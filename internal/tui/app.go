@@ -225,6 +225,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.page = pageCompose
 			m.compose.Reset()
 			m.compose.Focus()
+		case "L":
+			// Mod only: toggle lock on current thread.
+			if m.actor.IsMod() {
+				return m.toggleThreadLock()
+			}
 		case "esc":
 			m.page = pageThreadList
 			return m.fetchThreads(m.currentBoard)
@@ -339,6 +344,24 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		if m.page == pageThread {
 			m.rebuildPostView()
 		}
+
+	case proto.EvtThreadLocked:
+		p, ok := evt.Payload.(*proto.ThreadLockedPayload)
+		if !ok {
+			return nil
+		}
+		for i, t := range m.threads {
+			if t.ID == p.Thread {
+				m.threads[i].Locked = p.Locked
+			}
+		}
+		if m.page == pageThread {
+			action := "locked"
+			if !p.Locked {
+				action = "unlocked"
+			}
+			m.statusMsg = fmt.Sprintf("thread %s by %s", action, p.By)
+		}
 	}
 	return nil
 }
@@ -356,7 +379,11 @@ func (m model) View() string {
 	case pageThreadList:
 		body = m.list.View()
 	case pageThread:
-		body = m.vp.View() + "\n" + styleDim.Render("n=new post  esc=back  q=quit")
+		help := "n=new post  esc=back  q=quit"
+		if m.actor.IsMod() {
+			help = "n=new post  L=lock/unlock  esc=back  q=quit"
+		}
+		body = m.vp.View() + "\n" + styleDim.Render(help)
 	case pageCompose:
 		body = styleTitle.Render("New post") + "\n\n" + m.compose.View() +
 			"\n" + styleDim.Render("Ctrl+S submit  Esc cancel")
@@ -563,6 +590,26 @@ func (m model) submitPost(body string) tea.Cmd {
 		reply := m.c.ExecCmd(context.Background(), m.actor, cmd, raw, "")
 		if reply.Err != nil {
 			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
+		}
+		return nil
+	}
+}
+
+func (m model) toggleThreadLock() tea.Cmd {
+	return func() tea.Msg {
+		// Find current thread's locked state.
+		var locked bool
+		for _, t := range m.threads {
+			if t.ID == m.currentThread {
+				locked = t.Locked
+				break
+			}
+		}
+		p := proto.LockThreadPayload{Thread: m.currentThread, Locked: !locked}
+		raw, _ := json.Marshal(p)
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdLockThread, raw, "")
+		if reply.Err != nil {
+			return errMsg{fmt.Errorf("lock: %s", reply.Err.Message)}
 		}
 		return nil
 	}

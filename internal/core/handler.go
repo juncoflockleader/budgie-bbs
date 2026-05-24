@@ -198,6 +198,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.createBoard(actor, p)
 
+	case proto.CmdPurgePost:
+		var p proto.PurgePostPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.purgePost(actor, p)
+
 	default:
 		return Reply{Err: errDetail(proto.ErrValidationFailed, fmt.Sprintf("unknown command: %s", name), false)}
 	}
@@ -849,6 +856,59 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 		Payload: &proto.BoardCreatedPayload{ID: p.ID, Name: p.Name, Description: p.Description, By: actor.Name, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: p.ID, Seq: seq}}
+}
+
+func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
+	if !actor.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	}
+	if p.Post == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	ts := nowMS()
+
+	// Read before TX.
+	post, err := getPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil || thread == nil {
+		return internalErr(err)
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostPurged, scopes, &proto.PostPurgedPayload{
+		ID: post.ID, Thread: post.Thread, By: actor.ID, Reason: p.Reason, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := markPostPurged(tx, post.ID, seq); err != nil {
+		return internalErr(err)
+	}
+	// Remove from FTS permanently.
+	if err := ftsDeletePost(tx, post.ID); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostPurged, Seq: seq, Scopes: scopes,
+		Payload: &proto.PostPurgedPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
 // --- Helpers ---

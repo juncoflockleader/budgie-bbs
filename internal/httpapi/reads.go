@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +60,27 @@ func (s *Server) handleListPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
+}
+
+// handleAuditLog returns recent durable events for mod/admin inspection.
+// GET /api/v1/audit?after=0&limit=100
+func (s *Server) handleAuditLog(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	if !actor.IsMod() {
+		writeError(w, http.StatusForbidden, proto.ErrForbidden, "moderator role required", false)
+		return
+	}
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	events, err := s.core.AuditLog(after, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

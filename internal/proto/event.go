@@ -16,6 +16,7 @@ const (
 	EvtRoleGranted    EventKind = "role.granted"
 	EvtRoleRevoked    EventKind = "role.revoked"
 	EvtBoardCreated   EventKind = "board.created"
+	EvtPostPurged     EventKind = "post.purged" // GDPR hard-delete; body removed from projection
 
 	// Ephemeral events — carry eseq, best-effort, prunable.
 	EvtChatLine       EventKind = "chat.line"
@@ -40,8 +41,8 @@ type Event struct {
 func (e *Event) IsDurable() bool {
 	switch e.Kind {
 	case EvtThreadNew, EvtPostAppended, EvtPostEdited, EvtPostRedacted,
-		EvtPostRestored, EvtThreadLocked, EvtThreadMoved,
-		EvtUserSanctioned, EvtRoleGranted, EvtRoleRevoked:
+		EvtPostRestored, EvtPostPurged, EvtThreadLocked, EvtThreadMoved,
+		EvtUserSanctioned, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated:
 		return true
 	}
 	return false
@@ -87,6 +88,14 @@ type PostRestoredPayload struct {
 	ID     string `json:"id"`
 	Thread string `json:"thread"`
 	By     string `json:"by"`
+	TS     int64  `json:"ts"`
+}
+
+type PostPurgedPayload struct {
+	ID     string `json:"id"`
+	Thread string `json:"thread"`
+	By     string `json:"by"`
+	Reason string `json:"reason,omitempty"`
 	TS     int64  `json:"ts"`
 }
 

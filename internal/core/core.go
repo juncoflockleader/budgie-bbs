@@ -154,3 +154,8 @@ func (c *Core) ListPosts(thread string, limit, offset int) ([]Post, error) {
 func (c *Core) SearchPosts(query, boardID string, limit int) ([]Post, error) {
 	return searchPosts(c.DB, query, boardID, limit)
 }
+
+// AuditLog returns recent durable events (mod/admin use).
+func (c *Core) AuditLog(after int64, limit int) ([]*proto.Event, error) {
+	return replayEvents(c.DB, after, nil, limit)
+}

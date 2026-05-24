@@ -104,6 +104,8 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.PostRedactedPayload)
 	case proto.EvtPostRestored:
 		dst = new(proto.PostRestoredPayload)
+	case proto.EvtPostPurged:
+		dst = new(proto.PostPurgedPayload)
 	case proto.EvtThreadLocked:
 		dst = new(proto.ThreadLockedPayload)
 	case proto.EvtThreadMoved:

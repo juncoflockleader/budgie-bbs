@@ -67,7 +67,7 @@ export async function search(token: string, q: string, board?: string): Promise<
 export type CommandName =
   | 'createThread' | 'appendPost' | 'editPost' | 'redactPost' | 'restorePost'
   | 'lockThread' | 'moveThread' | 'sanctionUser' | 'grantRole' | 'revokeRole'
-  | 'sendChatLine' | 'setPresence' | 'createBoard'
+  | 'sendChatLine' | 'setPresence' | 'createBoard' | 'purgePost'
 
 export async function execCommand(
   token: string,

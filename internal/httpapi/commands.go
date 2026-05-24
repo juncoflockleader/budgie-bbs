@@ -146,6 +146,22 @@ func (s *Server) handleSendChatLine(w http.ResponseWriter, r *http.Request) {
 	writeAck(w, cid, reply)
 }
 
+func (s *Server) handlePurgePost(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	postID := r.PathValue("post")
+
+	var p proto.PurgePostPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		p = proto.PurgePostPayload{}
+	}
+	p.Post = postID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdPurgePost, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 // writeAck serialises a handler Reply into the wire ack envelope.
 func writeAck(w http.ResponseWriter, cid string, reply core.Reply) {
 	type ack struct {

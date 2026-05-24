@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import * as api from '../api/client'
 import type { Thread, Post, BudgieEvent } from '../api/types'
-import type { PostAppendedPayload, PostEditedPayload, PostRedactedPayload, PostRestoredPayload } from '../api/types'
+import type { PostAppendedPayload, PostEditedPayload, PostRedactedPayload, PostRestoredPayload, ThreadLockedPayload } from '../api/types'
 import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
 import { useStream } from '../hooks/useStream'
@@ -18,12 +18,14 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [threadLocked, setThreadLocked] = useState(thread.locked)
   const [composing, setComposing] = useState(false)
   const [draftBody, setDraftBody] = useState('')
   const [replyTo, setReplyTo] = useState<string | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isMod = currentUserRole === 'moderator' || currentUserRole === 'admin'
+  const isAdmin = currentUserRole === 'admin'
 
   useEffect(() => {
     setLoading(true)
@@ -67,6 +69,9 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
       setPosts(prev => prev.map(post =>
         post.id === p.id ? { ...post, redacted: false } : post
       ))
+    } else if (evt.event === 'thread.locked') {
+      const p = evt.payload as ThreadLockedPayload
+      if (p.thread === thread.id) setThreadLocked(p.locked)
     }
   }, [thread.id])
 
@@ -96,6 +101,23 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
     if (res.error) alert(res.error.message)
   }
 
+  async function restorePost(postId: string) {
+    const res = await api.execCommand(token, 'restorePost', { post: postId })
+    if (res.error) alert(res.error.message)
+  }
+
+  async function purgePost(postId: string) {
+    const reason = prompt('Reason for GDPR purge (this permanently removes post body):')
+    if (reason === null) return
+    const res = await api.execCommand(token, 'purgePost', { post: postId, reason })
+    if (res.error) alert(res.error.message)
+  }
+
+  async function toggleLock() {
+    const res = await api.execCommand(token, 'lockThread', { thread: thread.id, locked: !threadLocked })
+    if (res.error) alert(res.error.message)
+  }
+
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
 
@@ -106,7 +128,12 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
       <div className="page-header">
         <button className="back-btn" onClick={onBack}>← Threads</button>
         <h2 className="thread-title">{thread.title}</h2>
-        {thread.locked && <span className="locked-badge">🔒 Locked</span>}
+        {threadLocked && <span className="locked-badge">🔒 Locked</span>}
+        {isMod && (
+          <button className="link-btn" onClick={toggleLock}>
+            {threadLocked ? '🔓 Unlock' : '🔒 Lock'}
+          </button>
+        )}
       </div>
 
       <div className="post-list">
@@ -125,6 +152,12 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
                 {(isMod || post.author === currentUserId) && !post.redacted && (
                   <button className="link-btn danger" onClick={() => redactPost(post.id)}>Redact</button>
                 )}
+                {isMod && post.redacted && (
+                  <button className="link-btn" onClick={() => restorePost(post.id)}>Restore</button>
+                )}
+                {isAdmin && post.redacted && (
+                  <button className="link-btn danger" title="GDPR purge — permanently removes body" onClick={() => purgePost(post.id)}>Purge</button>
+                )}
               </span>
             </div>
             {post.replyTo && (
@@ -140,7 +173,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
         <div ref={bottomRef} />
       </div>
 
-      {!thread.locked && (
+      {!threadLocked && (
         composing ? (
           <div className="compose-box">
             {replyToPost && (

@@ -19,6 +19,7 @@ const (
 	CmdCreateBoard  CommandName = "createBoard"
 	CmdSubscribe    CommandName = "subscribe"
 	CmdUnsubscribe  CommandName = "unsubscribe"
+	CmdPurgePost    CommandName = "purgePost" // admin-only physical delete of post body (GDPR)
 )
 
 type CreateBoardPayload struct {
@@ -90,6 +91,11 @@ type SendChatLinePayload struct {
 
 type SetPresencePayload struct {
 	Status string `json:"status"`
+}
+
+type PurgePostPayload struct {
+	Post   string `json:"post"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type SubscribePayload struct {

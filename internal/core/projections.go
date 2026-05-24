@@ -248,6 +248,18 @@ func markPostRestored(tx *sql.Tx, postID string, seq int64) error {
 	return err
 }
 
+// markPostPurged irreversibly clears the post body from the projection (GDPR
+// hard-delete escape hatch). The body is replaced with an empty string and the
+// post is kept redacted. The event log still contains the original content —
+// true GDPR compliance would require crypto-shredding or log scrubbing.
+func markPostPurged(tx *sql.Tx, postID string, seq int64) error {
+	_, err := tx.Exec(
+		`UPDATE posts SET body='', redacted=1, updated_seq=? WHERE id=?`,
+		seq, postID,
+	)
+	return err
+}
+
 func setThreadLocked(tx *sql.Tx, threadID string, locked bool) error {
 	v := 0
 	if locked {
