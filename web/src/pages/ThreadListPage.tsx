@@ -31,16 +31,19 @@ export function ThreadListPage({ token, board, onSelect, onBack, onNewThread }: 
     if (evt.event === 'thread.new') {
       const p = evt.payload as ThreadNewPayload
       if (p.board !== board.id) return
-      setThreads(prev => [{
-        id: p.id,
-        board: p.board,
-        author: p.author,
-        title: p.title,
-        locked: false,
-        postCount: 1,
-        lastSeq: evt.seq ?? 0,
-        createdTs: p.ts,
-      }, ...prev])
+      setThreads(prev => {
+        if (prev.find(t => t.id === p.id)) return prev
+        return [{
+          id: p.id,
+          board: p.board,
+          author: p.author,
+          title: p.title,
+          locked: false,
+          postCount: 1,
+          lastSeq: evt.seq ?? 0,
+          createdTs: p.ts,
+        }, ...prev]
+      })
     }
   }, [board.id])
 
