@@ -241,6 +241,22 @@ label {
 .chat-form { display: flex; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--c-border) }
 .chat-input { flex: 1 }
 
+/* ── Search ────────────────────────────────────────────────────────────── */
+.nav-search-form { flex: 1; max-width: 200px }
+.nav-search-input {
+  padding: 0.3em 0.6em;
+  font-size: 0.85em;
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+}
+.nav-search-input:focus { outline: 1px solid var(--c-accent); }
+
+.search-page {}
+.search-form { display: flex; gap: 0.5rem; margin-bottom: 1rem }
+.search-input { flex: 1 }
+.search-results { display: flex; flex-direction: column; gap: 0.5rem }
+.search-count { font-size: 0.85em; margin-bottom: 0.5rem }
+
 /* ── Responsive tweaks ─────────────────────────────────────────────────── */
 @media (max-width: 500px) {
   .top-nav { padding: 0.4rem 0.75rem }

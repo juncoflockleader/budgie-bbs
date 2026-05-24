@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, FormEvent, useRef } from 'react'
 import { useAuth } from './hooks/useAuth'
 import { AuthPage } from './pages/AuthPage'
 import { BoardListPage } from './pages/BoardListPage'
@@ -6,6 +6,7 @@ import { ThreadListPage } from './pages/ThreadListPage'
 import { ThreadPage } from './pages/ThreadPage'
 import { NewThreadPage } from './pages/NewThreadPage'
 import { ChatPage } from './pages/ChatPage'
+import { SearchPage } from './pages/SearchPage'
 import type { Board, Thread } from './api/types'
 
 type Page =
@@ -14,10 +15,13 @@ type Page =
   | { name: 'thread'; board: Board; thread: Thread }
   | { name: 'new-thread'; board: Board }
   | { name: 'chat' }
+  | { name: 'search'; query: string }
 
 export function App() {
   const { auth, login, logout } = useAuth()
   const [page, setPage] = useState<Page>({ name: 'boards' })
+  const [searchDraft, setSearchDraft] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
 
   if (!auth.token || !auth.user) {
     return <AuthPage onLogin={login} />
@@ -27,11 +31,29 @@ export function App() {
 
   function nav(p: Page) { setPage(p) }
 
+  function submitSearch(e: FormEvent) {
+    e.preventDefault()
+    if (searchDraft.trim()) {
+      nav({ name: 'search', query: searchDraft.trim() })
+      setSearchDraft('')
+      searchRef.current?.blur()
+    }
+  }
+
   return (
     <div className="app">
       <nav className="top-nav">
         <span className="nav-logo" onClick={() => nav({ name: 'boards' })}>🐦 Budgie</span>
-        <span className="nav-spacer" />
+        <form className="nav-search-form" onSubmit={submitSearch}>
+          <input
+            ref={searchRef}
+            className="nav-search-input"
+            value={searchDraft}
+            onChange={e => setSearchDraft(e.target.value)}
+            placeholder="Search…"
+            aria-label="Search posts"
+          />
+        </form>
         <button className="link-btn nav-chat" onClick={() => nav({ name: 'chat' })}>Chat</button>
         <span className="nav-user muted">{user.name}</span>
         <button className="link-btn nav-logout" onClick={logout}>Logout</button>
@@ -76,6 +98,13 @@ export function App() {
         )}
         {page.name === 'chat' && (
           <ChatPage token={token} onBack={() => nav({ name: 'boards' })} />
+        )}
+        {page.name === 'search' && (
+          <SearchPage
+            token={token}
+            initialQuery={page.query}
+            onBack={() => nav({ name: 'boards' })}
+          />
         )}
       </main>
     </div>

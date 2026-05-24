@@ -26,6 +26,7 @@ const (
 	pageThread
 	pageCompose
 	pageChat
+	pageSearch
 )
 
 // msg types for the bubbletea update cycle.
@@ -35,6 +36,7 @@ type (
 	boardsMsg     struct{ boards []core.Board }
 	threadsMsg    struct{ threads []core.Thread }
 	postsMsg      struct{ posts []core.Post }
+	searchMsg     struct{ posts []core.Post }
 	disconnectMsg struct{}
 )
 
@@ -52,9 +54,10 @@ type model struct {
 	currentThread string
 
 	// Component state.
-	list     list.Model
-	vp       viewport.Model
-	compose  textarea.Model
+	list       list.Model
+	vp         viewport.Model
+	compose    textarea.Model
+	searchQuery string // current search input
 
 	// In-memory state.
 	boards  []core.Board
@@ -139,6 +142,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.posts = msg.posts
 		m.rebuildPostView()
 
+	case searchMsg:
+		m.rebuildSearchView(msg.posts)
+
 	case eventMsg:
 		cmds = append(cmds, m.awaitEvent()) // re-arm listener
 		cmds = append(cmds, m.handleEvent(msg.evt)...)
@@ -162,7 +168,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		cmds = append(cmds, cmd)
-	case pageThread, pageChat:
+	case pageThread, pageChat, pageSearch:
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
 		cmds = append(cmds, cmd)
@@ -190,6 +196,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "c":
 			m.page = pageChat
 			m.rebuildChatView()
+		case "/":
+			m.page = pageSearch
+			m.searchQuery = ""
+			m.vp.SetContent(styleDim.Render("Type your query and press Enter to search…"))
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
@@ -211,6 +221,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.page = pageCompose
 			m.compose.Reset()
 			m.compose.Focus()
+		case "/":
+			m.page = pageSearch
+			m.searchQuery = ""
+			m.vp.SetContent(styleDim.Render("Type your query and press Enter to search…"))
 		case "esc":
 			m.page = pageBoardList
 			m.rebuildList()
@@ -262,6 +276,27 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
+		}
+
+	case pageSearch:
+		switch msg.String() {
+		case "enter":
+			if m.searchQuery != "" {
+				return m.runSearch(m.searchQuery)
+			}
+		case "backspace":
+			if len(m.searchQuery) > 0 {
+				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
+				m.vp.SetContent(styleTitle.Render("Search: ") + m.searchQuery + "▌")
+			}
+		case "esc", "q":
+			m.page = pageBoardList
+		default:
+			// Accumulate printable characters.
+			if len(msg.String()) == 1 {
+				m.searchQuery += msg.String()
+				m.vp.SetContent(styleTitle.Render("Search: ") + m.searchQuery + "▌")
+			}
 		}
 	}
 	return nil
@@ -389,6 +424,8 @@ func (m model) View() string {
 			"\n" + styleDim.Render("Ctrl+S submit  Esc cancel")
 	case pageChat:
 		body = m.vp.View() + "\n" + styleDim.Render("esc=back")
+	case pageSearch:
+		body = m.vp.View() + "\n" + styleDim.Render("type query  enter=search  esc=back")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
@@ -595,6 +632,32 @@ func (m model) submitPost(body string) tea.Cmd {
 	}
 }
 
+func (m model) runSearch(query string) tea.Cmd {
+	return func() tea.Msg {
+		posts, err := m.c.SearchPosts(query, "", 30)
+		if err != nil {
+			return errMsg{err}
+		}
+		return searchMsg{posts}
+	}
+}
+
+func (m *model) rebuildSearchView(posts []core.Post) {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render(fmt.Sprintf("Search results (%d)", len(posts))) + "\n\n")
+	if len(posts) == 0 {
+		b.WriteString(styleDim.Render("No results found."))
+	}
+	for _, p := range posts {
+		author := styleAuthor.Render(p.Author)
+		b.WriteString(fmt.Sprintf("%s in thread %s\n", author, styleDim.Render(p.Thread)))
+		b.WriteString(renderMarkup(p.Body))
+		b.WriteString("\n" + stylePostSep.String() + "\n")
+	}
+	m.vp.SetContent(b.String())
+	m.vp.GotoTop()
+}
+
 func (m model) toggleThreadLock() tea.Cmd {
 	return func() tea.Msg {
 		// Find current thread's locked state.
@@ -627,6 +690,8 @@ func pageName(p page) string {
 		return "Compose"
 	case pageChat:
 		return "Chat"
+	case pageSearch:
+		return "Search"
 	}
 	return ""
 }
