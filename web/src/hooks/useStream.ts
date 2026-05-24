@@ -37,17 +37,22 @@ export function useStream({ token, after = 0 }: Options, onEvent: Handler) {
       ws = new WebSocket(url)
 
       ws.onopen = () => {
-        // Send resume to replay missed events.
-        ws!.send(JSON.stringify({ type: 'resume', after: seenSeq }))
+        // Server sends welcome first; full-duplex so we can send resume immediately.
+        ws!.send(JSON.stringify({
+          kind: 'control',
+          control: 'resume',
+          payload: { after: seenSeq, subscriptions: [] },
+        }))
       }
 
       ws.onmessage = (e: MessageEvent<string>) => {
-        const msg = JSON.parse(e.data) as { type?: string; event?: string; seq?: number; eseq?: number; ts?: number; payload?: unknown }
-        if (msg.type === 'event' || msg.event) {
+        const msg = JSON.parse(e.data) as { kind?: string; event?: string; seq?: number; eseq?: number; ts?: number; payload?: unknown }
+        if (msg.kind === 'event' && msg.event) {
           const evt = msg as unknown as BudgieEvent
           if (evt.seq) seenSeq = Math.max(seenSeq, evt.seq)
           dispatch(evt)
         }
+        // Ignore control messages (welcome, ping, etc.)
       }
 
       ws.onerror = () => {
