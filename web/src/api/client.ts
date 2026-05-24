@@ -33,33 +33,41 @@ export async function login(name: string, password: string): Promise<ApiResponse
 
 export async function listBoards(token: string): Promise<ApiResponse<Board[]>> {
   const res = await fetch(`${BASE}/boards`, { headers: authHeaders(token) })
-  return json<Board[]>(res)
+  const r = await json<{ boards: Board[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.boards ?? [] }
 }
 
 export async function listThreads(token: string, board: string, limit = 30, offset = 0): Promise<ApiResponse<Thread[]>> {
   const res = await fetch(`${BASE}/boards/${board}/threads?limit=${limit}&offset=${offset}`, {
     headers: authHeaders(token),
   })
-  return json<Thread[]>(res)
+  const r = await json<{ threads: Thread[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.threads ?? [] }
 }
 
-export async function getThread(token: string, id: string): Promise<ApiResponse<Thread>> {
+export async function getThread(token: string, id: string): Promise<ApiResponse<{ thread: Thread; posts: Post[] }>> {
   const res = await fetch(`${BASE}/threads/${id}`, { headers: authHeaders(token) })
-  return json<Thread>(res)
+  return json<{ thread: Thread; posts: Post[] }>(res)
 }
 
 export async function listPosts(token: string, thread: string, limit = 50, offset = 0): Promise<ApiResponse<Post[]>> {
   const res = await fetch(`${BASE}/threads/${thread}/posts?limit=${limit}&offset=${offset}`, {
     headers: authHeaders(token),
   })
-  return json<Post[]>(res)
+  const r = await json<{ posts: Post[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.posts ?? [] }
 }
 
 export async function search(token: string, q: string, board?: string): Promise<ApiResponse<Post[]>> {
   const params = new URLSearchParams({ q, limit: '30' })
   if (board) params.set('board', board)
   const res = await fetch(`${BASE}/search?${params}`, { headers: authHeaders(token) })
-  return json<Post[]>(res)
+  const r = await json<{ posts: Post[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.posts ?? [] }
 }
 
 // ── M8: Notifications ─────────────────────────────────────────────────────
