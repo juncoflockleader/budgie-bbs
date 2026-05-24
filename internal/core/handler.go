@@ -281,7 +281,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Append thread.new
 	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: p.Board, Author: actor.ID, Title: p.Title, TS: ts,
+		ID: threadID, Board: p.Board, Author: actor.Name, Title: p.Title, TS: ts,
 	})
 	if err != nil {
 		return internalErr(err)
@@ -291,7 +291,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Append post.appended (the first post in the thread)
 	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.ID, Body: p.Body,
+		ID: postID, Thread: threadID, Author: actor.Name, Body: p.Body,
 		ContentType: ct, TS: ts,
 	})
 	if err != nil {
@@ -300,13 +300,13 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Update projections.
 	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: p.Board, Author: actor.ID, Title: p.Title,
+		ID: threadID, Board: p.Board, Author: actor.Name, Title: p.Title,
 		LastSeq: tseq, CreatedTS: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
 	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: actor.ID,
+		ID: postID, Thread: threadID, Author: actor.Name,
 		Body: p.Body, ContentType: ct, CreatedSeq: pseq,
 	}); err != nil {
 		return internalErr(err)
@@ -387,14 +387,14 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: p.Thread, Author: actor.ID, Body: p.Body,
+		ID: postID, Thread: p.Thread, Author: actor.Name, Body: p.Body,
 		ContentType: ct, ReplyTo: p.ReplyTo, TS: ts,
 	})
 	if err != nil {
 		return internalErr(err)
 	}
 	if err := insertPost(tx, &Post{
-		ID: postID, Thread: p.Thread, Author: actor.ID,
+		ID: postID, Thread: p.Thread, Author: actor.Name,
 		Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, CreatedSeq: seq,
 	}); err != nil {
 		return internalErr(err)

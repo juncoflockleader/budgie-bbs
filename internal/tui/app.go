@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -46,18 +47,24 @@ type model struct {
 	actor *core.User
 	sub   *core.Subscription
 
-	page         page
-	width        int
-	height       int
-	statusMsg    string
-	currentBoard string
+	page      page
+	pageStack []page // navigation history for back/esc
+	width     int
+	height    int
+	statusMsg string
+
+	currentBoard  string
 	currentThread string
 
 	// Component state.
-	list       list.Model
-	vp         viewport.Model
-	compose    textarea.Model
-	searchQuery string // current search input
+	list        list.Model
+	vp          viewport.Model
+	compose     textarea.Model
+	titleInput  textinput.Model
+	searchQuery string
+
+	// Compose mode: true = creating new thread, false = replying
+	composingNewThread bool
 
 	// In-memory state.
 	boards  []core.Board
@@ -88,12 +95,18 @@ func newModel(c *core.Core, actor *core.User, width, height int) model {
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
 	sub := c.Subscribe(scopes)
 
+	ti := textinput.New()
+	ti.Placeholder = "Thread title…"
+	ti.CharLimit = 200
+
 	m := model{
-		c:     c,
-		actor: actor,
-		sub:   sub,
-		page:  pageBoardList,
-		width: width, height: height,
+		c:          c,
+		actor:      actor,
+		sub:        sub,
+		page:       pageBoardList,
+		width:      width,
+		height:     height,
+		titleInput: ti,
 	}
 
 	m.list = list.New(nil, list.NewDefaultDelegate(), width, height-3)
@@ -103,11 +116,28 @@ func newModel(c *core.Core, actor *core.User, width, height int) model {
 	m.vp.Style = lipgloss.NewStyle()
 
 	m.compose = textarea.New()
-	m.compose.Placeholder = "Write your post... (Ctrl+S to submit, Esc to cancel)"
+	m.compose.Placeholder = "Write your post… (Ctrl+S to submit, Esc to cancel)"
 	m.compose.SetWidth(width - 4)
 	m.compose.SetHeight(height / 3)
 
 	return m
+}
+
+// pushPage saves the current page on the stack and navigates to p.
+func (m *model) pushPage(p page) {
+	m.pageStack = append(m.pageStack, m.page)
+	m.page = p
+}
+
+// popPage returns to the previous page. Returns false if already at root.
+func (m *model) popPage() bool {
+	if len(m.pageStack) == 0 {
+		return false
+	}
+	n := len(m.pageStack)
+	m.page = m.pageStack[n-1]
+	m.pageStack = m.pageStack[:n-1]
+	return true
 }
 
 func (m model) Init() tea.Cmd {
@@ -129,6 +159,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp.Height = msg.Height - 4
 		m.compose.SetWidth(msg.Width - 4)
 		m.compose.SetHeight(msg.Height / 3)
+		m.titleInput.Width = msg.Width - 4
 
 	case boardsMsg:
 		m.boards = msg.boards
@@ -156,26 +187,58 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "error: " + msg.err.Error()
 
 	case tea.KeyMsg:
+		// Capture the page BEFORE handleKey might change it, so the component
+		// dispatch below uses the correct component for this key event.
+		activePage := m.page
 		cmd := m.handleKey(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+
+		// Delegate to the component that was active when the key arrived.
+		switch activePage {
+		case pageBoardList, pageThreadList:
+			var c tea.Cmd
+			m.list, c = m.list.Update(msg)
+			cmds = append(cmds, c)
+		case pageThread, pageChat, pageSearch:
+			var c tea.Cmd
+			m.vp, c = m.vp.Update(msg)
+			cmds = append(cmds, c)
+		case pageCompose:
+			if m.composingNewThread && m.titleInput.Focused() {
+				var c tea.Cmd
+				m.titleInput, c = m.titleInput.Update(msg)
+				cmds = append(cmds, c)
+			} else {
+				var c tea.Cmd
+				m.compose, c = m.compose.Update(msg)
+				cmds = append(cmds, c)
+			}
+		}
+		return m, tea.Batch(cmds...)
 	}
 
-	// Delegate to focused component.
+	// Non-key messages also need component updates.
 	switch m.page {
 	case pageBoardList, pageThreadList:
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		cmds = append(cmds, cmd)
+		var c tea.Cmd
+		m.list, c = m.list.Update(msg)
+		cmds = append(cmds, c)
 	case pageThread, pageChat, pageSearch:
-		var cmd tea.Cmd
-		m.vp, cmd = m.vp.Update(msg)
-		cmds = append(cmds, cmd)
+		var c tea.Cmd
+		m.vp, c = m.vp.Update(msg)
+		cmds = append(cmds, c)
 	case pageCompose:
-		var cmd tea.Cmd
-		m.compose, cmd = m.compose.Update(msg)
-		cmds = append(cmds, cmd)
+		if m.composingNewThread && m.titleInput.Focused() {
+			var c tea.Cmd
+			m.titleInput, c = m.titleInput.Update(msg)
+			cmds = append(cmds, c)
+		} else {
+			var c tea.Cmd
+			m.compose, c = m.compose.Update(msg)
+			cmds = append(cmds, c)
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -188,16 +251,16 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "enter", " ":
 			if b := m.selectedBoard(); b != nil {
 				m.currentBoard = b.ID
-				m.page = pageThreadList
+				m.pushPage(pageThreadList)
 				m.threads = nil
 				m.rebuildList()
 				return m.fetchThreads(b.ID)
 			}
 		case "c":
-			m.page = pageChat
+			m.pushPage(pageChat)
 			m.rebuildChatView()
 		case "/":
-			m.page = pageSearch
+			m.pushPage(pageSearch)
 			m.searchQuery = ""
 			m.vp.SetContent(styleDim.Render("Type your query and press Enter to search…"))
 		case "q", "ctrl+c":
@@ -210,7 +273,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "enter", " ":
 			if t := m.selectedThread(); t != nil {
 				m.currentThread = t.ID
-				m.page = pageThread
+				m.pushPage(pageThread)
 				m.posts = nil
 				return tea.Batch(
 					m.fetchPosts(t.ID),
@@ -218,15 +281,18 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				)
 			}
 		case "n":
-			m.page = pageCompose
+			m.composingNewThread = true
+			m.titleInput.Reset()
+			m.titleInput.Focus()
 			m.compose.Reset()
-			m.compose.Focus()
+			m.compose.Blur()
+			m.pushPage(pageCompose)
 		case "/":
-			m.page = pageSearch
+			m.pushPage(pageSearch)
 			m.searchQuery = ""
 			m.vp.SetContent(styleDim.Render("Type your query and press Enter to search…"))
-		case "esc":
-			m.page = pageBoardList
+		case "esc", "left":
+			m.popPage()
 			m.rebuildList()
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
@@ -236,16 +302,16 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case pageThread:
 		switch msg.String() {
 		case "n":
-			m.page = pageCompose
+			m.composingNewThread = false
 			m.compose.Reset()
 			m.compose.Focus()
+			m.pushPage(pageCompose)
 		case "L":
-			// Mod only: toggle lock on current thread.
 			if m.actor.IsMod() {
 				return m.toggleThreadLock()
 			}
-		case "esc":
-			m.page = pageThreadList
+		case "esc", "left":
+			m.popPage()
 			return m.fetchThreads(m.currentBoard)
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
@@ -255,24 +321,46 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case pageCompose:
 		switch msg.String() {
 		case "ctrl+s":
+			if m.composingNewThread {
+				// If title field still focused, move to body first.
+				if m.titleInput.Focused() {
+					title := strings.TrimSpace(m.titleInput.Value())
+					if title == "" {
+						m.statusMsg = "title is required"
+						return nil
+					}
+					m.titleInput.Blur()
+					m.compose.Focus()
+					return nil
+				}
+				return m.submitNewThread()
+			}
 			body := strings.TrimSpace(m.compose.Value())
 			if body == "" {
 				return nil
 			}
 			return m.submitPost(body)
+		case "tab", "enter":
+			// In new-thread mode, tab/enter on the title field moves to body.
+			if m.composingNewThread && m.titleInput.Focused() {
+				title := strings.TrimSpace(m.titleInput.Value())
+				if title == "" {
+					return nil
+				}
+				m.titleInput.Blur()
+				m.compose.Focus()
+				return nil
+			}
 		case "esc":
 			m.compose.Blur()
-			if m.currentThread != "" {
-				m.page = pageThread
-			} else {
-				m.page = pageThreadList
-			}
+			m.titleInput.Blur()
+			m.popPage()
 		}
 
 	case pageChat:
 		switch msg.String() {
-		case "esc":
-			m.page = pageBoardList
+		case "esc", "left":
+			m.popPage()
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
@@ -289,10 +377,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
 				m.vp.SetContent(styleTitle.Render("Search: ") + m.searchQuery + "▌")
 			}
-		case "esc", "q":
-			m.page = pageBoardList
+		case "esc", "left":
+			m.popPage()
 		default:
-			// Accumulate printable characters.
 			if len(msg.String()) == 1 {
 				m.searchQuery += msg.String()
 				m.vp.SetContent(styleTitle.Render("Search: ") + m.searchQuery + "▌")
@@ -323,7 +410,6 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			m.rebuildPostView()
 			m.vp.GotoBottom()
 		}
-		// Update thread list bump.
 		for i, t := range m.threads {
 			if t.ID == p.Thread {
 				m.threads[i].PostCount++
@@ -414,18 +500,29 @@ func (m model) View() string {
 	case pageThreadList:
 		body = m.list.View()
 	case pageThread:
-		help := "n=new post  esc=back  q=quit"
+		help := "n=reply  esc/←=back  q=quit"
 		if m.actor.IsMod() {
-			help = "n=new post  L=lock/unlock  esc=back  q=quit"
+			help = "n=reply  L=lock/unlock  esc/←=back  q=quit"
 		}
 		body = m.vp.View() + "\n" + styleDim.Render(help)
 	case pageCompose:
-		body = styleTitle.Render("New post") + "\n\n" + m.compose.View() +
-			"\n" + styleDim.Render("Ctrl+S submit  Esc cancel")
+		if m.composingNewThread {
+			titleSection := styleTitle.Render("New thread") + "\n\n" +
+				styleDim.Render("Title: ") + m.titleInput.View() + "\n\n"
+			if m.titleInput.Focused() {
+				body = titleSection + styleDim.Render("Enter/Tab=next field  Esc=cancel")
+			} else {
+				body = titleSection + m.compose.View() + "\n" +
+					styleDim.Render("Ctrl+S=submit  Esc=cancel")
+			}
+		} else {
+			body = styleTitle.Render("New reply") + "\n\n" + m.compose.View() +
+				"\n" + styleDim.Render("Ctrl+S=submit  Esc=cancel")
+		}
 	case pageChat:
-		body = m.vp.View() + "\n" + styleDim.Render("esc=back")
+		body = m.vp.View() + "\n" + styleDim.Render("esc/←=back")
 	case pageSearch:
-		body = m.vp.View() + "\n" + styleDim.Render("type query  enter=search  esc=back")
+		body = m.vp.View() + "\n" + styleDim.Render("type query  enter=search  esc/←=back")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
@@ -441,7 +538,7 @@ func (i boardItem) FilterValue() string { return i.b.Name }
 
 type threadItem struct{ t core.Thread }
 
-func (i threadItem) Title() string       { return i.t.Title }
+func (i threadItem) Title() string { return i.t.Title }
 func (i threadItem) Description() string {
 	return fmt.Sprintf("by %s · %d posts", i.t.Author, i.t.PostCount)
 }
@@ -531,7 +628,6 @@ func renderMarkup(body string) string {
 			out = append(out, dimStyle.Render("│ "+line[2:]))
 			continue
 		}
-		// Inline: **bold** and `code`
 		line = replaceInline(line, "**", func(s string) string { return boldStyle.Render(s) })
 		line = replaceInline(line, "`", func(s string) string { return codeStyle.Render(s) })
 		out = append(out, line)
@@ -539,7 +635,6 @@ func renderMarkup(body string) string {
 	return strings.Join(out, "\n")
 }
 
-// replaceInline replaces paired delimiters with rendered text.
 func replaceInline(s, delim string, render func(string) string) string {
 	parts := strings.Split(s, delim)
 	if len(parts) < 3 {
@@ -607,24 +702,36 @@ func (m model) resubscribeThread(threadID string) tea.Cmd {
 
 func (m model) submitPost(body string) tea.Cmd {
 	return func() tea.Msg {
-		var raw []byte
-		var cmd proto.CommandName
-		var err error
-
-		if m.currentThread != "" {
-			p := proto.AppendPostPayload{Thread: m.currentThread, Body: body}
-			raw, err = json.Marshal(p)
-			cmd = proto.CmdAppendPost
-		} else {
-			// New thread in current board — shouldn't happen from compose page
-			// without a title; for now treat as append to first thread.
-			return errMsg{fmt.Errorf("no thread selected")}
-		}
+		p := proto.AppendPostPayload{Thread: m.currentThread, Body: body}
+		raw, err := json.Marshal(p)
 		if err != nil {
 			return errMsg{err}
 		}
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdAppendPost, raw, "")
+		if reply.Err != nil {
+			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
+		}
+		return nil
+	}
+}
 
-		reply := m.c.ExecCmd(context.Background(), m.actor, cmd, raw, "")
+func (m model) submitNewThread() tea.Cmd {
+	title := strings.TrimSpace(m.titleInput.Value())
+	body := strings.TrimSpace(m.compose.Value())
+	board := m.currentBoard
+	return func() tea.Msg {
+		if title == "" {
+			return errMsg{fmt.Errorf("title is required")}
+		}
+		if body == "" {
+			return errMsg{fmt.Errorf("body is required")}
+		}
+		p := proto.CreateThreadPayload{Board: board, Title: title, Body: body}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return errMsg{err}
+		}
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdCreateThread, raw, "")
 		if reply.Err != nil {
 			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
 		}
@@ -660,7 +767,6 @@ func (m *model) rebuildSearchView(posts []core.Post) {
 
 func (m model) toggleThreadLock() tea.Cmd {
 	return func() tea.Msg {
-		// Find current thread's locked state.
 		var locked bool
 		for _, t := range m.threads {
 			if t.ID == m.currentThread {
