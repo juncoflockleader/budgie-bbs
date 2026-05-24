@@ -16,9 +16,16 @@ const (
 	CmdRevokeRole   CommandName = "revokeRole"
 	CmdSendChatLine CommandName = "sendChatLine"
 	CmdSetPresence  CommandName = "setPresence"
+	CmdCreateBoard  CommandName = "createBoard"
 	CmdSubscribe    CommandName = "subscribe"
 	CmdUnsubscribe  CommandName = "unsubscribe"
 )
+
+type CreateBoardPayload struct {
+	ID          string `json:"id"`          // URL-safe slug
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
 
 type CreateThreadPayload struct {
 	Board       string `json:"board"`

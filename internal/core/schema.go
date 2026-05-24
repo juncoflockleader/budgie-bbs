@@ -70,6 +70,27 @@ CREATE TABLE IF NOT EXISTS auth_pubkeys (
     PRIMARY KEY (user_id, pubkey)
 );
 
+-- Active sanctions (mutes / bans). expires_at=0 means permanent.
+CREATE TABLE IF NOT EXISTS user_sanctions (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id),
+    kind       TEXT NOT NULL,              -- "mute" | "ban"
+    scope      TEXT NOT NULL DEFAULT 'global', -- board id or "global"
+    expires_at INTEGER NOT NULL DEFAULT 0, -- unix ms; 0 = permanent
+    by         TEXT NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    seq        INTEGER NOT NULL
+);
+
+-- Full-text search index over post bodies (FTS5 projection, rebuildable).
+CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
+    body,
+    post_id   UNINDEXED,
+    thread_id UNINDEXED,
+    board_id  UNINDEXED,
+    author    UNINDEXED
+);
+
 -- Seed the default board.
 INSERT OR IGNORE INTO boards (id, name, description)
     VALUES ('general', 'General', 'General discussion');

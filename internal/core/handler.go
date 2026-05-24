@@ -184,6 +184,20 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.setPresence(actor, p)
 
+	case proto.CmdSanctionUser:
+		var p proto.SanctionUserPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.sanctionUser(actor, p)
+
+	case proto.CmdCreateBoard:
+		var p proto.CreateBoardPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.createBoard(actor, p)
+
 	default:
 		return Reply{Err: errDetail(proto.ErrValidationFailed, fmt.Sprintf("unknown command: %s", name), false)}
 	}
@@ -195,6 +209,16 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if p.Board == "" || p.Title == "" || p.Body == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "board, title, and body are required", false)}
 	}
+
+	// Sanction check.
+	if kind, ok := activeSanction(h.db, actor.ID, p.Board); ok {
+		code := proto.ErrMuted
+		if kind == "ban" {
+			code = proto.ErrBanned
+		}
+		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
+	}
+
 	ct := contentType(p.ContentType)
 	ts := nowMS()
 	threadID := newID("thr_")
@@ -251,6 +275,9 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if err := bumpThread(tx, threadID, pseq); err != nil {
 		return internalErr(err)
 	}
+	if err := ftsInsertPost(tx, postID, threadID, p.Board, actor.Name, p.Body); err != nil {
+		return internalErr(err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
@@ -273,13 +300,9 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	ts := nowMS()
 	postID := newID("pst_")
 
-	tx, err := h.db.Begin()
-	if err != nil {
-		return internalErr(err)
-	}
-	defer tx.Rollback() //nolint
-
-	thread, err := getThreadTx(tx, p.Thread)
+	// All reads happen before the TX so we don't exhaust the single DB connection
+	// (SetMaxOpenConns(1) means the TX holds the only connection).
+	thread, err := getThread(h.db, p.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -289,6 +312,36 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if thread.Locked && !actor.IsMod() {
 		return Reply{Err: errDetail(proto.ErrThreadLocked, "thread is locked", false)}
 	}
+
+	// Sanction check.
+	if kind, ok := activeSanction(h.db, actor.ID, thread.Board); ok {
+		code := proto.ErrMuted
+		if kind == "ban" {
+			code = proto.ErrBanned
+		}
+		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
+	}
+
+	// Threading depth cap: max 1 level. If replyTo is itself a reply, flatten.
+	if p.ReplyTo != "" {
+		parent, err := getPost(h.db, p.ReplyTo)
+		if err != nil {
+			return internalErr(err)
+		}
+		if parent == nil {
+			return Reply{Err: errDetail(proto.ErrNotFound, "replyTo post not found", false)}
+		}
+		if parent.ReplyTo != "" {
+			// Already depth-1 reply — flatten to grandparent.
+			p.ReplyTo = parent.ReplyTo
+		}
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, &proto.PostAppendedPayload{
@@ -305,6 +358,9 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		return internalErr(err)
 	}
 	if err := bumpThread(tx, p.Thread, seq); err != nil {
+		return internalErr(err)
+	}
+	if err := ftsInsertPost(tx, postID, p.Thread, thread.Board, actor.Name, p.Body); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -361,6 +417,9 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 	if err := updatePostBody(tx, post.ID, p.Body, seq); err != nil {
 		return internalErr(err)
 	}
+	if err := ftsUpdatePost(tx, post.ID, p.Body); err != nil {
+		return internalErr(err)
+	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
@@ -413,6 +472,9 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		return internalErr(err)
 	}
 	if err := markPostRedacted(tx, post.ID, seq); err != nil {
+		return internalErr(err)
+	}
+	if err := ftsDeletePost(tx, post.ID); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -678,6 +740,117 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 	return Reply{Result: &proto.AckResult{}}
 }
 
+func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
+	if !actor.IsMod() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
+	}
+	if p.User == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "user is required", false)}
+	}
+	if p.Kind != "mute" && p.Kind != "ban" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, `kind must be "mute" or "ban"`, false)}
+	}
+	scope := p.Scope
+	if scope == "" {
+		scope = "global"
+	}
+	ts := nowMS()
+	var expiresAt int64
+	if p.DurationSec > 0 {
+		expiresAt = ts + p.DurationSec*1000
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	target, err := getUserTx(tx, p.User)
+	if err != nil {
+		return internalErr(err)
+	}
+	if target == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
+	}
+	if target.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "cannot sanction an admin", false)}
+	}
+	if target.IsMod() && !actor.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "only admins can sanction moderators", false)}
+	}
+
+	// Validate scope is "global" or an existing board.
+	if scope != "global" {
+		var boardName string
+		if err := tx.QueryRow(`SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
+			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
+		} else if err != nil {
+			return internalErr(err)
+		}
+	}
+
+	sanctionID := newID("san_")
+	scopes := []string{"account:" + target.ID}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctioned, scopes, &proto.UserSanctionedPayload{
+		User: target.ID, Kind: p.Kind, Scope: scope, DurationSec: p.DurationSec,
+		By: actor.ID, Reason: p.Reason, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := insertSanction(tx, sanctionID, target.ID, p.Kind, scope, expiresAt, actor.ID, p.Reason, seq); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtUserSanctioned, Seq: seq, Scopes: scopes,
+		Payload: &proto.UserSanctionedPayload{User: target.Name, Kind: p.Kind, Scope: scope,
+			DurationSec: p.DurationSec, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: sanctionID, Seq: seq}}
+}
+
+func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
+	if !actor.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	}
+	if p.ID == "" || p.Name == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "id and name are required", false)}
+	}
+	if !isValidSlug(p.ID) {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "id must be lowercase alphanumeric, hyphens, or underscores (max 64 chars)", false)}
+	}
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	scopes := []string{"board:" + p.ID}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, scopes, &proto.BoardCreatedPayload{
+		ID: p.ID, Name: p.Name, Description: p.Description, By: actor.ID, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := insertBoard(tx, p.ID, p.Name, p.Description); err != nil {
+		return Reply{Err: errDetail(proto.ErrConflict, "board already exists", false)}
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: seq, Scopes: scopes,
+		Payload: &proto.BoardCreatedPayload{ID: p.ID, Name: p.Name, Description: p.Description, By: actor.Name, TS: ts}, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: p.ID, Seq: seq}}
+}
+
 // --- Helpers ---
 
 func getThreadTx(tx *sql.Tx, id string) (*Thread, error) {
@@ -739,4 +912,18 @@ func badPayload() Reply {
 
 func internalErr(err error) Reply {
 	return Reply{Err: errDetail("internal_error", err.Error(), true)}
+}
+
+// isValidSlug returns true if s is a non-empty lowercase alphanumeric / hyphen / underscore
+// string of at most 64 characters (suitable as a board ID).
+func isValidSlug(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }

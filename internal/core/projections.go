@@ -267,6 +267,120 @@ func setUserRole(tx *sql.Tx, userID, role string) error {
 	return err
 }
 
+func insertBoard(tx *sql.Tx, id, name, description string) error {
+	_, err := tx.Exec(
+		`INSERT INTO boards (id, name, description) VALUES (?,?,?)`,
+		id, name, description,
+	)
+	return err
+}
+
+// --- FTS helpers ---
+
+func ftsInsertPost(tx *sql.Tx, postID, threadID, boardID, author, body string) error {
+	_, err := tx.Exec(
+		`INSERT INTO posts_fts (post_id, thread_id, board_id, author, body) VALUES (?,?,?,?,?)`,
+		postID, threadID, boardID, author, body,
+	)
+	return err
+}
+
+func ftsUpdatePost(tx *sql.Tx, postID, newBody string) error {
+	_, err := tx.Exec(`UPDATE posts_fts SET body=? WHERE post_id=?`, newBody, postID)
+	return err
+}
+
+func ftsDeletePost(tx *sql.Tx, postID string) error {
+	_, err := tx.Exec(`DELETE FROM posts_fts WHERE post_id=?`, postID)
+	return err
+}
+
+func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
+	var rows *sql.Rows
+	var err error
+	if boardID != "" {
+		rows, err = db.Query(
+			`SELECT p.id, p.thread, p.author, p.body, p.content_type,
+			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq
+			 FROM posts_fts f
+			 JOIN posts p ON p.id = f.post_id
+			 WHERE f.board_id=? AND posts_fts MATCH ? AND p.redacted=0
+			 ORDER BY rank LIMIT ?`,
+			boardID, query, limit,
+		)
+	} else {
+		rows, err = db.Query(
+			`SELECT p.id, p.thread, p.author, p.body, p.content_type,
+			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq
+			 FROM posts_fts f
+			 JOIN posts p ON p.id = f.post_id
+			 WHERE posts_fts MATCH ? AND p.redacted=0
+			 ORDER BY rank LIMIT ?`,
+			query, limit,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var posts []Post
+	for rows.Next() {
+		var p Post
+		var redacted int
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.Body, &p.ContentType,
+			&p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq); err != nil {
+			return nil, err
+		}
+		p.Redacted = redacted != 0
+		posts = append(posts, p)
+	}
+	return posts, rows.Err()
+}
+
+// --- Sanction helpers ---
+
+// insertSanction records an active sanction.
+func insertSanction(tx *sql.Tx, id, userID, kind, scope string, expiresAt int64, by, reason string, seq int64) error {
+	_, err := tx.Exec(
+		`INSERT OR REPLACE INTO user_sanctions (id, user_id, kind, scope, expires_at, by, reason, seq)
+		 VALUES (?,?,?,?,?,?,?,?)`,
+		id, userID, kind, scope, expiresAt, by, reason, seq,
+	)
+	return err
+}
+
+// activeSanction returns ("mute"|"ban", true) if user has an active sanction
+// in the given scope (or globally). scope="" checks global only.
+func activeSanction(db *sql.DB, userID, scope string) (string, bool) {
+	now := nowMS()
+	var kind string
+	var err error
+	if scope != "" {
+		err = db.QueryRow(
+			`SELECT kind FROM user_sanctions
+			 WHERE user_id=? AND (scope=? OR scope='global')
+			   AND (expires_at=0 OR expires_at>?)
+			 ORDER BY CASE kind WHEN 'ban' THEN 0 ELSE 1 END LIMIT 1`,
+			userID, scope, now,
+		).Scan(&kind)
+	} else {
+		err = db.QueryRow(
+			`SELECT kind FROM user_sanctions
+			 WHERE user_id=? AND scope='global'
+			   AND (expires_at=0 OR expires_at>?)
+			 ORDER BY CASE kind WHEN 'ban' THEN 0 ELSE 1 END LIMIT 1`,
+			userID, now,
+		).Scan(&kind)
+	}
+	if err == sql.ErrNoRows {
+		return "", false
+	}
+	if err != nil {
+		return "", false
+	}
+	return kind, true
+}
+
 // --- Idempotency helpers ---
 
 func checkProcessed(db *sql.DB, cid string) (string, bool) {

@@ -114,6 +114,8 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.RoleGrantedPayload)
 	case proto.EvtRoleRevoked:
 		dst = new(proto.RoleRevokedPayload)
+	case proto.EvtBoardCreated:
+		dst = new(proto.BoardCreatedPayload)
 	case proto.EvtChatLine:
 		dst = new(proto.ChatLinePayload)
 	case proto.EvtPresenceUpdate:

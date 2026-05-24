@@ -15,6 +15,7 @@ const (
 	EvtUserSanctioned EventKind = "user.sanctioned"
 	EvtRoleGranted    EventKind = "role.granted"
 	EvtRoleRevoked    EventKind = "role.revoked"
+	EvtBoardCreated   EventKind = "board.created"
 
 	// Ephemeral events — carry eseq, best-effort, prunable.
 	EvtChatLine       EventKind = "chat.line"
@@ -126,6 +127,14 @@ type RoleRevokedPayload struct {
 	Role string `json:"role"`
 	By   string `json:"by"`
 	TS   int64  `json:"ts"`
+}
+
+type BoardCreatedPayload struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	By          string `json:"by"`
+	TS          int64  `json:"ts"`
 }
 
 // Ephemeral event payloads.
