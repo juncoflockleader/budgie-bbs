@@ -20,6 +20,16 @@ const (
 	CmdSubscribe    CommandName = "subscribe"
 	CmdUnsubscribe  CommandName = "unsubscribe"
 	CmdPurgePost    CommandName = "purgePost" // admin-only physical delete of post body (GDPR)
+
+	// M10 — Reactions
+	CmdReactPost   CommandName = "reactPost"
+	CmdUnreactPost CommandName = "unreactPost"
+
+	// M11 — Polls
+	CmdVotePoll CommandName = "votePoll"
+
+	// M8 — Notifications
+	CmdSetThreadPref CommandName = "setThreadPref"
 )
 
 type CreateBoardPayload struct {
@@ -96,6 +106,24 @@ type SetPresencePayload struct {
 type PurgePostPayload struct {
 	Post   string `json:"post"`
 	Reason string `json:"reason,omitempty"`
+}
+
+// M10 — Reactions
+type ReactPostPayload struct {
+	Post  string `json:"post"`
+	Emoji string `json:"emoji,omitempty"` // defaults to "heart"
+}
+
+// M11 — Polls
+type VotePollPayload struct {
+	Poll   string `json:"poll"`
+	Option string `json:"option"`
+}
+
+// M8 — Thread watch preference
+type SetThreadPrefPayload struct {
+	Thread string `json:"thread"`
+	Level  string `json:"level"` // "watch" | "normal" | "mute"
 }
 
 type SubscribePayload struct {

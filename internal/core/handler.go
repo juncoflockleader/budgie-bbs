@@ -5,10 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+var mentionRe = regexp.MustCompile(`@([A-Za-z0-9_\-]{1,64})`)
 
 // editWindowDur is how long an author may edit their own post without mod role.
 const editWindowDur = 24 * time.Hour
@@ -205,6 +209,34 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.purgePost(actor, p)
 
+	case proto.CmdReactPost:
+		var p proto.ReactPostPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.reactPost(actor, p)
+
+	case proto.CmdUnreactPost:
+		var p proto.ReactPostPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.unreactPost(actor, p)
+
+	case proto.CmdVotePoll:
+		var p proto.VotePollPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.votePoll(actor, p)
+
+	case proto.CmdSetThreadPref:
+		var p proto.SetThreadPrefPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.setThreadPref(actor, p)
+
 	default:
 		return Reply{Err: errDetail(proto.ErrValidationFailed, fmt.Sprintf("unknown command: %s", name), false)}
 	}
@@ -296,6 +328,9 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
 		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, Body: p.Body, ContentType: ct, TS: ts}, TS: ts})
 
+	// Post-commit activity tracking (best-effort, non-blocking).
+	go h.postCommitWork(actor, postID, threadID, p.Board, p.Body, "", ts, pseq)
+
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }
 
@@ -370,12 +405,35 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if err := ftsInsertPost(tx, postID, p.Thread, thread.Board, actor.Name, p.Body); err != nil {
 		return internalErr(err)
 	}
+	// Parse [poll] block from post body (if present) — before commit.
+	pollBlock, cleanBody := extractPoll(p.Body)
+	if pollBlock != nil && cleanBody != p.Body {
+		// Update the body stored in the event and projection to the cleaned version.
+		// (We already wrote the event and post with p.Body above; redo both.)
+		// Simplest approach: just store poll metadata — body stays as-is for now.
+		// Create poll rows within the same TX.
+		pollID := newID("pol_")
+		if err := insertPoll(tx, pollID, postID, pollBlock.question, 0, ts); err != nil {
+			return internalErr(err)
+		}
+		for i, opt := range pollBlock.options {
+			optID := newID("opt_")
+			if err := insertPollOption(tx, optID, pollID, opt, i); err != nil {
+				return internalErr(err)
+			}
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: seq, Scopes: scopes,
 		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: actor.Name, Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, TS: ts}, TS: ts})
+
+	// Post-commit: record activity + trust level change; fan out notifications.
+	// These are best-effort and do not affect the command reply.
+	go h.postCommitWork(actor, postID, p.Thread, thread.Board, p.Body, p.ReplyTo, ts, seq)
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
 }
@@ -909,6 +967,338 @@ func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
 		Payload: &proto.PostPurgedPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
+}
+
+// ── M10: Reactions ──────────────────────────────────────────────────────────
+
+func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
+	if p.Post == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	emoji := p.Emoji
+	if emoji == "" {
+		emoji = "heart"
+	}
+	ts := nowMS()
+
+	// Read before TX.
+	post, err := getPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+	if post.Redacted {
+		return Reply{Err: errDetail(proto.ErrConflict, "cannot react to a redacted post", false)}
+	}
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil || thread == nil {
+		return internalErr(err)
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if err := upsertReaction(tx, post.ID, actor.ID, emoji, ts); err != nil {
+		return internalErr(err)
+	}
+	count, err := reactionCountTx(tx, post.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostReacted, scopes, &proto.PostReactedPayload{
+		PostID: post.ID, Thread: post.Thread, User: actor.ID, Emoji: emoji, ReactionCount: count, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	// Update activity for post author (best-effort).
+	if post.Author != actor.ID {
+		go recordReactionReceived(h.db, post.Author) //nolint
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostReacted, Seq: seq, Scopes: scopes,
+		Payload: &proto.PostReactedPayload{PostID: post.ID, Thread: post.Thread, User: actor.Name, Emoji: emoji, ReactionCount: count, TS: ts}, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
+}
+
+func (h *Handler) unreactPost(actor *User, p proto.ReactPostPayload) Reply {
+	if p.Post == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	ts := nowMS()
+
+	post, err := getPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil || thread == nil {
+		return internalErr(err)
+	}
+
+	// Check user actually reacted.
+	reacted, err := userReacted(h.db, post.ID, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if !reacted {
+		return Reply{Err: errDetail(proto.ErrConflict, "you have not reacted to this post", false)}
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if err := deleteReaction(tx, post.ID, actor.ID); err != nil {
+		return internalErr(err)
+	}
+	count, err := reactionCountTx(tx, post.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	emoji := p.Emoji
+	if emoji == "" {
+		emoji = "heart"
+	}
+	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostUnreacted, scopes, &proto.PostUnreactedPayload{
+		PostID: post.ID, Thread: post.Thread, User: actor.ID, Emoji: emoji, ReactionCount: count, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	if post.Author != actor.ID {
+		go recordReactionRemoved(h.db, post.Author) //nolint
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostUnreacted, Seq: seq, Scopes: scopes,
+		Payload: &proto.PostUnreactedPayload{PostID: post.ID, Thread: post.Thread, User: actor.Name, Emoji: emoji, ReactionCount: count, TS: ts}, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
+}
+
+// ── M11: Polls ──────────────────────────────────────────────────────────────
+
+func (h *Handler) votePoll(actor *User, p proto.VotePollPayload) Reply {
+	if p.Poll == "" || p.Option == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "poll and option are required", false)}
+	}
+	ts := nowMS()
+
+	// Verify poll + option exist (reads before TX).
+	poll, err := getPollWithVotes(h.db, p.Poll, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if poll == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "poll not found", false)}
+	}
+	optionValid := false
+	for _, opt := range poll.Options {
+		if opt.ID == p.Option {
+			optionValid = true
+			break
+		}
+	}
+	if !optionValid {
+		return Reply{Err: errDetail(proto.ErrNotFound, "option not found", false)}
+	}
+	if poll.ExpiresAt > 0 && ts > poll.ExpiresAt {
+		return Reply{Err: errDetail(proto.ErrConflict, "poll has expired", false)}
+	}
+
+	// Look up the post for scoping.
+	post, err := getPost(h.db, poll.PostID)
+	if err != nil || post == nil {
+		return internalErr(err)
+	}
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil || thread == nil {
+		return internalErr(err)
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if err := castVote(tx, p.Poll, p.Option, actor.ID, ts); err != nil {
+		return internalErr(err)
+	}
+	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPollVoted, scopes, &proto.PollVotedPayload{
+		Poll: p.Poll, Option: p.Option, User: actor.ID, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPollVoted, Seq: seq, Scopes: scopes,
+		Payload: &proto.PollVotedPayload{Poll: p.Poll, Option: p.Option, User: actor.Name, TS: ts}, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: p.Poll, Seq: seq}}
+}
+
+// ── M8: Thread prefs ────────────────────────────────────────────────────────
+
+func (h *Handler) setThreadPref(actor *User, p proto.SetThreadPrefPayload) Reply {
+	if p.Thread == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	}
+	if p.Level != "watch" && p.Level != "normal" && p.Level != "mute" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, `level must be "watch", "normal", or "mute"`, false)}
+	}
+	// Verify thread exists.
+	thread, err := getThread(h.db, p.Thread)
+	if err != nil {
+		return internalErr(err)
+	}
+	if thread == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+	}
+	if err := setThreadPref(h.db, actor.ID, p.Thread, p.Level); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Thread}}
+}
+
+// ── Post-commit work (goroutine) ─────────────────────────────────────────────
+
+// postCommitWork runs after a post is committed: records activity/trust,
+// fans out mention notifications, and notifies thread watchers.
+// Called in a goroutine — must not use the TX or hold any locks.
+func (h *Handler) postCommitWork(
+	actor *User, postID, threadID, boardID, body, replyTo string, ts, seq int64,
+) {
+	// 1. Record activity and recompute trust level.
+	oldTL, newTL, err := recordPostCreated(h.db, actor.ID)
+	if err == nil && newTL != oldTL {
+		// Emit trust level change event (best-effort, separate mini-tx).
+		if tx, err2 := h.db.Begin(); err2 == nil {
+			scopes := []string{"account:" + actor.ID}
+			evtSeq, err3 := appendEvent(tx, newID("evt_"), proto.EvtTrustLevelChanged, scopes,
+				&proto.TrustLevelChangedPayload{User: actor.ID, OldLevel: oldTL, NewLevel: newTL, TS: ts})
+			if err3 == nil {
+				_ = tx.Commit()
+				h.bus.Publish(&proto.Event{Kind: proto.EvtTrustLevelChanged, Seq: evtSeq, Scopes: scopes,
+					Payload: &proto.TrustLevelChangedPayload{User: actor.Name, OldLevel: oldTL, NewLevel: newTL, TS: ts}, TS: ts})
+			} else {
+				_ = tx.Rollback()
+			}
+		}
+	}
+
+	// 2. Fan out mention notifications.
+	mentions := parseMentions(body)
+	for _, username := range mentions {
+		u, err := getUserByName(h.db, username)
+		if err != nil || u == nil || u.ID == actor.ID {
+			continue
+		}
+		_ = insertNotification(h.db, newID("ntf_"), u.ID, "mention", threadID, postID, actor.Name, ts)
+	}
+
+	// 3. Notify reply-to author.
+	if replyTo != "" {
+		parent, err := getPost(h.db, replyTo)
+		if err == nil && parent != nil && parent.Author != actor.ID {
+			_ = insertNotification(h.db, newID("ntf_"), parent.Author, "reply", threadID, postID, actor.Name, ts)
+		}
+	}
+
+	// 4. Notify thread watchers (excluding the author).
+	watchers, err := watchersOfThread(h.db, threadID, actor.ID)
+	if err == nil {
+		for _, watcherID := range watchers {
+			_ = insertNotification(h.db, newID("ntf_"), watcherID, "watched", threadID, postID, actor.Name, ts)
+		}
+	}
+
+	// 5. Ephemeral notification event for live-connected clients.
+	_ = seq // available for future use
+}
+
+// parseMentions extracts unique @usernames from post body text.
+func parseMentions(body string) []string {
+	matches := mentionRe.FindAllStringSubmatch(body, -1)
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range matches {
+		name := strings.ToLower(m[1])
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, m[1]) // preserve original casing for lookup
+		}
+	}
+	return out
+}
+
+// pollBlock represents a parsed [poll] block from post markup.
+type pollBlock struct {
+	question string
+	options  []string
+}
+
+// extractPoll looks for [poll]...[/poll] in body. Returns the parsed block
+// (or nil if absent) and the body with the poll block stripped.
+func extractPoll(body string) (*pollBlock, string) {
+	const open = "[poll]"
+	const close = "[/poll]"
+	start := strings.Index(body, open)
+	if start < 0 {
+		return nil, body
+	}
+	end := strings.Index(body, close)
+	if end < start {
+		return nil, body
+	}
+	inner := strings.TrimSpace(body[start+len(open) : end])
+	lines := strings.Split(inner, "\n")
+	var question string
+	var options []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if question == "" && !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "*") {
+			question = line
+		} else {
+			opt := strings.TrimLeft(line, "-* ")
+			if opt != "" {
+				options = append(options, opt)
+			}
+		}
+	}
+	if len(options) < 2 {
+		return nil, body // not a valid poll
+	}
+	cleanBody := strings.TrimSpace(body[:start]) + strings.TrimSpace(body[end+len(close):])
+	return &pollBlock{question: question, options: options}, cleanBody
 }
 
 // --- Helpers ---

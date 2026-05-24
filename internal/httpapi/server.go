@@ -47,6 +47,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/threads/{thread}/posts", auth(http.HandlerFunc(s.handleListPosts)))
 	mux.Handle("GET /api/v1/search", auth(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /api/v1/audit", auth(http.HandlerFunc(s.handleAuditLog)))
+	mux.Handle("GET /api/v1/notifications", auth(http.HandlerFunc(s.handleListNotifications)))
+	mux.Handle("GET /api/v1/polls/{poll}", auth(http.HandlerFunc(s.handleGetPoll)))
+	mux.Handle("GET /api/v1/posts/{post}/poll", auth(http.HandlerFunc(s.handleGetPollByPost)))
+	mux.Handle("GET /api/v1/users/{name}/trust", auth(http.HandlerFunc(s.handleGetTrust)))
 
 	// Authenticated write endpoints
 	mux.Handle("POST /api/v1/auth/pubkey", auth(http.HandlerFunc(s.handleAddPubkey)))
@@ -57,6 +61,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/posts/{post}", auth(http.HandlerFunc(s.handleRedactPost)))
 	mux.Handle("POST /api/v1/posts/{post}/restore", auth(http.HandlerFunc(s.handleRestorePost)))
 	mux.Handle("POST /api/v1/posts/{post}/purge", auth(http.HandlerFunc(s.handlePurgePost)))
+	mux.Handle("POST /api/v1/posts/{post}/react", auth(http.HandlerFunc(s.handleReactPost)))
+	mux.Handle("DELETE /api/v1/posts/{post}/react", auth(http.HandlerFunc(s.handleUnreactPost)))
+	mux.Handle("POST /api/v1/polls/{poll}/vote", auth(http.HandlerFunc(s.handleVotePoll)))
+	mux.Handle("POST /api/v1/notifications/{id}/read", auth(http.HandlerFunc(s.handleMarkNotificationRead)))
+	mux.Handle("POST /api/v1/notifications/read-all", auth(http.HandlerFunc(s.handleMarkAllRead)))
+	mux.Handle("PUT /api/v1/threads/{thread}/prefs", auth(http.HandlerFunc(s.handleSetThreadPref)))
 	mux.Handle("POST /api/v1/threads/{thread}/lock", auth(http.HandlerFunc(s.handleLockThread)))
 	mux.Handle("POST /api/v1/chat/{room}/lines", auth(http.HandlerFunc(s.handleSendChatLine)))
 

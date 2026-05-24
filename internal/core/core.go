@@ -140,6 +140,11 @@ func (c *Core) UserByID(id string) (*User, error) {
 	return getUserByID(c.DB, id)
 }
 
+// UserByName returns the user for the given username.
+func (c *Core) UserByName(name string) (*User, error) {
+	return getUserByName(c.DB, name)
+}
+
 // --- Projection readers (safe for concurrent access) ---
 
 func (c *Core) ListBoards() ([]Board, error) { return listBoards(c.DB) }
@@ -158,4 +163,46 @@ func (c *Core) SearchPosts(query, boardID string, limit int) ([]Post, error) {
 // AuditLog returns recent durable events (mod/admin use).
 func (c *Core) AuditLog(after int64, limit int) ([]*proto.Event, error) {
 	return replayEvents(c.DB, after, nil, limit)
+}
+
+// ── M10: Reactions ──────────────────────────────────────────────────────────
+
+func (c *Core) ReactionCount(postID string) (int, error) {
+	return reactionCount(c.DB, postID)
+}
+func (c *Core) UserReacted(postID, userID string) (bool, error) {
+	return userReacted(c.DB, postID, userID)
+}
+
+// ── M11: Polls ──────────────────────────────────────────────────────────────
+
+func (c *Core) GetPoll(pollID, viewerUserID string) (*Poll, error) {
+	return getPollWithVotes(c.DB, pollID, viewerUserID)
+}
+func (c *Core) GetPollByPostID(postID string) (*Poll, error) {
+	return getPollByPostID(c.DB, postID)
+}
+func (c *Core) PollsForPosts(postIDs []string, viewerUserID string) (map[string]*Poll, error) {
+	return pollsForPosts(c.DB, postIDs, viewerUserID)
+}
+
+// ── M8: Notifications ───────────────────────────────────────────────────────
+
+func (c *Core) ListNotifications(userID string, limit, offset int, unreadOnly bool) ([]Notification, error) {
+	return listNotifications(c.DB, userID, limit, offset, unreadOnly)
+}
+func (c *Core) CountUnreadNotifications(userID string) (int, error) {
+	return countUnreadNotifications(c.DB, userID)
+}
+func (c *Core) MarkNotificationRead(id, userID string) error {
+	return markNotificationRead(c.DB, id, userID)
+}
+func (c *Core) MarkAllNotificationsRead(userID string) error {
+	return markAllNotificationsRead(c.DB, userID)
+}
+
+// ── M9: Trust levels ────────────────────────────────────────────────────────
+
+func (c *Core) TrustInfo(userID string) (*TrustLevelInfo, error) {
+	return trustInfo(c.DB, userID)
 }

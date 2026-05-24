@@ -102,6 +102,74 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
 }
 
+// GET /api/v1/notifications
+func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	limit, offset := paginate(r)
+	unreadOnly := r.URL.Query().Get("unread") == "1" || r.URL.Query().Get("unread") == "true"
+	notifs, err := s.core.ListNotifications(actor.ID, limit, offset, unreadOnly)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	unread, _ := s.core.CountUnreadNotifications(actor.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"notifications": notifs, "unreadCount": unread})
+}
+
+// GET /api/v1/polls/{poll}
+func (s *Server) handleGetPoll(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	pollID := r.PathValue("poll")
+	poll, err := s.core.GetPoll(pollID, actor.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	if poll == nil {
+		writeError(w, http.StatusNotFound, "not_found", "poll not found", false)
+		return
+	}
+	writeJSON(w, http.StatusOK, poll)
+}
+
+// GET /api/v1/posts/{post}/poll
+func (s *Server) handleGetPollByPost(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	postID := r.PathValue("post")
+	poll, err := s.core.GetPollByPostID(postID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	if poll == nil {
+		writeError(w, http.StatusNotFound, "not_found", "poll not found", false)
+		return
+	}
+	// Re-fetch with viewer context to get voted state
+	fullPoll, err := s.core.GetPoll(poll.ID, actor.ID)
+	if err != nil || fullPoll == nil {
+		writeJSON(w, http.StatusOK, poll)
+		return
+	}
+	writeJSON(w, http.StatusOK, fullPoll)
+}
+
+// GET /api/v1/users/{name}/trust
+func (s *Server) handleGetTrust(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	u, err := s.core.UserByName(name)
+	if err != nil || u == nil {
+		writeError(w, http.StatusNotFound, "not_found", "user not found", false)
+		return
+	}
+	info, err := s.core.TrustInfo(u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 func paginate(r *http.Request) (limit, offset int) {
 	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))

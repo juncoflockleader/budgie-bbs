@@ -94,4 +94,67 @@ CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
 -- Seed the default board.
 INSERT OR IGNORE INTO boards (id, name, description)
     VALUES ('general', 'General', 'General discussion');
+
+-- ── M10: Reactions ───────────────────────────────────────────────────────────
+-- One reaction per user per post (emoji is reserved for future multi-reaction).
+CREATE TABLE IF NOT EXISTS post_reactions (
+    post_id TEXT    NOT NULL REFERENCES posts(id),
+    user_id TEXT    NOT NULL REFERENCES users(id),
+    emoji   TEXT    NOT NULL DEFAULT 'heart',
+    ts      INTEGER NOT NULL,
+    PRIMARY KEY (post_id, user_id)
+);
+
+-- ── M11: Polls ───────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS polls (
+    id         TEXT    PRIMARY KEY,
+    post_id    TEXT    NOT NULL REFERENCES posts(id),
+    question   TEXT    NOT NULL DEFAULT '',
+    expires_at INTEGER NOT NULL DEFAULT 0,  -- unix ms; 0 = no expiry
+    ts         INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS poll_options (
+    id       TEXT    PRIMARY KEY,
+    poll_id  TEXT    NOT NULL REFERENCES polls(id),
+    text     TEXT    NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+);
+-- One vote per user per poll.
+CREATE TABLE IF NOT EXISTS poll_votes (
+    poll_id   TEXT    NOT NULL REFERENCES polls(id),
+    option_id TEXT    NOT NULL REFERENCES poll_options(id),
+    user_id   TEXT    NOT NULL REFERENCES users(id),
+    ts        INTEGER NOT NULL,
+    PRIMARY KEY (poll_id, user_id)
+);
+
+-- ── M8: Notifications & thread watch preferences ─────────────────────────────
+CREATE TABLE IF NOT EXISTS thread_prefs (
+    user_id   TEXT NOT NULL REFERENCES users(id),
+    thread_id TEXT NOT NULL REFERENCES threads(id),
+    level     TEXT NOT NULL DEFAULT 'normal',  -- 'watch' | 'normal' | 'mute'
+    PRIMARY KEY (user_id, thread_id)
+);
+CREATE TABLE IF NOT EXISTS notifications (
+    id        TEXT    PRIMARY KEY,
+    user_id   TEXT    NOT NULL REFERENCES users(id),
+    kind      TEXT    NOT NULL,  -- 'mention' | 'reply' | 'watched'
+    thread_id TEXT    NOT NULL,
+    post_id   TEXT    NOT NULL,
+    actor     TEXT    NOT NULL,  -- username of who triggered the notification
+    read      INTEGER NOT NULL DEFAULT 0,
+    ts        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifs_user_unread
+    ON notifications(user_id, read, ts DESC);
+
+-- ── M9: Trust levels & activity tracking ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_activity (
+    user_id        TEXT    PRIMARY KEY REFERENCES users(id),
+    posts_created  INTEGER NOT NULL DEFAULT 0,
+    days_visited   INTEGER NOT NULL DEFAULT 0,
+    last_visit_day TEXT    NOT NULL DEFAULT '',  -- 'YYYY-MM-DD'
+    reactions_recv INTEGER NOT NULL DEFAULT 0,
+    trust_level    INTEGER NOT NULL DEFAULT 0    -- 0–4
+);
 `

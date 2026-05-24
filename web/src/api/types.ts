@@ -74,6 +74,11 @@ export type EventKind =
   | 'presence.update'
   | 'user.joined'
   | 'user.left'
+  | 'post.reacted'
+  | 'post.unreacted'
+  | 'poll.voted'
+  | 'user.mentioned'
+  | 'trust.changed'
 
 export interface BudgieEvent {
   event: EventKind
@@ -110,3 +115,51 @@ export interface PresenceUpdatePayload {
 }
 export interface UserJoinedPayload { user: string; ts: number }
 export interface UserLeftPayload   { user: string; ts: number }
+
+// ── M10: Reactions ──────────────────────────────────────────────────────────
+export interface PostReactedPayload {
+  postId: string; thread: string; user: string; emoji: string
+  reactionCount: number; ts: number
+}
+export interface PostUnreactedPayload {
+  postId: string; thread: string; user: string; emoji: string
+  reactionCount: number; ts: number
+}
+
+// ── M11: Polls ──────────────────────────────────────────────────────────────
+export interface PollOption {
+  id: string
+  text: string
+  voteCount: number
+}
+export interface Poll {
+  id: string
+  postId: string
+  question?: string
+  expiresAt?: number
+  ts: number
+  options: PollOption[]
+  voted?: string // option id the viewer voted for
+}
+export interface PollVotedPayload {
+  poll: string; option: string; user: string; ts: number
+}
+
+// ── M8: Notifications ───────────────────────────────────────────────────────
+export interface Notification {
+  id: string
+  kind: 'mention' | 'reply' | 'watched'
+  threadId: string
+  postId: string
+  actor: string
+  read: boolean
+  ts: number
+}
+
+// ── M9: Trust ───────────────────────────────────────────────────────────────
+export interface TrustInfo {
+  postsCreated: number
+  daysVisited: number
+  reactionsReceived: number
+  trustLevel: number
+}

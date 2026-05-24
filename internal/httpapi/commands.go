@@ -146,6 +146,92 @@ func (s *Server) handleSendChatLine(w http.ResponseWriter, r *http.Request) {
 	writeAck(w, cid, reply)
 }
 
+// POST /api/v1/posts/{post}/react
+func (s *Server) handleReactPost(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	postID := r.PathValue("post")
+
+	var p proto.ReactPostPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		p = proto.ReactPostPayload{}
+	}
+	p.Post = postID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdReactPost, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+// DELETE /api/v1/posts/{post}/react
+func (s *Server) handleUnreactPost(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	postID := r.PathValue("post")
+
+	p := proto.ReactPostPayload{Post: postID}
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdUnreactPost, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+// POST /api/v1/polls/{poll}/vote
+func (s *Server) handleVotePoll(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	pollID := r.PathValue("poll")
+
+	var p proto.VotePollPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Poll = pollID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdVotePoll, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+// POST /api/v1/notifications/{id}/read
+func (s *Server) handleMarkNotificationRead(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	id := r.PathValue("id")
+	if err := s.core.MarkNotificationRead(id, actor.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// POST /api/v1/notifications/read-all
+func (s *Server) handleMarkAllRead(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	if err := s.core.MarkAllNotificationsRead(actor.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// PUT /api/v1/threads/{thread}/prefs
+func (s *Server) handleSetThreadPref(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	threadID := r.PathValue("thread")
+
+	var p proto.SetThreadPrefPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Thread = threadID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetThreadPref, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 func (s *Server) handlePurgePost(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	postID := r.PathValue("post")

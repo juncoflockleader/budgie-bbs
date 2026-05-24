@@ -18,6 +18,19 @@ const (
 	EvtBoardCreated   EventKind = "board.created"
 	EvtPostPurged     EventKind = "post.purged" // GDPR hard-delete; body removed from projection
 
+	// M10 — Reactions
+	EvtPostReacted   EventKind = "post.reacted"
+	EvtPostUnreacted EventKind = "post.unreacted"
+
+	// M11 — Polls
+	EvtPollVoted EventKind = "poll.voted"
+
+	// M8 — Notifications
+	EvtMentioned EventKind = "user.mentioned" // durable: @username in post body
+
+	// M9 — Trust levels
+	EvtTrustLevelChanged EventKind = "user.trust_level_changed"
+
 	// Ephemeral events — carry eseq, best-effort, prunable.
 	EvtChatLine       EventKind = "chat.line"
 	EvtPresenceUpdate EventKind = "presence.update"
@@ -42,7 +55,9 @@ func (e *Event) IsDurable() bool {
 	switch e.Kind {
 	case EvtThreadNew, EvtPostAppended, EvtPostEdited, EvtPostRedacted,
 		EvtPostRestored, EvtPostPurged, EvtThreadLocked, EvtThreadMoved,
-		EvtUserSanctioned, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated:
+		EvtUserSanctioned, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated,
+		EvtPostReacted, EvtPostUnreacted, EvtPollVoted,
+		EvtMentioned, EvtTrustLevelChanged:
 		return true
 	}
 	return false
@@ -144,6 +159,54 @@ type BoardCreatedPayload struct {
 	Description string `json:"description"`
 	By          string `json:"by"`
 	TS          int64  `json:"ts"`
+}
+
+// M10 — Reaction payloads.
+
+type PostReactedPayload struct {
+	PostID        string `json:"postId"`
+	Thread        string `json:"thread"`
+	User          string `json:"user"`
+	Emoji         string `json:"emoji"`
+	ReactionCount int    `json:"reactionCount"`
+	TS            int64  `json:"ts"`
+}
+
+type PostUnreactedPayload struct {
+	PostID        string `json:"postId"`
+	Thread        string `json:"thread"`
+	User          string `json:"user"`
+	Emoji         string `json:"emoji"`
+	ReactionCount int    `json:"reactionCount"`
+	TS            int64  `json:"ts"`
+}
+
+// M11 — Poll payload.
+
+type PollVotedPayload struct {
+	Poll   string `json:"poll"`
+	Option string `json:"option"`
+	User   string `json:"user"`
+	TS     int64  `json:"ts"`
+}
+
+// M8 — Notification payload (durable mention event).
+
+type MentionedPayload struct {
+	User     string `json:"user"`     // mentioned user ID
+	By       string `json:"by"`       // author username
+	PostID   string `json:"postId"`
+	ThreadID string `json:"threadId"`
+	TS       int64  `json:"ts"`
+}
+
+// M9 — Trust level payload.
+
+type TrustLevelChangedPayload struct {
+	User     string `json:"user"`
+	OldLevel int    `json:"oldLevel"`
+	NewLevel int    `json:"newLevel"`
+	TS       int64  `json:"ts"`
 }
 
 // Ephemeral event payloads.

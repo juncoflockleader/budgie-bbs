@@ -1,4 +1,4 @@
-import type { AuthResponse, Board, Thread, Post, AckResult, ApiResponse } from './types'
+import type { AuthResponse, Board, Thread, Post, AckResult, ApiResponse, Notification, Poll, TrustInfo } from './types'
 
 const BASE = '/api/v1'
 
@@ -62,12 +62,85 @@ export async function search(token: string, q: string, board?: string): Promise<
   return json<Post[]>(res)
 }
 
+// ── M8: Notifications ─────────────────────────────────────────────────────
+
+export async function listNotifications(token: string, unreadOnly = false): Promise<ApiResponse<{ notifications: Notification[]; unreadCount: number }>> {
+  const params = new URLSearchParams({ limit: '50' })
+  if (unreadOnly) params.set('unread', '1')
+  const res = await fetch(`${BASE}/notifications?${params}`, { headers: authHeaders(token) })
+  return json<{ notifications: Notification[]; unreadCount: number }>(res)
+}
+
+export async function markNotificationRead(token: string, id: string): Promise<ApiResponse<unknown>> {
+  const res = await fetch(`${BASE}/notifications/${id}/read`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  return json<unknown>(res)
+}
+
+export async function markAllNotificationsRead(token: string): Promise<ApiResponse<unknown>> {
+  const res = await fetch(`${BASE}/notifications/read-all`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  return json<unknown>(res)
+}
+
+// ── M10: Reactions ─────────────────────────────────────────────────────────
+
+export async function reactPost(token: string, postId: string, emoji = 'heart'): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/posts/${postId}/react`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ emoji }),
+  })
+  return json<AckResult>(res)
+}
+
+export async function unreactPost(token: string, postId: string): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/posts/${postId}/react`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  return json<AckResult>(res)
+}
+
+// ── M11: Polls ─────────────────────────────────────────────────────────────
+
+export async function getPoll(token: string, pollId: string): Promise<ApiResponse<Poll>> {
+  const res = await fetch(`${BASE}/polls/${pollId}`, { headers: authHeaders(token) })
+  return json<Poll>(res)
+}
+
+export async function getPollByPost(token: string, postId: string): Promise<ApiResponse<Poll>> {
+  const res = await fetch(`${BASE}/posts/${postId}/poll`, { headers: authHeaders(token) })
+  return json<Poll>(res)
+}
+
+export async function votePoll(token: string, pollId: string, option: string): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/polls/${pollId}/vote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ option }),
+  })
+  return json<AckResult>(res)
+}
+
+// ── M9: Trust ──────────────────────────────────────────────────────────────
+
+export async function getTrust(token: string, username: string): Promise<ApiResponse<TrustInfo>> {
+  const res = await fetch(`${BASE}/users/${username}/trust`, { headers: authHeaders(token) })
+  return json<TrustInfo>(res)
+}
+
 // ── Commands ───────────────────────────────────────────────────────────────
 
 export type CommandName =
   | 'createThread' | 'appendPost' | 'editPost' | 'redactPost' | 'restorePost'
   | 'lockThread' | 'moveThread' | 'sanctionUser' | 'grantRole' | 'revokeRole'
   | 'sendChatLine' | 'setPresence' | 'createBoard' | 'purgePost'
+  | 'reactPost' | 'unreactPost' | 'votePoll' | 'setThreadPref'
 
 export async function execCommand(
   token: string,

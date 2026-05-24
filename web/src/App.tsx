@@ -1,4 +1,4 @@
-import { useState, FormEvent, useRef } from 'react'
+import { useState, useEffect, useCallback, FormEvent, useRef } from 'react'
 import { useAuth } from './hooks/useAuth'
 import { AuthPage } from './pages/AuthPage'
 import { BoardListPage } from './pages/BoardListPage'
@@ -7,7 +7,10 @@ import { ThreadPage } from './pages/ThreadPage'
 import { NewThreadPage } from './pages/NewThreadPage'
 import { ChatPage } from './pages/ChatPage'
 import { SearchPage } from './pages/SearchPage'
-import type { Board, Thread } from './api/types'
+import { NotificationsPage } from './pages/NotificationsPage'
+import * as api from './api/client'
+import type { Board, Thread, BudgieEvent } from './api/types'
+import { useStream } from './hooks/useStream'
 
 type Page =
   | { name: 'boards' }
@@ -16,12 +19,37 @@ type Page =
   | { name: 'new-thread'; board: Board }
   | { name: 'chat' }
   | { name: 'search'; query: string }
+  | { name: 'notifications' }
 
 export function App() {
   const { auth, login, logout } = useAuth()
   const [page, setPage] = useState<Page>({ name: 'boards' })
   const [searchDraft, setSearchDraft] = useState('')
+  const [unreadCount, setUnreadCount] = useState(0)
   const searchRef = useRef<HTMLInputElement>(null)
+
+  // Load initial unread notification count
+  useEffect(() => {
+    if (!auth.token) return
+    api.listNotifications(auth.token).then(res => {
+      if (res.data) setUnreadCount(res.data.unreadCount)
+    })
+  }, [auth.token])
+
+  // Live update unread count from stream events
+  const onEvent = useCallback((evt: BudgieEvent) => {
+    if (evt.event === 'user.joined' || evt.event === 'user.left') return
+    // Any event that might be a notification for us — re-fetch count
+    if (evt.event === 'post.appended' || evt.event === 'post.edited') {
+      if (auth.token) {
+        api.listNotifications(auth.token).then(res => {
+          if (res.data) setUnreadCount(res.data.unreadCount)
+        })
+      }
+    }
+  }, [auth.token])
+
+  useStream({ token: auth.token ?? null }, onEvent)
 
   if (!auth.token || !auth.user) {
     return <AuthPage onLogin={login} />
@@ -55,6 +83,13 @@ export function App() {
           />
         </form>
         <button className="link-btn nav-chat" onClick={() => nav({ name: 'chat' })}>Chat</button>
+        <button
+          className={`link-btn nav-notifications${unreadCount > 0 ? ' nav-notifications--unread' : ''}`}
+          onClick={() => { nav({ name: 'notifications' }); setUnreadCount(0) }}
+          title="Notifications"
+        >
+          🔔{unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+        </button>
         <span className="nav-user muted">{user.name}</span>
         <button className="link-btn nav-logout" onClick={logout}>Logout</button>
       </nav>
@@ -89,7 +124,6 @@ export function App() {
             token={token}
             board={page.board}
             onCreated={threadId => {
-              // After creation, go back to thread list; the thread will appear via event.
               void threadId
               nav({ name: 'threads', board: page.board })
             }}
@@ -103,6 +137,12 @@ export function App() {
           <SearchPage
             token={token}
             initialQuery={page.query}
+            onBack={() => nav({ name: 'boards' })}
+          />
+        )}
+        {page.name === 'notifications' && (
+          <NotificationsPage
+            token={token}
             onBack={() => nav({ name: 'boards' })}
           />
         )}

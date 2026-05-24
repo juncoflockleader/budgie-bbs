@@ -2,6 +2,7 @@ package core
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -418,6 +419,407 @@ func recordProcessed(tx *sql.Tx, cid, resultJSON string) error {
 		cid, resultJSON, nowMS(),
 	)
 	return err
+}
+
+// ── M10: Reactions ──────────────────────────────────────────────────────────
+
+// upsertReaction inserts or replaces a reaction (one per user per post).
+func upsertReaction(tx *sql.Tx, postID, userID, emoji string, ts int64) error {
+	_, err := tx.Exec(
+		`INSERT OR REPLACE INTO post_reactions (post_id, user_id, emoji, ts) VALUES (?,?,?,?)`,
+		postID, userID, emoji, ts,
+	)
+	return err
+}
+
+func deleteReaction(tx *sql.Tx, postID, userID string) error {
+	_, err := tx.Exec(`DELETE FROM post_reactions WHERE post_id=? AND user_id=?`, postID, userID)
+	return err
+}
+
+func reactionCount(db *sql.DB, postID string) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM post_reactions WHERE post_id=?`, postID).Scan(&n)
+	return n, err
+}
+
+func reactionCountTx(tx *sql.Tx, postID string) (int, error) {
+	var n int
+	err := tx.QueryRow(`SELECT COUNT(*) FROM post_reactions WHERE post_id=?`, postID).Scan(&n)
+	return n, err
+}
+
+func userReacted(db *sql.DB, postID, userID string) (bool, error) {
+	var n int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM post_reactions WHERE post_id=? AND user_id=?`, postID, userID,
+	).Scan(&n)
+	return n > 0, err
+}
+
+// ── M11: Polls ──────────────────────────────────────────────────────────────
+
+// Poll is the API projection of a poll.
+type Poll struct {
+	ID        string       `json:"id"`
+	PostID    string       `json:"postId"`
+	Question  string       `json:"question,omitempty"`
+	ExpiresAt int64        `json:"expiresAt,omitempty"`
+	TS        int64        `json:"ts"`
+	Options   []PollOption `json:"options"`
+	Voted     string       `json:"voted,omitempty"` // option_id the current user voted for
+}
+
+type PollOption struct {
+	ID        string `json:"id"`
+	Text      string `json:"text"`
+	VoteCount int    `json:"voteCount"`
+}
+
+func insertPoll(tx *sql.Tx, id, postID, question string, expiresAt, ts int64) error {
+	_, err := tx.Exec(
+		`INSERT INTO polls (id, post_id, question, expires_at, ts) VALUES (?,?,?,?,?)`,
+		id, postID, question, expiresAt, ts,
+	)
+	return err
+}
+
+func insertPollOption(tx *sql.Tx, id, pollID, text string, position int) error {
+	_, err := tx.Exec(
+		`INSERT INTO poll_options (id, poll_id, text, position) VALUES (?,?,?,?)`,
+		id, pollID, text, position,
+	)
+	return err
+}
+
+func castVote(tx *sql.Tx, pollID, optionID, userID string, ts int64) error {
+	_, err := tx.Exec(
+		`INSERT OR REPLACE INTO poll_votes (poll_id, option_id, user_id, ts) VALUES (?,?,?,?)`,
+		pollID, optionID, userID, ts,
+	)
+	return err
+}
+
+func getPollByPostID(db *sql.DB, postID string) (*Poll, error) {
+	p := &Poll{}
+	err := db.QueryRow(
+		`SELECT id, post_id, question, expires_at, ts FROM polls WHERE post_id=?`, postID,
+	).Scan(&p.ID, &p.PostID, &p.Question, &p.ExpiresAt, &p.TS)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func getPollWithVotes(db *sql.DB, pollID, viewerUserID string) (*Poll, error) {
+	p := &Poll{}
+	err := db.QueryRow(
+		`SELECT id, post_id, question, expires_at, ts FROM polls WHERE id=?`, pollID,
+	).Scan(&p.ID, &p.PostID, &p.Question, &p.ExpiresAt, &p.TS)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Load options with counts.
+	rows, err := db.Query(
+		`SELECT po.id, po.text,
+		        (SELECT COUNT(*) FROM poll_votes pv WHERE pv.option_id=po.id) AS cnt
+		 FROM poll_options po WHERE po.poll_id=? ORDER BY po.position`, pollID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var opt PollOption
+		if err := rows.Scan(&opt.ID, &opt.Text, &opt.VoteCount); err != nil {
+			return nil, err
+		}
+		p.Options = append(p.Options, opt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Check if viewer voted.
+	if viewerUserID != "" {
+		var votedOptionID string
+		err := db.QueryRow(
+			`SELECT option_id FROM poll_votes WHERE poll_id=? AND user_id=?`, pollID, viewerUserID,
+		).Scan(&votedOptionID)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		p.Voted = votedOptionID
+	}
+	return p, nil
+}
+
+// pollsForPosts returns a map of postID → Poll for any posts that have polls.
+// viewerUserID is used to populate the Voted field.
+func pollsForPosts(db *sql.DB, postIDs []string, viewerUserID string) (map[string]*Poll, error) {
+	if len(postIDs) == 0 {
+		return nil, nil
+	}
+	// Build "?,?,?" placeholder.
+	args := make([]interface{}, len(postIDs))
+	for i, id := range postIDs {
+		args[i] = id
+	}
+	placeholder := strings.Repeat("?,", len(postIDs))
+	placeholder = placeholder[:len(placeholder)-1] // trim trailing comma
+	rows, err := db.Query(
+		`SELECT id, post_id, question, expires_at, ts FROM polls WHERE post_id IN (`+placeholder+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	polls := map[string]*Poll{}
+	for rows.Next() {
+		p := &Poll{}
+		if err := rows.Scan(&p.ID, &p.PostID, &p.Question, &p.ExpiresAt, &p.TS); err != nil {
+			return nil, err
+		}
+		polls[p.PostID] = p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Load options and votes for each poll found.
+	for _, p := range polls {
+		full, err := getPollWithVotes(db, p.ID, viewerUserID)
+		if err != nil {
+			return nil, err
+		}
+		if full != nil {
+			polls[p.PostID] = full
+		}
+	}
+	return polls, nil
+}
+
+// ── M8: Notifications ───────────────────────────────────────────────────────
+
+// Notification is the API projection of a notification.
+type Notification struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"` // "mention" | "reply" | "watched"
+	ThreadID string `json:"threadId"`
+	PostID   string `json:"postId"`
+	Actor    string `json:"actor"`
+	Read     bool   `json:"read"`
+	TS       int64  `json:"ts"`
+}
+
+func insertNotification(db *sql.DB, id, userID, kind, threadID, postID, actor string, ts int64) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO notifications (id, user_id, kind, thread_id, post_id, actor, read, ts)
+		 VALUES (?,?,?,?,?,?,0,?)`,
+		id, userID, kind, threadID, postID, actor, ts,
+	)
+	return err
+}
+
+func listNotifications(db *sql.DB, userID string, limit, offset int, unreadOnly bool) ([]Notification, error) {
+	q := `SELECT id, kind, thread_id, post_id, actor, read, ts
+	      FROM notifications WHERE user_id=?`
+	if unreadOnly {
+		q += ` AND read=0`
+	}
+	q += ` ORDER BY ts DESC LIMIT ? OFFSET ?`
+	rows, err := db.Query(q, userID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Notification
+	for rows.Next() {
+		var n Notification
+		var read int
+		if err := rows.Scan(&n.ID, &n.Kind, &n.ThreadID, &n.PostID, &n.Actor, &read, &n.TS); err != nil {
+			return nil, err
+		}
+		n.Read = read != 0
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func countUnreadNotifications(db *sql.DB, userID string) (int, error) {
+	var n int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM notifications WHERE user_id=? AND read=0`, userID,
+	).Scan(&n)
+	return n, err
+}
+
+func markNotificationRead(db *sql.DB, id, userID string) error {
+	_, err := db.Exec(
+		`UPDATE notifications SET read=1 WHERE id=? AND user_id=?`, id, userID,
+	)
+	return err
+}
+
+func markAllNotificationsRead(db *sql.DB, userID string) error {
+	_, err := db.Exec(`UPDATE notifications SET read=1 WHERE user_id=?`, userID)
+	return err
+}
+
+func setThreadPref(db *sql.DB, userID, threadID, level string) error {
+	if level == "normal" {
+		// "normal" = remove the row (default).
+		_, err := db.Exec(`DELETE FROM thread_prefs WHERE user_id=? AND thread_id=?`, userID, threadID)
+		return err
+	}
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO thread_prefs (user_id, thread_id, level) VALUES (?,?,?)`,
+		userID, threadID, level,
+	)
+	return err
+}
+
+// watchersOfThread returns user IDs with level='watch' for the given thread,
+// excluding excludeUserID (usually the post author).
+func watchersOfThread(db *sql.DB, threadID, excludeUserID string) ([]string, error) {
+	rows, err := db.Query(
+		`SELECT user_id FROM thread_prefs WHERE thread_id=? AND level='watch' AND user_id!=?`,
+		threadID, excludeUserID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ── M9: Trust levels ────────────────────────────────────────────────────────
+
+// TrustLevelInfo holds computed activity stats and trust level for a user.
+type TrustLevelInfo struct {
+	PostsCreated  int `json:"postsCreated"`
+	DaysVisited   int `json:"daysVisited"`
+	ReactionsRecv int `json:"reactionsReceived"`
+	TrustLevel    int `json:"trustLevel"`
+}
+
+// ensureActivity creates or returns the activity row for a user (idempotent).
+func ensureActivity(db *sql.DB, userID string) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO user_activity (user_id) VALUES (?)`, userID,
+	)
+	return err
+}
+
+// recordPostCreated bumps the post counter and visit day, then recomputes trust.
+// Returns (oldLevel, newLevel, error).
+func recordPostCreated(db *sql.DB, userID string) (int, int, error) {
+	today := nowDay()
+	_, err := db.Exec(`INSERT OR IGNORE INTO user_activity (user_id) VALUES (?)`, userID)
+	if err != nil {
+		return 0, 0, err
+	}
+	// Bump posts_created; conditionally bump days_visited.
+	_, err = db.Exec(`
+		UPDATE user_activity SET
+		    posts_created = posts_created + 1,
+		    days_visited  = days_visited + CASE WHEN last_visit_day != ? THEN 1 ELSE 0 END,
+		    last_visit_day = ?
+		WHERE user_id = ?`, today, today, userID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return recomputeTrust(db, userID)
+}
+
+// recordReactionReceived increments the reactions_recv counter.
+func recordReactionReceived(db *sql.DB, postAuthorID string) error {
+	_, err := db.Exec(`
+		INSERT INTO user_activity (user_id, reactions_recv) VALUES (?,1)
+		ON CONFLICT(user_id) DO UPDATE SET reactions_recv = reactions_recv + 1`,
+		postAuthorID,
+	)
+	return err
+}
+
+func recordReactionRemoved(db *sql.DB, postAuthorID string) error {
+	_, err := db.Exec(`
+		UPDATE user_activity SET reactions_recv = MAX(0, reactions_recv - 1) WHERE user_id=?`,
+		postAuthorID,
+	)
+	return err
+}
+
+// recomputeTrust recalculates trust level from activity data and updates it.
+// Returns (oldLevel, newLevel, error).
+func recomputeTrust(db *sql.DB, userID string) (int, int, error) {
+	var posts, days, oldLevel int
+	err := db.QueryRow(
+		`SELECT posts_created, days_visited, trust_level FROM user_activity WHERE user_id=?`, userID,
+	).Scan(&posts, &days, &oldLevel)
+	if err == sql.ErrNoRows {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	newLevel := computeTrustLevel(posts, days, oldLevel)
+	if newLevel != oldLevel {
+		_, err = db.Exec(
+			`UPDATE user_activity SET trust_level=? WHERE user_id=?`, newLevel, userID,
+		)
+	}
+	return oldLevel, newLevel, err
+}
+
+// computeTrustLevel returns TL0–TL3 (TL4 = manual admin grant only).
+func computeTrustLevel(postsCreated, daysVisited, currentLevel int) int {
+	// Never downgrade below TL4 (manually granted).
+	if currentLevel >= 4 {
+		return currentLevel
+	}
+	switch {
+	case daysVisited >= 100 && postsCreated >= 50:
+		return 3
+	case daysVisited >= 30 && postsCreated >= 15:
+		return 2
+	case postsCreated >= 1:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// trustInfo returns trust level info for a user.
+func trustInfo(db *sql.DB, userID string) (*TrustLevelInfo, error) {
+	_ = ensureActivity(db, userID)
+	t := &TrustLevelInfo{}
+	err := db.QueryRow(
+		`SELECT posts_created, days_visited, reactions_recv, trust_level
+		 FROM user_activity WHERE user_id=?`, userID,
+	).Scan(&t.PostsCreated, &t.DaysVisited, &t.ReactionsRecv, &t.TrustLevel)
+	if err == sql.ErrNoRows {
+		return t, nil
+	}
+	return t, err
+}
+
+// nowDay returns today's date string 'YYYY-MM-DD'.
+func nowDay() string {
+	return time.Now().UTC().Format("2006-01-02")
 }
 
 func nullStr(s string) interface{} {

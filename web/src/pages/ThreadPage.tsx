@@ -1,9 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import * as api from '../api/client'
-import type { Thread, Post, BudgieEvent } from '../api/types'
-import type { PostAppendedPayload, PostEditedPayload, PostRedactedPayload, PostRestoredPayload, ThreadLockedPayload } from '../api/types'
+import type { Thread, Post, Poll, BudgieEvent } from '../api/types'
+import type {
+  PostAppendedPayload, PostEditedPayload, PostRedactedPayload, PostRestoredPayload,
+  ThreadLockedPayload, PostReactedPayload, PostUnreactedPayload, PollVotedPayload,
+} from '../api/types'
 import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
+import { PollWidget } from '../components/PollWidget'
 import { useStream } from '../hooks/useStream'
 
 interface Props {
@@ -12,6 +16,17 @@ interface Props {
   currentUserId: string
   currentUserRole: string
   onBack: () => void
+}
+
+interface ReactionState {
+  count: number
+  reacted: boolean
+}
+
+const TL_LABEL = ['TL0', 'TL1', 'TL2', 'TL3', 'TL4']
+
+function hasPollBlock(body: string) {
+  return body.includes('[poll]')
 }
 
 export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBack }: Props) {
@@ -23,19 +38,60 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
   const [draftBody, setDraftBody] = useState('')
   const [replyTo, setReplyTo] = useState<string | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
+  // postId → reaction state
+  const [reactions, setReactions] = useState<Record<string, ReactionState>>({})
+  // postId → Poll (null means "loading", undefined means "not loaded")
+  const [polls, setPolls] = useState<Record<string, Poll | null>>({})
+  // authorName → trust level
+  const [trustLevels, setTrustLevels] = useState<Record<string, number>>({})
   const bottomRef = useRef<HTMLDivElement>(null)
   const isMod = currentUserRole === 'moderator' || currentUserRole === 'admin'
   const isAdmin = currentUserRole === 'admin'
+
+  // Fetch trust level for an author if not already loaded
+  async function loadTrust(author: string) {
+    if (trustLevels[author] !== undefined) return
+    const res = await api.getTrust(token, author)
+    if (res.data) {
+      setTrustLevels(prev => ({ ...prev, [author]: res.data!.trustLevel }))
+    }
+  }
+
+  // Fetch poll for a post if not already loading/loaded
+  async function loadPollForPost(postId: string, body: string) {
+    if (!hasPollBlock(body)) return
+    setPolls(prev => {
+      if (prev[postId] !== undefined) return prev // already loading or loaded
+      return { ...prev, [postId]: null } // mark as loading
+    })
+    const res = await api.getPollByPost(token, postId)
+    setPolls(prev => {
+      if (res.data) return { ...prev, [postId]: res.data }
+      // If 404, remove the loading marker
+      const next = { ...prev }
+      delete next[postId]
+      return next
+    })
+  }
 
   useEffect(() => {
     setLoading(true)
     api.listPosts(token, thread.id).then(res => {
       setLoading(false)
-      if (res.error) setError(res.error.message)
-      else {
-        setPosts(res.data ?? [])
-        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
-      }
+      if (res.error) { setError(res.error.message); return }
+      const loadedPosts = res.data ?? []
+      setPosts(loadedPosts)
+      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+
+      // Init reaction state (count=0 until server pushes updates)
+      const rxMap: Record<string, ReactionState> = {}
+      loadedPosts.forEach(p => { rxMap[p.id] = { count: 0, reacted: false } })
+      setReactions(rxMap)
+
+      // Lazily load trust levels and polls
+      const uniqueAuthors = [...new Set(loadedPosts.map(p => p.author))]
+      uniqueAuthors.forEach(a => loadTrust(a))
+      loadedPosts.forEach(p => { if (hasPollBlock(p.body)) loadPollForPost(p.id, p.body) })
     })
   }, [token, thread.id])
 
@@ -43,17 +99,21 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
     if (evt.event === 'post.appended') {
       const p = evt.payload as PostAppendedPayload
       if (p.thread !== thread.id) return
+      const newPost: Post = {
+        id: p.id, thread: p.thread, author: p.author,
+        body: p.body, contentType: p.contentType,
+        replyTo: p.replyTo, version: 1, redacted: false,
+        createdSeq: evt.seq ?? 0, updatedSeq: evt.seq ?? 0,
+      }
       setPosts(prev => {
         if (prev.find(x => x.id === p.id)) return prev
-        const next = [...prev, {
-          id: p.id, thread: p.thread, author: p.author,
-          body: p.body, contentType: p.contentType,
-          replyTo: p.replyTo, version: 1, redacted: false,
-          createdSeq: evt.seq ?? 0, updatedSeq: evt.seq ?? 0,
-        }]
         setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
-        return next
+        return [...prev, newPost]
       })
+      setReactions(prev => ({ ...prev, [p.id]: { count: 0, reacted: false } }))
+      // Load trust + poll for the new post
+      loadTrust(p.author)
+      if (hasPollBlock(p.body)) loadPollForPost(p.id, p.body)
     } else if (evt.event === 'post.edited') {
       const p = evt.payload as PostEditedPayload
       setPosts(prev => prev.map(post =>
@@ -72,8 +132,43 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
     } else if (evt.event === 'thread.locked') {
       const p = evt.payload as ThreadLockedPayload
       if (p.thread === thread.id) setThreadLocked(p.locked)
+    } else if (evt.event === 'post.reacted') {
+      const p = evt.payload as PostReactedPayload
+      setReactions(prev => ({
+        ...prev,
+        [p.postId]: {
+          count: p.reactionCount,
+          reacted: p.user === currentUserId ? true : (prev[p.postId]?.reacted ?? false),
+        },
+      }))
+    } else if (evt.event === 'post.unreacted') {
+      const p = evt.payload as PostUnreactedPayload
+      setReactions(prev => ({
+        ...prev,
+        [p.postId]: {
+          count: p.reactionCount,
+          reacted: p.user === currentUserId ? false : (prev[p.postId]?.reacted ?? false),
+        },
+      }))
+    } else if (evt.event === 'poll.voted') {
+      const p = evt.payload as PollVotedPayload
+      setPolls(prev => {
+        const entry = Object.entries(prev).find(([, poll]) => poll?.id === p.poll)
+        if (!entry) return prev
+        const [postId, poll] = entry
+        if (!poll) return prev
+        return {
+          ...prev,
+          [postId]: {
+            ...poll,
+            options: poll.options.map(o =>
+              o.id === p.option ? { ...o, voteCount: o.voteCount + 1 } : o
+            ),
+          },
+        }
+      })
     }
-  }, [thread.id])
+  }, [thread.id, currentUserId])
 
   useStream({ token }, onEvent)
 
@@ -107,7 +202,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
   }
 
   async function purgePost(postId: string) {
-    const reason = prompt('Reason for GDPR purge (this permanently removes post body):')
+    const reason = prompt('Reason for GDPR purge (permanently removes post body):')
     if (reason === null) return
     const res = await api.execCommand(token, 'purgePost', { post: postId, reason })
     if (res.error) alert(res.error.message)
@@ -116,6 +211,47 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
   async function toggleLock() {
     const res = await api.execCommand(token, 'lockThread', { thread: thread.id, locked: !threadLocked })
     if (res.error) alert(res.error.message)
+  }
+
+  async function toggleReact(postId: string) {
+    const state = reactions[postId]
+    if (state?.reacted) {
+      setReactions(prev => ({
+        ...prev,
+        [postId]: { count: Math.max(0, (prev[postId]?.count ?? 1) - 1), reacted: false },
+      }))
+      const res = await api.unreactPost(token, postId)
+      if (res.error) {
+        setReactions(prev => ({
+          ...prev,
+          [postId]: { count: (prev[postId]?.count ?? 0) + 1, reacted: true },
+        }))
+        alert(res.error.message)
+      }
+    } else {
+      setReactions(prev => ({
+        ...prev,
+        [postId]: { count: (prev[postId]?.count ?? 0) + 1, reacted: true },
+      }))
+      const res = await api.reactPost(token, postId)
+      if (res.error) {
+        setReactions(prev => ({
+          ...prev,
+          [postId]: { count: Math.max(0, (prev[postId]?.count ?? 1) - 1), reacted: false },
+        }))
+        alert(res.error.message)
+      }
+    }
+  }
+
+  async function handleVotePoll(postId: string, pollId: string, optionId: string) {
+    const res = await api.votePoll(token, pollId, optionId)
+    if (res.error) { alert(res.error.message); return }
+    // Refresh from server to get accurate counts
+    const pollRes = await api.getPoll(token, pollId)
+    if (pollRes.data) {
+      setPolls(prev => ({ ...prev, [postId]: pollRes.data! }))
+    }
   }
 
   if (loading) return <Spinner />
@@ -137,39 +273,66 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
       </div>
 
       <div className="post-list">
-        {posts.map(post => (
-          <div key={post.id} className="post-card">
-            <div className="post-meta">
-              <span className="post-author">{post.author}</span>
-              <span className="muted post-time">#{post.createdSeq}</span>
-              <span className="post-actions">
-                {!thread.locked && !post.redacted && (
-                  <button className="link-btn" onClick={() => {
-                    setReplyTo(post.id)
-                    setComposing(true)
-                  }}>Reply</button>
+        {posts.map(post => {
+          const rx = reactions[post.id] ?? { count: 0, reacted: false }
+          const poll = polls[post.id] // null = loading, Poll = loaded, undefined = none
+          const tl = trustLevels[post.author]
+
+          return (
+            <div key={post.id} className="post-card">
+              <div className="post-meta">
+                <span className="post-author">{post.author}</span>
+                {tl !== undefined && (
+                  <span className={`trust-badge trust-badge--tl${tl}`} title={`Trust level ${tl}`}>
+                    {TL_LABEL[tl] ?? `TL${tl}`}
+                  </span>
                 )}
-                {(isMod || post.author === currentUserId) && !post.redacted && (
-                  <button className="link-btn danger" onClick={() => redactPost(post.id)}>Redact</button>
-                )}
-                {isMod && post.redacted && (
-                  <button className="link-btn" onClick={() => restorePost(post.id)}>Restore</button>
-                )}
-                {isAdmin && post.redacted && (
-                  <button className="link-btn danger" title="GDPR purge — permanently removes body" onClick={() => purgePost(post.id)}>Purge</button>
-                )}
-              </span>
-            </div>
-            {post.replyTo && (
-              <div className="post-reply-context muted">
-                ↩ replying to #{posts.find(p => p.id === post.replyTo)?.createdSeq ?? post.replyTo}
+                <span className="muted post-time">#{post.createdSeq}</span>
+                <span className="post-actions">
+                  <button
+                    className={`link-btn react-btn${rx.reacted ? ' react-btn--active' : ''}`}
+                    onClick={() => toggleReact(post.id)}
+                    title={rx.reacted ? 'Remove heart' : 'Heart this post'}
+                  >
+                    {rx.reacted ? '❤️' : '🤍'}{rx.count > 0 ? ` ${rx.count}` : ''}
+                  </button>
+                  {!threadLocked && !post.redacted && (
+                    <button className="link-btn" onClick={() => {
+                      setReplyTo(post.id)
+                      setComposing(true)
+                    }}>Reply</button>
+                  )}
+                  {(isMod || post.author === currentUserId) && !post.redacted && (
+                    <button className="link-btn danger" onClick={() => redactPost(post.id)}>Redact</button>
+                  )}
+                  {isMod && post.redacted && (
+                    <button className="link-btn" onClick={() => restorePost(post.id)}>Restore</button>
+                  )}
+                  {isAdmin && post.redacted && (
+                    <button className="link-btn danger" title="GDPR purge — permanently removes body" onClick={() => purgePost(post.id)}>Purge</button>
+                  )}
+                </span>
               </div>
-            )}
-            <div className="post-body">
-              <Markup body={post.body} redacted={post.redacted} />
+
+              {post.replyTo && (
+                <div className="post-reply-context muted">
+                  ↩ replying to #{posts.find(p => p.id === post.replyTo)?.createdSeq ?? post.replyTo}
+                </div>
+              )}
+
+              <div className="post-body">
+                <Markup body={post.body} redacted={post.redacted} />
+              </div>
+
+              {poll && (
+                <PollWidget
+                  poll={poll}
+                  onVote={optionId => handleVotePoll(post.id, poll.id, optionId)}
+                />
+              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
         <div ref={bottomRef} />
       </div>
 
@@ -187,8 +350,8 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
               className="compose-textarea"
               value={draftBody}
               onChange={e => setDraftBody(e.target.value)}
-              placeholder="Write your reply…"
-              rows={5}
+              placeholder={"Write your reply…\n\nTip: add a poll with:\n[poll]\nOption A\nOption B\n[/poll]"}
+              rows={6}
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitPost()
               }}
