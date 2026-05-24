@@ -151,3 +151,6 @@ func (c *Core) GetThread(id string) (*Thread, error) { return getThread(c.DB, id
 func (c *Core) ListPosts(thread string, limit, offset int) ([]Post, error) {
 	return listPosts(c.DB, thread, limit, offset)
 }
+func (c *Core) SearchPosts(query, boardID string, limit int) ([]Post, error) {
+	return searchPosts(c.DB, query, boardID, limit)
+}

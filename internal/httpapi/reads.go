@@ -60,6 +60,25 @@ func (s *Server) handleListPosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
 }
 
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		writeError(w, http.StatusBadRequest, "validation_failed", "q is required", false)
+		return
+	}
+	board := r.URL.Query().Get("board")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	posts, err := s.core.SearchPosts(q, board, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
+}
+
 func paginate(r *http.Request) (limit, offset int) {
 	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
