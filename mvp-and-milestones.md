@@ -18,6 +18,19 @@ The server at MVP needs to do exactly four things:
 
 ---
 
+## Standing constraint — this is not a single-server application
+
+Every decision across all milestones must be made with multi-node deployment in mind. We are building for a distributed system from the start, not retrofitting it later. Concretely:
+
+- **No in-process global state that can't be externalized.** The single-writer command handler and in-process pub/sub are correct starting points, but they must be designed so that the writer can become a dedicated service and the pub/sub can be backed by an external broker (Redis pub/sub, NATS, etc.) without rewriting the surrounding code.
+- **Stateless HTTP handlers.** Any node must be able to serve any read or write request. Session affinity is an optimisation, never a requirement.
+- **The cursor is the only client state the server needs.** That cursor must be storable externally (Redis, the DB) so any node can resume a connection mid-stream.
+- **Projection tables are read replicas, not the source of truth.** The event log is. Schema evolution, horizontal read scaling, and node failure recovery all follow from this — only if the discipline is maintained from M1.
+
+When a milestone decision would couple us to a single node, name the coupling explicitly, note what the migration path would be, and avoid making it load-bearing.
+
+---
+
 ## Milestone 0 — Spec & Schema ✓ (complete)
 
 **Deliverable:** A typed, agreed-upon wire contract. Nothing is built against assumptions; everything is built against this document.
