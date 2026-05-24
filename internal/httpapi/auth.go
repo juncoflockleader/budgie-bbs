@@ -9,18 +9,25 @@ import (
 )
 
 type registerRequest struct {
-	User     string `json:"user"`
+	Name     string `json:"name"`
 	Password string `json:"password"`
 }
 
 type loginRequest struct {
-	User     string `json:"user"`
+	Name     string `json:"name"`
 	Password string `json:"password"`
 }
 
+type authUser struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
 type loginResponse struct {
-	Token   string `json:"token"`
-	Expires int64  `json:"expires"`
+	Token     string   `json:"token"`
+	ExpiresAt int64    `json:"expiresAt"`
+	User      authUser `json:"user"`
 }
 
 type pubkeyRequest struct {
@@ -29,11 +36,11 @@ type pubkeyRequest struct {
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.User == "" || req.Password == "" {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "user and password required", false)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Password == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name and password required", false)
 		return
 	}
-	u, err := s.core.RegisterUser(req.User, req.Password)
+	u, err := s.core.RegisterUser(req.Name, req.Password)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", err.Error(), false)
 		return
@@ -43,16 +50,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
 		return
 	}
-	writeJSON(w, http.StatusCreated, loginResponse{Token: tok, Expires: exp})
+	writeJSON(w, http.StatusCreated, loginResponse{
+		Token: tok, ExpiresAt: exp,
+		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role},
+	})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.User == "" || req.Password == "" {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "user and password required", false)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Password == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name and password required", false)
 		return
 	}
-	u, err := s.core.AuthenticateUser(req.User, req.Password)
+	u, err := s.core.AuthenticateUser(req.Name, req.Password)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
 		return
@@ -62,7 +72,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
 		return
 	}
-	writeJSON(w, http.StatusOK, loginResponse{Token: tok, Expires: exp})
+	writeJSON(w, http.StatusOK, loginResponse{
+		Token: tok, ExpiresAt: exp,
+		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role},
+	})
 }
 
 func (s *Server) handleAddPubkey(w http.ResponseWriter, r *http.Request) {
