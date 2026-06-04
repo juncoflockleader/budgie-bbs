@@ -63,6 +63,11 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"community_stat_history", "online_guests", "online_guests INTEGER NOT NULL DEFAULT 0"},
 		{"community_stat_history", "max_online_guests", "max_online_guests INTEGER NOT NULL DEFAULT 0"},
 		{"community_stat_history", "max_online_guests_at", "max_online_guests_at INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "total_logouts", "total_logouts INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "total_web_logins", "total_web_logins INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "total_web_logouts", "total_web_logouts INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "total_guest_logins", "total_guest_logins INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "total_guest_logouts", "total_guest_logouts INTEGER NOT NULL DEFAULT 0"},
 		{"board_member_requirements", "min_score", "min_score INTEGER NOT NULL DEFAULT 0"},
 		{"board_member_requirements", "min_board_post_count", "min_board_post_count INTEGER NOT NULL DEFAULT 0"},
 		{"board_member_requirements", "min_board_original_post_count", "min_board_original_post_count INTEGER NOT NULL DEFAULT 0"},
@@ -175,6 +180,27 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_guest_presence_sessions_last_seen ON guest_presence_sessions(last_seen DESC)`); err != nil {
 		return fmt.Errorf("ensure guest presence sessions last_seen index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS community_counter_totals (
+		    id                    TEXT    PRIMARY KEY DEFAULT 'default',
+		    total_logouts         INTEGER NOT NULL DEFAULT 0,
+		    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+		    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+		    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+		    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
+		    updated_at            INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure community counter totals table: %w", err)
+	}
+	if _, err := qExec(db, `INSERT OR IGNORE INTO community_counter_totals (id) VALUES ('default')`); err != nil {
+		return fmt.Errorf("ensure community counter totals row: %w", err)
+	}
+	if _, err := qExec(db,
+		`UPDATE community_counter_totals
+		    SET total_web_logins=(SELECT COALESCE(SUM(login_count), 0) FROM user_activity)
+		  WHERE id='default' AND total_web_logins=0`,
+	); err != nil {
+		return fmt.Errorf("seed community web login counter: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS community_stat_history (
 		    day                   TEXT    PRIMARY KEY,
 		    snapshot_at           INTEGER NOT NULL DEFAULT 0,
@@ -186,6 +212,11 @@ func applySQLiteMigrations(db *sql.DB) error {
 		    total_mail            INTEGER NOT NULL DEFAULT 0,
 		    total_direct_messages INTEGER NOT NULL DEFAULT 0,
 		    total_logins          INTEGER NOT NULL DEFAULT 0,
+		    total_logouts         INTEGER NOT NULL DEFAULT 0,
+		    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+		    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+		    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+		    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
 		    total_online_seconds  INTEGER NOT NULL DEFAULT 0,
 		    online_users          INTEGER NOT NULL DEFAULT 0,
 		    online_guests         INTEGER NOT NULL DEFAULT 0,

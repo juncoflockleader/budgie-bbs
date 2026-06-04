@@ -560,6 +560,19 @@ CREATE TABLE IF NOT EXISTS guest_presence_sessions (
 CREATE INDEX IF NOT EXISTS idx_guest_presence_sessions_last_seen
     ON guest_presence_sessions(last_seen DESC);
 
+CREATE TABLE IF NOT EXISTS community_counter_totals (
+    id                    TEXT PRIMARY KEY DEFAULT 'default',
+    total_logouts         INTEGER NOT NULL DEFAULT 0,
+    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
+    updated_at            BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO community_counter_totals (id)
+VALUES ('default')
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS community_stat_history (
     day                   TEXT PRIMARY KEY,
     snapshot_at           BIGINT NOT NULL DEFAULT 0,
@@ -571,6 +584,11 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
     total_logins          INTEGER NOT NULL DEFAULT 0,
+    total_logouts         INTEGER NOT NULL DEFAULT 0,
+    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  BIGINT NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     online_guests         INTEGER NOT NULL DEFAULT 0,
@@ -1643,6 +1661,11 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_reactions       INTEGER NOT NULL DEFAULT 0,
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    total_logouts         INTEGER NOT NULL DEFAULT 0,
+    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  BIGINT NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     online_guests         INTEGER NOT NULL DEFAULT 0,
@@ -1906,6 +1929,42 @@ ON CONFLICT (board_id, user_id, started_at) DO NOTHING;
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (42, 'postgres-board-moderator-terms', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 43,
+			Name:    "postgres-community-static-counters",
+			SQL: `
+CREATE TABLE IF NOT EXISTS community_counter_totals (
+    id                    TEXT PRIMARY KEY DEFAULT 'default',
+    total_logouts         INTEGER NOT NULL DEFAULT 0,
+    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
+    updated_at            BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO community_counter_totals (id)
+VALUES ('default')
+ON CONFLICT (id) DO NOTHING;
+UPDATE community_counter_totals
+   SET total_web_logins=(SELECT COALESCE(SUM(login_count), 0) FROM user_activity)
+ WHERE id='default' AND total_web_logins=0;
+
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS total_logouts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS total_web_logins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS total_web_logouts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS total_guest_logins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS total_guest_logouts INTEGER NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (43, 'postgres-community-static-counters', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

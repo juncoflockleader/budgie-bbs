@@ -144,6 +144,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/v1/users/me/login-acl/rules/{rule}", auth(http.HandlerFunc(s.handleUpdateOwnLoginACLRule)))
 	mux.Handle("DELETE /api/v1/users/me/login-acl/rules/{rule}", auth(http.HandlerFunc(s.handleDeleteOwnLoginACLRule)))
 	mux.Handle("PATCH /api/v1/users/me", auth(http.HandlerFunc(s.handleUpdateOwnProfile)))
+	mux.Handle("POST /api/v1/auth/logout", auth(http.HandlerFunc(s.handleLogout)))
 	mux.Handle("POST /api/v1/boards", auth(http.HandlerFunc(s.handleCreateBoard)))
 	mux.Handle("PATCH /api/v1/boards/{board}/settings", auth(http.HandlerFunc(s.handleSetBoardSettings)))
 	mux.Handle("PUT /api/v1/boards/{board}/recommended", auth(http.HandlerFunc(s.handleSetRecommendedBoard)))

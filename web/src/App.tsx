@@ -106,6 +106,11 @@ export function App() {
 
   function nav(p: Page) { setPage(p) }
 
+  function handleLogout() {
+    void api.logout(token)
+    logout()
+  }
+
   function submitSearch(e: FormEvent) {
     e.preventDefault()
     if (searchDraft.trim()) {
@@ -154,7 +159,7 @@ export function App() {
         >
           {user.name}
         </button>
-        <button className="link-btn nav-logout" onClick={logout}>Logout</button>
+        <button className="link-btn nav-logout" onClick={handleLogout}>Logout</button>
       </nav>
 
       <main className="main-content">

@@ -426,6 +426,18 @@ CREATE TABLE IF NOT EXISTS guest_presence_sessions (
 CREATE INDEX IF NOT EXISTS idx_guest_presence_sessions_last_seen
     ON guest_presence_sessions(last_seen DESC);
 
+CREATE TABLE IF NOT EXISTS community_counter_totals (
+    id                    TEXT    PRIMARY KEY DEFAULT 'default',
+    total_logouts         INTEGER NOT NULL DEFAULT 0,
+    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
+    updated_at            INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO community_counter_totals (id)
+    VALUES ('default');
+
 CREATE TABLE IF NOT EXISTS community_stat_history (
     day                   TEXT    PRIMARY KEY,
     snapshot_at           INTEGER NOT NULL DEFAULT 0,
@@ -437,6 +449,11 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
     total_logins          INTEGER NOT NULL DEFAULT 0,
+    total_logouts         INTEGER NOT NULL DEFAULT 0,
+    total_web_logins      INTEGER NOT NULL DEFAULT 0,
+    total_web_logouts     INTEGER NOT NULL DEFAULT 0,
+    total_guest_logins    INTEGER NOT NULL DEFAULT 0,
+    total_guest_logouts   INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  INTEGER NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     online_guests         INTEGER NOT NULL DEFAULT 0,

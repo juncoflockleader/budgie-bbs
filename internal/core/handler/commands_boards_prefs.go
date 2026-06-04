@@ -2153,6 +2153,11 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 	fmt.Fprintf(&b, "# Community stats %s\n\n", dateLabel)
 	fmt.Fprintf(&b, "- Total users: %d\n", stats.TotalUsers)
 	fmt.Fprintf(&b, "- Total logins: %d\n", stats.TotalLogins)
+	fmt.Fprintf(&b, "- Total logouts: %d\n", stats.TotalLogouts)
+	fmt.Fprintf(&b, "- Web logins: %d\n", stats.TotalWebLogins)
+	fmt.Fprintf(&b, "- Web logouts: %d\n", stats.TotalWebLogouts)
+	fmt.Fprintf(&b, "- Guest logins: %d\n", stats.TotalGuestLogins)
+	fmt.Fprintf(&b, "- Guest logouts: %d\n", stats.TotalGuestLogouts)
 	fmt.Fprintf(&b, "- Total boards: %d\n", stats.TotalBoards)
 	fmt.Fprintf(&b, "- Total threads: %d\n", stats.TotalThreads)
 	fmt.Fprintf(&b, "- Total posts: %d\n", stats.TotalPosts)
@@ -2187,12 +2192,22 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 		if day.MaxOnlineGuestsAt > 0 {
 			guestMaxAt = time.UnixMilli(day.MaxOnlineGuestsAt).UTC().Format("2006-01-02 15:04")
 		}
-		fmt.Fprintf(&b, "- %s: %d users%s, %s%s, %d guests%s, %d posts%s, %d reactions%s, %s online time%s, %d users online now, max %d users at %s UTC, max %d guests at %s UTC\n",
+		fmt.Fprintf(&b, "- %s: %d users%s, %s%s, %s%s, web %d in%s/%d out%s, guests %d in%s/%d out%s, %d guests%s, %d posts%s, %d reactions%s, %s online time%s, %d users online now, max %d users at %s UTC, max %d guests at %s UTC\n",
 			day.Day,
 			day.TotalUsers,
 			formatStatsDelta(day.DeltaUsers),
 			formatStatsCount(day.TotalLogins, "login", "logins"),
 			formatStatsDelta(day.DeltaLogins),
+			formatStatsCount(day.TotalLogouts, "logout", "logouts"),
+			formatStatsDelta(day.DeltaLogouts),
+			day.TotalWebLogins,
+			formatStatsDelta(day.DeltaWebLogins),
+			day.TotalWebLogouts,
+			formatStatsDelta(day.DeltaWebLogouts),
+			day.TotalGuestLogins,
+			formatStatsDelta(day.DeltaGuestLogins),
+			day.TotalGuestLogouts,
+			formatStatsDelta(day.DeltaGuestLogouts),
 			day.OnlineGuests,
 			formatStatsDelta(day.DeltaGuests),
 			day.TotalPosts,
@@ -2258,6 +2273,11 @@ func formatStatsLoginHistoryBody(dateLabel string, stats *projections.CommunityS
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Login count history %s\n\n", dateLabel)
 	fmt.Fprintf(&b, "- Total logins: %d\n", stats.TotalLogins)
+	fmt.Fprintf(&b, "- Total logouts: %d\n", stats.TotalLogouts)
+	fmt.Fprintf(&b, "- Web logins: %d\n", stats.TotalWebLogins)
+	fmt.Fprintf(&b, "- Web logouts: %d\n", stats.TotalWebLogouts)
+	fmt.Fprintf(&b, "- Guest logins: %d\n", stats.TotalGuestLogins)
+	fmt.Fprintf(&b, "- Guest logouts: %d\n", stats.TotalGuestLogouts)
 	fmt.Fprintf(&b, "- Total users: %d\n", stats.TotalUsers)
 	fmt.Fprintf(&b, "- Online users: %d\n", stats.OnlineUsers)
 	fmt.Fprintf(&b, "- Online guests: %d\n", stats.OnlineGuests)
@@ -2276,10 +2296,20 @@ func formatStatsLoginHistoryBody(dateLabel string, stats *projections.CommunityS
 		b.WriteString("- No daily stat history yet.\n")
 	}
 	for _, day := range history {
-		fmt.Fprintf(&b, "- %s: %s%s, %d users%s, %d online users, %d guests%s, %s online time%s\n",
+		fmt.Fprintf(&b, "- %s: %s%s, %s%s, web %d in%s/%d out%s, guests %d in%s/%d out%s, %d users%s, %d online users, %d guests%s, %s online time%s\n",
 			day.Day,
 			formatStatsCount(day.TotalLogins, "login", "logins"),
 			formatStatsDelta(day.DeltaLogins),
+			formatStatsCount(day.TotalLogouts, "logout", "logouts"),
+			formatStatsDelta(day.DeltaLogouts),
+			day.TotalWebLogins,
+			formatStatsDelta(day.DeltaWebLogins),
+			day.TotalWebLogouts,
+			formatStatsDelta(day.DeltaWebLogouts),
+			day.TotalGuestLogins,
+			formatStatsDelta(day.DeltaGuestLogins),
+			day.TotalGuestLogouts,
+			formatStatsDelta(day.DeltaGuestLogouts),
 			day.TotalUsers,
 			formatStatsDelta(day.DeltaUsers),
 			day.OnlineUsers,
@@ -3121,7 +3151,8 @@ func formatStatsPeriodHistoryBody(spec statsPeriodHistorySpec, history []project
 	}
 
 	newest := history[0]
-	var posts, threads, boards, users, reactions, mail, messages, logins int
+	var posts, threads, boards, users, reactions, mail, messages, logins, logouts int
+	var webLogins, webLogouts, guestLogins, guestLogouts int
 	var onlineSeconds int64
 	var guestDelta int
 	maxOnlineUsers := newest.MaxOnlineUsers
@@ -3137,6 +3168,11 @@ func formatStatsPeriodHistoryBody(spec statsPeriodHistorySpec, history []project
 		mail += day.DeltaMail
 		messages += day.DeltaDirectMessages
 		logins += day.DeltaLogins
+		logouts += day.DeltaLogouts
+		webLogins += day.DeltaWebLogins
+		webLogouts += day.DeltaWebLogouts
+		guestLogins += day.DeltaGuestLogins
+		guestLogouts += day.DeltaGuestLogouts
 		onlineSeconds += day.DeltaOnlineSeconds
 		guestDelta += day.DeltaGuests
 		if day.MaxOnlineUsers > maxOnlineUsers {
@@ -3158,6 +3194,11 @@ func formatStatsPeriodHistoryBody(spec statsPeriodHistorySpec, history []project
 	fmt.Fprintf(&b, "- New mail messages: %d\n", mail)
 	fmt.Fprintf(&b, "- New direct messages: %d\n", messages)
 	fmt.Fprintf(&b, "- Logins: %d\n", logins)
+	fmt.Fprintf(&b, "- Logouts: %d\n", logouts)
+	fmt.Fprintf(&b, "- Web logins: %d\n", webLogins)
+	fmt.Fprintf(&b, "- Web logouts: %d\n", webLogouts)
+	fmt.Fprintf(&b, "- Guest logins: %d\n", guestLogins)
+	fmt.Fprintf(&b, "- Guest logouts: %d\n", guestLogouts)
 	fmt.Fprintf(&b, "- Online time added: %s\n", formatStatsDuration(onlineSeconds))
 	fmt.Fprintf(&b, "- Guest delta: %+d\n", guestDelta)
 	fmt.Fprintf(&b, "- Ending users: %d\n", newest.TotalUsers)
@@ -3175,7 +3216,7 @@ func formatStatsPeriodHistoryBody(spec statsPeriodHistorySpec, history []project
 	}
 	b.WriteString("\n\n## Daily rows\n")
 	for _, day := range history {
-		fmt.Fprintf(&b, "- %s: %d posts%s, %d threads%s, %d boards%s, %d users%s, %s%s, %d reactions%s, %s online time%s\n",
+		fmt.Fprintf(&b, "- %s: %d posts%s, %d threads%s, %d boards%s, %d users%s, %s%s, %s%s, web %d in%s/%d out%s, guests %d in%s/%d out%s, %d reactions%s, %s online time%s\n",
 			day.Day,
 			day.TotalPosts,
 			formatStatsDelta(day.DeltaPosts),
@@ -3187,6 +3228,16 @@ func formatStatsPeriodHistoryBody(spec statsPeriodHistorySpec, history []project
 			formatStatsDelta(day.DeltaUsers),
 			formatStatsCount(day.TotalLogins, "login", "logins"),
 			formatStatsDelta(day.DeltaLogins),
+			formatStatsCount(day.TotalLogouts, "logout", "logouts"),
+			formatStatsDelta(day.DeltaLogouts),
+			day.TotalWebLogins,
+			formatStatsDelta(day.DeltaWebLogins),
+			day.TotalWebLogouts,
+			formatStatsDelta(day.DeltaWebLogouts),
+			day.TotalGuestLogins,
+			formatStatsDelta(day.DeltaGuestLogins),
+			day.TotalGuestLogouts,
+			formatStatsDelta(day.DeltaGuestLogouts),
 			day.TotalReactions,
 			formatStatsDelta(day.DeltaReactions),
 			formatStatsDuration(day.TotalOnlineSeconds),

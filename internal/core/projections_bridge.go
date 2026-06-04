@@ -530,6 +530,10 @@ func recordLogin(db *sql.DB, userID string) error {
 	return projections.RecordLogin(db, userID)
 }
 
+func recordLogout(db *sql.DB) error {
+	return projections.RecordLogout(db)
+}
+
 func recordPostCreated(db *sql.DB, userID string) (int, int, error) {
 	return projections.RecordPostCreated(db, userID)
 }

@@ -129,6 +129,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.RecordLogout(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not record logout", true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleRequestPasswordRecovery(w http.ResponseWriter, r *http.Request) {
 	var req passwordRecoveryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {

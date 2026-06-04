@@ -150,10 +150,16 @@ ranking surface:
   completed week/month/year period-summary and hot-topic list threads.
 - Login recording maintains UTC day/hour login buckets for KBS `static.c` /
   `countlogins`-style hourly login distribution charts.
+- KBS `static.c`-style cumulative counters now track explicit logouts, web
+  logins, web logouts, anonymous guest logins, and anonymous guest logouts
+  alongside total logins. Successful web registration/login increments the web
+  login counter; `POST /api/v1/auth/logout` records explicit web logouts; guest
+  presence transitions record first-online and online-to-offline guest totals.
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters, max-online users/time, and
   day-over-day deltas for user, board, thread, post, reaction, mail, direct
-  message, and login totals, plus cumulative online/stay-time and guest totals.
+  message, login, logout, web login/logout, and guest login/logout totals, plus
+  cumulative online/stay-time and current guest totals.
 - Presence updates accrue per-user total online seconds from visible sessions
   with a five-minute cap per update so stale clients do not inflate stay time.
 - Public guest-presence pings (`POST /api/v1/presence/guest`) maintain anonymous
@@ -173,9 +179,10 @@ ranking surface:
   max-online history, recent daily stat-history rows with trend deltas, plus
   public-safe board, thread, latest-reply, user, blessing, and archive rankings.
 - Stat snapshots also create deterministic daily KBS `countlogins`-style
-  `BBSLists` login-count history threads showing total logins, user totals,
-  online users, anonymous guests, online time, recent daily deltas, and a
-  24-hour login histogram for the snapshot date.
+  `BBSLists` login-count history threads showing total logins/logouts, web
+  login/logout totals, guest login/logout totals, user totals, online users,
+  anonymous guests, online time, recent daily deltas, and a 24-hour login
+  histogram for the snapshot date.
 - Stat snapshots also create deterministic daily KBS `statguy`-style
   `BBSLists` user-activity ranking threads showing top posters, top login
   counts, top stay/online time, and an aggregate community score derived from
@@ -1031,13 +1038,13 @@ social graph:
 
 ## Remaining Major KBS Parity Areas
 
-- Remaining specialized historical/stat-log boards and richer community
-  statistics.
+- Final audit of specialized historical/stat-log boards not already represented
+  by deterministic `BBSLists` outputs.
 - Explicitly out of the current BBS/forum parity goal: POP3/SMTP bridges,
   blog/personal corpus, legacy transfer protocols, SMS/pager layers, sysop
   import/repair tooling, and optional campus utilities/games.
 
 ## Suggested Next Slices
 
-1. Remaining specialized historical/stat-log boards and richer community
-   statistics.
+1. Final audit of specialized historical/stat-log boards not already
+   represented by deterministic `BBSLists` outputs.

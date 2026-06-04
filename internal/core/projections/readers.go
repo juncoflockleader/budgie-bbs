@@ -98,6 +98,11 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		    (SELECT COUNT(*) FROM mail_messages),
 		    (SELECT COUNT(*) FROM direct_messages),
 		    COALESCE((SELECT SUM(login_count) FROM user_activity), 0),
+		    COALESCE((SELECT total_logouts FROM community_counter_totals WHERE id='default'), 0),
+		    COALESCE((SELECT total_web_logins FROM community_counter_totals WHERE id='default'), 0),
+		    COALESCE((SELECT total_web_logouts FROM community_counter_totals WHERE id='default'), 0),
+		    COALESCE((SELECT total_guest_logins FROM community_counter_totals WHERE id='default'), 0),
+		    COALESCE((SELECT total_guest_logouts FROM community_counter_totals WHERE id='default'), 0),
 		    COALESCE((SELECT SUM(total_online_seconds) FROM user_activity), 0),
 		    (SELECT COUNT(DISTINCT user_id) FROM user_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')),
 		    (SELECT COUNT(*) FROM guest_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'inactive')),
@@ -113,6 +118,11 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		&stats.TotalMail,
 		&stats.TotalDirectMessages,
 		&stats.TotalLogins,
+		&stats.TotalLogouts,
+		&stats.TotalWebLogins,
+		&stats.TotalWebLogouts,
+		&stats.TotalGuestLogins,
+		&stats.TotalGuestLogouts,
 		&stats.TotalOnlineSeconds,
 		&stats.OnlineUsers,
 		&stats.OnlineGuests,
@@ -171,11 +181,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	}
 	fetchLimit := limit + 1
 	rows, err := QQuery(db,
-		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		        total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
-		        online_guests, max_online_users, max_online_at, max_online_guests,
-		        max_online_guests_at, head_seq
-		   FROM community_stat_history
+		communityStatHistorySelectSQL()+`
 		  ORDER BY day DESC
 		  LIMIT ? OFFSET ?`,
 		fetchLimit, offset,
@@ -186,8 +192,8 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	defer rows.Close()
 	out := []CommunityStatHistory{}
 	for rows.Next() {
-		var h CommunityStatHistory
-		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalLogins, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.OnlineGuests, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.MaxOnlineGuests, &h.MaxOnlineGuestsAt, &h.HeadSeq); err != nil {
+		h, err := scanCommunityStatHistory(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -209,11 +215,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 
 func ListCommunityStatHistoryRange(db *sql.DB, startDay, endDay string) ([]CommunityStatHistory, error) {
 	rows, err := QQuery(db,
-		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		        total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
-		        online_guests, max_online_users, max_online_at, max_online_guests,
-		        max_online_guests_at, head_seq
-		   FROM community_stat_history
+		communityStatHistorySelectSQL()+`
 		  WHERE day >= ? AND day <= ?
 		  ORDER BY day DESC`,
 		startDay, endDay,
@@ -224,8 +226,8 @@ func ListCommunityStatHistoryRange(db *sql.DB, startDay, endDay string) ([]Commu
 	defer rows.Close()
 	out := []CommunityStatHistory{}
 	for rows.Next() {
-		var h CommunityStatHistory
-		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalLogins, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.OnlineGuests, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.MaxOnlineGuests, &h.MaxOnlineGuestsAt, &h.HeadSeq); err != nil {
+		h, err := scanCommunityStatHistory(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -236,16 +238,12 @@ func ListCommunityStatHistoryRange(db *sql.DB, startDay, endDay string) ([]Commu
 	var previous CommunityStatHistory
 	hasPrevious := false
 	err = QQueryRow(db,
-		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		        total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
-		        online_guests, max_online_users, max_online_at, max_online_guests,
-		        max_online_guests_at, head_seq
-		   FROM community_stat_history
+		communityStatHistorySelectSQL()+`
 		  WHERE day < ?
 		  ORDER BY day DESC
 		  LIMIT 1`,
 		startDay,
-	).Scan(&previous.Day, &previous.SnapshotAt, &previous.TotalUsers, &previous.TotalBoards, &previous.TotalThreads, &previous.TotalPosts, &previous.TotalReactions, &previous.TotalMail, &previous.TotalDirectMessages, &previous.TotalLogins, &previous.TotalOnlineSeconds, &previous.OnlineUsers, &previous.OnlineGuests, &previous.MaxOnlineUsers, &previous.MaxOnlineAt, &previous.MaxOnlineGuests, &previous.MaxOnlineGuestsAt, &previous.HeadSeq)
+	).Scan(communityStatHistoryScanDest(&previous)...)
 	if err == nil {
 		hasPrevious = true
 	} else if err != sql.ErrNoRows {
@@ -261,6 +259,55 @@ func ListCommunityStatHistoryRange(db *sql.DB, startDay, endDay string) ([]Commu
 		}
 	}
 	return out, nil
+}
+
+func communityStatHistorySelectSQL() string {
+	return `SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+		        total_reactions, total_mail, total_direct_messages, total_logins,
+		        total_logouts, total_web_logins, total_web_logouts,
+		        total_guest_logins, total_guest_logouts,
+		        total_online_seconds, online_users, online_guests,
+		        max_online_users, max_online_at, max_online_guests,
+		        max_online_guests_at, head_seq
+		   FROM community_stat_history`
+}
+
+type communityStatHistoryScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanCommunityStatHistory(row communityStatHistoryScanner) (CommunityStatHistory, error) {
+	var h CommunityStatHistory
+	err := row.Scan(communityStatHistoryScanDest(&h)...)
+	return h, err
+}
+
+func communityStatHistoryScanDest(h *CommunityStatHistory) []any {
+	return []any{
+		&h.Day,
+		&h.SnapshotAt,
+		&h.TotalUsers,
+		&h.TotalBoards,
+		&h.TotalThreads,
+		&h.TotalPosts,
+		&h.TotalReactions,
+		&h.TotalMail,
+		&h.TotalDirectMessages,
+		&h.TotalLogins,
+		&h.TotalLogouts,
+		&h.TotalWebLogins,
+		&h.TotalWebLogouts,
+		&h.TotalGuestLogins,
+		&h.TotalGuestLogouts,
+		&h.TotalOnlineSeconds,
+		&h.OnlineUsers,
+		&h.OnlineGuests,
+		&h.MaxOnlineUsers,
+		&h.MaxOnlineAt,
+		&h.MaxOnlineGuests,
+		&h.MaxOnlineGuestsAt,
+		&h.HeadSeq,
+	}
 }
 
 func ListLoginHourlyStats(db *sql.DB, day string) ([]LoginHourlyStat, error) {
@@ -307,6 +354,11 @@ func (h *CommunityStatHistory) applyDeltaFrom(previous CommunityStatHistory) {
 	h.DeltaMail = h.TotalMail - previous.TotalMail
 	h.DeltaDirectMessages = h.TotalDirectMessages - previous.TotalDirectMessages
 	h.DeltaLogins = h.TotalLogins - previous.TotalLogins
+	h.DeltaLogouts = h.TotalLogouts - previous.TotalLogouts
+	h.DeltaWebLogins = h.TotalWebLogins - previous.TotalWebLogins
+	h.DeltaWebLogouts = h.TotalWebLogouts - previous.TotalWebLogouts
+	h.DeltaGuestLogins = h.TotalGuestLogins - previous.TotalGuestLogins
+	h.DeltaGuestLogouts = h.TotalGuestLogouts - previous.TotalGuestLogouts
 	h.DeltaOnlineSeconds = h.TotalOnlineSeconds - previous.TotalOnlineSeconds
 	h.DeltaGuests = h.OnlineGuests - previous.OnlineGuests
 }

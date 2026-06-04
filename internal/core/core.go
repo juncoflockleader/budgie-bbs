@@ -718,6 +718,10 @@ func (c *Core) RecordLogin(userID string) error {
 	return recordLogin(c.DB, userID)
 }
 
+func (c *Core) RecordLogout() error {
+	return recordLogout(c.DB)
+}
+
 // AddPubkey registers an SSH public key for the given user.
 func (c *Core) AddPubkey(userID, pubkey string) error {
 	_, err := qExec(c.DB,

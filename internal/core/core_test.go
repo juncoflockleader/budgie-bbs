@@ -1610,8 +1610,21 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if stats.TotalUsers != 3 || stats.TotalLogins != 1 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 5 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("unexpected community stats: %+v", stats)
 	}
+	if stats.TotalWebLogins != 1 || stats.TotalLogouts != 0 || stats.TotalWebLogouts != 0 || stats.TotalGuestLogins != 0 || stats.TotalGuestLogouts != 0 {
+		t.Fatalf("expected initial KBS static counters in community stats, got %+v", stats)
+	}
 	if stats.HeadSeq == 0 {
 		t.Fatalf("expected head seq in community stats, got %+v", stats)
+	}
+	if err := c.RecordLogout(); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalLogouts != 1 || stats.TotalWebLogouts != 1 || stats.TotalWebLogins != 1 {
+		t.Fatalf("expected web logout counters in community stats, got %+v", stats)
 	}
 	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{Status: "offline"})
 	stats, err = c.GetCommunityStats()
@@ -1649,6 +1662,19 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if stats.OnlineGuests != 1 || stats.MaxOnlineGuests != 1 || stats.MaxOnlineGuestsAt == 0 {
 		t.Fatalf("expected guest counters in community stats, got %+v", stats)
 	}
+	if err := projections.SetGuestPresence(c.DB, "guest_left", "active", "web", "203.0.113.11", time.Now().UTC().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if err := projections.SetGuestPresence(c.DB, "guest_left", "offline", "web", "203.0.113.11", time.Now().UTC().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.OnlineGuests != 1 || stats.TotalGuestLogins != 2 || stats.TotalGuestLogouts != 1 {
+		t.Fatalf("expected guest login/logout counters in community stats, got %+v", stats)
+	}
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
 	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
@@ -1671,10 +1697,13 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if history[0].TotalLogins != 1 || history[0].DeltaUsers != 1 || history[0].DeltaLogins != 1 || history[0].DeltaBoards != 1 || history[0].DeltaThreads != 2 || history[0].DeltaPosts != 3 || history[0].DeltaReactions != 1 || history[0].DeltaMail != 0 || history[0].DeltaDirectMessages != 0 {
 		t.Fatalf("expected newest daily stat history row to include deltas, got %+v", history[0])
 	}
+	if history[0].TotalLogouts != 1 || history[0].DeltaLogouts != 1 || history[0].TotalWebLogins != 1 || history[0].DeltaWebLogins != 1 || history[0].TotalWebLogouts != 1 || history[0].DeltaWebLogouts != 1 || history[0].TotalGuestLogins != 2 || history[0].DeltaGuestLogins != 2 || history[0].TotalGuestLogouts != 1 || history[0].DeltaGuestLogouts != 1 {
+		t.Fatalf("expected newest daily stat history row to include KBS static counter deltas, got %+v", history[0])
+	}
 	if history[0].TotalOnlineSeconds != 120 || history[0].DeltaOnlineSeconds != 60 {
 		t.Fatalf("expected newest daily stat history row to include online-time totals and deltas, got %+v", history[0])
 	}
-	if history[0].OnlineGuests != 1 || history[0].DeltaGuests != 1 || history[0].MaxOnlineGuests != 1 || history[0].MaxOnlineGuestsAt == 0 {
+	if history[0].OnlineGuests != 1 || history[0].DeltaGuests != 1 || history[0].MaxOnlineGuests != 2 || history[0].MaxOnlineGuestsAt == 0 {
 		t.Fatalf("expected newest daily stat history row to include guest counters and deltas, got %+v", history[0])
 	}
 	if history[1].DeltaUsers != 0 || history[1].DeltaLogins != 0 || history[1].DeltaPosts != 0 || history[1].DeltaReactions != 0 {
@@ -1840,7 +1869,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
 	}
 	body := systemPosts[0].Body
-	for _, want := range []string{"Total users: 3", "Total logins: 1", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "1 login (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "1 participants", "Latest replies", "second", "Top users", "bob", "Blessings", "bob: 2 blessings", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total logins: 1", "Total logouts: 1", "Web logins: 1", "Web logouts: 1", "Guest logins: 2", "Guest logouts: 1", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 2", "Recent daily history", "3 users (+1)", "1 login (+1)", "1 logout (+1)", "web 1 in (+1)/1 out (+1)", "guests 2 in (+2)/1 out (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 2 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "1 participants", "Latest replies", "second", "Top users", "bob", "Blessings", "bob: 2 blessings", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
@@ -1853,7 +1882,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated login-history post, got %+v", loginPosts)
 	}
 	loginBody := loginPosts[0].Body
-	for _, want := range []string{"Login count history 2026-06-04", "Total logins: 1", "Recent login and guest history", "1 login (+1)", "3 users (+1)", "1 guests (+1)", "2m online time (+1m)"} {
+	for _, want := range []string{"Login count history 2026-06-04", "Total logins: 1", "Total logouts: 1", "Web logins: 1", "Web logouts: 1", "Guest logins: 2", "Guest logouts: 1", "Recent login and guest history", "1 login (+1)", "1 logout (+1)", "web 1 in (+1)/1 out (+1)", "guests 2 in (+2)/1 out (+1)", "3 users (+1)", "1 guests (+1)", "2m online time (+1m)"} {
 		if !strings.Contains(loginBody, want) {
 			t.Fatalf("expected login-history body to contain %q, got:\n%s", want, loginBody)
 		}
@@ -2346,17 +2375,17 @@ func TestStatsPeriodHistorySystemPosts(t *testing.T) {
 		{
 			threadID: "bbslists_week_2026w24",
 			title:    "Weekly activity history 2026-W24",
-			contains: []string{"Period: 2026-06-08 to 2026-06-14", "Days captured: 2", "New posts: 14", "Logins: 15", "2026-06-14: 24 posts (+12)", "2026-06-08: 12 posts (+2)"},
+			contains: []string{"Period: 2026-06-08 to 2026-06-14", "Days captured: 2", "New posts: 14", "Logins: 15", "Logouts: 8", "Web logins: 15", "Web logouts: 8", "Guest logins: 2", "Guest logouts: 1", "2026-06-14: 24 posts (+12)", "20 logins (+12)", "10 logouts (+6)", "web 20 in (+12)/10 out (+6)", "guests 12 in (+1)/6 out (+1)", "2026-06-08: 12 posts (+2)"},
 		},
 		{
 			threadID: "bbslists_month_202607",
 			title:    "Monthly activity history 2026-07",
-			contains: []string{"Period: 2026-07-01 to 2026-07-31", "Days captured: 2", "New posts: 30", "Logins: 25", "2026-07-31: 60 posts (+25)"},
+			contains: []string{"Period: 2026-07-01 to 2026-07-31", "Days captured: 2", "New posts: 30", "Logins: 25", "Logouts: 13", "Web logins: 25", "Web logouts: 13", "Guest logins: 2", "Guest logouts: 1", "2026-07-31: 60 posts (+25)"},
 		},
 		{
 			threadID: "bbslists_year_2027",
 			title:    "Yearly activity history 2027",
-			contains: []string{"Period: 2027-01-01 to 2027-12-31", "Days captured: 1", "New posts: 95", "Logins: 79", "2027-12-31: 175 posts (+95)"},
+			contains: []string{"Period: 2027-01-01 to 2027-12-31", "Days captured: 1", "New posts: 95", "Logins: 79", "Logouts: 39", "Web logins: 79", "Web logouts: 39", "Guest logins: 4", "Guest logouts: 2", "2027-12-31: 175 posts (+95)"},
 		},
 	} {
 		threads, err := c.ListThreads("BBSLists", 100, 0)
@@ -2677,11 +2706,15 @@ func insertCommunityStatHistory(t *testing.T, db *sql.DB, day string, users, boa
 	}
 	if _, err := db.Exec(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
+		total_reactions, total_mail, total_direct_messages, total_logins,
+		total_logouts, total_web_logins, total_web_logouts, total_guest_logins,
+		total_guest_logouts, total_online_seconds, online_users,
 		online_guests, max_online_users, max_online_at, max_online_guests,
 		max_online_guests_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		day, at.UnixMilli(), users, boards, threads, posts, reactions, 0, 0, logins, onlineSeconds, 0, 0, users, at.UnixMilli(), 0, int64(0), posts,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		day, at.UnixMilli(), users, boards, threads, posts, reactions, 0, 0,
+		logins, logins/2, logins, logins/2, users, users/2,
+		onlineSeconds, 0, 0, users, at.UnixMilli(), 0, int64(0), posts,
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -82,6 +82,15 @@ export async function login(name: string, password: string): Promise<ApiResponse
   return json<AuthResponse>(res)
 }
 
+export async function logout(token: string): Promise<ApiResponse<unknown>> {
+  const res = await fetch(`${BASE}/auth/logout`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    keepalive: true,
+  })
+  return json<unknown>(res)
+}
+
 export async function requestPasswordRecovery(
   payload: { name: string; submittedName?: string; email?: string; note?: string },
 ): Promise<ApiResponse<unknown>> {

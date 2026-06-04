@@ -152,6 +152,7 @@ Tokens are obtained out-of-band of the event protocol:
 
 ```
 POST /api/v1/auth/login        { "user": "...", "password": "..." }  -> { "token": "...", "expires": ... }
+POST /api/v1/auth/logout       Authorization: Bearer <token>          -> { "ok": true }
 POST /api/v1/auth/password-recovery { name, submittedName?, email?, note? } -> accepted
 POST /api/v1/auth/refresh      { "token": "..." }                    -> { "token": "...", "expires": ... }
 ```
@@ -320,8 +321,9 @@ GET /api/v1/chat/{room}/recent?limit=    -> bounded ephemeral history (ring buff
 ```
 These read projection tables directly (see Decision 2) and are CDN-cacheable. Moderator views (`?include=redacted`) require role and are never cached.
 Ranking reads are derived projection views for KBS-style public lists: community
-counters including cumulative online/stay time, active boards, hot threads,
-latest replies, top posters, blessing rituals, and active archive paths.
+counters including cumulative online/stay time and KBS `static.c`-style
+login/logout, web, and guest totals, active boards, hot threads, latest
+replies, top posters, blessing rituals, and active archive paths.
 Hot-thread `score` is recency-decayed: visible posts and reactions form the
 activity base, then thread `updatedAt` applies a 48-hour half-life so stale
 activity gradually falls behind fresh conversation.
@@ -453,6 +455,7 @@ Returns: the ack envelope.
 | `PUT /api/v1/users/{user}/login-watch` | `setLoginWatch` |
 | `DELETE /api/v1/users/{user}/login-watch` | `setLoginWatch` |
 | `POST /api/v1/users/{user}/bless` | `blessUser` |
+| `POST /api/v1/auth/logout` | record explicit authenticated web logout |
 | `POST /api/v1/presence/guest` | public anonymous guest presence ping |
 | `POST /api/v1/chat/{room}/lines` | `sendChatLine` |
 | `POST /api/v1/mod/reviewables/{id}/resolve` | `resolveReview` |
@@ -720,12 +723,16 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   `GET /api/v1/stats/community` exposes current authenticated `onlineUsers`,
   anonymous web `onlineGuests`, historical `maxOnlineUsers`, `maxOnlineAt`,
   `maxOnlineGuests`, `maxOnlineGuestsAt`, and cumulative
-  `totalLogins` and `totalOnlineSeconds`; `GET
+  `totalLogins`, `totalLogouts`, `totalWebLogins`, `totalWebLogouts`,
+  `totalGuestLogins`, `totalGuestLogouts`, and `totalOnlineSeconds`; `GET
   /api/v1/stats/community/history` returns daily stat-log rows ordered newest
   first with derived `deltaUsers`, `deltaBoards`, `deltaThreads`, `deltaPosts`,
   `deltaReactions`, `deltaMail`, `deltaDirectMessages`, `deltaLogins`,
-  `deltaOnlineSeconds`, and `deltaGuests` fields compared to the next older
-  fetched row.
+  `deltaLogouts`, `deltaWebLogins`, `deltaWebLogouts`, `deltaGuestLogins`,
+  `deltaGuestLogouts`, `deltaOnlineSeconds`, and `deltaGuests` fields compared
+  to the next older fetched row.
+- Successful web registration/login records `totalWebLogins`; explicit
+  `POST /api/v1/auth/logout` records `totalLogouts` and `totalWebLogouts`.
 - Presence updates accrue per-user `totalOnlineSeconds` while the previous
   session status was visibly online. A single update contributes at most five
   minutes so stale sessions do not create inflated stay-time totals.
@@ -733,7 +740,9 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   sessions by opaque `sessionId`, `status`, optional `location`, and request
   host. The web SPA pings it while unauthenticated, and guest sessions age out
   of current counters after the same five-minute freshness window used for
-  authenticated online users.
+  authenticated online users. The first online transition for a guest session
+  records `totalGuestLogins`; an online-to-`offline`/`inactive` transition
+  records `totalGuestLogouts`.
 - The `budgied` server also runs an automatic stat publisher by default
   (`-auto-stats=true`). On startup and hourly thereafter it ensures the current
   UTC day has the same deterministic `BBSLists` snapshot, authored by the

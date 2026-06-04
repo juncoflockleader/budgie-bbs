@@ -1699,7 +1699,33 @@ func SetGuestPresence(db *sql.DB, sessionID, status, locationLabel, fromHost str
 	if ts <= 0 {
 		ts = NowMS()
 	}
-	_, err := QExec(db,
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	var previousStatus string
+	err = QQueryRow(tx, `SELECT status FROM guest_presence_sessions WHERE session_id=?`, sessionID).Scan(&previousStatus)
+	hadPrevious := err == nil
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	wasOnline := hadPrevious && guestPresenceStatusCountsOnline(previousStatus)
+	isOnline := guestPresenceStatusCountsOnline(status)
+
+	if !wasOnline && isOnline {
+		if err := incrementCommunityCounterTx(tx, "total_guest_logins", ts); err != nil {
+			return err
+		}
+	} else if wasOnline && !isOnline {
+		if err := incrementCommunityCounterTx(tx, "total_guest_logouts", ts); err != nil {
+			return err
+		}
+	}
+
+	_, err = QExec(tx,
 		`INSERT INTO guest_presence_sessions (session_id, status, location_label, from_host, last_seen, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(session_id)
@@ -1717,6 +1743,9 @@ func SetGuestPresence(db *sql.DB, sessionID, status, locationLabel, fromHost str
 		ts,
 	)
 	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	return UpsertCommunityStatHistoryFromCurrent(db, ts)
@@ -1744,6 +1773,15 @@ func presenceStatusCountsOnline(status string) bool {
 	}
 }
 
+func guestPresenceStatusCountsOnline(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "offline", "inactive":
+		return false
+	default:
+		return true
+	}
+}
+
 func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 	if ts <= 0 {
 		ts = NowMS()
@@ -1764,10 +1802,12 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 	_, err = QExec(db,
 		`INSERT INTO community_stat_history (
 		    day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		    total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
-		    online_guests, max_online_users, max_online_at, max_online_guests,
-		    max_online_guests_at, head_seq
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    total_reactions, total_mail, total_direct_messages, total_logins,
+		    total_logouts, total_web_logins, total_web_logouts,
+		    total_guest_logins, total_guest_logouts, total_online_seconds,
+		    online_users, online_guests, max_online_users, max_online_at,
+		    max_online_guests, max_online_guests_at, head_seq
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(day)
 		 DO UPDATE SET
 		    snapshot_at=excluded.snapshot_at,
@@ -1779,6 +1819,11 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		    total_mail=excluded.total_mail,
 		    total_direct_messages=excluded.total_direct_messages,
 		    total_logins=excluded.total_logins,
+		    total_logouts=excluded.total_logouts,
+		    total_web_logins=excluded.total_web_logins,
+		    total_web_logouts=excluded.total_web_logouts,
+		    total_guest_logins=excluded.total_guest_logins,
+		    total_guest_logouts=excluded.total_guest_logouts,
 		    total_online_seconds=excluded.total_online_seconds,
 		    online_users=excluded.online_users,
 		    online_guests=excluded.online_guests,
@@ -1809,6 +1854,11 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		stats.TotalMail,
 		stats.TotalDirectMessages,
 		stats.TotalLogins,
+		stats.TotalLogouts,
+		stats.TotalWebLogins,
+		stats.TotalWebLogouts,
+		stats.TotalGuestLogins,
+		stats.TotalGuestLogouts,
 		stats.TotalOnlineSeconds,
 		stats.OnlineUsers,
 		stats.OnlineGuests,
@@ -2326,7 +2376,7 @@ func RecordLoginAt(db *sql.DB, userID string, ts int64) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint
 	if _, err := QExec(tx,
 		`INSERT INTO user_activity (user_id, login_count)
 		 VALUES (?, 1)
@@ -2349,7 +2399,50 @@ func RecordLoginAt(db *sql.DB, userID string, ts int64) error {
 	); err != nil {
 		return err
 	}
+	if err := incrementCommunityCounterTx(tx, "total_web_logins", ts); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func RecordLogout(db *sql.DB) error {
+	return RecordLogoutAt(db, NowMS())
+}
+
+func RecordLogoutAt(db *sql.DB, ts int64) error {
+	if ts <= 0 {
+		ts = NowMS()
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+	if err := incrementCommunityCounterTx(tx, "total_logouts", ts); err != nil {
+		return err
+	}
+	if err := incrementCommunityCounterTx(tx, "total_web_logouts", ts); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return UpsertCommunityStatHistoryFromCurrent(db, ts)
+}
+
+func incrementCommunityCounterTx(tx *sql.Tx, column string, ts int64) error {
+	switch column {
+	case "total_logouts", "total_web_logins", "total_web_logouts", "total_guest_logins", "total_guest_logouts":
+	default:
+		return fmt.Errorf("unknown community counter %q", column)
+	}
+	query := `INSERT INTO community_counter_totals (` + column + `, updated_at)
+		 VALUES (1, ?)
+		 ON CONFLICT(id)
+		 DO UPDATE SET ` + column + `=community_counter_totals.` + column + ` + 1,
+		               updated_at=excluded.updated_at`
+	_, err := QExec(tx, query, ts)
+	return err
 }
 
 func RecordOnlineSeconds(db *sql.DB, userID string, seconds int64) error {

@@ -51,6 +51,11 @@ export interface CommunityStats {
   totalMail: number
   totalDirectMessages: number
   totalLogins: number
+  totalLogouts: number
+  totalWebLogins: number
+  totalWebLogouts: number
+  totalGuestLogins: number
+  totalGuestLogouts: number
   totalOnlineSeconds: number
   onlineUsers: number
   onlineGuests: number
@@ -72,6 +77,11 @@ export interface CommunityStatHistory {
   totalMail: number
   totalDirectMessages: number
   totalLogins: number
+  totalLogouts: number
+  totalWebLogins: number
+  totalWebLogouts: number
+  totalGuestLogins: number
+  totalGuestLogouts: number
   totalOnlineSeconds: number
   onlineUsers: number
   onlineGuests: number
@@ -88,6 +98,11 @@ export interface CommunityStatHistory {
   deltaMail: number
   deltaDirectMessages: number
   deltaLogins: number
+  deltaLogouts: number
+  deltaWebLogins: number
+  deltaWebLogouts: number
+  deltaGuestLogins: number
+  deltaGuestLogouts: number
   deltaOnlineSeconds: number
   deltaGuests: number
 }
