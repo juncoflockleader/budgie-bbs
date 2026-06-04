@@ -167,6 +167,33 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen ON user_presence_sessions(board_id, last_seen DESC)`); err != nil {
 		return fmt.Errorf("ensure user presence sessions board index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS chat_rooms (
+		    id         TEXT    PRIMARY KEY,
+		    name       TEXT    NOT NULL,
+		    topic      TEXT    NOT NULL DEFAULT '',
+		    created_by TEXT    NOT NULL DEFAULT '',
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure chat rooms table: %w", err)
+	}
+	if _, err := qExec(db, `INSERT OR IGNORE INTO chat_rooms (id, name, topic, created_by, created_at, updated_at)
+		VALUES ('lobby', 'Lobby', 'Campus lobby chat', '', 0, 0)`); err != nil {
+		return fmt.Errorf("ensure lobby chat room: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS chat_lines (
+		    id         TEXT    PRIMARY KEY,
+		    room_id    TEXT    NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+		    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    user_name  TEXT    NOT NULL,
+		    body       TEXT    NOT NULL,
+		    created_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure chat lines table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_chat_lines_room_created ON chat_lines(room_id, created_at DESC, id DESC)`); err != nil {
+		return fmt.Errorf("ensure chat lines room index: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS guest_presence_sessions (
 		    session_id     TEXT    PRIMARY KEY,
 		    status         TEXT    NOT NULL DEFAULT 'active',

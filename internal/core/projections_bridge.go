@@ -218,6 +218,10 @@ func setUserPresence(db *sql.DB, userID, sessionID, status, mode, boardID, threa
 	return projections.SetUserPresence(db, userID, sessionID, status, mode, boardID, threadID, locationLabel, fromHost, ts)
 }
 
+func insertChatLine(db *sql.DB, id, roomID, roomName, userID, userName, body string, ts int64) error {
+	return projections.InsertChatLine(db, id, roomID, roomName, userID, userName, body, ts)
+}
+
 func userIgnores(db *sql.DB, userID, targetUserID string) (bool, error) {
 	return projections.UserIgnores(db, userID, targetUserID)
 }
@@ -392,6 +396,18 @@ func listSocialUsers(db *sql.DB, userID, list string, onlineOnly bool) ([]Social
 
 func listOnlineUsers(db *sql.DB, viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
 	return projections.ListOnlineUsers(db, viewerID, boardID, limit, offset)
+}
+
+func listChatRooms(db *sql.DB) ([]ChatRoom, error) {
+	return projections.ListChatRooms(db)
+}
+
+func listChatLines(db *sql.DB, roomID string, limit int) ([]ChatLine, error) {
+	return projections.ListChatLines(db, roomID, limit)
+}
+
+func listChatOnlineUsers(db *sql.DB, viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
+	return projections.ListChatOnlineUsers(db, viewerID, roomID, limit, offset)
 }
 
 func listFavoriteBoards(db *sql.DB, userID string) ([]Board, error) {

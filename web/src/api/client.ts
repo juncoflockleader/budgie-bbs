@@ -9,6 +9,8 @@ import type {
   BoardMemberRequirements,
   BoardSettings,
   BoardSummary,
+  ChatLine,
+  ChatRoom,
   BoardRanking,
   BlessingRanking,
   ArchiveRanking,
@@ -1016,6 +1018,37 @@ export async function listBoardOnlineUsers(token: string, board: string): Promis
   const r = await json<{ users: SocialUser[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.users ?? [] }
+}
+
+export async function listChatRooms(token: string): Promise<ApiResponse<ChatRoom[]>> {
+  const res = await fetch(`${BASE}/chat/rooms`, { headers: authHeaders(token) })
+  const r = await json<{ rooms: ChatRoom[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.rooms ?? [] }
+}
+
+export async function listChatRecent(token: string, room: string, limit = 50): Promise<ApiResponse<ChatLine[]>> {
+  const q = new URLSearchParams({ limit: String(limit) })
+  const res = await fetch(`${BASE}/chat/${encodeURIComponent(room)}/recent?${q}`, { headers: authHeaders(token) })
+  const r = await json<{ lines: ChatLine[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.lines ?? [] }
+}
+
+export async function listChatOnlineUsers(token: string, room: string): Promise<ApiResponse<SocialUser[]>> {
+  const res = await fetch(`${BASE}/chat/${encodeURIComponent(room)}/online`, { headers: authHeaders(token) })
+  const r = await json<{ users: SocialUser[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.users ?? [] }
+}
+
+export async function sendChatLine(token: string, room: string, text: string): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/chat/${encodeURIComponent(room)}/lines`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ text }),
+  })
+  return json<AckResult>(res)
 }
 
 export async function setPresence(

@@ -415,6 +415,28 @@ CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_last_seen
 CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen
     ON user_presence_sessions(board_id, last_seen DESC);
 
+CREATE TABLE IF NOT EXISTS chat_rooms (
+    id         TEXT    PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    topic      TEXT    NOT NULL DEFAULT '',
+    created_by TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO chat_rooms (id, name, topic, created_by, created_at, updated_at)
+    VALUES ('lobby', 'Lobby', 'Campus lobby chat', '', 0, 0);
+
+CREATE TABLE IF NOT EXISTS chat_lines (
+    id         TEXT    PRIMARY KEY,
+    room_id    TEXT    NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_name  TEXT    NOT NULL,
+    body       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_chat_lines_room_created
+    ON chat_lines(room_id, created_at DESC, id DESC);
+
 CREATE TABLE IF NOT EXISTS guest_presence_sessions (
     session_id     TEXT    PRIMARY KEY,
     status         TEXT    NOT NULL DEFAULT 'active',

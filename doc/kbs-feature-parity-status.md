@@ -904,12 +904,39 @@ social graph:
   and ignores with presence badges.
 - Web board pages publish reading presence and expose board-local online users.
 - Web thread pages publish thread-level reading presence.
-- Web chat exposes online friends in-room with direct-message shortcuts.
+- Web chat publishes room presence and exposes online friends with
+  direct-message shortcuts.
 - Web profile pages expose add-friend and ignore actions.
 - Web thread readers expose add-author-as-friend and ignore-author actions from
   article context.
 - Web People rows and board-local online chips can open a direct-message draft
   for the selected online user.
+
+### Chat Rooms, Recent Lines, And Room Rosters
+
+KBS chat was more than a single broadcast feed: users could enter named rooms,
+see who was in-room, talk alongside friends, and keep short room logs. Budgie now
+has the core BBS/forum workflow:
+
+- A `chat_rooms` projection with default `lobby`, display name, topic fields,
+  creator metadata, and updated timestamps.
+- A bounded `chat_lines` projection stores the most recent room history and
+  prunes each room to the latest 200 lines.
+- `sendChatLine` now normalizes room ids, validates room names, trims text,
+  creates rooms lazily, stores the recent line, and then broadcasts the live
+  `chat.line` event.
+- Authenticated chat read APIs:
+  - `GET /api/v1/chat/rooms`
+  - `GET /api/v1/chat/{room}/recent?limit=`
+  - `GET /api/v1/chat/{room}/online?limit=&offset=`
+- REST chat write alias:
+  - `POST /api/v1/chat/{room}/lines`
+- Room rosters are backed by rich presence: users in `mode=chat` with
+  `location` matching the room id appear in that room's online list; invisible
+  and ordinary-viewer-hidden cloaked users are excluded.
+- Web chat now loads the room catalog, switches between rooms, restores recent
+  lines after refresh, sends into the selected room, publishes room presence,
+  shows the room roster, and keeps online-friend direct-message shortcuts.
 
 ## Existing Budgie Coverage That Maps To KBS
 
@@ -1032,19 +1059,20 @@ social graph:
 - Sanitized KBS-style `denypost` / `undenypost` system-board records for
   public-board posting sanction and restoration events, with private boards
   kept out of the public mirror.
-- Live chat lines, rich presence events, current board/thread presence, and
-  online-friend chat shortcuts in the web UI.
+- Room-aware live chat lines, recent room history, room rosters, rich presence
+  events, current board/thread presence, and online-friend chat shortcuts in the
+  web UI.
 - HTTP, web, WebSocket/SSE, SSH TUI, and NNTP-facing surfaces.
 
 ## Remaining Major KBS Parity Areas
 
-- Final audit of specialized historical/stat-log boards not already represented
-  by deterministic `BBSLists` outputs.
+- No known major in-scope BBS/forum workflow gap remains after the current KBS
+  feature audit.
 - Explicitly out of the current BBS/forum parity goal: POP3/SMTP bridges,
   blog/personal corpus, legacy transfer protocols, SMS/pager layers, sysop
   import/repair tooling, and optional campus utilities/games.
 
 ## Suggested Next Slices
 
-1. Final audit of specialized historical/stat-log boards not already
-   represented by deterministic `BBSLists` outputs.
+1. Product hardening: broader browser QA, load testing for room/presence churn,
+   and any UX polish found during hands-on use.

@@ -557,6 +557,27 @@ type SocialUser struct {
 	UpdatedAt     int64  `json:"updatedAt"`
 }
 
+type ChatRoom struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Topic       string `json:"topic,omitempty"`
+	OnlineUsers int    `json:"onlineUsers"`
+	LineCount   int    `json:"lineCount"`
+	CreatedBy   string `json:"createdBy,omitempty"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
+}
+
+type ChatLine struct {
+	ID        string `json:"id"`
+	Room      string `json:"room"`
+	UserID    string `json:"userId,omitempty"`
+	User      string `json:"user"`
+	Text      string `json:"text"`
+	CreatedAt int64  `json:"createdAt"`
+	TS        int64  `json:"ts"`
+}
+
 // Category is a board category projection.
 type Category struct {
 	ID          string `json:"id"`

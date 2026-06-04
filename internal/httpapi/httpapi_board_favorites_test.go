@@ -5360,6 +5360,93 @@ func TestHTTPMultiSessionPresenceLifecycle(t *testing.T) {
 	}
 }
 
+func TestHTTPChatRoomsRecentAndRoster(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/presence", aliceToken, map[string]string{
+		"status":   "active",
+		"mode":     "chat",
+		"location": "study-room",
+	}, &ack); status != http.StatusOK {
+		t.Fatalf("set alice chat presence status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/presence", bobToken, map[string]string{
+		"status":   "active",
+		"mode":     "chat",
+		"location": "study-room",
+	}, &ack); status != http.StatusOK {
+		t.Fatalf("set bob chat presence status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/chat/Study-Room/lines", aliceToken, map[string]string{
+		"text": "  meet at the terminal  ",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("send chat line status: %d error=%+v", status, ack.Error)
+	}
+
+	var rooms struct {
+		Rooms []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			OnlineUsers int    `json:"onlineUsers"`
+			LineCount   int    `json:"lineCount"`
+		} `json:"rooms"`
+	}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/chat/rooms", aliceToken, nil, &rooms); status != http.StatusOK {
+		t.Fatalf("list chat rooms status: %d", status)
+	}
+	foundRoom := false
+	for _, room := range rooms.Rooms {
+		if room.ID != "study-room" {
+			continue
+		}
+		foundRoom = true
+		if room.Name != "Study Room" || room.OnlineUsers != 2 || room.LineCount != 1 {
+			t.Fatalf("expected study room counts, got %+v", room)
+		}
+	}
+	if !foundRoom {
+		t.Fatalf("expected study room in room list, got %+v", rooms.Rooms)
+	}
+
+	var recent struct {
+		Lines []struct {
+			ID   string `json:"id"`
+			Room string `json:"room"`
+			User string `json:"user"`
+			Text string `json:"text"`
+			TS   int64  `json:"ts"`
+		} `json:"lines"`
+	}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/chat/study-room/recent?limit=10", aliceToken, nil, &recent); status != http.StatusOK {
+		t.Fatalf("list chat recent status: %d", status)
+	}
+	if len(recent.Lines) != 1 || recent.Lines[0].ID != ack.Result.ID || recent.Lines[0].Room != "study-room" || recent.Lines[0].User != "alice" || recent.Lines[0].Text != "meet at the terminal" || recent.Lines[0].TS == 0 {
+		t.Fatalf("expected normalized recent chat line, got %+v", recent.Lines)
+	}
+
+	roster := socialUsersResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/chat/study-room/online", aliceToken, nil, &roster); status != http.StatusOK {
+		t.Fatalf("list chat online users status: %d", status)
+	}
+	names := map[string]bool{}
+	for _, user := range roster.Users {
+		names[user.Name] = user.Mode == "chat" && user.Location == "study-room"
+	}
+	if !names["alice"] || !names["bob"] {
+		t.Fatalf("expected alice and bob in study-room roster, got %+v", roster.Users)
+	}
+
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/chat/bad%20room/lines", aliceToken, map[string]string{
+		"text": "nope",
+	}, &ack); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected invalid chat room to fail, got %d error=%+v", status, ack.Error)
+	}
+}
+
 func TestHTTPBoardReadMarkersLifecycle(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 

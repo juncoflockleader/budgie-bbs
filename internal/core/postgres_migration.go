@@ -100,6 +100,8 @@ func MigrateSQLiteToPostgres(ctx context.Context, sqlitePath, pgDSN string) erro
 		{src: "recommended_boards", dst: "recommended_boards", cols: []string{"board_id", "note", "position", "curated_by", "created_at", "updated_at"}},
 		{src: "user_presence", dst: "user_presence", cols: []string{"user_id", "status", "mode", "board_id", "thread_id", "location_label", "from_host", "last_seen", "updated_at"}},
 		{src: "user_presence_sessions", dst: "user_presence_sessions", cols: []string{"user_id", "session_id", "status", "mode", "board_id", "thread_id", "location_label", "from_host", "last_seen", "updated_at"}},
+		{src: "chat_rooms", dst: "chat_rooms", cols: []string{"id", "name", "topic", "created_by", "created_at", "updated_at"}},
+		{src: "chat_lines", dst: "chat_lines", cols: []string{"id", "room_id", "user_id", "user_name", "body", "created_at"}},
 		{src: "guest_presence_sessions", dst: "guest_presence_sessions", cols: []string{"session_id", "status", "location_label", "from_host", "last_seen", "updated_at"}},
 		{src: "community_counter_totals", dst: "community_counter_totals", cols: []string{"id", "total_logouts", "total_web_logins", "total_web_logouts", "total_guest_logins", "total_guest_logouts", "updated_at"}},
 		{src: "direct_message_settings", dst: "direct_message_settings", cols: []string{"user_id", "policy", "updated_at"}},

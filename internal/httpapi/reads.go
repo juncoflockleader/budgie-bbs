@@ -537,6 +537,37 @@ func (s *Server) handleListOnlineUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 
+func (s *Server) handleListChatRooms(w http.ResponseWriter, r *http.Request) {
+	rooms, err := s.core.ListChatRooms()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rooms": rooms})
+}
+
+func (s *Server) handleListChatLines(w http.ResponseWriter, r *http.Request) {
+	limit, _ := paginate(r)
+	lines, err := s.core.ListChatLines(r.PathValue("room"), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lines": lines})
+}
+
+func (s *Server) handleListChatOnlineUsers(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	limit, offset := paginate(r)
+	users, err := s.core.ListChatOnlineUsers(actor.ID, r.PathValue("room"), limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	s.maskPrivatePresenceLocations(actor, users)
+	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
 func (s *Server) handleListBoardOnlineUsers(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")

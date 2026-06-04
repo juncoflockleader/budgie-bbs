@@ -2525,6 +2525,152 @@ func ListOnlineUsers(db *sql.DB, viewerID, boardID string, limit, offset int) ([
 	return out, rows.Err()
 }
 
+func ListChatRooms(db *sql.DB) ([]ChatRoom, error) {
+	cutoff := NowMS() - 5*60*1000
+	rows, err := QQuery(db,
+		`SELECT r.id, r.name, r.topic,
+		        COALESCE((
+		          SELECT COUNT(DISTINCT p.user_id)
+		            FROM user_presence_sessions p
+		           WHERE p.last_seen >= ?
+		             AND LOWER(p.status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')
+		             AND LOWER(p.mode)='chat'
+		             AND p.location_label=r.id
+		        ), 0) AS online_users,
+		        COALESCE((SELECT COUNT(*) FROM chat_lines l WHERE l.room_id=r.id), 0) AS line_count,
+		        r.created_by, r.created_at, r.updated_at
+		   FROM chat_rooms r
+		  ORDER BY CASE WHEN r.id='lobby' THEN 0 ELSE 1 END, r.updated_at DESC, r.name`,
+		cutoff,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ChatRoom{}
+	for rows.Next() {
+		var room ChatRoom
+		if err := rows.Scan(&room.ID, &room.Name, &room.Topic, &room.OnlineUsers, &room.LineCount, &room.CreatedBy, &room.CreatedAt, &room.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, room)
+	}
+	return out, rows.Err()
+}
+
+func ListChatLines(db *sql.DB, roomID string, limit int) ([]ChatLine, error) {
+	roomID = strings.TrimSpace(roomID)
+	if roomID == "" {
+		roomID = "lobby"
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := QQuery(db,
+		`SELECT id, room_id, user_id, user_name, body, created_at
+		   FROM (
+		     SELECT id, room_id, user_id, user_name, body, created_at
+		       FROM chat_lines
+		      WHERE room_id=?
+		      ORDER BY created_at DESC, id DESC
+		      LIMIT ?
+		   ) recent
+		  ORDER BY created_at ASC, id ASC`,
+		roomID,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ChatLine{}
+	for rows.Next() {
+		var line ChatLine
+		if err := rows.Scan(&line.ID, &line.Room, &line.UserID, &line.User, &line.Text, &line.CreatedAt); err != nil {
+			return nil, err
+		}
+		line.TS = line.CreatedAt
+		out = append(out, line)
+	}
+	return out, rows.Err()
+}
+
+func ListChatOnlineUsers(db *sql.DB, viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
+	roomID = strings.TrimSpace(roomID)
+	if roomID == "" {
+		roomID = "lobby"
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	cutoff := NowMS() - 5*60*1000
+	rows, err := QQuery(db,
+		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
+		        p.session_id, '', 'chat', 0, COALESCE(p.updated_at, 0),
+		        COALESCE(p.status, ''), COALESCE(p.last_seen, 0),
+		        COALESCE(p.mode, ''), COALESCE(p.board_id, ''), COALESCE(pb.name, ''),
+		        COALESCE(p.thread_id, ''), COALESCE(p.location_label, ''), COALESCE(p.from_host, ''),
+		        CASE WHEN EXISTS (
+		          SELECT 1 FROM user_relationships mine
+		           WHERE mine.user_id = ? AND mine.target_user_id = u.id AND mine.kind='friend'
+		        ) AND EXISTS (
+		          SELECT 1 FROM user_relationships back
+		           WHERE back.user_id = u.id AND back.target_user_id = ? AND back.kind='friend'
+		        ) THEN 1 ELSE 0 END AS mutual,
+		        CASE WHEN EXISTS (
+		          SELECT 1 FROM user_relationships ig
+		           WHERE ig.user_id = ? AND ig.target_user_id = u.id AND ig.kind='ignore'
+		        ) THEN 1 ELSE 0 END AS ignored
+		   FROM user_presence_sessions p
+		   JOIN users u ON u.id = p.user_id
+		   LEFT JOIN user_profiles up ON up.user_id = u.id
+		   LEFT JOIN boards pb ON pb.id = p.board_id
+		  WHERE p.last_seen >= ?
+		    AND LOWER(p.status) NOT IN ('offline', 'invisible')
+		    AND (LOWER(p.status) NOT IN ('cloak', 'cloaked')
+		      OR EXISTS (
+		        SELECT 1 FROM users viewer
+		         WHERE viewer.id = ? AND viewer.role IN ('moderator', 'admin')
+		      ))
+		    AND LOWER(p.mode)='chat'
+		    AND p.location_label=?
+		  ORDER BY p.last_seen DESC, u.name
+		  LIMIT ? OFFSET ?`,
+		viewerID,
+		viewerID,
+		viewerID,
+		cutoff,
+		viewerID,
+		roomID,
+		limit,
+		offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialUser{}
+	now := NowMS()
+	for rows.Next() {
+		var u SocialUser
+		var mutual, ignored int
+		if err := rows.Scan(&u.UserID, &u.Name, &u.Role, &u.DisplayName, &u.SessionID, &u.Note, &u.Kind, &u.CreatedAt, &u.UpdatedAt, &u.Status, &u.LastSeen, &u.Mode, &u.BoardID, &u.BoardName, &u.ThreadID, &u.LocationLabel, &u.FromHost, &mutual, &ignored); err != nil {
+			return nil, err
+		}
+		u.Mutual = mutual != 0
+		u.Ignored = ignored != 0
+		u.Online = true
+		if u.LastSeen > 0 {
+			u.IdleSeconds = (now - u.LastSeen) / 1000
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func visibleOnlineStatus(status string) bool {
 	status = strings.ToLower(strings.TrimSpace(status))
 	return status != "" && !hiddenOnlineStatus(status)

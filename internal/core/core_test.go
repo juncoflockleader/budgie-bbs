@@ -4958,6 +4958,70 @@ func TestSocialGraphAndIgnoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestChatRoomsRecentAndRoster(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, alice, proto.CmdSetPresence, proto.SetPresencePayload{
+		Status:   "active",
+		Mode:     "chat",
+		Location: "lobby",
+	})
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{
+		Status:   "active",
+		Mode:     "chat",
+		Location: "study-room",
+	})
+	line := exec(t, c, alice, proto.CmdSendChatLine, proto.SendChatLinePayload{
+		Room: "Study-Room",
+		Text: "  meet at the terminal  ",
+	})
+
+	lines, err := c.ListChatLines("study-room", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 || lines[0].ID != line.ID || lines[0].Room != "study-room" || lines[0].User != "alice" || lines[0].Text != "meet at the terminal" {
+		t.Fatalf("expected normalized recent chat line, got %+v", lines)
+	}
+
+	rooms, err := c.ListChatRooms()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lobbyRoom, studyRoom *core.ChatRoom
+	for i := range rooms {
+		switch rooms[i].ID {
+		case "lobby":
+			lobbyRoom = &rooms[i]
+		case "study-room":
+			studyRoom = &rooms[i]
+		}
+	}
+	if lobbyRoom == nil || lobbyRoom.Name != "Lobby" || lobbyRoom.OnlineUsers != 1 {
+		t.Fatalf("expected lobby room with alice online, got %+v", rooms)
+	}
+	if studyRoom == nil || studyRoom.Name != "Study Room" || studyRoom.LineCount != 1 || studyRoom.OnlineUsers != 1 {
+		t.Fatalf("expected study room counts, got %+v", rooms)
+	}
+
+	roster, err := c.ListChatOnlineUsers(alice.ID, "study-room", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roster) != 1 || roster[0].Name != "bob" || roster[0].Mode != "chat" || roster[0].LocationLabel != "study-room" {
+		t.Fatalf("expected bob in study-room roster, got %+v", roster)
+	}
+
+	execExpectErr(t, c, alice, proto.CmdSendChatLine, proto.SendChatLinePayload{
+		Room: "bad room",
+		Text: "nope",
+	}, proto.ErrValidationFailed)
+}
+
 func TestPrivilegedCloakPresence(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

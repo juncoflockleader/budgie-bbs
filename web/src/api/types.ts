@@ -638,6 +638,25 @@ export interface ReviewResolvedPayload {
   by: string
   ts: number
 }
+export interface ChatRoom {
+  id: string
+  name: string
+  topic?: string
+  onlineUsers: number
+  lineCount: number
+  createdBy?: string
+  createdAt: number
+  updatedAt: number
+}
+export interface ChatLine {
+  id: string
+  room: string
+  userId?: string
+  user: string
+  text: string
+  createdAt: number
+  ts: number
+}
 export interface ChatLinePayload {
   id: string; room: string; user: string; text: string; ts: number
 }

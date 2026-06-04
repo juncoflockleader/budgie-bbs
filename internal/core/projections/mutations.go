@@ -1673,6 +1673,73 @@ func SetUserPresence(db *sql.DB, userID, sessionID, status, mode, boardID, threa
 	return UpsertCommunityStatHistoryFromCurrent(db, ts)
 }
 
+func InsertChatLine(db *sql.DB, id, roomID, roomName, userID, userName, body string, ts int64) error {
+	id = strings.TrimSpace(id)
+	roomID = strings.TrimSpace(roomID)
+	roomName = strings.TrimSpace(roomName)
+	userID = strings.TrimSpace(userID)
+	userName = strings.TrimSpace(userName)
+	body = strings.TrimSpace(body)
+	if id == "" || roomID == "" || userID == "" || body == "" {
+		return fmt.Errorf("chat line id, room, user, and body are required")
+	}
+	if roomName == "" {
+		roomName = roomID
+	}
+	if ts <= 0 {
+		ts = NowMS()
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	if _, err := QExec(tx,
+		`INSERT INTO chat_rooms (id, name, created_by, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(id)
+		 DO UPDATE SET
+		    name=CASE WHEN chat_rooms.name='' THEN excluded.name ELSE chat_rooms.name END,
+		    updated_at=excluded.updated_at`,
+		roomID,
+		roomName,
+		userID,
+		ts,
+		ts,
+	); err != nil {
+		return err
+	}
+	if _, err := QExec(tx,
+		`INSERT INTO chat_lines (id, room_id, user_id, user_name, body, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		id,
+		roomID,
+		userID,
+		userName,
+		body,
+		ts,
+	); err != nil {
+		return err
+	}
+	if _, err := QExec(tx,
+		`DELETE FROM chat_lines
+		  WHERE room_id=?
+		    AND id NOT IN (
+		      SELECT id FROM chat_lines
+		       WHERE room_id=?
+		       ORDER BY created_at DESC, id DESC
+		       LIMIT 200
+		    )`,
+		roomID,
+		roomID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func SetGuestPresence(db *sql.DB, sessionID, status, locationLabel, fromHost string, ts int64) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {

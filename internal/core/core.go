@@ -1092,6 +1092,15 @@ func (c *Core) ListSocialUsers(userID, list string, onlineOnly bool) ([]SocialUs
 func (c *Core) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
 	return listOnlineUsers(c.DB, viewerID, boardID, limit, offset)
 }
+func (c *Core) ListChatRooms() ([]ChatRoom, error) {
+	return listChatRooms(c.DB)
+}
+func (c *Core) ListChatLines(roomID string, limit int) ([]ChatLine, error) {
+	return listChatLines(c.DB, roomID, limit)
+}
+func (c *Core) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
+	return listChatOnlineUsers(c.DB, viewerID, roomID, limit, offset)
+}
 func (c *Core) ListFavoriteBoards(userID string) ([]Board, error) {
 	return listFavoriteBoards(c.DB, userID)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -105,21 +106,77 @@ func (h *Handler) revokeRole(actor *User, p proto.RevokeRolePayload) Reply {
 }
 
 func (h *Handler) sendChatLine(actor *User, p proto.SendChatLinePayload) Reply {
-	if p.Room == "" || p.Text == "" {
+	roomID := normalizeChatRoomID(p.Room)
+	text := strings.TrimSpace(p.Text)
+	if roomID == "" || text == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "room and text are required", false)}
+	}
+	if !validChatRoomID(roomID) {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "chat room must use letters, numbers, underscore, or hyphen", false)}
+	}
+	if len([]rune(text)) > 1000 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "chat text is too long", false)}
 	}
 	ts := nowMS()
 	id := newID("chat_")
-	scopes := []string{"chat:" + p.Room}
+	roomName := formatChatRoomName(roomID)
+	if err := projections.InsertChatLine(h.db, id, roomID, roomName, actor.ID, actor.Name, text, ts); err != nil {
+		return internalErr(err)
+	}
+	scopes := []string{"chat:" + roomID}
 
 	h.bus.Publish(&proto.Event{
 		Kind:    proto.EvtChatLine,
 		Scopes:  scopes,
-		Payload: &proto.ChatLinePayload{ID: id, Room: p.Room, User: actor.Name, Text: p.Text, TS: ts},
+		Payload: &proto.ChatLinePayload{ID: id, Room: roomID, User: actor.Name, Text: text, TS: ts},
 		TS:      ts,
 	})
 
 	return Reply{Result: &proto.AckResult{ID: id}}
+}
+
+func normalizeChatRoomID(room string) string {
+	room = strings.ToLower(strings.TrimSpace(room))
+	if room == "" {
+		return "lobby"
+	}
+	return room
+}
+
+func validChatRoomID(room string) bool {
+	if len(room) > 40 {
+		return false
+	}
+	for _, ch := range room {
+		if ch >= 'a' && ch <= 'z' {
+			continue
+		}
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		if ch == '_' || ch == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func formatChatRoomName(roomID string) string {
+	if roomID == "lobby" {
+		return "Lobby"
+	}
+	parts := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(roomID))
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	if len(parts) == 0 {
+		return roomID
+	}
+	return strings.Join(parts, " ")
 }
 
 func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
