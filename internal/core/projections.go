@@ -239,6 +239,47 @@ func listPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	return posts, rows.Err()
 }
 
+func listPostsByAuthor(db *sql.DB, name string, limit, offset int) ([]Post, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := qQuery(db,
+		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type,
+		        COALESCE(reply_to,''), version, redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=posts.id), 0),
+		        created_seq, updated_seq, created_at, updated_at
+		 FROM posts
+		 WHERE author=? AND redacted=0
+		 ORDER BY created_seq DESC LIMIT ? OFFSET ?`,
+		name, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var posts []Post
+	for rows.Next() {
+		var p Post
+		var redacted int
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType,
+			&p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if p.CreatedAt == 0 {
+			p.CreatedAt = p.CreatedSeq
+		}
+		if p.UpdatedAt == 0 {
+			p.UpdatedAt = p.CreatedAt
+		}
+		p.Redacted = redacted != 0
+		posts = append(posts, p)
+	}
+	return posts, rows.Err()
+}
+
 func getPost(db *sql.DB, id string) (*Post, error) {
 	p := &Post{}
 	var redacted int

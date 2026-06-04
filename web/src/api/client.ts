@@ -167,6 +167,19 @@ export async function getUserProfile(token: string, username: string): Promise<A
   return json<UserProfile>(res)
 }
 
+export async function listUserPosts(
+  token: string,
+  username: string,
+  limit = 20,
+  offset = 0,
+): Promise<ApiResponse<Post[]>> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  const res = await fetch(`${BASE}/users/${username}/posts?${params}`, { headers: authHeaders(token) })
+  const r = await json<{ posts: Post[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.posts ?? [] }
+}
+
 export async function updateMyProfile(
   token: string,
   payload: { displayName?: string; bio?: string; avatar?: string },

@@ -16,6 +16,7 @@ interface Props {
   currentUserId: string
   currentUserRole: string
   onBack: () => void
+  onOpenProfile: (username: string) => void
 }
 
 interface ReactionState {
@@ -29,7 +30,7 @@ function hasPollBlock(body: string) {
   return body.includes('[poll]')
 }
 
-export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBack }: Props) {
+export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBack, onOpenProfile }: Props) {
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -283,7 +284,9 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
           return (
             <div key={post.id} className="post-card">
               <div className="post-meta">
-                <span className="post-author">{post.author}</span>
+                <button className="post-author post-author-link" onClick={() => onOpenProfile(post.author)}>
+                  {post.author}
+                </button>
                 {tl !== undefined && (
                   <span className={`trust-badge trust-badge--tl${tl}`} title={`Trust level ${tl}`}>
                     {TL_LABEL[tl] ?? `TL${tl}`}

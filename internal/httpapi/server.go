@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/polls/{poll}", auth(http.HandlerFunc(s.handleGetPoll)))
 	mux.Handle("GET /api/v1/posts/{post}/poll", auth(http.HandlerFunc(s.handleGetPollByPost)))
 	mux.Handle("GET /api/v1/users/{name}/trust", auth(http.HandlerFunc(s.handleGetTrust)))
+	mux.Handle("GET /api/v1/users/{name}/posts", auth(http.HandlerFunc(s.handleListUserPosts)))
 	mux.Handle("GET /api/v1/users/{name}", auth(http.HandlerFunc(s.handleGetUserProfile)))
 	mux.Handle("GET /api/v1/mod/reviewables", auth(http.HandlerFunc(s.handleListReviewables)))
 	mux.Handle("GET /api/v1/users/{name}/sanctions", auth(http.HandlerFunc(s.handleListUserSanctions)))

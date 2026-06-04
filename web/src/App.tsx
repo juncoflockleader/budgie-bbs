@@ -8,6 +8,7 @@ import { NewThreadPage } from './pages/NewThreadPage'
 import { ChatPage } from './pages/ChatPage'
 import { SearchPage } from './pages/SearchPage'
 import { NotificationsPage } from './pages/NotificationsPage'
+import { UserProfilePage } from './pages/UserProfilePage'
 import * as api from './api/client'
 import type { Board, Thread, BudgieEvent } from './api/types'
 import { useStream } from './hooks/useStream'
@@ -20,6 +21,7 @@ type Page =
   | { name: 'chat' }
   | { name: 'search'; query: string }
   | { name: 'notifications' }
+  | { name: 'user-profile'; username: string }
 
 export function App() {
   const { auth, login, logout } = useAuth()
@@ -90,7 +92,13 @@ export function App() {
         >
           🔔{unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
         </button>
-        <span className="nav-user muted">{user.name}</span>
+        <button
+          className="link-btn nav-user"
+          onClick={() => nav({ name: 'user-profile', username: user.name })}
+          title="Open your profile"
+        >
+          {user.name}
+        </button>
         <button className="link-btn nav-logout" onClick={logout}>Logout</button>
       </nav>
 
@@ -117,6 +125,15 @@ export function App() {
             currentUserId={user.id}
             currentUserRole={user.role}
             onBack={() => nav({ name: 'threads', board: page.board })}
+            onOpenProfile={username => nav({ name: 'user-profile', username })}
+          />
+        )}
+        {page.name === 'user-profile' && (
+          <UserProfilePage
+            token={token}
+            username={page.username}
+            isOwnProfile={page.username === user.name}
+            onBack={() => nav({ name: 'boards' })}
           />
         )}
         {page.name === 'new-thread' && (

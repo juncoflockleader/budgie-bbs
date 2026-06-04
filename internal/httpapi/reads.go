@@ -194,6 +194,31 @@ func (s *Server) handleGetUserProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile)
 }
 
+// GET /api/v1/users/{name}/posts
+func (s *Server) handleListUserPosts(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusNotFound, "not_found", "user not found", false)
+		return
+	}
+	target, err := s.core.UserByName(name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	if target == nil {
+		writeError(w, http.StatusNotFound, "not_found", "user not found", false)
+		return
+	}
+	limit, offset := paginate(r)
+	posts, err := s.core.ListPostsByAuthor(target.Name, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
+}
+
 // GET /api/v1/mod/reviewables?status=open
 func (s *Server) handleListReviewables(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
