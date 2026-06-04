@@ -1377,7 +1377,7 @@ var pollTagOpenRe = regexp.MustCompile(`(?i)^\[poll(?:\s+expires\s*=\s*([^\]]+))
 // (or nil if absent) and the body with the poll block stripped.
 func extractPoll(body string) (*pollBlock, string) {
 	const close = "[/poll]"
-	start := strings.Index(body, "[poll")
+	start := strings.Index(strings.ToLower(body), "[poll")
 	if start < 0 {
 		return nil, body
 	}
@@ -1402,6 +1402,9 @@ func extractPoll(body string) (*pollBlock, string) {
 	}
 
 	end := strings.Index(body[openClose+1:], close)
+	if end < 0 {
+		end = strings.Index(strings.ToLower(body[openClose+1:]), close)
+	}
 	if end < 0 {
 		return nil, body
 	}

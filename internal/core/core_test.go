@@ -542,6 +542,46 @@ func TestPollCreationSupportsExpiryUppercaseDuration(t *testing.T) {
 	}
 }
 
+func TestPollCreationSupportsUppercasePollTags(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[POLL]\nQuestion?\nOption A\nOption B\n[/POLL]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Uppercase poll tag", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for uppercase tags")
+	}
+
+	fullPoll, err := c.GetPoll(poll.ID, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullPoll == nil {
+		t.Fatal("expected full poll for uppercase tags")
+	}
+	if len(fullPoll.Options) != 2 {
+		t.Fatalf("expected 2 options, got %d", len(fullPoll.Options))
+	}
+}
+
 func TestPollCreationSupportsExpiryLocalDateTime(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
