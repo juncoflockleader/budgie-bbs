@@ -280,6 +280,23 @@ CREATE TABLE IF NOT EXISTS board_moderators (
 CREATE INDEX IF NOT EXISTS idx_board_moderators_board_position
     ON board_moderators(board_id, position, user_id);
 
+CREATE TABLE IF NOT EXISTS board_moderator_terms (
+    board_id     TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    started_at   BIGINT NOT NULL DEFAULT 0,
+    ended_at     BIGINT NOT NULL DEFAULT 0,
+    appointed_by TEXT NOT NULL DEFAULT '',
+    removed_by   TEXT NOT NULL DEFAULT '',
+    position     INTEGER NOT NULL DEFAULT 0,
+    created_at   BIGINT NOT NULL DEFAULT 0,
+    updated_at   BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (board_id, user_id, started_at)
+);
+CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_board_time
+    ON board_moderator_terms(board_id, ended_at, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_user_time
+    ON board_moderator_terms(user_id, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS board_members (
     board_id           TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
     user_id            TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -842,6 +859,23 @@ CREATE TABLE IF NOT EXISTS board_moderators (
 );
 CREATE INDEX IF NOT EXISTS idx_board_moderators_board_position
     ON board_moderators(board_id, position, user_id);
+
+CREATE TABLE IF NOT EXISTS board_moderator_terms (
+    board_id     TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    started_at   BIGINT NOT NULL DEFAULT 0,
+    ended_at     BIGINT NOT NULL DEFAULT 0,
+    appointed_by TEXT NOT NULL DEFAULT '',
+    removed_by   TEXT NOT NULL DEFAULT '',
+    position     INTEGER NOT NULL DEFAULT 0,
+    created_at   BIGINT NOT NULL DEFAULT 0,
+    updated_at   BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (board_id, user_id, started_at)
+);
+CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_board_time
+    ON board_moderator_terms(board_id, ended_at, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_user_time
+    ON board_moderator_terms(user_id, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS board_members (
     board_id           TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
@@ -1836,6 +1870,42 @@ CREATE INDEX IF NOT EXISTS idx_post_deletions_board_kind
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (41, 'postgres-post-deletions', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 42,
+			Name:    "postgres-board-moderator-terms",
+			SQL: `
+CREATE TABLE IF NOT EXISTS board_moderator_terms (
+    board_id     TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    started_at   BIGINT NOT NULL DEFAULT 0,
+    ended_at     BIGINT NOT NULL DEFAULT 0,
+    appointed_by TEXT NOT NULL DEFAULT '',
+    removed_by   TEXT NOT NULL DEFAULT '',
+    position     INTEGER NOT NULL DEFAULT 0,
+    created_at   BIGINT NOT NULL DEFAULT 0,
+    updated_at   BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (board_id, user_id, started_at)
+);
+CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_board_time
+    ON board_moderator_terms(board_id, ended_at, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_user_time
+    ON board_moderator_terms(user_id, started_at DESC);
+
+INSERT INTO board_moderator_terms (
+    board_id, user_id, started_at, ended_at, appointed_by, removed_by,
+    position, created_at, updated_at
+)
+SELECT board_id, user_id,
+       CASE WHEN created_at > 0 THEN created_at ELSE updated_at END,
+       0, '', '', position, created_at, updated_at
+  FROM board_moderators
+ON CONFLICT (board_id, user_id, started_at) DO NOTHING;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (42, 'postgres-board-moderator-terms', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

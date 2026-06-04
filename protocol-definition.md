@@ -273,6 +273,7 @@ GET /api/v1/boards/resident-feed?limit=&offset=
 GET /api/v1/boards/{id}
 GET /api/v1/boards/{id}/online?limit=&offset=
 GET /api/v1/boards/{id}/members
+GET /api/v1/boards/{id}/moderator-history?limit=&offset=
 GET /api/v1/boards/{id}/member-applications?status=
 GET /api/v1/boards/{id}/deleted?kind=recycle|junk&limit=&offset=
 GET /api/v1/boards/{id}/digest?kind=&path=&limit=&offset=
@@ -619,7 +620,10 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   public-board `setBoardSettings`, and public-board `setBoardModerator` changes
   also lazily create the `syssecurity` system board and sanitized generated
   security/admin notice threads. Member-read board security changes are not
-  mirrored into the public audit board.
+  mirrored into the public audit board. `GET
+  /api/v1/boards/{board}/moderator-history` returns KBS `bms`-style moderator
+  tenure terms for readers who can read that board; appointment opens an active
+  term and removal closes it with actor/time metadata.
 - Public-board `flagPost` and `resolveReview` also lazily create the
   `0moderation` system board and deterministic sanitized audit threads/posts.
   The generated body includes review id, status, board, thread, post, and actor
@@ -704,9 +708,11 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   if needed and writes a deterministic daily generated thread/post containing
   community counters, cumulative online/stay time, max-online history, recent
   daily stat-history rows, plus public-safe board, thread, latest-reply, user,
-  blessing, and archive rankings. It also writes a deterministic daily
-  `BBSLists` login-count history thread/post modeled on KBS `countlogins`
-  autoposts.
+  blessing, and archive rankings. It also writes deterministic daily
+  `BBSLists` login-count, user-activity, board-online, online-user roster,
+  board-moderator activity, KBS `bms`-style board-moderator tenure, board
+  activity, board-popularity, new-board, recommended-board, recommended-article,
+  hot-topic, and blessing thread/posts.
   `date` is optional `YYYY-MM-DD` and defaults to the current UTC day; publishing
   the same date again returns the existing generated thread instead of
   duplicating it.

@@ -283,6 +283,23 @@ type BoardModerator struct {
 	UpdatedAt int64  `json:"updatedAt"`
 }
 
+type BoardModeratorTerm struct {
+	BoardID         string `json:"boardId"`
+	BoardName       string `json:"boardName"`
+	UserID          string `json:"userId"`
+	Name            string `json:"name"`
+	Position        int    `json:"position"`
+	StartedAt       int64  `json:"startedAt"`
+	EndedAt         int64  `json:"endedAt"`
+	AppointedByID   string `json:"appointedById,omitempty"`
+	AppointedByName string `json:"appointedByName,omitempty"`
+	RemovedByID     string `json:"removedById,omitempty"`
+	RemovedByName   string `json:"removedByName,omitempty"`
+	Active          bool   `json:"active"`
+	CreatedAt       int64  `json:"createdAt"`
+	UpdatedAt       int64  `json:"updatedAt"`
+}
+
 type BoardMember struct {
 	UserID              string `json:"userId"`
 	Name                string `json:"name"`

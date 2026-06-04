@@ -197,6 +197,27 @@ func (s *Server) handleListBoardMembers(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"members": info.Members})
 }
 
+func (s *Server) handleListBoardModeratorHistory(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	boardID := r.PathValue("board")
+	info, err := s.core.GetBoardInfo(boardID)
+	if err != nil || info == nil {
+		writeError(w, http.StatusNotFound, "not_found", "board not found", false)
+		return
+	}
+	if !actorCanReadBoardInfo(actor, info) {
+		writeError(w, http.StatusForbidden, proto.ErrForbidden, "board members only", false)
+		return
+	}
+	limit, offset := paginate(r)
+	terms, err := s.core.ListBoardModeratorTerms(boardID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"terms": terms})
+}
+
 func (s *Server) handleListBoardMemberApplications(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")

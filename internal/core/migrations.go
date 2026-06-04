@@ -97,6 +97,38 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_members_board_position ON board_members(board_id, position, user_id)`); err != nil {
 		return fmt.Errorf("ensure board member position index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS board_moderator_terms (
+		    board_id     TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+		    user_id      TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    started_at   INTEGER NOT NULL DEFAULT 0,
+		    ended_at     INTEGER NOT NULL DEFAULT 0,
+		    appointed_by TEXT    NOT NULL DEFAULT '',
+		    removed_by   TEXT    NOT NULL DEFAULT '',
+		    position     INTEGER NOT NULL DEFAULT 0,
+		    created_at   INTEGER NOT NULL DEFAULT 0,
+		    updated_at   INTEGER NOT NULL DEFAULT 0,
+		    PRIMARY KEY (board_id, user_id, started_at)
+		)`); err != nil {
+		return fmt.Errorf("ensure board moderator terms table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_board_time ON board_moderator_terms(board_id, ended_at, started_at DESC)`); err != nil {
+		return fmt.Errorf("ensure board moderator terms board index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_moderator_terms_user_time ON board_moderator_terms(user_id, started_at DESC)`); err != nil {
+		return fmt.Errorf("ensure board moderator terms user index: %w", err)
+	}
+	if _, err := qExec(db,
+		`INSERT OR IGNORE INTO board_moderator_terms (
+		    board_id, user_id, started_at, ended_at, appointed_by, removed_by,
+		    position, created_at, updated_at
+		)
+		 SELECT board_id, user_id,
+		        CASE WHEN created_at > 0 THEN created_at ELSE updated_at END,
+		        0, '', '', position, created_at, updated_at
+		   FROM board_moderators`,
+	); err != nil {
+		return fmt.Errorf("seed board moderator terms: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS board_zaps (
 		    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		    board_id   TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,

@@ -92,7 +92,7 @@ type Runtime struct {
 	SetRecommendedBoard          func(db *sql.DB, boardID, note, curatedBy string, position *int, recommended bool) error
 	GetBoardMemberRequirements   func(db *sql.DB, boardID string) (*BoardMemberRequirements, error)
 	SetBoardMemberRequirements   func(db *sql.DB, boardID string, patch BoardMemberRequirementsPatch) error
-	SetBoardModerator            func(db *sql.DB, boardID, userID string, moderator bool, position *int) error
+	SetBoardModerator            func(db *sql.DB, boardID, userID, actorID string, moderator bool, position *int) error
 	SetBoardMember               func(db *sql.DB, boardID, userID string, member bool, patch BoardMemberPatch) error
 	InsertBoardMemberApplication func(db *sql.DB, id, boardID, userID, note string) error
 	ReviewBoardMemberApplication func(db *sql.DB, applicationID, reviewerID, status, title, reviewNote string) error

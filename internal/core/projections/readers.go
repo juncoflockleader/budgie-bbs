@@ -1021,6 +1021,86 @@ func ListBoardModerators(db *sql.DB, boardID string) ([]BoardModerator, error) {
 	return mods, rows.Err()
 }
 
+func ListBoardModeratorTerms(db *sql.DB, boardID string, limit, offset int) ([]BoardModeratorTerm, error) {
+	rows, err := QQuery(db,
+		`SELECT mt.board_id, b.name, mt.user_id, u.name, mt.position,
+		        mt.started_at, mt.ended_at,
+		        mt.appointed_by, COALESCE(appointed.name, ''),
+		        mt.removed_by, COALESCE(removed.name, ''),
+		        mt.created_at, mt.updated_at
+		   FROM board_moderator_terms mt
+		   JOIN boards b ON b.id=mt.board_id
+		   JOIN users u ON u.id=mt.user_id
+		   LEFT JOIN users appointed ON appointed.id=mt.appointed_by
+		   LEFT JOIN users removed ON removed.id=mt.removed_by
+		  WHERE mt.board_id=?
+		  ORDER BY CASE WHEN mt.ended_at=0 THEN 0 ELSE 1 END,
+		           mt.started_at DESC, u.name
+		  LIMIT ? OFFSET ?`,
+		boardID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanBoardModeratorTerms(rows)
+}
+
+func ListPublicBoardModeratorTerms(db *sql.DB, limit, offset int) ([]BoardModeratorTerm, error) {
+	rows, err := QQuery(db,
+		`SELECT mt.board_id, b.name, mt.user_id, u.name, mt.position,
+		        mt.started_at, mt.ended_at,
+		        mt.appointed_by, COALESCE(appointed.name, ''),
+		        mt.removed_by, COALESCE(removed.name, ''),
+		        mt.created_at, mt.updated_at
+		   FROM board_moderator_terms mt
+		   JOIN boards b ON b.id=mt.board_id
+		   JOIN users u ON u.id=mt.user_id
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		   LEFT JOIN users appointed ON appointed.id=mt.appointed_by
+		   LEFT JOIN users removed ON removed.id=mt.removed_by
+		  WHERE b.id NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(s.member_read_mode, 0)=0
+		    AND COALESCE(s.stats_excluded, 0)=0
+		  ORDER BY CASE WHEN mt.ended_at=0 THEN 0 ELSE 1 END,
+		           mt.started_at DESC, b.name, u.name
+		  LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanBoardModeratorTerms(rows)
+}
+
+func scanBoardModeratorTerms(rows *sql.Rows) ([]BoardModeratorTerm, error) {
+	terms := []BoardModeratorTerm{}
+	for rows.Next() {
+		var term BoardModeratorTerm
+		if err := rows.Scan(
+			&term.BoardID,
+			&term.BoardName,
+			&term.UserID,
+			&term.Name,
+			&term.Position,
+			&term.StartedAt,
+			&term.EndedAt,
+			&term.AppointedByID,
+			&term.AppointedByName,
+			&term.RemovedByID,
+			&term.RemovedByName,
+			&term.CreatedAt,
+			&term.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		term.Active = term.EndedAt == 0
+		terms = append(terms, term)
+	}
+	return terms, rows.Err()
+}
+
 func GetBoardInfo(db *sql.DB, boardID string) (*BoardInfo, error) {
 	board, err := GetBoard(db, boardID)
 	if err != nil || board == nil {

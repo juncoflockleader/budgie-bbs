@@ -20,6 +20,7 @@ type ContentFilter = projections.ContentFilter
 type BoardSettings = projections.BoardSettings
 type BoardSettingsPatch = projections.BoardSettingsPatch
 type BoardModerator = projections.BoardModerator
+type BoardModeratorTerm = projections.BoardModeratorTerm
 type BoardMember = projections.BoardMember
 type BoardMemberPatch = projections.BoardMemberPatch
 type BoardMemberApplication = projections.BoardMemberApplication

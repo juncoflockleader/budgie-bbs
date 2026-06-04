@@ -343,8 +343,8 @@ func setBoardMemberRequirements(db *sql.DB, boardID string, patch BoardMemberReq
 	return currentRuntime().SetBoardMemberRequirements(db, boardID, patch)
 }
 
-func setBoardModerator(db *sql.DB, boardID, userID string, moderator bool, position *int) error {
-	return currentRuntime().SetBoardModerator(db, boardID, userID, moderator, position)
+func setBoardModerator(db *sql.DB, boardID, userID, actorID string, moderator bool, position *int) error {
+	return currentRuntime().SetBoardModerator(db, boardID, userID, actorID, moderator, position)
 }
 
 func setBoardMember(db *sql.DB, boardID, userID string, member bool, patch BoardMemberPatch) error {

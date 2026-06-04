@@ -258,6 +258,10 @@ func listBlessings(db *sql.DB, limit, offset int) ([]Blessing, error) {
 	return projections.ListBlessings(db, limit, offset)
 }
 
+func listBoardModeratorTerms(db *sql.DB, boardID string, limit, offset int) ([]BoardModeratorTerm, error) {
+	return projections.ListBoardModeratorTerms(db, boardID, limit, offset)
+}
+
 func listArchiveRankings(db *sql.DB, viewerID string, includePrivate bool, kind string, limit, offset int) ([]ArchiveRanking, error) {
 	return projections.ListArchiveRankings(db, viewerID, includePrivate, kind, limit, offset)
 }
@@ -606,8 +610,8 @@ func setBoardMemberRequirements(db *sql.DB, boardID string, patch BoardMemberReq
 	return projections.SetBoardMemberRequirements(db, boardID, patch)
 }
 
-func setBoardModerator(db *sql.DB, boardID, userID string, moderator bool, position *int) error {
-	return projections.SetBoardModerator(db, boardID, userID, moderator, position)
+func setBoardModerator(db *sql.DB, boardID, userID, actorID string, moderator bool, position *int) error {
+	return projections.SetBoardModerator(db, boardID, userID, actorID, moderator, position)
 }
 
 func setBoardMember(db *sql.DB, boardID, userID string, member bool, patch BoardMemberPatch) error {

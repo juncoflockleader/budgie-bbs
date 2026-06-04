@@ -733,29 +733,148 @@ func SetBoardMemberRequirements(db *sql.DB, boardID string, patch BoardMemberReq
 	return err
 }
 
-func SetBoardModerator(db *sql.DB, boardID, userID string, moderator bool, position *int) error {
-	if !moderator {
-		_, err := QExec(db, `DELETE FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID)
+func SetBoardModerator(db *sql.DB, boardID, userID, actorID string, moderator bool, position *int) error {
+	tx, err := db.Begin()
+	if err != nil {
 		return err
 	}
+	defer tx.Rollback() //nolint
+
+	ts := NowMS()
+	var currentPosition int
+	var currentCreatedAt int64
+	err = QQueryRow(tx,
+		`SELECT position, created_at FROM board_moderators WHERE board_id=? AND user_id=?`,
+		boardID, userID,
+	).Scan(&currentPosition, &currentCreatedAt)
+	hasCurrent := err == nil
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	if !moderator {
+		if hasCurrent {
+			if _, err := QExec(tx, `DELETE FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID); err != nil {
+				return err
+			}
+			res, err := QExec(tx,
+				`UPDATE board_moderator_terms
+				    SET ended_at=?, removed_by=?, updated_at=?
+				  WHERE board_id=? AND user_id=? AND ended_at=0`,
+				ts, actorID, ts, boardID, userID,
+			)
+			if err != nil {
+				return err
+			}
+			affected, _ := res.RowsAffected()
+			if affected == 0 {
+				startedAt := currentCreatedAt
+				if startedAt <= 0 {
+					startedAt = ts
+				}
+				if err := insertBoardModeratorTermTx(tx, boardID, userID, startedAt, ts, "", actorID, currentPosition, startedAt, ts); err != nil {
+					return err
+				}
+			}
+		}
+		return tx.Commit()
+	}
+
 	targetPosition := 0
 	if position != nil {
 		targetPosition = *position
 		if targetPosition < 0 {
 			targetPosition = 0
 		}
-	} else if err := QQueryRow(db, `SELECT COALESCE(MAX(position) + 1, 0) FROM board_moderators WHERE board_id=?`, boardID).Scan(&targetPosition); err != nil {
+	} else if hasCurrent {
+		targetPosition = currentPosition
+	} else if err := QQueryRow(tx, `SELECT COALESCE(MAX(position) + 1, 0) FROM board_moderators WHERE board_id=?`, boardID).Scan(&targetPosition); err != nil {
 		return err
 	}
-	ts := NowMS()
-	_, err := QExec(db,
+	_, err = QExec(tx,
 		`INSERT INTO board_moderators (board_id, user_id, position, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(board_id, user_id)
 		 DO UPDATE SET position=excluded.position, updated_at=excluded.updated_at`,
 		boardID, userID, targetPosition, ts, ts,
 	)
+	if err != nil {
+		return err
+	}
+
+	if hasCurrent {
+		res, err := QExec(tx,
+			`UPDATE board_moderator_terms
+			    SET position=?, updated_at=?
+			  WHERE board_id=? AND user_id=? AND ended_at=0`,
+			targetPosition, ts, boardID, userID,
+		)
+		if err != nil {
+			return err
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			startedAt := currentCreatedAt
+			if startedAt <= 0 {
+				startedAt = ts
+			}
+			startedAt, err = nextBoardModeratorTermStartedAt(tx, boardID, userID, startedAt)
+			if err != nil {
+				return err
+			}
+			if err := insertBoardModeratorTermTx(tx, boardID, userID, startedAt, 0, actorID, "", targetPosition, startedAt, ts); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
+	}
+
+	startedAt, err := nextBoardModeratorTermStartedAt(tx, boardID, userID, ts)
+	if err != nil {
+		return err
+	}
+	if err := insertBoardModeratorTermTx(tx, boardID, userID, startedAt, 0, actorID, "", targetPosition, ts, ts); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertBoardModeratorTermTx(tx *sql.Tx, boardID, userID string, startedAt, endedAt int64, appointedBy, removedBy string, position int, createdAt, updatedAt int64) error {
+	_, err := QExec(tx,
+		`INSERT INTO board_moderator_terms (
+		    board_id, user_id, started_at, ended_at, appointed_by, removed_by,
+		    position, created_at, updated_at
+		)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(board_id, user_id, started_at)
+		 DO UPDATE SET ended_at=excluded.ended_at,
+		               appointed_by=excluded.appointed_by,
+		               removed_by=excluded.removed_by,
+		               position=excluded.position,
+		               updated_at=excluded.updated_at`,
+		boardID, userID, startedAt, endedAt, appointedBy, removedBy, position, createdAt, updatedAt,
+	)
 	return err
+}
+
+func nextBoardModeratorTermStartedAt(tx *sql.Tx, boardID, userID string, desired int64) (int64, error) {
+	if desired <= 0 {
+		desired = NowMS()
+	}
+	for {
+		var exists int
+		err := QQueryRow(tx,
+			`SELECT 1 FROM board_moderator_terms WHERE board_id=? AND user_id=? AND started_at=?`,
+			boardID, userID, desired,
+		).Scan(&exists)
+		if err == sql.ErrNoRows {
+			return desired, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		desired++
+	}
 }
 
 func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch BoardMemberPatch) error {

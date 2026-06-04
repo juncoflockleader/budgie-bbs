@@ -143,8 +143,9 @@ ranking surface:
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has deterministic `BBSLists` snapshot, login-count
   history, user-activity rankings, board-online occupancy list, online-user
-  roster, board-moderator activity report, board-activity history,
-  board-popularity list, new-board list, recommended-board list,
+  roster, board-moderator activity report, KBS `bms`-style board-moderator
+  tenure history, board-activity history, board-popularity list, new-board list,
+  recommended-board list,
   recommended-article list, hot-topic history, daily blessing list, and
   completed week/month/year period-summary and hot-topic list threads.
 - Login recording maintains UTC day/hour login buckets for KBS `static.c` /
@@ -193,6 +194,13 @@ ranking surface:
   moderator assignments, current online/offline state, login count, post count,
   stay time, and last activity day while excluding member-read, generated, and
   `statsExcluded` boards.
+- Board moderator appointments now maintain KBS `bms`-style tenure rows. The
+  board reader API exposes active and closed moderator terms through
+  `GET /api/v1/boards/{board}/moderator-history`, and stat snapshots create a
+  deterministic daily `BBSLists` board-moderator tenure history thread showing
+  public-board moderator terms, appointment/removal actors, active terms, and
+  closed terms while excluding member-read, generated, and `statsExcluded`
+  boards.
 - Stat snapshots also create deterministic daily KBS-style `BBSLists`
   board-activity history threads showing total board/thread/post counts, top
   public board rankings, last public board activity times, and recent
@@ -243,7 +251,7 @@ ranking surface:
 This does not yet implement every historical/stat-log board from KBS local
 utilities beyond the generated `BBSLists` snapshot, login-history, and
 user-activity/board-online/online-user-roster/board-moderator-activity/
-board-activity/board-popularity/new-board/recommended-board/
+board-moderator-tenure/board-activity/board-popularity/new-board/recommended-board/
 recommended-article/hot-topic/blessing/period-summary history threads.
 
 ### Board-Level Unread Workflow And Read Markers
@@ -997,8 +1005,9 @@ social graph:
   distinct-participant hot-topic scoring, top-poster rankings, latest-reply
   rankings, blessing rankings/rituals, archive-path rankings, automatic
   `BBSLists` generated stat snapshots and login-count, user-activity,
-  board-online, online-user-roster, board-moderator-activity, board-activity,
-  board-popularity, new-board, recommended-board, recommended-article,
+  board-online, online-user-roster, board-moderator-activity,
+  board-moderator-tenure, board-activity, board-popularity, new-board,
+  recommended-board, recommended-article,
   hot-topic, and blessing history posts,
   category/section hot-topic groups, 24-hour login histograms, plus completed
   week/month/year activity and hot-topic summaries, and a web `Rankings`

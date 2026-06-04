@@ -295,7 +295,7 @@ func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayloa
 	if errReply.Err != nil {
 		return errReply
 	}
-	if err := setBoardModerator(h.db, p.Board, userID, p.Moderator, p.Position); err != nil {
+	if err := setBoardModerator(h.db, p.Board, userID, actor.ID, p.Moderator, p.Position); err != nil {
 		return internalErr(err)
 	}
 	action := "moderator removed"
@@ -1254,6 +1254,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsBoardModeratorActivitySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsBoardModeratorHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1561,6 +1564,31 @@ func (h *Handler) ensureStatsBoardModeratorActivitySystemPost(actor *User, dateL
 	}
 	body := formatStatsBoardModeratorActivityBody(dateLabel, activity)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Board moderator activity "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsBoardModeratorHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_bms_" + dateID
+	postID := "bbslists_bms_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	terms, err := projections.ListPublicBoardModeratorTerms(h.db, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsBoardModeratorHistoryBody(dateLabel, terms)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Board moderator tenure history "+dateLabel, body, ts)
 }
 
 type statsBoardModeratorActivity struct {
@@ -2611,6 +2639,58 @@ func statsBoardModeratorActivitySummary(activity []statsBoardModeratorActivity) 
 		}
 	}
 	return boardCount, assignmentCount, onlineCount, dormantCount
+}
+
+func formatStatsBoardModeratorHistoryBody(dateLabel string, terms []projections.BoardModeratorTerm) string {
+	activeCount := 0
+	for _, term := range terms {
+		if term.Active {
+			activeCount++
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Board moderator tenure history %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Public moderator terms: %d\n", len(terms))
+	fmt.Fprintf(&b, "- Active terms: %d\n", activeCount)
+	fmt.Fprintf(&b, "- Closed terms: %d\n\n", len(terms)-activeCount)
+
+	b.WriteString("## Public board moderator terms\n")
+	if len(terms) == 0 {
+		b.WriteString("- No public board moderator terms are recorded.\n")
+		return b.String()
+	}
+	for i, term := range terms {
+		fmt.Fprintf(&b, "%d. %s (%s) / %s: position %d, %s",
+			i+1,
+			term.BoardName,
+			term.BoardID,
+			term.Name,
+			term.Position,
+			formatStatsModeratorTermWindow(term))
+		if by := strings.TrimSpace(term.AppointedByName); by != "" {
+			fmt.Fprintf(&b, ", appointed by %s", by)
+		}
+		if by := strings.TrimSpace(term.RemovedByName); by != "" {
+			fmt.Fprintf(&b, ", removed by %s", by)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func formatStatsModeratorTermWindow(term projections.BoardModeratorTerm) string {
+	started := formatStatsTermDate(term.StartedAt)
+	if term.Active {
+		return "active since " + started
+	}
+	return "served " + started + " to " + formatStatsTermDate(term.EndedAt)
+}
+
+func formatStatsTermDate(ts int64) string {
+	if ts <= 0 {
+		return "unknown"
+	}
+	return time.UnixMilli(ts).UTC().Format("2006-01-02")
 }
 
 func formatStatsModeratorOnline(online bool) string {

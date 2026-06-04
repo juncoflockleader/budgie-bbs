@@ -972,6 +972,9 @@ func (c *Core) ListBlessingRankings(limit, offset int) ([]BlessingRanking, error
 func (c *Core) ListBlessings(limit, offset int) ([]Blessing, error) {
 	return listBlessings(c.DB, limit, offset)
 }
+func (c *Core) ListBoardModeratorTerms(boardID string, limit, offset int) ([]BoardModeratorTerm, error) {
+	return listBoardModeratorTerms(c.DB, boardID, limit, offset)
+}
 func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) ([]ArchiveRanking, error) {
 	return listArchiveRankings(c.DB, actor.ID, actor.IsMod(), kind, limit, offset)
 }
