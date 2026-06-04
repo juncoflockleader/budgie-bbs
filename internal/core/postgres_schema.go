@@ -145,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_password_recovery_status_updated
 CREATE TABLE IF NOT EXISTS user_profiles (
     user_id      TEXT PRIMARY KEY REFERENCES users(id),
     display_name TEXT NOT NULL DEFAULT '',
+    title        TEXT NOT NULL DEFAULT '',
     bio          TEXT NOT NULL DEFAULT '',
     avatar       TEXT NOT NULL DEFAULT '',
     signature    TEXT NOT NULL DEFAULT '',
@@ -1665,6 +1666,18 @@ ALTER TABLE community_stat_history
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (34, 'postgres-guest-presence-stats', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 35,
+			Name:    "postgres-user-profile-title",
+			SQL: `
+ALTER TABLE user_profiles
+    ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT '';
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (35, 'postgres-user-profile-title', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

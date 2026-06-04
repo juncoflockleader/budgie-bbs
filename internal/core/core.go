@@ -1199,8 +1199,8 @@ func (c *Core) ListUserPubkeyTitles(name string) ([]string, error) {
 	return listPubkeyTitlesByUserName(c.DB, name)
 }
 
-func (c *Core) UpdateUserProfile(userID, displayName, bio, avatar, signature, plan, homepage string) error {
-	return updateUserProfile(c.DB, userID, displayName, bio, avatar, signature, plan, homepage)
+func (c *Core) UpdateUserProfile(userID, displayName, title, bio, avatar, signature, plan, homepage string) error {
+	return updateUserProfile(c.DB, userID, displayName, title, bio, avatar, signature, plan, homepage)
 }
 
 func (c *Core) UserPrivateProfile(userID string) (*UserPrivateProfile, error) {

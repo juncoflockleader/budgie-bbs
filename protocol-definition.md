@@ -816,9 +816,9 @@ markPostRead     { post* }                                   -> ack only
   across boards, including board/thread context for same-author reading jumps.
   Member-read boards are included only when the viewer can read them. The public
   `GET /api/v1/users/{name}/posts` view is restricted to public-board posts.
-- Public `GET /api/v1/users/{name}` profile reads include `signature`, `plan`,
-  and `homepage`. Authenticated `PATCH /api/v1/users/me` updates
-  `displayName`, `bio`, `avatar`, `signature`, `plan`, and `homepage`.
+- Public `GET /api/v1/users/{name}` profile reads include `title`, `signature`,
+  `plan`, and `homepage`. Authenticated `PATCH /api/v1/users/me` updates
+  `displayName`, `title`, `bio`, `avatar`, `signature`, `plan`, and `homepage`.
   Authenticated `PATCH /api/v1/users/me/password` changes the caller's password
   after checking `currentPassword`.
 - `POST /api/v1/auth/password-recovery` accepts account, real-name, email, and

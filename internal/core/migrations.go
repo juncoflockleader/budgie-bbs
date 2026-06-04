@@ -42,6 +42,7 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"posts", "source_title", "source_title TEXT NOT NULL DEFAULT ''"},
 		{"posts", "created_at", "created_at INTEGER NOT NULL DEFAULT 0"},
 		{"posts", "updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"},
+		{"user_profiles", "title", "title TEXT NOT NULL DEFAULT ''"},
 		{"user_profiles", "signature", "signature TEXT NOT NULL DEFAULT ''"},
 		{"user_profiles", "plan", "plan TEXT NOT NULL DEFAULT ''"},
 		{"user_profiles", "homepage", "homepage TEXT NOT NULL DEFAULT ''"},

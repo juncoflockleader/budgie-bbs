@@ -594,6 +594,7 @@ INSERT OR IGNORE INTO categories (id, name, description, position)
 CREATE TABLE IF NOT EXISTS user_profiles (
     user_id      TEXT PRIMARY KEY REFERENCES users(id),
     display_name TEXT NOT NULL DEFAULT '',
+    title        TEXT NOT NULL DEFAULT '',
     bio          TEXT NOT NULL DEFAULT '',
     avatar       TEXT NOT NULL DEFAULT '',
     signature    TEXT NOT NULL DEFAULT '',

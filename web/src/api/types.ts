@@ -639,6 +639,7 @@ export interface UserProfile {
   name: string
   role: string
   displayName: string
+  title: string
   bio: string
   avatar: string
   signature: string

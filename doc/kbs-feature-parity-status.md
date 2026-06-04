@@ -464,9 +464,10 @@ stat-history boards.
 KBS treated identity and personal presentation as part of daily forum use.
 Budgie now has first profile and password-management workflows:
 
-- User profiles expose editable display name, bio, avatar, signature text,
-  plan/profile text, and homepage URL.
-- `PATCH /api/v1/users/me` accepts `signature`, `plan`, and `homepage`.
+- User profiles expose editable display name, public title/rank, bio, avatar,
+  signature text, plan/profile text, and homepage URL.
+- `PATCH /api/v1/users/me` accepts `title`, `signature`, `plan`, and
+  `homepage`.
 - Private contact profiles store real name, real/registration email, address,
   phone/mobile, birthday, school, and contact notes outside the public profile
   projection.
@@ -522,8 +523,8 @@ Budgie now has first profile and password-management workflows:
   internal account ID and updating authored thread/post display names.
 - Admins can hard-delete a user's account row and private/user-owned state while
   preserving old public discussions under a `[deleted]` author tombstone.
-- Public profile reads include the current signature, plan/profile text, and
-  homepage URL.
+- Public profile reads include public title/rank, the current signature,
+  plan/profile text, and homepage URL.
 - Users can maintain up to eight saved signatures, choose a fixed current
   signature, or rotate randomly among active saved signatures.
 - Users can manually recount/repair their saved-signature bank. The recount
@@ -534,9 +535,9 @@ Budgie now has first profile and password-management workflows:
 - Later signature edits do not rewrite old posts.
 - Anonymous posts do not expose the user's signature.
 - Web profile editing includes homepage and plan/profile fields plus a
-  signature editor and saved-signature bank. Profile pages preview the current
-  plan/profile and signature, and thread readers render captured post
-  signatures below article bodies.
+  title/rank field, signature editor, and saved-signature bank. Profile pages
+  preview title/rank, the current plan/profile, and signature, and thread
+  readers render captured post signatures below article bodies.
 - Web profile editing includes a private contact panel for the caller's own
   real/contact registration fields.
 - Web profile pages render public personal files, while the caller's own

@@ -662,8 +662,8 @@ func updatePostBody(tx *sql.Tx, postID string, body string, seq int64) error {
 	return projections.UpdatePostBody(tx, postID, body, seq)
 }
 
-func updateUserProfile(db *sql.DB, userID, displayName, bio, avatar, signature, plan, homepage string) error {
-	return projections.UpdateUserProfile(db, userID, displayName, bio, avatar, signature, plan, homepage)
+func updateUserProfile(db *sql.DB, userID, displayName, title, bio, avatar, signature, plan, homepage string) error {
+	return projections.UpdateUserProfile(db, userID, displayName, title, bio, avatar, signature, plan, homepage)
 }
 
 func getUserPrivateProfile(db *sql.DB, userID string) (*UserPrivateProfile, error) {

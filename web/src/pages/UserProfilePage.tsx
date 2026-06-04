@@ -66,6 +66,7 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
   const [editMode, setEditMode] = useState(false)
   const [saving, setSaving] = useState(false)
   const [displayName, setDisplayName] = useState('')
+  const [title, setTitle] = useState('')
   const [bio, setBio] = useState('')
   const [avatar, setAvatar] = useState('')
   const [signature, setSignature] = useState('')
@@ -130,6 +131,7 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
     if (res.data) {
       setProfile(res.data)
       setDisplayName(res.data.displayName)
+      setTitle(res.data.title)
       setBio(res.data.bio)
       setAvatar(res.data.avatar)
       setSignature(res.data.signature)
@@ -274,6 +276,7 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
     setSaveError(null)
     const res = await api.updateMyProfile(token, {
       displayName: displayName.trim(),
+      title: title.trim(),
       bio: bio.trim(),
       avatar: avatar.trim(),
       signature: signature.trim(),
@@ -289,6 +292,7 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
     setProfile(prev => prev ? {
       ...prev,
       displayName: displayName.trim() || profile.name,
+      title: title.trim(),
       bio: bio.trim(),
       avatar: avatar.trim(),
       signature: signature.trim(),
@@ -689,6 +693,7 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
           </div>
           <div className="profile-title">
             <h3>{profile.displayName || profile.name}</h3>
+            {profile.title && <p className="profile-rank">{profile.title}</p>}
             <p className="muted">@{profile.name}</p>
             {homepageUrl && (
               <a className="profile-homepage" href={homepageUrl} target="_blank" rel="noreferrer">
@@ -832,6 +837,10 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
             <input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Display name" />
           </label>
           <label>
+            Title / rank
+            <input value={title} onChange={e => setTitle(e.target.value)} maxLength={80} placeholder="Board veteran, alum, moderator emeritus" />
+          </label>
+          <label>
             Avatar
             <input value={avatar} onChange={e => setAvatar(e.target.value)} placeholder="Emoji or short ASCII art" />
           </label>
@@ -858,6 +867,7 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
               setEditMode(false)
               if (profile) {
                 setDisplayName(profile.displayName)
+                setTitle(profile.title)
                 setBio(profile.bio)
                 setAvatar(profile.avatar)
                 setSignature(profile.signature)

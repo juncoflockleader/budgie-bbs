@@ -2171,7 +2171,7 @@ func ComputeTrustLevel(postsCreated, daysVisited, currentLevel int) int {
 	}
 }
 
-func UpdateUserProfile(db *sql.DB, userID, displayName, bio, avatar, signature, plan, homepage string) error {
+func UpdateUserProfile(db *sql.DB, userID, displayName, title, bio, avatar, signature, plan, homepage string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -2179,18 +2179,20 @@ func UpdateUserProfile(db *sql.DB, userID, displayName, bio, avatar, signature, 
 	defer tx.Rollback() //nolint
 
 	ts := NowMS()
+	title = strings.TrimSpace(title)
 	_, err = QExec(tx,
-		`INSERT INTO user_profiles (user_id, display_name, bio, avatar, signature, plan, homepage, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO user_profiles (user_id, display_name, title, bio, avatar, signature, plan, homepage, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		    display_name=excluded.display_name,
+		    title=excluded.title,
 		    bio=excluded.bio,
 		    avatar=excluded.avatar,
 		    signature=excluded.signature,
 		    plan=excluded.plan,
 		    homepage=excluded.homepage,
 		    updated_at=excluded.updated_at`,
-		userID, displayName, bio, avatar, signature, plan, homepage, ts,
+		userID, displayName, title, bio, avatar, signature, plan, homepage, ts,
 	)
 	if err != nil {
 		return err

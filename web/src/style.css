@@ -569,6 +569,13 @@ label {
   font-size: 1.45em;
 }
 .profile-title h3 { margin-bottom: 0.1rem }
+.profile-rank {
+  margin: 0.1rem 0;
+  color: var(--c-accent2);
+  font-size: 0.88em;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .profile-homepage {
   display: inline-block;
   margin: 0.1rem 0 0.25rem;

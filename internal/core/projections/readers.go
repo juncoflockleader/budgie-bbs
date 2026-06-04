@@ -2895,7 +2895,7 @@ func GetUserProfileByName(db *sql.DB, name string) (*UserProfile, error) {
 	var lastVisitDay string
 	err := QQueryRow(db,
 		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
-		        COALESCE(up.bio,''), COALESCE(up.avatar,''), COALESCE(up.signature,''),
+		        COALESCE(up.title,''), COALESCE(up.bio,''), COALESCE(up.avatar,''), COALESCE(up.signature,''),
 		        COALESCE(up.plan,''), COALESCE(up.homepage,''), u.created,
 		        COALESCE(ua.posts_created,0), COALESCE(ua.reactions_recv,0), COALESCE(ua.trust_level,0),
 		        COALESCE(ua.last_visit_day,'')
@@ -2904,7 +2904,7 @@ func GetUserProfileByName(db *sql.DB, name string) (*UserProfile, error) {
 		 LEFT JOIN user_activity ua ON ua.user_id = u.id
 		 WHERE u.name=?`,
 		name,
-	).Scan(&p.ID, &p.Name, &p.Role, &p.DisplayName, &p.Bio, &p.Avatar, &p.Signature,
+	).Scan(&p.ID, &p.Name, &p.Role, &p.DisplayName, &p.Title, &p.Bio, &p.Avatar, &p.Signature,
 		&p.Plan, &p.Homepage, &p.Created,
 		&p.PostsCreated, &p.ReactionsReceived, &p.TrustLevel, &lastVisitDay)
 	if err == sql.ErrNoRows {

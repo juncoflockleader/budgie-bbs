@@ -332,7 +332,7 @@ func TestUserSignatureSnapshotsOnPosts(t *testing.T) {
 	defer cancel()
 
 	alice := registerAndGetUser(t, c, "alice", "pw")
-	if err := c.UpdateUserProfile(alice.ID, "Alice", "bio", "A", "first signature", "", ""); err != nil {
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "", "bio", "A", "first signature", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
@@ -340,7 +340,7 @@ func TestUserSignatureSnapshotsOnPosts(t *testing.T) {
 		Title: "Signature thread",
 		Body:  "first body",
 	})
-	if err := c.UpdateUserProfile(alice.ID, "Alice", "bio", "A", "second signature", "", ""); err != nil {
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "", "bio", "A", "second signature", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	reply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
@@ -394,7 +394,7 @@ func TestUserPlanAndHomepageProfileFields(t *testing.T) {
 	defer cancel()
 
 	alice := registerAndGetUser(t, c, "alice", "pw")
-	if err := c.UpdateUserProfile(alice.ID, "Alice", "bio", "A", "signature", "Learning Go on KBS", "example.edu/~alice"); err != nil {
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "BBS Elder", "bio", "A", "signature", "Learning Go on KBS", "example.edu/~alice"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -405,8 +405,8 @@ func TestUserPlanAndHomepageProfileFields(t *testing.T) {
 	if profile == nil {
 		t.Fatal("expected profile")
 	}
-	if profile.Plan != "Learning Go on KBS" || profile.Homepage != "example.edu/~alice" {
-		t.Fatalf("expected plan and homepage to round trip, got %+v", profile)
+	if profile.Title != "BBS Elder" || profile.Plan != "Learning Go on KBS" || profile.Homepage != "example.edu/~alice" {
+		t.Fatalf("expected title, plan, and homepage to round trip, got %+v", profile)
 	}
 }
 
@@ -717,7 +717,7 @@ func TestDeleteUserHardPurgesAccount(t *testing.T) {
 
 	admin := registerAndGetUser(t, c, "admin", "pw")
 	alice := registerAndGetUser(t, c, "alice", "pw")
-	if err := c.UpdateUserProfile(alice.ID, "Alice", "", "", "secret sig", "", ""); err != nil {
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "", "", "", "secret sig", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.UpdateUserPrivateProfile(&core.UserPrivateProfile{

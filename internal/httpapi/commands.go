@@ -1111,6 +1111,7 @@ func (s *Server) handlePurgePost(w http.ResponseWriter, r *http.Request) {
 
 type updateProfileRequest struct {
 	DisplayName string `json:"displayName"`
+	Title       string `json:"title"`
 	Bio         string `json:"bio"`
 	Avatar      string `json:"avatar"`
 	Signature   string `json:"signature"`
@@ -1199,7 +1200,12 @@ func (s *Server) handleUpdateOwnProfile(w http.ResponseWriter, r *http.Request) 
 	if req.DisplayName == "" {
 		req.DisplayName = actor.Name
 	}
-	if err := s.core.UpdateUserProfile(actor.ID, req.DisplayName, req.Bio, req.Avatar, req.Signature, req.Plan, req.Homepage); err != nil {
+	req.Title = strings.TrimSpace(req.Title)
+	if len(req.Title) > 80 {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "title must be 80 characters or less", false)
+		return
+	}
+	if err := s.core.UpdateUserProfile(actor.ID, req.DisplayName, req.Title, req.Bio, req.Avatar, req.Signature, req.Plan, req.Homepage); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}

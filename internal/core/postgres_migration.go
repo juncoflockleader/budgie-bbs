@@ -70,7 +70,7 @@ func MigrateSQLiteToPostgres(ctx context.Context, sqlitePath, pgDSN string) erro
 		{src: "users", dst: "users", cols: []string{"id", "name", "role", "password", "created", "registration_status", "reviewed_at", "reviewed_by", "review_reason", "deactivated_at", "deactivated_by", "deactivated_reason"}},
 		{src: "account_registration_settings", dst: "account_registration_settings", cols: []string{"id", "require_approval", "updated_at"}},
 		{src: "password_recovery_requests", dst: "password_recovery_requests", cols: []string{"id", "user_id", "status", "submitted_name", "submitted_email", "note", "reviewer_id", "review_note", "created_at", "updated_at"}},
-		{src: "user_profiles", dst: "user_profiles", cols: []string{"user_id", "display_name", "bio", "avatar", "signature", "plan", "homepage", "updated_at"}},
+		{src: "user_profiles", dst: "user_profiles", cols: []string{"user_id", "display_name", "title", "bio", "avatar", "signature", "plan", "homepage", "updated_at"}},
 		{src: "user_private_profiles", dst: "user_private_profiles", cols: []string{"user_id", "real_name", "real_email", "registration_email", "address", "phone", "mobile", "birthday", "school", "contact_note", "updated_at"}},
 		{src: "user_personal_files", dst: "user_personal_files", cols: []string{"user_id", "name", "body", "public", "updated_at"}},
 		{src: "user_signatures", dst: "user_signatures", cols: []string{"id", "user_id", "label", "body", "position", "active", "created_at", "updated_at"}},

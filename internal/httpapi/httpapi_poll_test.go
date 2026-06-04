@@ -46,6 +46,7 @@ type userProfileResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName"`
+	Title       string `json:"title"`
 	Bio         string `json:"bio"`
 	Avatar      string `json:"avatar"`
 	Signature   string `json:"signature"`
@@ -3148,6 +3149,7 @@ func TestHTTPProfileSignatureSnapshotsOnPosts(t *testing.T) {
 	profileUpdate := map[string]any{}
 	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me", token, map[string]string{
 		"displayName": "Alice",
+		"title":       "Campus Guide",
 		"bio":         "bio",
 		"avatar":      "A",
 		"signature":   "first signature",
@@ -3160,7 +3162,7 @@ func TestHTTPProfileSignatureSnapshotsOnPosts(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice", "", nil, &profile); status != http.StatusOK {
 		t.Fatalf("get profile status: %d", status)
 	}
-	if profile.Signature != "first signature" || profile.Plan != "KBS campus plan" || profile.Homepage != "example.edu/~alice" {
+	if profile.Title != "Campus Guide" || profile.Signature != "first signature" || profile.Plan != "KBS campus plan" || profile.Homepage != "example.edu/~alice" {
 		t.Fatalf("expected profile signature, got %+v", profile)
 	}
 
@@ -3173,6 +3175,7 @@ func TestHTTPProfileSignatureSnapshotsOnPosts(t *testing.T) {
 	}
 	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me", token, map[string]string{
 		"displayName": "Alice",
+		"title":       "Campus Guide",
 		"bio":         "bio",
 		"avatar":      "A",
 		"signature":   "second signature",

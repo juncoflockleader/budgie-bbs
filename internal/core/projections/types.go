@@ -619,6 +619,7 @@ type UserProfile struct {
 	Name              string   `json:"name"`
 	Role              string   `json:"role"`
 	DisplayName       string   `json:"displayName"`
+	Title             string   `json:"title"`
 	Bio               string   `json:"bio"`
 	Avatar            string   `json:"avatar"`
 	Signature         string   `json:"signature"`

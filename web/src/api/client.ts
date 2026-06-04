@@ -1325,7 +1325,7 @@ export async function listAuthorPosts(
 
 export async function updateMyProfile(
   token: string,
-  payload: { displayName?: string; bio?: string; avatar?: string; signature?: string; plan?: string; homepage?: string },
+  payload: { displayName?: string; title?: string; bio?: string; avatar?: string; signature?: string; plan?: string; homepage?: string },
 ): Promise<ApiResponse<unknown>> {
   const res = await fetch(`${BASE}/users/me`, {
     method: 'PATCH',
