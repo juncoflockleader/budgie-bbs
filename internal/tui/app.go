@@ -25,6 +25,7 @@ const (
 	pageBoardList page = iota
 	pageThreadList
 	pageThread
+	pagePoll
 	pageCompose
 	pageChat
 	pageSearch
@@ -33,11 +34,17 @@ const (
 
 // msg types for the bubbletea update cycle.
 type (
-	eventMsg         struct{ evt *proto.Event }
-	errMsg           struct{ err error }
-	boardsMsg        struct{ boards []core.Board }
-	threadsMsg       struct{ threads []core.Thread }
-	postsMsg         struct{ posts []core.Post }
+	eventMsg   struct{ evt *proto.Event }
+	errMsg     struct{ err error }
+	boardsMsg  struct{ boards []core.Board }
+	threadsMsg struct{ threads []core.Thread }
+	postsMsg   struct{ posts []core.Post }
+	pollMsg    struct {
+		postID string
+		poll   *core.Poll
+		open   bool
+		err    error
+	}
 	searchMsg        struct{ posts []core.Post }
 	notificationsMsg struct {
 		notifications []core.Notification
@@ -78,6 +85,8 @@ type model struct {
 	posts         []core.Post
 	postReactions map[string]bool
 	selectedPost  int
+	postPolls     map[string]*core.Poll
+	currentPoll   string // postID currently shown in pagePoll
 	chat          []chatLine
 	// Notifications tracked in the current actor session.
 	notifications []core.Notification
@@ -120,6 +129,7 @@ func newModel(c *core.Core, actor *core.User, width, height int) model {
 		titleInput:    ti,
 		selectedPost:  -1,
 		postReactions: make(map[string]bool),
+		postPolls:     make(map[string]*core.Poll),
 	}
 
 	m.list = list.New(nil, list.NewDefaultDelegate(), width, height-3)
@@ -189,12 +199,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "error: " + err.Error()
 			return m, nil
 		}
+		m.postPolls = make(map[string]*core.Poll)
 		if len(m.posts) == 0 {
 			m.selectedPost = -1
 		} else {
 			m.selectedPost = len(m.posts) - 1
 		}
 		m.rebuildPostView()
+
+	case pollMsg:
+		if msg.err != nil {
+			m.statusMsg = "error: " + msg.err.Error()
+			return m, nil
+		}
+		if msg.poll == nil {
+			m.statusMsg = "selected post has no active poll"
+			return m, nil
+		}
+		m.postPolls[msg.postID] = msg.poll
+		if msg.open {
+			m.currentPoll = msg.postID
+			m.pushPage(pagePoll)
+		}
+		return m, nil
 
 	case searchMsg:
 		m.rebuildSearchView(msg.posts)
@@ -234,7 +261,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var c tea.Cmd
 			m.list, c = m.list.Update(msg)
 			cmds = append(cmds, c)
-		case pageThread, pageChat, pageSearch:
+		case pageThread, pagePoll, pageChat, pageSearch:
 			var c tea.Cmd
 			m.vp, c = m.vp.Update(msg)
 			cmds = append(cmds, c)
@@ -258,7 +285,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var c tea.Cmd
 		m.list, c = m.list.Update(msg)
 		cmds = append(cmds, c)
-	case pageThread, pageChat, pageSearch:
+	case pageThread, pagePoll, pageChat, pageSearch:
 		var c tea.Cmd
 		m.vp, c = m.vp.Update(msg)
 		cmds = append(cmds, c)
@@ -371,12 +398,48 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.notifications = nil
 			m.rebuildList()
 			return m.fetchNotifications()
+		case "p":
+			postID := m.selectedPostID()
+			if postID == "" {
+				m.statusMsg = "no post selected"
+				return nil
+			}
+			return m.openPoll(postID)
+		case "P":
+			postID := m.selectedPostID()
+			if postID == "" {
+				m.statusMsg = "no post selected"
+				return nil
+			}
+			return m.openPoll(postID)
 		case "esc", "left":
 			m.popPage()
 			return m.fetchThreads(m.currentBoard)
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
+		}
+
+	case pagePoll:
+		switch msg.String() {
+		case "esc", "left":
+			m.popPage()
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			idx := int(msg.String()[0]-'0') - 1
+			poll := m.currentPollData()
+			if poll == nil {
+				m.statusMsg = "poll not found"
+				return nil
+			}
+			expired := poll.ExpiresAt != 0 && poll.ExpiresAt < time.Now().UnixMilli()
+			if expired || poll.Voted != "" {
+				m.statusMsg = "poll already voted or closed"
+				return nil
+			}
+			if idx < 0 || idx >= len(poll.Options) {
+				return nil
+			}
+			return m.votePoll(poll.ID, poll.Options[idx].ID, m.currentPoll)
 		}
 
 	case pageCompose:
@@ -611,6 +674,16 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		}
 		cmds = append(cmds, m.fetchNotificationStatus())
 
+	case proto.EvtPollVoted:
+		p, ok := evt.Payload.(*proto.PollVotedPayload)
+		if !ok {
+			return []tea.Cmd{m.fetchNotificationStatus()}
+		}
+		if postID := m.pollPostIDForPoll(p.Poll); postID != "" {
+			cmds = append(cmds, m.fetchPoll(postID, false))
+		}
+		cmds = append(cmds, m.fetchNotificationStatus())
+
 	case proto.EvtThreadLocked:
 		p, ok := evt.Payload.(*proto.ThreadLockedPayload)
 		if !ok {
@@ -654,11 +727,69 @@ func (m model) View() string {
 	case pageNotifications:
 		body = m.list.View() + "\n" + styleDim.Render("enter=mark read  a=mark all read  esc/←=back")
 	case pageThread:
-		help := "n=reply  r=react  ↑/↓=select  esc/←=back  q=quit"
+		help := "n=reply  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		if m.actor.IsMod() {
-			help = "n=reply  L=lock/unlock  r=react  ↑/↓=select  esc/←=back  q=quit"
+			help = "n=reply  L=lock/unlock  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		}
 		body = m.vp.View() + "\n" + styleDim.Render(help)
+	case pagePoll:
+		poll := m.currentPollData()
+		if poll == nil {
+			body = styleDim.Render("No poll loaded")
+		} else {
+			help := "1-9 vote · esc/←=back"
+			if poll.ExpiresAt > 0 && poll.ExpiresAt < time.Now().UnixMilli() {
+				help = "poll closed · esc/←=back"
+			}
+			if poll.Voted != "" {
+				help = "already voted · " + help
+			}
+			total := 0
+			for _, opt := range poll.Options {
+				total += opt.VoteCount
+			}
+			var b strings.Builder
+			b.WriteString(styleTitle.Render("Poll") + "\n\n")
+			if poll.Question != "" {
+				b.WriteString(styleTitle.Render(poll.Question) + "\n\n")
+			}
+			for i, option := range poll.Options {
+				if i >= 9 {
+					break
+				}
+				pct := 0
+				if total > 0 {
+					pct = (option.VoteCount * 100) / total
+				}
+				voteState := ""
+				if poll.Voted == option.ID {
+					voteState = " ✓"
+				}
+				line := fmt.Sprintf("%d) %s%s", i+1, option.Text, voteState)
+				if poll.Voted != "" || (poll.ExpiresAt > 0 && poll.ExpiresAt < time.Now().UnixMilli()) {
+					line = fmt.Sprintf("%s - %d (%d%%)", line, option.VoteCount, pct)
+				}
+				b.WriteString(line + "\n")
+			}
+			expires := "open"
+			if poll.ExpiresAt > 0 {
+				if poll.ExpiresAt < time.Now().UnixMilli() {
+					expires = "closed"
+				} else {
+					expires = "closes " + time.UnixMilli(poll.ExpiresAt).Format("2006-01-02 15:04")
+				}
+			}
+			b.WriteString("\n" + styleDim.Render(fmt.Sprintf("%d vote%s · %s", total, func() string {
+				if total == 1 {
+					return ""
+				}
+				return "s"
+			}(), expires)) + "\n")
+			body = b.String() + "\n" + styleDim.Render(help)
+		}
+		if body == "" {
+			body = styleDim.Render("No poll loaded")
+		}
 	case pageCompose:
 		if m.composingNewThread {
 			titleSection := styleTitle.Render("New thread") + "\n\n" +
@@ -789,6 +920,22 @@ func (m *model) selectedPostID() string {
 		return ""
 	}
 	return m.posts[m.selectedPost].ID
+}
+
+func (m *model) currentPollData() *core.Poll {
+	if m.currentPoll == "" {
+		return nil
+	}
+	return m.postPolls[m.currentPoll]
+}
+
+func (m *model) pollPostIDForPoll(pollID string) string {
+	for postID, poll := range m.postPolls {
+		if poll != nil && poll.ID == pollID {
+			return postID
+		}
+	}
+	return ""
 }
 
 func (m *model) moveSelectedPost(delta int) {
@@ -1007,6 +1154,53 @@ func (m model) reactPost(postID string) tea.Cmd {
 	}
 }
 
+func (m model) openPoll(postID string) tea.Cmd {
+	return m.fetchPoll(postID, true)
+}
+
+func (m model) fetchPoll(postID string, open bool) tea.Cmd {
+	return func() tea.Msg {
+		pollMeta, err := m.c.GetPollByPostID(postID)
+		if err != nil {
+			return pollMsg{postID: postID, open: open, err: err}
+		}
+		if pollMeta == nil {
+			return pollMsg{postID: postID, open: open}
+		}
+		poll, err := m.c.GetPoll(pollMeta.ID, m.actor.ID)
+		if err != nil {
+			return pollMsg{postID: postID, open: open, err: err}
+		}
+		if poll == nil {
+			return pollMsg{postID: postID, open: open}
+		}
+		return pollMsg{postID: postID, poll: poll, open: open}
+	}
+}
+
+func (m model) votePoll(pollID, optionID, postID string) tea.Cmd {
+	return func() tea.Msg {
+		p := proto.VotePollPayload{Poll: pollID, Option: optionID}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return errMsg{err}
+		}
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdVotePoll, raw, "")
+		if reply.Err != nil {
+			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
+		}
+		// Reload to get latest counts and voter status.
+		poll, err := m.c.GetPoll(pollID, m.actor.ID)
+		if err != nil {
+			return errMsg{err}
+		}
+		if poll == nil {
+			return nil
+		}
+		return pollMsg{postID: postID, poll: poll}
+	}
+}
+
 func (m model) unreactPost(postID string) tea.Cmd {
 	return func() tea.Msg {
 		p := proto.ReactPostPayload{Post: postID, Emoji: "heart"}
@@ -1099,6 +1293,8 @@ func pageName(p page) string {
 		return "Threads"
 	case pageThread:
 		return "Thread"
+	case pagePoll:
+		return "Poll"
 	case pageCompose:
 		return "Compose"
 	case pageChat:
