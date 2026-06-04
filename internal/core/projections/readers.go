@@ -1385,6 +1385,47 @@ func ListSiteDigestEntries(db *sql.DB, viewerID string, includePrivate bool, kin
 	return scanDigestEntryRows(rows)
 }
 
+func ListPublicRecommendedDigestEntries(db *sql.DB, limit, offset int) ([]DigestEntry, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT d.id, d.board_id, b.name, d.target_kind, d.target_id, d.kind, d.title, d.path, d.note, d.body_edited,
+		        d.created_by, COALESCE(u.name, ''), d.created_at, d.updated_at,
+		        CASE WHEN d.target_kind='thread' THEN tt.id ELSE pt.id END AS thread_id,
+		        CASE WHEN d.target_kind='post' THEN p.id ELSE '' END AS post_id,
+		        CASE WHEN d.target_kind='thread' THEN tt.author ELSE p.author END AS author,
+		        CASE
+		          WHEN d.body_edited != 0 THEN SUBSTR(d.body, 1, 180)
+		          WHEN d.target_kind='post' THEN SUBSTR(p.body, 1, 180)
+		          ELSE tt.title
+		        END AS excerpt
+		   FROM digest_entries d
+		   JOIN boards b ON b.id = d.board_id
+		   JOIN categories c ON c.id = b.id
+		   LEFT JOIN board_settings s ON s.board_id = b.id
+		   LEFT JOIN users u ON u.id = d.created_by
+		   LEFT JOIN posts p ON d.target_kind='post' AND p.id = d.target_id
+		   LEFT JOIN threads pt ON pt.id = p.thread
+		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id = d.target_id
+		  WHERE d.kind = 'recommended'
+		    AND b.id NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(c.visibility, 'public')='public'
+		    AND COALESCE(s.member_read_mode, 0)=0
+		    AND COALESCE(s.stats_excluded, 0)=0
+		  ORDER BY d.updated_at DESC, b.name, d.title
+		  LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanDigestEntryRows(rows)
+}
+
 func SearchDigestEntries(db *sql.DB, viewerID string, includePrivate bool, boardID, kind, path, query string, limit, offset int) ([]DigestEntry, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50

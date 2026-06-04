@@ -107,8 +107,9 @@ ranking surface:
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has deterministic `BBSLists` snapshot, login-count
   history, board-activity history, board-popularity list, new-board list,
-  hot-topic history, daily blessing list, and completed week/month/year
-  period-summary and hot-topic list threads.
+  recommended-board list, recommended-article list, hot-topic history, daily
+  blessing list, and completed week/month/year period-summary and hot-topic
+  list threads.
 - Login recording maintains UTC day/hour login buckets for KBS `static.c` /
   `countlogins`-style hourly login distribution charts.
 - Presence changes and stat snapshots maintain a projection-backed daily
@@ -153,6 +154,12 @@ ranking surface:
   discovery page, and deterministic daily `BBSLists` recommended-board list
   threads. Member-read, hidden/staff-directory, generated system, and
   `statsExcluded` boards cannot be publicly recommended.
+- Public recommended-article curation now also feeds a deterministic daily KBS
+  `commend.xml`-style `BBSLists` recommended-article list thread. The list is
+  built from public recommended digest entries and carries board, source kind,
+  author, path, curator note, curator, updated time, and excerpt metadata while
+  excluding member-read, hidden/staff-directory, generated system, and
+  `statsExcluded` boards.
 - Stat snapshots also create deterministic daily KBS `toplog`-style
   `BBSLists` hot-topic history threads showing ranked public hot topics,
   distinct participant counts, post/reaction counts, decayed score, and last
@@ -180,8 +187,8 @@ ranking surface:
 
 This does not yet implement every historical/stat-log board from KBS local
 utilities beyond the generated `BBSLists` snapshot, login-history, and
-board-activity/board-popularity/new-board/hot-topic/blessing/period-summary
-history threads.
+board-activity/board-popularity/new-board/recommended-board/recommended-article/
+hot-topic/blessing/period-summary history threads.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -381,7 +388,7 @@ enforced version:
   - `statsExcluded` keeps otherwise readable/postable boards out of public
     board/thread/reply/user/archive rankings and generated `BBSLists`
     snapshot, board-activity, board-popularity, new-board, recommended-board,
-    and hot-topic stat logs.
+    recommended-article, and hot-topic stat logs.
   - Admins can curate public recommended boards with position and note metadata;
     only public, non-member-read, non-generated, non-`statsExcluded` boards are
     eligible for the KBS `rcmdbrd`-style discovery list.
@@ -502,7 +509,8 @@ archive areas. Budgie now has the first durable curation layer:
   recommendations stay digest-only to avoid exposing private content.
 - Admin-triggered and automatic stat snapshots lazily create the `BBSLists`
   system board and deterministic generated daily stat/ranking/list threads,
-  including the KBS `rcmdbrd`-style recommended-board list.
+  including the KBS `rcmdbrd`-style recommended-board list and
+  `commend`-style recommended-article list.
 - Public blessing rituals lazily create the `Blessing` system board and
   generated public blessing threads/posts.
 - Public poll result publishing lazily creates the `vote` system board and
@@ -884,8 +892,8 @@ social graph:
   distinct-participant hot-topic scoring, top-poster rankings, latest-reply
   rankings, blessing rankings/rituals, archive-path rankings, automatic
   `BBSLists` generated stat snapshots and login-count, board-activity,
-  board-popularity, new-board, recommended-board, hot-topic, and blessing
-  history posts,
+  board-popularity, new-board, recommended-board, recommended-article,
+  hot-topic, and blessing history posts,
   category/section hot-topic groups, 24-hour login histograms, plus completed
   week/month/year activity and hot-topic summaries, and a web `Rankings`
   surface with selectable 30-day history charts.

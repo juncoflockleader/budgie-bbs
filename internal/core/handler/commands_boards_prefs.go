@@ -1231,6 +1231,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsRecommendedBoardListSystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsRecommendedArticleListSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsHotTopicHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1470,6 +1473,31 @@ func (h *Handler) ensureStatsRecommendedBoardListSystemPost(actor *User, dateLab
 	}
 	body := formatStatsRecommendedBoardListBody(dateLabel, boards)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Recommended board list "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsRecommendedArticleListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_commend_" + dateID
+	postID := "bbslists_commend_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	entries, err := projections.ListPublicRecommendedDigestEntries(h.db, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsRecommendedArticleListBody(dateLabel, entries)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Recommended article list "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -2129,6 +2157,58 @@ func formatStatsRecommendedBoardListBody(dateLabel string, boards []projections.
 		}
 		if strings.TrimSpace(board.CuratedByName) != "" {
 			fmt.Fprintf(&b, "   - Curated by %s\n", board.CuratedByName)
+		}
+	}
+	return b.String()
+}
+
+func formatStatsRecommendedArticleListBody(dateLabel string, entries []projections.DigestEntry) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Recommended article list %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Recommended public articles: %d\n\n", len(entries))
+
+	if len(entries) == 0 {
+		b.WriteString("- No public articles are currently recommended.\n")
+		return b.String()
+	}
+	b.WriteString("## Recommended public articles\n")
+	for i, entry := range entries {
+		boardName := strings.TrimSpace(entry.BoardName)
+		if boardName == "" {
+			boardName = entry.BoardID
+		}
+		title := strings.TrimSpace(entry.Title)
+		if title == "" {
+			title = "(untitled)"
+		}
+		source := entry.TargetKind
+		if source == "" {
+			source = "article"
+		}
+		updated := "unknown"
+		if entry.UpdatedAt > 0 {
+			updated = time.UnixMilli(entry.UpdatedAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s / %s: %s recommendation, updated %s\n",
+			i+1,
+			boardName,
+			title,
+			source,
+			updated)
+		if strings.TrimSpace(entry.Author) != "" {
+			fmt.Fprintf(&b, "   - Author: %s\n", entry.Author)
+		}
+		if strings.TrimSpace(entry.Path) != "" {
+			fmt.Fprintf(&b, "   - Path: %s\n", entry.Path)
+		}
+		if strings.TrimSpace(entry.Note) != "" {
+			fmt.Fprintf(&b, "   - Curator note: %s\n", entry.Note)
+		}
+		if strings.TrimSpace(entry.CreatedByName) != "" {
+			fmt.Fprintf(&b, "   - Curated by %s\n", entry.CreatedByName)
+		}
+		if excerpt := strings.Join(strings.Fields(entry.Excerpt), " "); excerpt != "" {
+			fmt.Fprintf(&b, "   - Excerpt: %s\n", excerpt)
 		}
 	}
 	return b.String()
