@@ -73,10 +73,12 @@ type model struct {
 	composingNewThread bool
 
 	// In-memory state.
-	boards  []core.Board
-	threads []core.Thread
-	posts   []core.Post
-	chat    []chatLine
+	boards        []core.Board
+	threads       []core.Thread
+	posts         []core.Post
+	postReactions map[string]bool
+	selectedPost  int
+	chat          []chatLine
 	// Notifications tracked in the current actor session.
 	notifications []core.Notification
 	unreadNotifs  int
@@ -109,13 +111,15 @@ func newModel(c *core.Core, actor *core.User, width, height int) model {
 	ti.CharLimit = 200
 
 	m := model{
-		c:          c,
-		actor:      actor,
-		sub:        sub,
-		page:       pageBoardList,
-		width:      width,
-		height:     height,
-		titleInput: ti,
+		c:             c,
+		actor:         actor,
+		sub:           sub,
+		page:          pageBoardList,
+		width:         width,
+		height:        height,
+		titleInput:    ti,
+		selectedPost:  -1,
+		postReactions: make(map[string]bool),
 	}
 
 	m.list = list.New(nil, list.NewDefaultDelegate(), width, height-3)
@@ -181,6 +185,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case postsMsg:
 		m.posts = msg.posts
+		if err := m.hydrateReactionState(); err != nil {
+			m.statusMsg = "error: " + err.Error()
+			return m, nil
+		}
+		if len(m.posts) == 0 {
+			m.selectedPost = -1
+		} else {
+			m.selectedPost = len(m.posts) - 1
+		}
 		m.rebuildPostView()
 
 	case searchMsg:
@@ -330,11 +343,25 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case pageThread:
 		switch msg.String() {
+		case "k", "up":
+			m.moveSelectedPost(-1)
+		case "j", "down":
+			m.moveSelectedPost(1)
 		case "n":
 			m.composingNewThread = false
 			m.compose.Reset()
 			m.compose.Focus()
 			m.pushPage(pageCompose)
+		case "r":
+			postID := m.selectedPostID()
+			if postID == "" {
+				m.statusMsg = "no post to react"
+				return nil
+			}
+			if m.postReactions[postID] {
+				return m.unreactPost(postID)
+			}
+			return m.reactPost(postID)
 		case "L":
 			if m.actor.IsMod() {
 				return m.toggleThreadLock()
@@ -470,18 +497,21 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		}
 		if p.Thread == m.currentThread {
 			m.posts = append(m.posts, core.Post{
-				ID:          p.ID,
-				Thread:      p.Thread,
-				Author:      p.Author,
-				AuthorID:    p.AuthorID,
-				Body:        p.Body,
-				ContentType: p.ContentType,
-				ReplyTo:     p.ReplyTo,
-				CreatedSeq:  evt.Seq,
-				UpdatedSeq:  evt.Seq,
-				CreatedAt:   p.TS,
-				UpdatedAt:   p.TS,
+				ID:            p.ID,
+				Thread:        p.Thread,
+				Author:        p.Author,
+				AuthorID:      p.AuthorID,
+				Body:          p.Body,
+				ContentType:   p.ContentType,
+				ReplyTo:       p.ReplyTo,
+				ReactionCount: 0,
+				CreatedSeq:    evt.Seq,
+				UpdatedSeq:    evt.Seq,
+				CreatedAt:     p.TS,
+				UpdatedAt:     p.TS,
 			})
+			m.postReactions[p.ID] = false
+			m.selectedPost = len(m.posts) - 1
 			m.rebuildPostView()
 			m.vp.GotoBottom()
 		}
@@ -549,6 +579,38 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		}
 		cmds = append(cmds, m.fetchNotificationStatus())
 
+	case proto.EvtPostReacted:
+		p, ok := evt.Payload.(*proto.PostReactedPayload)
+		if !ok {
+			return []tea.Cmd{m.fetchNotificationStatus()}
+		}
+		for i, post := range m.posts {
+			if post.ID == p.PostID {
+				m.posts[i].ReactionCount = p.ReactionCount
+			}
+		}
+		m.postReactions[p.PostID] = p.User == m.actor.Name
+		if m.page == pageThread {
+			m.rebuildPostView()
+		}
+		cmds = append(cmds, m.fetchNotificationStatus())
+
+	case proto.EvtPostUnreacted:
+		p, ok := evt.Payload.(*proto.PostUnreactedPayload)
+		if !ok {
+			return []tea.Cmd{m.fetchNotificationStatus()}
+		}
+		for i, post := range m.posts {
+			if post.ID == p.PostID {
+				m.posts[i].ReactionCount = p.ReactionCount
+			}
+		}
+		m.postReactions[p.PostID] = p.User == m.actor.Name
+		if m.page == pageThread {
+			m.rebuildPostView()
+		}
+		cmds = append(cmds, m.fetchNotificationStatus())
+
 	case proto.EvtThreadLocked:
 		p, ok := evt.Payload.(*proto.ThreadLockedPayload)
 		if !ok {
@@ -592,9 +654,9 @@ func (m model) View() string {
 	case pageNotifications:
 		body = m.list.View() + "\n" + styleDim.Render("enter=mark read  a=mark all read  esc/←=back")
 	case pageThread:
-		help := "n=reply  esc/←=back  q=quit"
+		help := "n=reply  r=react  ↑/↓=select  esc/←=back  q=quit"
 		if m.actor.IsMod() {
-			help = "n=reply  L=lock/unlock  esc/←=back  q=quit"
+			help = "n=reply  L=lock/unlock  r=react  ↑/↓=select  esc/←=back  q=quit"
 		}
 		body = m.vp.View() + "\n" + styleDim.Render(help)
 	case pageCompose:
@@ -722,11 +784,48 @@ func (m *model) selectedNotification() *core.Notification {
 	return &sel.n
 }
 
+func (m *model) selectedPostID() string {
+	if m.selectedPost < 0 || m.selectedPost >= len(m.posts) {
+		return ""
+	}
+	return m.posts[m.selectedPost].ID
+}
+
+func (m *model) moveSelectedPost(delta int) {
+	if len(m.posts) == 0 {
+		m.selectedPost = -1
+		return
+	}
+	m.selectedPost += delta
+	if m.selectedPost < 0 {
+		m.selectedPost = 0
+	}
+	if m.selectedPost >= len(m.posts) {
+		m.selectedPost = len(m.posts) - 1
+	}
+	m.rebuildPostView()
+}
+
+func (m *model) hydrateReactionState() error {
+	for _, p := range m.posts {
+		reacted, err := m.c.UserReacted(p.ID, m.actor.ID)
+		if err != nil {
+			return err
+		}
+		m.postReactions[p.ID] = reacted
+	}
+	return nil
+}
+
 // --- Post/chat view rendering ---
 
 func (m *model) rebuildPostView() {
 	var b strings.Builder
 	for i, p := range m.posts {
+		marker := "  "
+		if i == m.selectedPost {
+			marker = styleDim.Render("→ ")
+		}
 		createdAt := p.CreatedAt
 		if createdAt == 0 {
 			createdAt = p.CreatedSeq
@@ -736,7 +835,11 @@ func (m *model) rebuildPostView() {
 			ts = time.UnixMilli(createdAt).Format("2006-01-02 15:04")
 		}
 		author := styleAuthor.Render(p.Author)
-		b.WriteString(fmt.Sprintf("%s  %s  #%d", author, styleDim.Render(ts), i+1))
+		reactions := ""
+		if p.ReactionCount > 0 {
+			reactions = fmt.Sprintf("  ♥ %d", p.ReactionCount)
+		}
+		b.WriteString(fmt.Sprintf("%s%s  %s  #%d%s", marker, author, styleDim.Render(ts), i+1, reactions))
 		if p.Version > 1 {
 			b.WriteString(styleDim.Render(" (edited)"))
 		}
@@ -882,6 +985,36 @@ func (m model) submitNewThread() tea.Cmd {
 			return errMsg{err}
 		}
 		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdCreateThread, raw, "")
+		if reply.Err != nil {
+			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
+		}
+		return nil
+	}
+}
+
+func (m model) reactPost(postID string) tea.Cmd {
+	return func() tea.Msg {
+		p := proto.ReactPostPayload{Post: postID, Emoji: "heart"}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return errMsg{err}
+		}
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdReactPost, raw, "")
+		if reply.Err != nil {
+			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
+		}
+		return nil
+	}
+}
+
+func (m model) unreactPost(postID string) tea.Cmd {
+	return func() tea.Msg {
+		p := proto.ReactPostPayload{Post: postID, Emoji: "heart"}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return errMsg{err}
+		}
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdUnreactPost, raw, "")
 		if reply.Err != nil {
 			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
 		}
