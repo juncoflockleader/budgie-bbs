@@ -41,6 +41,10 @@ func getPost(db *sql.DB, id string) (*Post, error) {
 	return currentRuntime().GetPost(db, id)
 }
 
+func getMail(db *sql.DB, userID, messageID string) (*MailItem, error) {
+	return currentRuntime().GetMail(db, userID, messageID)
+}
+
 func getUserTx(tx *sql.Tx, id string) (*User, error) {
 	return currentRuntime().GetUserTx(tx, id)
 }

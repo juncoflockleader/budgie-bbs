@@ -24,6 +24,7 @@ type Runtime struct {
 	AppendEvent                  func(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, payload any) (int64, error)
 	GetThread                    func(db *sql.DB, id string) (*Thread, error)
 	GetPost                      func(db *sql.DB, id string) (*Post, error)
+	GetMail                      func(db *sql.DB, userID, messageID string) (*MailItem, error)
 	GetUserTx                    func(tx *sql.Tx, id string) (*User, error)
 	GetThreadTx                  func(tx *sql.Tx, id string) (*Thread, error)
 	GetPostTx                    func(tx *sql.Tx, id string) (*Post, error)
@@ -137,6 +138,7 @@ type BoardMemberPatch = projections.BoardMemberPatch
 type BoardMemberRequirements = projections.BoardMemberRequirements
 type BoardMemberRequirementsPatch = projections.BoardMemberRequirementsPatch
 type DigestExport = projections.DigestExport
+type MailItem = projections.MailItem
 type MailGroupMember = projections.MailGroupMember
 type DirectMessageSettings = projections.DirectMessageSettings
 type Blessing = projections.Blessing

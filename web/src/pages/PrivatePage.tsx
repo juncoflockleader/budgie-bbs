@@ -45,6 +45,8 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   const [mailBody, setMailBody] = useState('')
   const [mailAttachments, setMailAttachments] = useState<AttachmentPayload[]>([])
   const [replyTo, setReplyTo] = useState<string | undefined>()
+  const [forwardSource, setForwardSource] = useState<string | undefined>()
+  const [forwardSourceTitle, setForwardSourceTitle] = useState('')
   const [groupName, setGroupName] = useState('')
   const [groupMembers, setGroupMembers] = useState('')
   const [editingGroup, setEditingGroup] = useState<string | undefined>()
@@ -158,16 +160,16 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   async function sendMail(e: FormEvent) {
     e.preventDefault()
     const to = mailTo.split(/[,\s]+/).map(v => v.trim()).filter(Boolean)
-    const res = await api.sendMail(token, {
+    const common = {
       to,
       toGroups: mailToGroups,
       toFriends: mailToFriends,
       toAll: currentUserRole === 'admin' && mailToAll,
       subject: mailSubject,
-      body: mailBody,
-      replyTo,
-      attachments: cleanAttachments(mailAttachments),
-    })
+    }
+    const res = forwardSource
+      ? await api.forwardMail(token, forwardSource, { ...common, note: mailBody })
+      : await api.sendMail(token, { ...common, body: mailBody, replyTo, attachments: cleanAttachments(mailAttachments) })
     if (res.error) {
       setError(res.error.message)
       return
@@ -180,6 +182,8 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     setMailBody('')
     setMailAttachments([])
     setReplyTo(undefined)
+    setForwardSource(undefined)
+    setForwardSourceTitle('')
     await Promise.all([loadMail(mailbox), loadMailUsage()])
   }
 
@@ -262,7 +266,21 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     setTab('mail')
     setMailTo(item.fromName)
     setMailSubject(item.subject.toLowerCase().startsWith('re:') ? item.subject : `Re: ${item.subject}`)
+    setMailBody('')
     setReplyTo(item.id)
+    setForwardSource(undefined)
+    setForwardSourceTitle('')
+  }
+
+  function startForward(item: MailItem) {
+    setTab('mail')
+    setMailTo('')
+    setMailSubject(item.subject.toLowerCase().startsWith('fwd:') ? item.subject : `Fwd: ${item.subject}`)
+    setMailBody('')
+    setMailAttachments([])
+    setReplyTo(undefined)
+    setForwardSource(item.id)
+    setForwardSourceTitle(item.subject)
   }
 
   async function loadMailRelation(item: MailItem, mode: 'thread' | 'author') {
@@ -436,6 +454,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                 )}
                 <div className="private-actions">
                   <button className="link-btn" onClick={() => startReply(selectedMail)}>Reply</button>
+                  <button className="link-btn" onClick={() => startForward(selectedMail)}>Forward</button>
                   <button className="link-btn" onClick={() => loadMailRelation(selectedMail, 'thread')}>Thread</button>
                   <button className="link-btn" onClick={() => loadMailRelation(selectedMail, 'author')}>From author</button>
                   {selectedMail.role === 'sender' && <button className="link-btn" onClick={() => uploadMailAttachment(selectedMail)}>Upload file</button>}
@@ -491,11 +510,13 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                 )}
               </div>
               <label>Subject<input value={mailSubject} onChange={e => setMailSubject(e.target.value)} /></label>
-              <label>Body<textarea value={mailBody} onChange={e => setMailBody(e.target.value)} required /></label>
-              <AttachmentComposer attachments={mailAttachments} onChange={setMailAttachments} />
+              {forwardSource && <p className="muted">Forwarding {forwardSourceTitle}</p>}
+              <label>{forwardSource ? 'Note' : 'Body'}<textarea value={mailBody} onChange={e => setMailBody(e.target.value)} required={!forwardSource} /></label>
+              {!forwardSource && <AttachmentComposer attachments={mailAttachments} onChange={setMailAttachments} />}
               <div className="form-actions">
-                <button type="submit">{replyTo ? 'Send reply' : 'Send mail'}</button>
+                <button type="submit">{forwardSource ? 'Forward mail' : replyTo ? 'Send reply' : 'Send mail'}</button>
                 {replyTo && <button type="button" className="link-btn" onClick={() => setReplyTo(undefined)}>Clear reply</button>}
+                {forwardSource && <button type="button" className="link-btn" onClick={() => { setForwardSource(undefined); setForwardSourceTitle('') }}>Clear forward</button>}
               </div>
             </form>
           </section>

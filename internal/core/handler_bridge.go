@@ -26,6 +26,7 @@ func newHandler(db *sql.DB, bus Bus) *Handler {
 		AppendEvent:                  appendEvent,
 		GetThread:                    getThread,
 		GetPost:                      getPost,
+		GetMail:                      getMail,
 		GetUserTx:                    getUserTx,
 		GetThreadTx:                  getThreadTx,
 		GetPostTx:                    getPostTx,

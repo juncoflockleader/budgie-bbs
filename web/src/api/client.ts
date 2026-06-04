@@ -830,6 +830,27 @@ export async function sendMail(
   return json<AckResult>(res)
 }
 
+export async function forwardMail(
+  token: string,
+  mail: string,
+  payload: {
+    to: string[]
+    toGroups?: string[]
+    toFriends?: boolean
+    toAll?: boolean
+    subject?: string
+    note?: string
+    saveSent?: boolean
+  },
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/mail/${mail}/forward`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return json<AckResult>(res)
+}
+
 export async function listMailGroups(token: string): Promise<ApiResponse<{ groups: MailGroup[] }>> {
   const res = await fetch(`${BASE}/mail/groups`, { headers: authHeaders(token) })
   return json<{ groups: MailGroup[] }>(res)
@@ -1753,7 +1774,7 @@ export type CommandName =
   | 'setBoardMember' | 'applyBoardMembership' | 'reviewBoardMembership' | 'leaveBoardMembership'
   | 'curatePost' | 'curateThread' | 'removeDigestEntry' | 'updateDigestEntry' | 'setDigestEntryBody' | 'createDigestDirectory'
   | 'moveDigestPath' | 'copyDigestPath' | 'deleteDigestPath' | 'sendDigestEntryMail'
-  | 'mailPostAuthor' | 'sendMail' | 'setMailGroup' | 'deleteMailGroup' | 'attachMail' | 'updateMail' | 'deleteMail'
+  | 'mailPostAuthor' | 'sendMail' | 'forwardMail' | 'setMailGroup' | 'deleteMailGroup' | 'attachMail' | 'updateMail' | 'deleteMail'
   | 'sendDirectMessage' | 'setDirectMessageSettings' | 'markDirectMessageRead' | 'deleteDirectMessage'
   | 'setUserRelationship' | 'setLoginWatch'
   | 'setBoardFavorite' | 'createFavoriteFolder' | 'updateFavoriteFolder'

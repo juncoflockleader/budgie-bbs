@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -80,5 +81,65 @@ func TestHTTPPrivateMailThreadAndAuthorReads(t *testing.T) {
 	forbidden := mailListResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail/thread/"+root.Result.ID, carolToken, nil, &forbidden); status != http.StatusNotFound {
 		t.Fatalf("expected hidden mail thread to be not found, got %d", status)
+	}
+}
+
+func TestHTTPForwardPrivateMail(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+	carolToken := registerUser(t, handler, "carol")
+	daveToken := registerUser(t, handler, "dave")
+
+	source := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail", bobToken, map[string]any{
+		"to":      []string{"alice"},
+		"subject": "Lab schedule",
+		"body":    "The lab opens at seven.",
+		"attachments": []map[string]any{{
+			"filename":    "schedule.txt",
+			"contentType": "text/plain",
+			"sizeBytes":   42,
+			"url":         "https://example.edu/schedule.txt",
+		}},
+	}, &source); status != http.StatusCreated {
+		t.Fatalf("send source mail status: %d error=%+v", status, source.Error)
+	}
+
+	forward := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail/"+source.Result.ID+"/forward", aliceToken, map[string]any{
+		"to":   []string{"carol"},
+		"note": "FYI for tomorrow.",
+	}, &forward); status != http.StatusCreated {
+		t.Fatalf("forward mail status: %d error=%+v", status, forward.Error)
+	}
+
+	carolMail := mailItemResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail/"+forward.Result.ID, carolToken, nil, &carolMail); status != http.StatusOK {
+		t.Fatalf("get forwarded mail status: %d", status)
+	}
+	if carolMail.FromName != "alice" || carolMail.Subject != "Fwd: Lab schedule" {
+		t.Fatalf("expected forwarded mail from alice with default subject, got %+v", carolMail)
+	}
+	for _, want := range []string{"FYI for tomorrow.", "----- Forwarded mail -----", "From: bob", "To: alice", "Subject: Lab schedule", "Attachments: schedule.txt", "The lab opens at seven."} {
+		if !strings.Contains(carolMail.Body, want) {
+			t.Fatalf("expected forwarded body to contain %q, got %q", want, carolMail.Body)
+		}
+	}
+
+	aliceSent := mailListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail?mailbox=sent", aliceToken, nil, &aliceSent); status != http.StatusOK {
+		t.Fatalf("list alice sent status: %d", status)
+	}
+	if len(aliceSent.Mail) != 1 || aliceSent.Mail[0].ID != forward.Result.ID {
+		t.Fatalf("expected forwarded mail in alice sent box, got %+v", aliceSent.Mail)
+	}
+
+	hidden := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail/"+source.Result.ID+"/forward", daveToken, map[string]any{
+		"to": []string{"carol"},
+	}, &hidden); status != http.StatusNotFound {
+		t.Fatalf("expected hidden mail forward to be not found, got %d error=%+v", status, hidden.Error)
 	}
 }
