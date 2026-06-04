@@ -1193,6 +1193,57 @@ func TestPollCreationOnReplyPost(t *testing.T) {
 	}
 }
 
+func TestPollCreationInsertsIntoPollsForPostsMap(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Poll map base", Body: "first post",
+	})
+	replyPoll := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: threadRes.ID,
+		Body:  "[poll]\nQuestion?\nOption A\nOption B\n[/poll]",
+	})
+	replyNoPoll := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: threadRes.ID,
+		Body:  "plain post",
+		ReplyTo: replyPoll.ID,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 3 {
+		t.Fatalf("expected 3 posts, got %d", len(posts))
+	}
+
+	postIDs := make([]string, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+	}
+
+	pollsByPost, err := c.PollsForPosts(postIDs, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pollsByPost) != 1 {
+		t.Fatalf("expected 1 poll in map, got %d", len(pollsByPost))
+	}
+	if _, ok := pollsByPost[replyNoPoll.ID]; ok {
+		t.Fatalf("did not expect map entry for non-poll post %s", replyNoPoll.ID)
+	}
+	if _, ok := pollsByPost[replyPoll.ID]; !ok {
+		t.Fatalf("expected map entry for poll post %s", replyPoll.ID)
+	}
+	if pollsByPost[replyPoll.ID].Question != "Question?" {
+		t.Fatalf("expected question %q, got %q", "Question?", pollsByPost[replyPoll.ID].Question)
+	}
+}
+
 func TestPollCreationRequiresQuestionText(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
