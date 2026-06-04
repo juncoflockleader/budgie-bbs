@@ -1222,6 +1222,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsUserActivityRankListSystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsBoardOnlineListSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1381,6 +1384,35 @@ func (h *Handler) ensureStatsUserActivityRankListSystemPost(actor *User, dateLab
 	}
 	body := formatStatsUserActivityRankListBody(dateLabel, users)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "User activity rankings "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsBoardOnlineListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_bonline_" + dateID
+	postID := "bbslists_bonline_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	stats, err := projections.GetCommunityStats(h.db)
+	if err != nil {
+		return "", 0, err
+	}
+	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsBoardOnlineListBody(dateLabel, stats, boards)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Board online occupancy "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -2168,6 +2200,58 @@ func formatStatsUserRankingSection(b *strings.Builder, title string, users []pro
 
 func userActivityScore(user projections.UserRanking) int64 {
 	return int64(user.PostsCreated*10+user.ReactionsReceived*3+user.LoginCount+user.TrustLevel*25) + user.TotalOnlineSeconds/3600
+}
+
+func formatStatsBoardOnlineListBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking) string {
+	onlineBoards := onlineBoardRankings(boards)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Board online occupancy %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Online users: %d\n", stats.OnlineUsers)
+	fmt.Fprintf(&b, "- Online guests: %d\n", stats.OnlineGuests)
+	fmt.Fprintf(&b, "- Boards with online users: %d\n\n", len(onlineBoards))
+
+	b.WriteString("## Public board online ranking\n")
+	if len(onlineBoards) == 0 {
+		b.WriteString("- No public boards currently have online users.\n")
+		return b.String()
+	}
+	for i, board := range onlineBoards {
+		lastActivity := "no posts yet"
+		if board.LastPostAt > 0 {
+			lastActivity = time.UnixMilli(board.LastPostAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s (%s): %d users online, %d posts, %d threads, last activity %s\n",
+			i+1,
+			board.Name,
+			board.ID,
+			board.OnlineUsers,
+			board.PostCount,
+			board.ThreadCount,
+			lastActivity)
+	}
+	return b.String()
+}
+
+func onlineBoardRankings(boards []projections.BoardRanking) []projections.BoardRanking {
+	out := make([]projections.BoardRanking, 0, len(boards))
+	for _, board := range boards {
+		if board.OnlineUsers > 0 {
+			out = append(out, board)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].OnlineUsers != out[j].OnlineUsers {
+			return out[i].OnlineUsers > out[j].OnlineUsers
+		}
+		if out[i].PostCount != out[j].PostCount {
+			return out[i].PostCount > out[j].PostCount
+		}
+		if out[i].LastSeq != out[j].LastSeq {
+			return out[i].LastSeq > out[j].LastSeq
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
 }
 
 func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, history []projections.CommunityStatHistory) string {
