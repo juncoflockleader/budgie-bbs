@@ -12,9 +12,14 @@ func TestValidatePollMarkupNoPoll(t *testing.T) {
 }
 
 func TestValidatePollMarkupValid(t *testing.T) {
-	body := "[poll]\nQuestion?\n- Option 1\n- Option 2\n[/poll]"
-	if err := validatePollMarkup(body); err != nil {
-		t.Fatalf("expected valid poll, got %v", err)
+	cases := []string{
+		"[poll]\nQuestion?\n- Option 1\n- Option 2\n[/poll]",
+		"[POLL]\nQuestion?\n- Option 1\n- Option 2\n[/poll]",
+	}
+	for _, body := range cases {
+		if err := validatePollMarkup(body); err != nil {
+			t.Fatalf("expected valid poll %q, got %v", body, err)
+		}
 	}
 }
 

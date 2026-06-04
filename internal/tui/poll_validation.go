@@ -12,7 +12,7 @@ var pollTagOpenRe = regexp.MustCompile(`(?i)^\[poll(?:\s+expires\s*=\s*([^\]]+))
 var pollExpiryNumberRe = regexp.MustCompile(`^\d+$`)
 
 func validatePollMarkup(body string) error {
-	openIdx := strings.Index(body, "[poll")
+	openIdx := strings.Index(strings.ToLower(body), "[poll")
 	if openIdx < 0 {
 		return nil
 	}
@@ -36,7 +36,10 @@ func validatePollMarkup(body string) error {
 
 	closeIdx := strings.Index(body[closeBracketIdx+1:], "[/poll]")
 	if closeIdx < 0 {
-		return fmt.Errorf("poll block is missing a closing [/poll] tag.")
+		closeIdx = strings.Index(strings.ToLower(body[closeBracketIdx+1:]), "[/poll]")
+		if closeIdx < 0 {
+			return fmt.Errorf("poll block is missing a closing [/poll] tag.")
+		}
 	}
 	closeIdx += closeBracketIdx + 1
 
