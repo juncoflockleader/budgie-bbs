@@ -1036,9 +1036,12 @@ export async function listThreads(
   limit = 30,
   offset = 0,
   unreadOnly = false,
+  filters: { q?: string; author?: string } = {},
 ): Promise<ApiResponse<ThreadSummary[]>> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (unreadOnly) params.set('unread', '1')
+  if (filters.q?.trim()) params.set('q', filters.q.trim())
+  if (filters.author?.trim()) params.set('author', filters.author.trim())
   const res = await fetch(`${BASE}/boards/${board}/threads?${params}`, {
     headers: authHeaders(token),
   })

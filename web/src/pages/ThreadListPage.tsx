@@ -1,4 +1,4 @@
-import { type MouseEvent, useEffect, useState, useCallback } from 'react'
+import { type FormEvent, type MouseEvent, useEffect, useState, useCallback } from 'react'
 import * as api from '../api/client'
 import type { Board, BoardInfo, BoardMember, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
 import type { BudgieEvent, ThreadNewPayload, ThreadTitleSetPayload } from '../api/types'
@@ -35,6 +35,10 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   const [memberCanAnnounce, setMemberCanAnnounce] = useState(false)
   const [memberCanManagePolls, setMemberCanManagePolls] = useState(false)
   const [memberCanSetBoardSettings, setMemberCanSetBoardSettings] = useState(false)
+  const [titleQuery, setTitleQuery] = useState('')
+  const [authorQuery, setAuthorQuery] = useState('')
+  const [activeTitleQuery, setActiveTitleQuery] = useState('')
+  const [activeAuthorQuery, setActiveAuthorQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -51,7 +55,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
     setLoading(true)
     setError(null)
     Promise.all([
-      api.listThreads(token, board.id),
+      api.listThreads(token, board.id, 30, 0, false, { q: activeTitleQuery, author: activeAuthorQuery }),
       api.getBoardInfo(token, board.id),
       api.listDigestEntries(token, board.id),
       api.listBoardMemberApplications(token, board.id, 'pending'),
@@ -78,7 +82,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       setMemberApplications(applicationsRes.data ?? [])
       setOnlineUsers(onlineRes.data ?? [])
     })
-  }, [token, board.id])
+  }, [token, board.id, activeTitleQuery, activeAuthorQuery])
 
   const onEvent = useCallback((evt: BudgieEvent) => {
     if (evt.event === 'thread.new') {
@@ -86,6 +90,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       if (p.board !== board.id) return
       setThreads(prev => {
         if (prev.find(t => t.id === p.id)) return prev
+        if (!matchesThreadSearch({ title: p.title, author: p.author, authorId: p.authorId }, activeTitleQuery, activeAuthorQuery)) return prev
         return [{
           id: p.id,
           board: p.board,
@@ -105,9 +110,9 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       const p = evt.payload as ThreadTitleSetPayload
       setThreads(prev => prev.map(thread => (
         thread.id === p.thread ? { ...thread, title: p.title, updatedAt: p.ts } : thread
-      )))
+      )).filter(thread => matchesThreadSearch(thread, activeTitleQuery, activeAuthorQuery)))
     }
-  }, [board.id])
+  }, [board.id, activeTitleQuery, activeAuthorQuery])
 
   useStream({ token }, onEvent)
 
@@ -204,6 +209,19 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
     setBoardInfo(refreshed.data ?? null)
     setSettingsDraft(refreshed.data?.settings ?? null)
     setRequirementsDraft(refreshed.data?.requirements ?? null)
+  }
+
+  function submitThreadSearch(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setActiveTitleQuery(titleQuery.trim())
+    setActiveAuthorQuery(authorQuery.trim())
+  }
+
+  function clearThreadSearch() {
+    setTitleQuery('')
+    setAuthorQuery('')
+    setActiveTitleQuery('')
+    setActiveAuthorQuery('')
   }
 
   async function addModerator() {
@@ -454,6 +472,26 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
         {canOpenBoardSettings && <button className="link-btn" onClick={() => setSettingsOpen(open => !open)}>Board settings</button>}
         <button className="new-btn" onClick={onNewThread} disabled={!canCreateThread}>+ New thread</button>
       </div>
+      <form className="search-form thread-search-form" onSubmit={submitThreadSearch}>
+        <input
+          className="search-input"
+          type="search"
+          value={titleQuery}
+          onChange={e => setTitleQuery(e.currentTarget.value)}
+          placeholder="Title"
+          aria-label="Search thread titles"
+        />
+        <input
+          className="search-input"
+          type="search"
+          value={authorQuery}
+          onChange={e => setAuthorQuery(e.currentTarget.value)}
+          placeholder="Author"
+          aria-label="Search thread authors"
+        />
+        <button type="submit" disabled={!titleQuery.trim() && !authorQuery.trim()}>Search</button>
+        {(activeTitleQuery || activeAuthorQuery) && <button type="button" className="link-btn" onClick={clearThreadSearch}>Clear</button>}
+      </form>
       {settingsOpen && canOpenBoardSettings && settingsDraft && (
         <section className="board-settings-panel">
           {canEditBoardSettings && (
@@ -738,7 +776,9 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
           </ul>
         </section>
       )}
-      {threads.length === 0 && <p className="muted">No threads yet. Start one!</p>}
+      {threads.length === 0 && (
+        <p className="muted">{activeTitleQuery || activeAuthorQuery ? 'No matching threads.' : 'No threads yet. Start one!'}</p>
+      )}
       <ul className="item-list">
         {threads.map(t => (
           <li key={t.id} className="item-row thread-row" onClick={() => onSelect(t, t.firstUnreadPostId)}>
@@ -781,4 +821,19 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       </ul>
     </div>
   )
+}
+
+function matchesThreadSearch(
+  thread: Pick<ThreadSummary, 'title' | 'author' | 'authorId'>,
+  titleQuery: string,
+  authorQuery: string,
+) {
+  const title = titleQuery.trim().toLowerCase()
+  const author = authorQuery.trim().toLowerCase()
+  if (title && !thread.title.toLowerCase().includes(title)) return false
+  if (author) {
+    const haystack = `${thread.author} ${thread.authorId ?? ''}`.toLowerCase()
+    if (!haystack.includes(author)) return false
+  }
+  return true
 }

@@ -175,6 +175,8 @@ thread. Budgie now has the first thread-level version:
   - `firstUnreadPostId`
 - Thread summary reads support `?unread=1` for board-level unread-thread
   navigation.
+- Thread summary reads support KBS-style board-local search filters:
+  `GET /api/v1/boards/{board}/threads?q=&author=`.
 - Site-wide unread thread queue:
   `GET /api/v1/threads/unread?favorites=&folder=`.
 - Favorite-folder unread traversal includes boards in the selected favorite
@@ -189,6 +191,7 @@ thread. Budgie now has the first thread-level version:
   - `markPostRead`
 - Web thread lists show unread post counts, open at the first unread post, and
   expose compact thread mark-read/restore controls.
+- Web thread lists expose board-local title and author search controls.
 - Web thread readers expose previous/next unread controls, mark-all-read,
   restore-marker, and per-post `Mark to here` actions.
 - Web thread readers expose previous/next unread-thread controls within the

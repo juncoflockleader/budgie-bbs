@@ -451,6 +451,92 @@ func hasHTTPThreadSummary(resp threadSummariesResponse, id, titlePart string) bo
 	return false
 }
 
+func TestHTTPBoardThreadSearchByTitleAndAuthor(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	campus := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", aliceToken, map[string]string{
+		"title": "Campus food map",
+		"body":  "cafeteria notes",
+	}, &campus); status != http.StatusCreated {
+		t.Fatalf("create campus thread status: %d error=%+v", status, campus.Error)
+	}
+	dorm := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", bobToken, map[string]string{
+		"title": "Dorm repair notes",
+		"body":  "maintenance",
+	}, &dorm); status != http.StatusCreated {
+		t.Fatalf("create dorm thread status: %d error=%+v", status, dorm.Error)
+	}
+
+	byTitle := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/threads?q=campus", bobToken, nil, &byTitle); status != http.StatusOK {
+		t.Fatalf("search by title status: %d", status)
+	}
+	if !hasHTTPThreadSummary(byTitle, campus.Result.ID, "Campus food") || hasHTTPThreadSummary(byTitle, dorm.Result.ID, "Dorm repair") {
+		t.Fatalf("expected title search to return only campus thread, got %+v", byTitle.Threads)
+	}
+
+	byAuthor := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/threads?author=alice", bobToken, nil, &byAuthor); status != http.StatusOK {
+		t.Fatalf("search by author status: %d", status)
+	}
+	if !hasHTTPThreadSummary(byAuthor, campus.Result.ID, "Campus food") || hasHTTPThreadSummary(byAuthor, dorm.Result.ID, "Dorm repair") {
+		t.Fatalf("expected author search to return only alice thread, got %+v", byAuthor.Threads)
+	}
+
+	combined := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/threads?q=notes&author=bob", aliceToken, nil, &combined); status != http.StatusOK {
+		t.Fatalf("combined thread search status: %d", status)
+	}
+	if !hasHTTPThreadSummary(combined, dorm.Result.ID, "Dorm repair") || hasHTTPThreadSummary(combined, campus.Result.ID, "Campus food") {
+		t.Fatalf("expected combined search to return only bob notes, got %+v", combined.Threads)
+	}
+
+	none := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/threads?q=campus&author=bob", aliceToken, nil, &none); status != http.StatusOK {
+		t.Fatalf("empty combined thread search status: %d", status)
+	}
+	if len(none.Threads) != 0 {
+		t.Fatalf("expected no combined search results, got %+v", none.Threads)
+	}
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":   "club",
+		"name": "Club",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create club board status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/boards/club/settings", adminToken, map[string]bool{
+		"memberReadMode": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("set club member-read status: %d error=%+v", status, ack.Error)
+	}
+	secret := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/club/threads", adminToken, map[string]string{
+		"title": "Campus club roster",
+		"body":  "private",
+	}, &secret); status != http.StatusCreated {
+		t.Fatalf("create club thread status: %d error=%+v", status, secret.Error)
+	}
+	forbidden := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/club/threads?q=campus&author=admin", aliceToken, nil, &forbidden); status != http.StatusForbidden {
+		t.Fatalf("expected member-read search to be forbidden, got %d response=%+v", status, forbidden)
+	}
+	allowed := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/club/threads?q=campus&author=admin", adminToken, nil, &allowed); status != http.StatusOK {
+		t.Fatalf("admin member-read search status: %d", status)
+	}
+	if !hasHTTPThreadSummary(allowed, secret.Result.ID, "Campus club") {
+		t.Fatalf("expected admin filtered search to include club thread, got %+v", allowed.Threads)
+	}
+}
+
 func TestHTTPBoardFavoritesLifecycle(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 

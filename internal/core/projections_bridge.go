@@ -430,6 +430,10 @@ func listThreadSummaries(db *sql.DB, userID, boardID string, limit, offset int, 
 	return projections.ListThreadSummaries(db, userID, boardID, limit, offset, unreadOnly)
 }
 
+func listThreadSummariesFiltered(db *sql.DB, userID, boardID, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
+	return projections.ListThreadSummariesFiltered(db, userID, boardID, titleQuery, authorQuery, limit, offset, unreadOnly)
+}
+
 func listUnreadThreadSummaries(db *sql.DB, userID string, includePrivate bool, favoritesOnly bool, folderID string, limit, offset int) ([]ThreadSummary, error) {
 	return projections.ListUnreadThreadSummaries(db, userID, includePrivate, favoritesOnly, folderID, limit, offset)
 }

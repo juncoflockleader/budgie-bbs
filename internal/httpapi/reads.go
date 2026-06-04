@@ -548,6 +548,8 @@ func (s *Server) handleListThreads(w http.ResponseWriter, r *http.Request) {
 	boardID := r.PathValue("board")
 	limit, offset := paginate(r)
 	unreadOnly := r.URL.Query().Get("unread") == "1" || r.URL.Query().Get("unread") == "true"
+	titleQuery := r.URL.Query().Get("q")
+	authorQuery := r.URL.Query().Get("author")
 
 	info, err := s.core.GetBoardInfo(boardID)
 	if err != nil || info == nil {
@@ -558,7 +560,7 @@ func (s *Server) handleListThreads(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, proto.ErrForbidden, "board members only", false)
 		return
 	}
-	threads, err := s.core.ListThreadSummaries(actor.ID, boardID, limit, offset, unreadOnly)
+	threads, err := s.core.ListThreadSummariesFiltered(actor.ID, boardID, titleQuery, authorQuery, limit, offset, unreadOnly)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return

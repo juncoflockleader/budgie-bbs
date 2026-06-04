@@ -2175,12 +2175,20 @@ func ListThreads(db *sql.DB, boardID string, limit, offset int) ([]Thread, error
 }
 
 func ListThreadSummaries(db *sql.DB, userID, boardID string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
+	return ListThreadSummariesFiltered(db, userID, boardID, "", "", limit, offset, unreadOnly)
+}
+
+func ListThreadSummariesFiltered(db *sql.DB, userID, boardID, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
 	if offset < 0 {
 		offset = 0
 	}
+	titleSearch := strings.TrimSpace(strings.ToLower(titleQuery))
+	authorSearch := strings.TrimSpace(strings.ToLower(authorQuery))
+	titleLike := "%" + escapeLike(titleSearch) + "%"
+	authorLike := "%" + escapeLike(authorSearch) + "%"
 	unreadFilter := 0
 	if unreadOnly {
 		unreadFilter = 1
@@ -2198,6 +2206,8 @@ func ListThreadSummaries(db *sql.DB, userID, boardID string, limit, offset int, 
 		      LEFT JOIN board_read_markers brm ON brm.board_id = t.board AND brm.user_id = ?
 		      LEFT JOIN thread_read_markers trm ON trm.thread_id = t.id AND trm.user_id = ?
 		     WHERE t.board = ?
+		       AND (? = '' OR LOWER(COALESCE(t.title, '')) LIKE ? ESCAPE '\')
+		       AND (? = '' OR LOWER(COALESCE(t.author, '')) LIKE ? ESCAPE '\' OR LOWER(COALESCE(t.author_id, '')) LIKE ? ESCAPE '\')
 		)
 		SELECT id, board, board_name, author, author_id, title, locked, post_count, last_seq, created_ts, created_at, updated_at, read_seq,
 		       unread_posts,
@@ -2210,7 +2220,7 @@ func ListThreadSummaries(db *sql.DB, userID, boardID string, limit, offset int, 
 		  ) summary
 		 WHERE ? = 0 OR unread_posts > 0
 		 ORDER BY last_seq DESC LIMIT ? OFFSET ?`,
-		userID, userID, boardID, unreadFilter, limit, offset,
+		userID, userID, boardID, titleSearch, titleLike, authorSearch, authorLike, authorLike, unreadFilter, limit, offset,
 	)
 	if err != nil {
 		return nil, err

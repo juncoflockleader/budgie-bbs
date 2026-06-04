@@ -1094,6 +1094,9 @@ func (c *Core) ListThreads(board string, limit, offset int) ([]Thread, error) {
 func (c *Core) ListThreadSummaries(userID, board string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
 	return listThreadSummaries(c.DB, userID, board, limit, offset, unreadOnly)
 }
+func (c *Core) ListThreadSummariesFiltered(userID, board, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
+	return listThreadSummariesFiltered(c.DB, userID, board, titleQuery, authorQuery, limit, offset, unreadOnly)
+}
 func (c *Core) ListUnreadThreadSummaries(actor *User, favoritesOnly bool, folderID string, limit, offset int) ([]ThreadSummary, error) {
 	return listUnreadThreadSummaries(c.DB, actor.ID, actor.IsMod(), favoritesOnly, folderID, limit, offset)
 }
