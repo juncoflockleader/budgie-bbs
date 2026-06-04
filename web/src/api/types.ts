@@ -198,9 +198,11 @@ export interface UserProfile {
   bio: string
   avatar: string
   created: number
+  lastSeen: number
   postsCreated: number
   reactionsReceived: number
   trustLevel: number
+  pubkeys: string[]
 }
 
 export interface ModerationReview {

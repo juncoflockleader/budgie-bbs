@@ -250,6 +250,10 @@ func (c *Core) UserProfileByName(name string) (*UserProfile, error) {
 	return getUserProfileByName(c.DB, name)
 }
 
+func (c *Core) ListUserPubkeyTitles(name string) ([]string, error) {
+	return listPubkeyTitlesByUserName(c.DB, name)
+}
+
 func (c *Core) UpdateUserProfile(userID, displayName, bio, avatar string) error {
 	return updateUserProfile(c.DB, userID, displayName, bio, avatar)
 }

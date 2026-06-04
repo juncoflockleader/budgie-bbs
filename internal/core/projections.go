@@ -67,16 +67,18 @@ type User struct {
 }
 
 type UserProfile struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Role              string `json:"role"`
-	DisplayName       string `json:"displayName"`
-	Bio               string `json:"bio"`
-	Avatar            string `json:"avatar"`
-	Created           int64  `json:"created"`
-	PostsCreated      int    `json:"postsCreated"`
-	ReactionsReceived int    `json:"reactionsReceived"`
-	TrustLevel        int    `json:"trustLevel"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Role              string   `json:"role"`
+	DisplayName       string   `json:"displayName"`
+	Bio               string   `json:"bio"`
+	Avatar            string   `json:"avatar"`
+	Created           int64    `json:"created"`
+	LastSeen          int64    `json:"lastSeen"`
+	PostsCreated      int      `json:"postsCreated"`
+	ReactionsReceived int      `json:"reactionsReceived"`
+	TrustLevel        int      `json:"trustLevel"`
+	Pubkeys           []string `json:"pubkeys"`
 }
 
 type ModerationReview struct {
@@ -344,21 +346,80 @@ func countUsers(db *sql.DB) (int, error) {
 
 func getUserProfileByName(db *sql.DB, name string) (*UserProfile, error) {
 	p := &UserProfile{}
+	var lastVisitDay string
 	err := qQueryRow(db,
 		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
 		        COALESCE(up.bio,''), COALESCE(up.avatar,''), u.created,
-		        COALESCE(ua.posts_created,0), COALESCE(ua.reactions_recv,0), COALESCE(ua.trust_level,0)
+		        COALESCE(ua.posts_created,0), COALESCE(ua.reactions_recv,0), COALESCE(ua.trust_level,0),
+		        COALESCE(ua.last_visit_day,'')
 		 FROM users u
 		 LEFT JOIN user_profiles up ON up.user_id = u.id
 		 LEFT JOIN user_activity ua ON ua.user_id = u.id
 		 WHERE u.name=?`,
 		name,
 	).Scan(&p.ID, &p.Name, &p.Role, &p.DisplayName, &p.Bio, &p.Avatar, &p.Created,
-		&p.PostsCreated, &p.ReactionsReceived, &p.TrustLevel)
+		&p.PostsCreated, &p.ReactionsReceived, &p.TrustLevel, &lastVisitDay)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	if lastVisitDay != "" {
+		if lastSeen, err := time.Parse("2006-01-02", lastVisitDay); err == nil {
+			p.LastSeen = lastSeen.UnixMilli()
+		}
+	}
+	pubkeys, err := listPubkeyTitlesByUserName(db, p.Name)
+	if err != nil {
+		return nil, err
+	}
+	p.Pubkeys = pubkeys
 	return p, err
+}
+
+func listPubkeyTitlesByUserName(db *sql.DB, username string) ([]string, error) {
+	rows, err := qQuery(db,
+		`SELECT pubkey FROM auth_pubkeys ap
+		 JOIN users u ON u.id = ap.user_id
+		 WHERE u.name = ?
+		 ORDER BY pubkey`,
+		username,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	keys := make([]string, 0)
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		keys = append(keys, extractPubkeyTitle(raw))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func extractPubkeyTitle(raw string) string {
+	parts := strings.Fields(raw)
+	if len(parts) >= 3 {
+		title := strings.Join(parts[2:], " ")
+		if title != "" {
+			return title
+		}
+	}
+	if raw == "" {
+		return "SSH key"
+	}
+	if len(parts) >= 1 {
+		return parts[0] + " key"
+	}
+	return "SSH key"
 }
 
 func updateUserProfile(db *sql.DB, userID, displayName, bio, avatar string) error {

@@ -244,6 +244,23 @@ label {
   flex-direction: column;
   gap: 0.6rem;
 }
+.profile-pubkeys {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+}
+.profile-key-list {
+  margin-left: 1.25rem;
+  color: var(--c-text);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  list-style: square;
+}
 .recent-posts { display: flex; flex-direction: column; gap: 0.45rem }
 .recent-post-card {
   border: 1px solid var(--c-border);

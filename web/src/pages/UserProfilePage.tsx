@@ -89,6 +89,7 @@ export function UserProfilePage({ token, username, isOwnProfile, onBack }: Props
   if (!profile) return <p className="muted">Profile not found.</p>
 
   const joinDate = new Date(profile.created).toLocaleDateString()
+  const lastSeen = profile.lastSeen ? new Date(profile.lastSeen).toLocaleString() : 'Never'
   const trustLabel = TL_LABEL[profile.trustLevel] ?? `TL${profile.trustLevel}`
 
   return (
@@ -130,6 +131,10 @@ export function UserProfilePage({ token, username, isOwnProfile, onBack }: Props
             <dd>{joinDate}</dd>
           </div>
           <div>
+            <dt>Last seen</dt>
+            <dd>{lastSeen}</dd>
+          </div>
+          <div>
             <dt>Posts</dt>
             <dd>{profile.postsCreated}</dd>
           </div>
@@ -138,6 +143,19 @@ export function UserProfilePage({ token, username, isOwnProfile, onBack }: Props
             <dd>{profile.reactionsReceived}</dd>
           </div>
         </dl>
+      </section>
+
+      <section className="profile-pubkeys">
+        <h4>SSH pubkeys</h4>
+        {profile.pubkeys.length === 0 ? (
+          <p className="muted">No SSH keys registered.</p>
+        ) : (
+          <ul className="profile-key-list">
+            {profile.pubkeys.map((pubkey, index) => (
+              <li key={`${pubkey}-${index}`}>{pubkey}</li>
+            ))}
+          </ul>
+        )}
       </section>
 
       {isOwnProfile && editMode && (

@@ -162,13 +162,13 @@ export async function getTrust(token: string, username: string): Promise<ApiResp
   return json<TrustInfo>(res)
 }
 
-export async function getUserProfile(token: string, username: string): Promise<ApiResponse<UserProfile>> {
+export async function getUserProfile(token: string | null, username: string): Promise<ApiResponse<UserProfile>> {
   const res = await fetch(`${BASE}/users/${username}`, { headers: authHeaders(token) })
   return json<UserProfile>(res)
 }
 
 export async function listUserPosts(
-  token: string,
+  token: string | null,
   username: string,
   limit = 20,
   offset = 0,
