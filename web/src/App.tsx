@@ -42,6 +42,7 @@ export function App() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [privateUnreadCount, setPrivateUnreadCount] = useState(0)
   const searchRef = useRef<HTMLInputElement>(null)
+  const historyDepthRef = useRef(0)
 
   const refreshPrivateUnread = useCallback(() => {
     if (!auth.token) return
@@ -98,16 +99,60 @@ export function App() {
     }
   }, [auth.token])
 
+  useEffect(() => {
+    const current = pageFromHistoryState(window.history.state)
+    if (current) {
+      historyDepthRef.current = historyDepthFromState(window.history.state)
+      setPage(current)
+    } else {
+      window.history.replaceState(historyStateForPage(page, historyDepthRef.current), '', window.location.href)
+    }
+
+    function handlePopState(event: PopStateEvent) {
+      const next = pageFromHistoryState(event.state)
+      if (!next) {
+        historyDepthRef.current = 0
+        setPage({ name: 'boards' })
+        return
+      }
+      historyDepthRef.current = historyDepthFromState(event.state)
+      setPage(next)
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
   if (!auth.token || !auth.user) {
     return <AuthPage onLogin={login} />
   }
 
   const { token, user } = auth
 
-  function nav(p: Page) { setPage(p) }
+  function nav(p: Page) {
+    const nextDepth = historyDepthRef.current + 1
+    historyDepthRef.current = nextDepth
+    window.history.pushState(historyStateForPage(p, nextDepth), '', window.location.href)
+    setPage(p)
+  }
+
+  function replacePage(p: Page) {
+    historyDepthRef.current = 0
+    window.history.replaceState(historyStateForPage(p, 0), '', window.location.href)
+    setPage(p)
+  }
+
+  function goBack(fallback: Page = { name: 'boards' }) {
+    if (historyDepthRef.current > 0) {
+      window.history.back()
+      return
+    }
+    replacePage(fallback)
+  }
 
   function handleLogout() {
     void api.logout(token)
+    replacePage({ name: 'boards' })
     logout()
   }
 
@@ -177,7 +222,7 @@ export function App() {
             currentUserId={user.id}
             currentUserRole={user.role}
             onSelect={(thread, initialPostId) => nav({ name: 'thread', board: page.board, thread, initialPostId })}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             onNewThread={() => nav({ name: 'new-thread', board: page.board })}
             onMessageUser={username => nav({ name: 'private', messageTo: username })}
           />
@@ -190,7 +235,7 @@ export function App() {
             currentUsername={user.name}
             currentUserRole={user.role}
             initialPostId={page.initialPostId}
-            onBack={() => nav({ name: 'threads', board: page.board })}
+            onBack={() => goBack({ name: 'threads', board: page.board })}
             onOpenThread={(thread: ThreadSummary, initialPostId?: string) => nav({ name: 'thread', board: page.board, thread, initialPostId })}
             onOpenProfile={username => nav({ name: 'user-profile', username })}
             onOpenAuthorPosts={username => nav({ name: 'author-posts', username })}
@@ -202,7 +247,7 @@ export function App() {
             username={page.username}
             isOwnProfile={page.username === user.name}
             currentUserRole={user.role}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             onOpenAuthorPosts={username => nav({ name: 'author-posts', username })}
           />
         )}
@@ -210,14 +255,14 @@ export function App() {
           <AuthorPostsPage
             token={token}
             username={page.username}
-            onBack={() => nav({ name: 'user-profile', username: page.username })}
+            onBack={() => goBack({ name: 'user-profile', username: page.username })}
             onOpenThread={(board, thread, initialPostId) => nav({ name: 'thread', board, thread, initialPostId })}
           />
         )}
         {page.name === 'resident-feed' && (
           <ResidentFeedPage
             token={token}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             onOpenThread={(board, thread, initialPostId) => nav({ name: 'thread', board, thread, initialPostId })}
           />
         )}
@@ -230,13 +275,13 @@ export function App() {
               void threadId
               nav({ name: 'threads', board: page.board })
             }}
-            onBack={() => nav({ name: 'threads', board: page.board })}
+            onBack={() => goBack({ name: 'threads', board: page.board })}
           />
         )}
         {page.name === 'chat' && (
           <ChatPage
             token={token}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             onMessageUser={username => nav({ name: 'private', messageTo: username })}
           />
         )}
@@ -244,26 +289,26 @@ export function App() {
           <SearchPage
             token={token}
             initialQuery={page.query}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
           />
         )}
         {page.name === 'notifications' && (
           <NotificationsPage
             token={token}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
           />
         )}
         {page.name === 'unread' && (
           <UnreadPage
             token={token}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             onOpenThread={(board, thread, initialPostId) => nav({ name: 'thread', board, thread, initialPostId })}
           />
         )}
         {page.name === 'private' && (
           <PrivatePage
             token={token}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             currentUserRole={auth.user.role}
             initialMessageTo={page.messageTo}
           />
@@ -271,7 +316,7 @@ export function App() {
         {page.name === 'social' && (
           <SocialPage
             token={token}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             onOpenProfile={username => nav({ name: 'user-profile', username })}
             onMessageUser={username => nav({ name: 'private', messageTo: username })}
           />
@@ -279,7 +324,7 @@ export function App() {
         {page.name === 'rankings' && (
           <RankingsPage
             token={token}
-            onBack={() => nav({ name: 'boards' })}
+            onBack={() => goBack({ name: 'boards' })}
             onOpenBoard={board => nav({ name: 'threads', board })}
             onOpenThread={(board, thread) => nav({ name: 'thread', board, thread })}
           />
@@ -287,6 +332,25 @@ export function App() {
       </main>
     </div>
   )
+}
+
+function historyStateForPage(page: Page, depth: number) {
+  return { budgiePage: page, budgieDepth: depth }
+}
+
+function pageFromHistoryState(state: unknown): Page | null {
+  if (!state || typeof state !== 'object') return null
+  const maybe = (state as { budgiePage?: unknown }).budgiePage
+  if (!maybe || typeof maybe !== 'object') return null
+  const name = (maybe as { name?: unknown }).name
+  if (typeof name !== 'string') return null
+  return maybe as Page
+}
+
+function historyDepthFromState(state: unknown) {
+  if (!state || typeof state !== 'object') return 0
+  const depth = (state as { budgieDepth?: unknown }).budgieDepth
+  return typeof depth === 'number' && Number.isFinite(depth) && depth > 0 ? depth : 0
 }
 
 function getGuestSessionId() {

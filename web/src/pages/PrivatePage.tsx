@@ -61,30 +61,30 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   const [messageBody, setMessageBody] = useState('')
 
   async function loadMail(nextMailbox = mailbox) {
-    const res = await api.listMail(token, nextMailbox)
-    if (res.error) {
-      setError(res.error.message)
+    const res = await safeCall(() => api.listMail(token, nextMailbox))
+    if (!res || res.error) {
+      setError(res?.error?.message ?? 'Could not load mail.')
       return
     }
-    const rows = res.data?.mail ?? []
+    const rows = normalizeMailList(res.data?.mail)
     setMail(rows)
     setSelectedMailIDs(prev => prev.filter(id => rows.some(item => item.id === id)))
     setMailUnread(res.data?.unreadCount ?? 0)
   }
 
   async function loadMailGroups() {
-    const res = await api.listMailGroups(token)
-    if (res.error) {
-      setError(res.error.message)
+    const res = await safeCall(() => api.listMailGroups(token))
+    if (!res || res.error) {
+      setError(res?.error?.message ?? 'Could not load mail groups.')
       return
     }
-    setMailGroups(res.data?.groups ?? [])
+    setMailGroups(normalizeMailGroups(res.data?.groups))
   }
 
   async function loadMailUsage() {
-    const res = await api.getMailUsage(token)
-    if (res.error) {
-      setError(res.error.message)
+    const res = await safeCall(() => api.getMailUsage(token))
+    if (!res || res.error) {
+      setError(res?.error?.message ?? 'Could not load mail usage.')
       return
     }
     setMailUsage(res.data ?? null)
@@ -134,8 +134,13 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   async function loadAll() {
     setLoading(true)
     setError(null)
-    await Promise.all([loadMail(mailbox), loadMailGroups(), loadMailUsage(), loadConversations(), loadMessageSettings()])
-    setLoading(false)
+    try {
+      await Promise.all([loadMail(mailbox), loadMailGroups(), loadMailUsage(), loadConversations(), loadMessageSettings()])
+    } catch (err) {
+      setError(errorMessage(err, 'Could not load inbox.'))
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => { void loadAll() }, [token])
@@ -154,7 +159,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
       setError(res.error.message)
       return
     }
-    const full = res.data ?? item
+    const full = normalizeMailItem(res.data ?? item)
     setSelectedMail(full)
     if (!keepRelated) {
       setRelatedMail([])
@@ -220,7 +225,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     if (group.builtIn) return
     setEditingGroup(group.id)
     setGroupName(group.name)
-    setGroupMembers(group.members.map(member => member.name).join(', '))
+    setGroupMembers(mailGroupMembers(group).map(member => member.name).join(', '))
   }
 
   async function saveMailGroup(e: FormEvent) {
@@ -304,9 +309,10 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   }
 
   function startReply(item: MailItem) {
+    const subject = mailTitle(item)
     setTab('mail')
-    setMailTo(item.fromName)
-    setMailSubject(item.subject.toLowerCase().startsWith('re:') ? item.subject : `Re: ${item.subject}`)
+    setMailTo(item.fromName || '')
+    setMailSubject(subject.toLowerCase().startsWith('re:') ? subject : `Re: ${subject}`)
     setMailBody('')
     setReplyTo(item.id)
     setForwardSource(undefined)
@@ -314,22 +320,24 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   }
 
   function startForward(item: MailItem) {
+    const subject = mailTitle(item)
     setTab('mail')
     setMailTo('')
-    setMailSubject(item.subject.toLowerCase().startsWith('fwd:') ? item.subject : `Fwd: ${item.subject}`)
+    setMailSubject(subject.toLowerCase().startsWith('fwd:') ? subject : `Fwd: ${subject}`)
     setMailBody('')
     setMailAttachments([])
     setReplyTo(undefined)
     setForwardSource(item.id)
-    setForwardSourceTitle(item.subject)
+    setForwardSourceTitle(subject)
   }
 
   function startBoardPost(item: MailItem) {
+    const subject = mailTitle(item)
     setBoardPostSource(item.id)
-    setBoardPostTitle(item.subject)
+    setBoardPostTitle(subject)
     setBoardPostBoard('')
     setBoardPostThread('')
-    setBoardPostSubject(item.subject)
+    setBoardPostSubject(subject)
     setBoardPostNote('')
   }
 
@@ -358,8 +366,8 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
       setError(res.error.message)
       return
     }
-    setRelatedTitle(mode === 'thread' ? 'Thread' : `From ${item.fromName || 'author'}`)
-    setRelatedMail(res.data?.mail ?? [])
+    setRelatedTitle(mode === 'thread' ? 'Thread' : `From ${mailFrom(item)}`)
+    setRelatedMail(normalizeMailList(res.data?.mail))
   }
 
   async function uploadMailAttachment(item: MailItem) {
@@ -375,7 +383,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
       setError(refreshed.error.message)
       return
     }
-    setSelectedMail(refreshed.data ?? item)
+    setSelectedMail(normalizeMailItem(refreshed.data ?? item))
     await Promise.all([loadMail(mailbox), loadMailUsage()])
   }
 
@@ -468,9 +476,9 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                     className={`private-list-row${selectedMail?.id === item.id ? ' private-list-row--active' : ''}${item.read ? '' : ' private-list-row--unread'}`}
                     onClick={() => openMail(item)}
                   >
-                    <span className="private-row-title">{item.subject}</span>
-                    <span className="private-row-meta">{item.fromName} / {item.toNames.join(', ')}</span>
-                    <span className="private-row-excerpt">{item.excerpt}</span>
+                    <span className="private-row-title">{mailTitle(item)}</span>
+                    <span className="private-row-meta">{mailFrom(item)} / {mailRecipients(item)}</span>
+                    <span className="private-row-excerpt">{item.excerpt || ''}</span>
                   </button>
                 </div>
               ))}
@@ -492,7 +500,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                   <div className="mail-group-row" key={group.id}>
                     <div>
                       <strong>{group.name}</strong>
-                      <span className="muted">{group.members.map(member => member.name).join(', ') || 'Empty'}</span>
+                      <span className="muted">{mailGroupMembers(group).map(member => member.name).join(', ') || 'Empty'}</span>
                     </div>
                     {group.builtIn ? (
                       <span className="muted">Built-in</span>
@@ -512,11 +520,11 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
             {selectedMail ? (
               <article className="mail-detail">
                 <div className="mail-detail-header">
-                  <h3>{selectedMail.subject}</h3>
+                  <h3>{mailTitle(selectedMail)}</h3>
                   <span className="muted">{new Date(selectedMail.createdAt).toLocaleString()}</span>
                 </div>
-                <p className="muted">From {selectedMail.fromName} to {selectedMail.toNames.join(', ')}</p>
-                <pre className="mail-body">{selectedMail.body}</pre>
+                <p className="muted">From {mailFrom(selectedMail)} to {mailRecipients(selectedMail)}</p>
+                <pre className="mail-body">{selectedMail.body || ''}</pre>
                 {selectedMail.attachments && selectedMail.attachments.length > 0 && (
                   <div className="post-attachments">
                     {selectedMail.attachments.map(att => (
@@ -547,7 +555,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                       <h4>To board</h4>
                       <button type="button" className="link-btn" onClick={clearBoardPost}>Cancel</button>
                     </div>
-                    <p className="muted">Posting {boardPostTitle}</p>
+                    <p className="muted">Posting {boardPostTitle || '(no subject)'}</p>
                     <div className="mail-board-grid">
                       <label>Board<input value={boardPostBoard} onChange={e => setBoardPostBoard(e.target.value)} required={!boardPostThread.trim()} /></label>
                       <label>Thread<input value={boardPostThread} onChange={e => setBoardPostThread(e.target.value)} /></label>
@@ -571,9 +579,9 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                         key={`${item.id}-${item.role}`}
                         onClick={() => openMail(item, true)}
                       >
-                        <span className="private-row-title">{item.subject}</span>
-                        <span className="private-row-meta">{item.fromName} / {new Date(item.createdAt).toLocaleString()} / {item.mailbox}</span>
-                        <span className="private-row-excerpt">{item.excerpt}</span>
+                        <span className="private-row-title">{mailTitle(item)}</span>
+                        <span className="private-row-meta">{mailFrom(item)} / {new Date(item.createdAt).toLocaleString()} / {item.mailbox || 'mail'}</span>
+                        <span className="private-row-excerpt">{item.excerpt || ''}</span>
                       </button>
                     ))}
                   </section>
@@ -674,7 +682,7 @@ function cleanAttachments(items: AttachmentPayload[]) {
   return items
     .map(item => ({
       ...item,
-      filename: item.filename.trim(),
+      filename: String(item.filename ?? '').trim(),
       contentType: item.contentType?.trim(),
       url: item.url?.trim(),
       sizeBytes: Number(item.sizeBytes) || 0,
@@ -682,10 +690,71 @@ function cleanAttachments(items: AttachmentPayload[]) {
     .filter(item => item.filename)
 }
 
+async function safeCall<T>(run: () => Promise<T>): Promise<T | null> {
+  try {
+    return await run()
+  } catch {
+    return null
+  }
+}
+
+function normalizeMailList(items: unknown): MailItem[] {
+  return Array.isArray(items) ? items.map(item => normalizeMailItem(item as MailItem)) : []
+}
+
+function normalizeMailItem(item: MailItem): MailItem {
+  return {
+    ...item,
+    id: String(item?.id ?? ''),
+    fromUserId: String(item?.fromUserId ?? ''),
+    fromName: String(item?.fromName ?? ''),
+    toUserIds: Array.isArray(item?.toUserIds) ? item.toUserIds : [],
+    toNames: Array.isArray(item?.toNames) ? item.toNames : [],
+    subject: String(item?.subject ?? ''),
+    body: item?.body ? String(item.body) : '',
+    excerpt: item?.excerpt ? String(item.excerpt) : '',
+    parentId: item?.parentId ? String(item.parentId) : undefined,
+    mailbox: String(item?.mailbox ?? ''),
+    role: String(item?.role ?? ''),
+    attachments: Array.isArray(item?.attachments) ? item.attachments : [],
+    createdAt: Number(item?.createdAt) || 0,
+    updatedAt: Number(item?.updatedAt) || 0,
+    seq: Number(item?.seq) || 0,
+  }
+}
+
+function normalizeMailGroups(groups: unknown): MailGroup[] {
+  return Array.isArray(groups) ? groups.map(group => ({
+    ...(group as MailGroup),
+    members: mailGroupMembers(group as MailGroup),
+  })) : []
+}
+
+function mailGroupMembers(group: MailGroup) {
+  return Array.isArray(group?.members) ? group.members : []
+}
+
+function mailTitle(item: MailItem) {
+  return item.subject || '(no subject)'
+}
+
+function mailFrom(item: MailItem) {
+  return item.fromName || 'unknown'
+}
+
+function mailRecipients(item: MailItem) {
+  return (Array.isArray(item.toNames) ? item.toNames : []).filter(Boolean).join(', ') || '(no recipients)'
+}
+
+function errorMessage(err: unknown, fallback: string) {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
 function formatBytes(value: number) {
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  const n = Number(value) || 0
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function pickMailAttachmentFile() {
