@@ -4169,7 +4169,7 @@ func CountUnreadNotifications(db *sql.DB, userID string) (int, error) {
 	return n, err
 }
 
-func WatchersOfThread(db *sql.DB, threadID, excludeUserID string) ([]string, error) {
+func WatchersOfThread(db sqlLike, threadID, excludeUserID string) ([]string, error) {
 	rows, err := QQuery(db,
 		`SELECT user_id FROM thread_prefs WHERE thread_id=? AND level='watch' AND user_id!=?`,
 		threadID, excludeUserID,

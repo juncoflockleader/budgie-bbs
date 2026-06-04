@@ -1192,6 +1192,23 @@ export async function markAllNotificationsRead(token: string): Promise<ApiRespon
   return json<unknown>(res)
 }
 
+export async function deleteNotification(token: string, id: string): Promise<ApiResponse<unknown>> {
+  const res = await fetch(`${BASE}/notifications/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  return json<unknown>(res)
+}
+
+export async function clearNotifications(token: string, readOnly = false): Promise<ApiResponse<unknown>> {
+  const params = readOnly ? '?read=1' : ''
+  const res = await fetch(`${BASE}/notifications${params}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  return json<unknown>(res)
+}
+
 // ── M10: Reactions ─────────────────────────────────────────────────────────
 
 export async function reactPost(token: string, postId: string, emoji = 'heart'): Promise<ApiResponse<AckResult>> {

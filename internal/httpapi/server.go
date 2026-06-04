@@ -195,6 +195,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/polls/{poll}/publish-result", auth(http.HandlerFunc(s.handlePublishPollResult)))
 	mux.Handle("POST /api/v1/notifications/{id}/read", auth(http.HandlerFunc(s.handleMarkNotificationRead)))
 	mux.Handle("POST /api/v1/notifications/read-all", auth(http.HandlerFunc(s.handleMarkAllRead)))
+	mux.Handle("DELETE /api/v1/notifications", auth(http.HandlerFunc(s.handleDeleteNotifications)))
+	mux.Handle("DELETE /api/v1/notifications/{id}", auth(http.HandlerFunc(s.handleDeleteNotification)))
 	mux.Handle("PUT /api/v1/threads/{thread}/prefs", auth(http.HandlerFunc(s.handleSetThreadPref)))
 	mux.Handle("POST /api/v1/threads/{thread}/read", auth(http.HandlerFunc(s.handleMarkThreadRead)))
 	mux.Handle("POST /api/v1/threads/{thread}/read/restore", auth(http.HandlerFunc(s.handleRestoreThreadRead)))

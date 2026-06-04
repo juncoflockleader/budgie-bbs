@@ -1188,6 +1188,15 @@ func (c *Core) MarkNotificationRead(id, userID string) error {
 func (c *Core) MarkAllNotificationsRead(userID string) error {
 	return markAllNotificationsRead(c.DB, userID)
 }
+func (c *Core) DeleteNotification(id, userID string) error {
+	return deleteNotification(c.DB, id, userID)
+}
+func (c *Core) DeleteReadNotifications(userID string) error {
+	return deleteReadNotifications(c.DB, userID)
+}
+func (c *Core) DeleteAllNotifications(userID string) error {
+	return deleteAllNotifications(c.DB, userID)
+}
 
 // ── M9: Trust levels ────────────────────────────────────────────────────────
 

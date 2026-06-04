@@ -429,6 +429,11 @@ Returns: the ack envelope.
 | `PATCH /api/v1/messages/settings` | `setDirectMessageSettings` |
 | `POST /api/v1/messages/{id}/read` | `markDirectMessageRead` |
 | `DELETE /api/v1/messages/{id}` | `deleteDirectMessage` |
+| `POST /api/v1/notifications/{id}/read` | mark notification read |
+| `POST /api/v1/notifications/read-all` | mark all notifications read |
+| `DELETE /api/v1/notifications/{id}` | delete notification |
+| `DELETE /api/v1/notifications?read=1` | clear read notifications |
+| `DELETE /api/v1/notifications` | truncate notification feed |
 | `PATCH /api/v1/posts/{id}/flags` | `setPostFlag` |
 | `PUT /api/v1/users/{user}/friend` | `setUserRelationship` |
 | `DELETE /api/v1/users/{user}/friend` | `setUserRelationship` |
@@ -770,6 +775,12 @@ deleteDirectMessage { message* }                               -> ack only
 - `setDirectMessageSettings.policy` is `"all"`, `"friends"`, or `"none"`.
   Friends-only delivery requires the recipient to have the sender on their own
   friend list.
+- Notification feeds contain post mentions, direct reply notifications, watched
+  thread updates, and one-shot friend-login watches. Post notification delivery
+  skips the author, recipients who ignore the author, users who muted the
+  thread, and users who cannot read a member-read board.
+- Notification cleanup is owner-scoped: clients can mark one/all read, delete a
+  single notification, clear read notifications, or truncate the feed.
 
 ### Social graph
 

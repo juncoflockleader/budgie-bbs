@@ -391,6 +391,34 @@ func (s *Server) handleMarkAllRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// DELETE /api/v1/notifications/{id}
+func (s *Server) handleDeleteNotification(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	id := r.PathValue("id")
+	if err := s.core.DeleteNotification(id, actor.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// DELETE /api/v1/notifications
+func (s *Server) handleDeleteNotifications(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	readOnly := r.URL.Query().Get("read") == "1" || r.URL.Query().Get("read") == "true"
+	var err error
+	if readOnly {
+		err = s.core.DeleteReadNotifications(actor.ID)
+	} else {
+		err = s.core.DeleteAllNotifications(actor.ID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // PUT /api/v1/threads/{thread}/prefs
 func (s *Server) handleSetThreadPref(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())

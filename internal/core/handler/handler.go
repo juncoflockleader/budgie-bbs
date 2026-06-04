@@ -53,6 +53,7 @@ type Runtime struct {
 	InsertMailMessage            func(tx *sql.Tx, id, fromUserID, subject, body, parentID string, createdAt, seq int64) error
 	InsertMailCopy               func(tx *sql.Tx, messageID, userID, role, mailbox string, read, kept bool, updatedAt int64) error
 	InsertNotification           func(db *sql.DB, id, userID, kind, threadID, postID, actor string, ts int64) error
+	InsertNotificationTx         func(tx *sql.Tx, id, userID, kind, threadID, postID, actor string, ts int64) error
 	UpdateMailCopy               func(db *sql.DB, userID, messageID string, mailbox *string, read, kept *bool) (bool, error)
 	TrashMailCopy                func(db *sql.DB, userID, messageID string) (bool, error)
 	SetMailGroup                 func(db *sql.DB, ownerID, groupID, name string, memberIDs []string) error
@@ -75,6 +76,7 @@ type Runtime struct {
 	ResolveModerationReview      func(tx *sql.Tx, id, actor, resolution string, ts int64) error
 	CastVote                     func(tx *sql.Tx, pollID, optionID, userID string, ts int64) error
 	SetThreadPref                func(db *sql.DB, userID, threadID, level string) error
+	WatchersOfThreadTx           func(tx *sql.Tx, threadID, excludeUserID string) ([]string, error)
 	SetBoardFavorite             func(db *sql.DB, userID, boardID, folderID string, position *int, favorite bool) error
 	SetBoardZap                  func(db *sql.DB, userID, boardID string, zapped bool) error
 	CreateFavoriteFolder         func(db *sql.DB, userID, folderID, parentID, name string, position *int) error

@@ -36,19 +36,61 @@ export function NotificationsPage({ token, onBack }: Props) {
   useEffect(() => { void load() }, [token])
 
   async function markRead(id: string) {
-    await api.markNotificationRead(token, id)
+    const target = notifs.find(n => n.id === id)
+    const res = await api.markNotificationRead(token, id)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
     setNotifs(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
-    setUnreadCount(prev => Math.max(0, prev - 1))
+    if (target && !target.read) setUnreadCount(prev => Math.max(0, prev - 1))
   }
 
   async function markAll() {
-    await api.markAllNotificationsRead(token)
+    const res = await api.markAllNotificationsRead(token)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
     setNotifs(prev => prev.map(n => ({ ...n, read: true })))
+    setUnreadCount(0)
+  }
+
+  async function deleteNotif(id: string) {
+    const target = notifs.find(n => n.id === id)
+    const res = await api.deleteNotification(token, id)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    setNotifs(prev => prev.filter(n => n.id !== id))
+    if (target && !target.read) setUnreadCount(prev => Math.max(0, prev - 1))
+  }
+
+  async function clearRead() {
+    const res = await api.clearNotifications(token, true)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    setNotifs(prev => prev.filter(n => !n.read))
+  }
+
+  async function clearAll() {
+    if (!window.confirm('Clear all notifications?')) return
+    const res = await api.clearNotifications(token)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    setNotifs([])
     setUnreadCount(0)
   }
 
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
+
+  const hasRead = notifs.some(n => n.read)
 
   return (
     <div className="notifications-page">
@@ -58,6 +100,8 @@ export function NotificationsPage({ token, onBack }: Props) {
         {unreadCount > 0 && (
           <button className="link-btn" onClick={markAll}>Mark all read</button>
         )}
+        {hasRead && <button className="link-btn" onClick={clearRead}>Clear read</button>}
+        {notifs.length > 0 && <button className="link-btn danger" onClick={clearAll}>Clear all</button>}
       </div>
 
       {notifs.length === 0 ? (
@@ -82,6 +126,15 @@ export function NotificationsPage({ token, onBack }: Props) {
               )}
               <span className="notif-time muted">{new Date(n.ts).toLocaleString()}</span>
               {!n.read && <span className="notif-dot" />}
+              <button
+                className="link-btn danger notif-delete"
+                onClick={e => {
+                  e.stopPropagation()
+                  void deleteNotif(n.id)
+                }}
+              >
+                Delete
+              </button>
             </div>
           ))}
         </div>

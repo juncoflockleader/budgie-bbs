@@ -960,6 +960,7 @@ label {
 .notif-kind { font-weight: bold; font-size: 0.85em }
 .notif-actor { color: var(--c-accent2) }
 .notif-time { margin-left: auto; font-size: 0.8em }
+.notif-delete { margin-left: 0.15rem }
 .notif-dot {
   width: 8px; height: 8px;
   background: var(--c-accent2);

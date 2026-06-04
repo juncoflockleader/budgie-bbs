@@ -104,10 +104,11 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 
 	// Update projections.
-	if err := insertThread(tx, &Thread{
+	newThread := &Thread{
 		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: p.Title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
+	}
+	if err := insertThread(tx, newThread); err != nil {
 		return internalErr(err)
 	}
 	if err := insertPost(tx, &Post{
@@ -154,6 +155,9 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 		ActorID: actor.ID, ActorName: authorName, PostID: postID, ThreadID: threadID,
 		BoardID: p.Board, Body: cleanBody, TS: ts, Seq: pseq,
 	}, ts); err != nil {
+		return internalErr(err)
+	}
+	if err := h.appendPostNotificationsTx(tx, actor, authorName, authorID, newThread, settings, postID, cleanBody, nil, ts); err != nil {
 		return internalErr(err)
 	}
 
@@ -248,6 +252,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 
 	var mailBackTarget *Post
 	var quoteSource *Post
+	var replyNotifyTarget *Post
 	// Threading depth cap: max 1 level. If replyTo is itself a reply, flatten.
 	if p.ReplyTo != "" {
 		parent, err := getPost(h.db, p.ReplyTo)
@@ -269,6 +274,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		if parent.NoReply && !canModerateThread {
 			return Reply{Err: errDetail(proto.ErrForbidden, "article is not accepting replies", false)}
 		}
+		replyNotifyTarget = parent
 		if parent.MailBack {
 			mailBackTarget = parent
 		}
@@ -289,6 +295,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		}
 	}
 	rawBody := userBody
+	notificationBody := cleanBody
 	if quoteSource != nil {
 		prefix := formatQuotedReplyPrefix(quoteSource)
 		cleanBody = prefix + cleanBody
@@ -366,6 +373,9 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}, ts); err != nil {
 		return internalErr(err)
 	}
+	if err := h.appendPostNotificationsTx(tx, actor, authorName, authorID, thread, settings, postID, notificationBody, replyNotifyTarget, ts); err != nil {
+		return internalErr(err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
@@ -382,6 +392,137 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	h.publishGeneratedEvents(filterGeneratedEvents)
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
+}
+
+func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName, authorID string, thread *Thread, settings *BoardSettings, postID, body string, replyTarget *Post, ts int64) error {
+	if actor == nil || thread == nil {
+		return nil
+	}
+	senderID := strings.TrimSpace(authorID)
+	if senderID == "" {
+		senderID = actor.ID
+	}
+	if senderID == "" {
+		return nil
+	}
+	actorLabel := strings.TrimSpace(authorName)
+	if actorLabel == "" {
+		actorLabel = actor.Name
+	}
+
+	recipients := map[string]string{}
+	addRecipient := func(userID, kind string) {
+		userID = strings.TrimSpace(userID)
+		if userID == "" || userID == senderID {
+			return
+		}
+		if existing, ok := recipients[userID]; ok && notificationKindPriority(existing) >= notificationKindPriority(kind) {
+			return
+		}
+		recipients[userID] = kind
+	}
+
+	for _, ref := range parseMentions(body) {
+		target, err := findUserRefTx(tx, ref)
+		if err != nil {
+			return err
+		}
+		if target != nil {
+			addRecipient(target.ID, "mention")
+		}
+	}
+	if replyTarget != nil {
+		addRecipient(replyTarget.AuthorID, "reply")
+	}
+	watchers, err := watchersOfThreadTx(tx, thread.ID, senderID)
+	if err != nil {
+		return err
+	}
+	for _, userID := range watchers {
+		addRecipient(userID, "watched")
+	}
+
+	for userID, kind := range recipients {
+		recipient, err := getUserTx(tx, userID)
+		if err != nil {
+			return err
+		}
+		if recipient == nil {
+			continue
+		}
+		canReceive, err := userCanReceivePostNotificationTx(tx, recipient, thread.Board, settings)
+		if err != nil {
+			return err
+		}
+		if !canReceive {
+			continue
+		}
+		level, err := threadPrefLevelTx(tx, recipient.ID, thread.ID)
+		if err != nil {
+			return err
+		}
+		if level == "mute" {
+			continue
+		}
+		ignored, err := relationshipExistsTx(tx, recipient.ID, senderID, "ignore")
+		if err != nil {
+			return err
+		}
+		if ignored {
+			continue
+		}
+		if err := insertNotificationTx(tx, newID("notif_"), recipient.ID, kind, thread.ID, postID, actorLabel, ts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func notificationKindPriority(kind string) int {
+	switch kind {
+	case "mention":
+		return 3
+	case "reply":
+		return 2
+	case "watched":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func threadPrefLevelTx(tx *sql.Tx, userID, threadID string) (string, error) {
+	var level string
+	err := qQueryRow(tx, `SELECT level FROM thread_prefs WHERE user_id=? AND thread_id=?`, userID, threadID).Scan(&level)
+	if err == sql.ErrNoRows {
+		return "normal", nil
+	}
+	return level, err
+}
+
+func userCanReceivePostNotificationTx(tx *sql.Tx, user *User, boardID string, settings *BoardSettings) (bool, error) {
+	if user == nil {
+		return false, nil
+	}
+	if settings == nil || !settings.MemberReadMode {
+		return true, nil
+	}
+	if user.IsMod() {
+		return true, nil
+	}
+	var exists int
+	err := qQueryRow(tx, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, user.ID).Scan(&exists)
+	if err == nil {
+		return true, nil
+	}
+	if err != sql.ErrNoRows {
+		return false, err
+	}
+	err = qQueryRow(tx, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, user.ID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func formatQuotedReplyPrefix(source *Post) string {

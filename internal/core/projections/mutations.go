@@ -2109,7 +2109,7 @@ func CastVote(tx *sql.Tx, pollID, optionID, userID string, ts int64) error {
 	return err
 }
 
-func InsertNotification(db *sql.DB, id, userID, kind, threadID, postID, actor string, ts int64) error {
+func InsertNotification(db sqlLike, id, userID, kind, threadID, postID, actor string, ts int64) error {
 	_, err := QExec(db,
 		`INSERT OR IGNORE INTO notifications (id, user_id, kind, thread_id, post_id, actor, read, ts)
 		 VALUES (?,?,?,?,?,?,0,?)`,
@@ -2127,6 +2127,21 @@ func MarkNotificationRead(db *sql.DB, id, userID string) error {
 
 func MarkAllNotificationsRead(db *sql.DB, userID string) error {
 	_, err := QExec(db, `UPDATE notifications SET read=1 WHERE user_id=?`, userID)
+	return err
+}
+
+func DeleteNotification(db *sql.DB, id, userID string) error {
+	_, err := QExec(db, `DELETE FROM notifications WHERE id=? AND user_id=?`, id, userID)
+	return err
+}
+
+func DeleteReadNotifications(db *sql.DB, userID string) error {
+	_, err := QExec(db, `DELETE FROM notifications WHERE user_id=? AND read=1`, userID)
+	return err
+}
+
+func DeleteAllNotifications(db *sql.DB, userID string) error {
+	_, err := QExec(db, `DELETE FROM notifications WHERE user_id=?`, userID)
 	return err
 }
 

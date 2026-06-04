@@ -7,6 +7,34 @@ just a schema placeholder or an idea in prose.
 
 ## Implemented KBS Parity Slices
 
+### Refer Notifications: Mentions, Replies, Watches, And Cleanup
+
+KBS evolved a distinct refer/notification feed outside private mail. Budgie now
+has the usable BBS/forum workflow:
+
+- Post creation generates notification rows for:
+  - `mention`: users referenced with `@username`.
+  - `reply`: the author of the post being directly replied to.
+  - `watched`: users who explicitly watch the thread.
+  - `login`: one-shot friend-login watches.
+- Post notification delivery is owner-aware:
+  - Authors do not notify themselves.
+  - Ignore rows suppress delivery from ignored authors.
+  - Muted threads suppress mention/reply/watch delivery.
+  - Member-read boards only notify users who can read the board.
+- Per-user notification read APIs:
+  - `GET /api/v1/notifications`
+  - `POST /api/v1/notifications/{notification}/read`
+  - `POST /api/v1/notifications/read-all`
+- KBS-style cleanup APIs:
+  - `DELETE /api/v1/notifications/{notification}`
+  - `DELETE /api/v1/notifications?read=1`
+  - `DELETE /api/v1/notifications`
+- Web notification page supports mark-one-read, mark-all-read, delete,
+  clear-read, and clear-all workflows.
+- SSH TUI notification view supports `enter` mark-read, `a` mark-all-read,
+  `d` delete, `x` clear-read, and `c` clear-all.
+
 ### Personal Board Collections: Favorite Folders
 
 KBS made favorite boards part of the default daily reading path, including
@@ -841,7 +869,8 @@ social graph:
 - Profiles and trust/activity counters.
 - Moderation review queue, redaction, restore, locks, moves, sanctions, and
   role grants.
-- Notifications for mentions, replies, and watched threads.
+- Notification feed rows for mentions, replies, watched threads, and friend
+  login watches, with read/delete/clear/truncate controls.
 - Thread watch/mute preferences.
 - Board-level unread counts and read-marker restore.
 - Board ZAP/no-ZAP controls for hiding boards from unread traversal.

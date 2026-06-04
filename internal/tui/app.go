@@ -657,6 +657,51 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.unreadNotifs = 0
 			m.rebuildList()
+		case "d":
+			selection := m.selectedNotification()
+			if selection == nil {
+				return nil
+			}
+			if err := m.c.DeleteNotification(selection.ID, m.actor.ID); err != nil {
+				m.statusMsg = "failed to delete notification"
+				return func() tea.Msg { return errMsg{err} }
+			}
+			next := m.notifications[:0]
+			for _, n := range m.notifications {
+				if n.ID == selection.ID {
+					if !n.Read && m.unreadNotifs > 0 {
+						m.unreadNotifs--
+					}
+					continue
+				}
+				next = append(next, n)
+			}
+			m.notifications = next
+			m.rebuildList()
+			m.statusMsg = "notification deleted"
+		case "x":
+			if err := m.c.DeleteReadNotifications(m.actor.ID); err != nil {
+				m.statusMsg = "failed to clear read notifications"
+				return func() tea.Msg { return errMsg{err} }
+			}
+			next := m.notifications[:0]
+			for _, n := range m.notifications {
+				if !n.Read {
+					next = append(next, n)
+				}
+			}
+			m.notifications = next
+			m.rebuildList()
+			m.statusMsg = "read notifications cleared"
+		case "c":
+			if err := m.c.DeleteAllNotifications(m.actor.ID); err != nil {
+				m.statusMsg = "failed to clear notifications"
+				return func() tea.Msg { return errMsg{err} }
+			}
+			m.notifications = nil
+			m.unreadNotifs = 0
+			m.rebuildList()
+			m.statusMsg = "notifications cleared"
 		case "esc", "left":
 			m.popPage()
 			m.rebuildList()
@@ -842,7 +887,7 @@ func (m model) View() string {
 	case pageThreadList:
 		body = m.list.View()
 	case pageNotifications:
-		body = m.list.View() + "\n" + m.styled(styleDim, "enter=mark read  a=mark all read  esc/←=back")
+		body = m.list.View() + "\n" + m.styled(styleDim, "enter=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
 	case pageThread:
 		help := "n=reply  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		if m.actor.IsMod() {

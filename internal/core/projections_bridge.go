@@ -118,6 +118,10 @@ func insertNotification(db *sql.DB, id, userID, kind, threadID, postID, actor st
 	return projections.InsertNotification(db, id, userID, kind, threadID, postID, actor, ts)
 }
 
+func insertNotificationTx(tx *sql.Tx, id, userID, kind, threadID, postID, actor string, ts int64) error {
+	return projections.InsertNotification(tx, id, userID, kind, threadID, postID, actor, ts)
+}
+
 func insertPoll(tx *sql.Tx, id, postID, question string, expiresAt, ts int64) error {
 	return projections.InsertPoll(tx, id, postID, question, expiresAt, ts)
 }
@@ -450,6 +454,18 @@ func markNotificationRead(db *sql.DB, id, userID string) error {
 	return projections.MarkNotificationRead(db, id, userID)
 }
 
+func deleteNotification(db *sql.DB, id, userID string) error {
+	return projections.DeleteNotification(db, id, userID)
+}
+
+func deleteReadNotifications(db *sql.DB, userID string) error {
+	return projections.DeleteReadNotifications(db, userID)
+}
+
+func deleteAllNotifications(db *sql.DB, userID string) error {
+	return projections.DeleteAllNotifications(db, userID)
+}
+
 func markPostPurged(tx *sql.Tx, postID string, seq int64) error {
 	return projections.MarkPostPurged(tx, postID, seq)
 }
@@ -756,4 +772,8 @@ func userTrustLevel(db *sql.DB, userID string) (int, error) {
 
 func watchersOfThread(db *sql.DB, threadID, excludeUserID string) ([]string, error) {
 	return projections.WatchersOfThread(db, threadID, excludeUserID)
+}
+
+func watchersOfThreadTx(tx *sql.Tx, threadID, excludeUserID string) ([]string, error) {
+	return projections.WatchersOfThread(tx, threadID, excludeUserID)
 }

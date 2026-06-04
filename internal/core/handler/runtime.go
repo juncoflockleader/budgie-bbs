@@ -195,6 +195,10 @@ func insertNotification(db *sql.DB, id, userID, kind, threadID, postID, actor st
 	return currentRuntime().InsertNotification(db, id, userID, kind, threadID, postID, actor, ts)
 }
 
+func insertNotificationTx(tx *sql.Tx, id, userID, kind, threadID, postID, actor string, ts int64) error {
+	return currentRuntime().InsertNotificationTx(tx, id, userID, kind, threadID, postID, actor, ts)
+}
+
 func updateMailCopy(db *sql.DB, userID, messageID string, mailbox *string, read, kept *bool) (bool, error) {
 	return currentRuntime().UpdateMailCopy(db, userID, messageID, mailbox, read, kept)
 }
@@ -273,6 +277,10 @@ func resolveModerationReview(tx *sql.Tx, id, actor, resolution string, ts int64)
 
 func setThreadPref(db *sql.DB, userID, threadID, level string) error {
 	return currentRuntime().SetThreadPref(db, userID, threadID, level)
+}
+
+func watchersOfThreadTx(tx *sql.Tx, threadID, excludeUserID string) ([]string, error) {
+	return currentRuntime().WatchersOfThreadTx(tx, threadID, excludeUserID)
 }
 
 func setBoardFavorite(db *sql.DB, userID, boardID, folderID string, position *int, favorite bool) error {
