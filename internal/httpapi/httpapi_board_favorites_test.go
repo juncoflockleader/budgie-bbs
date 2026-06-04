@@ -1557,6 +1557,87 @@ func TestHTTPStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	}
 }
 
+func TestHTTPStatsPeriodHistorySystemPosts(t *testing.T) {
+	c, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	insertHistory := func(day string, users, boards, threads, posts, reactions, logins int, onlineSeconds int64) {
+		t.Helper()
+		at, err := time.Parse("2006-01-02", day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
+			day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+			total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
+			online_guests, max_online_users, max_online_at, max_online_guests,
+			max_online_guests_at, head_seq
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			day, at.UnixMilli(), users, boards, threads, posts, reactions, 0, 0, logins, onlineSeconds, 0, 0, users, at.UnixMilli(), 0, int64(0), posts,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertHistory("2026-06-07", 10, 1, 1, 10, 1, 5, 60)
+	insertHistory("2026-06-08", 11, 2, 2, 12, 2, 8, 120)
+	insertHistory("2026-06-14", 12, 3, 4, 24, 5, 20, 600)
+	insertHistory("2026-06-30", 13, 4, 6, 30, 8, 25, 900)
+	insertHistory("2026-07-01", 14, 5, 7, 35, 9, 30, 1200)
+	insertHistory("2026-07-31", 15, 6, 9, 60, 15, 50, 2400)
+	insertHistory("2026-12-31", 16, 7, 11, 80, 18, 80, 3000)
+	insertHistory("2027-12-31", 20, 9, 20, 175, 35, 159, 7200)
+
+	for _, date := range []string{"2026-06-14", "2026-07-31", "2027-12-31"} {
+		ack := ackResponse{}
+		if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
+			"date": date,
+		}, &ack); status != http.StatusCreated {
+			t.Fatalf("publish stats snapshot %s status: %d error=%+v", date, status, ack.Error)
+		}
+	}
+	for _, want := range []struct {
+		threadID string
+		title    string
+		contains []string
+	}{
+		{
+			threadID: "bbslists_week_2026w24",
+			title:    "Weekly activity history 2026-W24",
+			contains: []string{"Period: 2026-06-08 to 2026-06-14", "Days captured: 2", "New posts: 14"},
+		},
+		{
+			threadID: "bbslists_month_202607",
+			title:    "Monthly activity history 2026-07",
+			contains: []string{"Period: 2026-07-01 to 2026-07-31", "Days captured: 2", "New posts: 30"},
+		},
+		{
+			threadID: "bbslists_year_2027",
+			title:    "Yearly activity history 2027",
+			contains: []string{"Period: 2027-01-01 to 2027-12-31", "Days captured: 1", "New posts: 95"},
+		},
+	} {
+		threads := threadSummariesResponse{}
+		if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", adminToken, nil, &threads); status != http.StatusOK {
+			t.Fatalf("list BBSLists threads status: %d", status)
+		}
+		if !hasHTTPThreadSummary(threads, want.threadID, want.title) {
+			t.Fatalf("expected generated period thread %s / %s, got %+v", want.threadID, want.title, threads.Threads)
+		}
+		posts := listPostsResponse{}
+		if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+want.threadID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+			t.Fatalf("list period posts for %s status: %d", want.threadID, status)
+		}
+		if len(posts.Posts) != 1 {
+			t.Fatalf("expected one generated period post for %s, got %+v", want.threadID, posts.Posts)
+		}
+		for _, text := range want.contains {
+			if !strings.Contains(posts.Posts[0].Body, text) {
+				t.Fatalf("expected generated period post %s to contain %q, got:\n%s", want.threadID, text, posts.Posts[0].Body)
+			}
+		}
+	}
+}
+
 func TestHTTPPublishSystemNoticeCreatesPublicNoticeBoard(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 

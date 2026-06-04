@@ -2035,6 +2035,67 @@ func TestStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	}
 }
 
+func TestStatsPeriodHistorySystemPosts(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	insertCommunityStatHistory(t, c.DB, "2026-06-07", 10, 1, 1, 10, 1, 5, 60)
+	insertCommunityStatHistory(t, c.DB, "2026-06-08", 11, 2, 2, 12, 2, 8, 120)
+	insertCommunityStatHistory(t, c.DB, "2026-06-14", 12, 3, 4, 24, 5, 20, 600)
+	insertCommunityStatHistory(t, c.DB, "2026-06-30", 13, 4, 6, 30, 8, 25, 900)
+	insertCommunityStatHistory(t, c.DB, "2026-07-01", 14, 5, 7, 35, 9, 30, 1200)
+	insertCommunityStatHistory(t, c.DB, "2026-07-31", 15, 6, 9, 60, 15, 50, 2400)
+	insertCommunityStatHistory(t, c.DB, "2026-12-31", 16, 7, 11, 80, 18, 80, 3000)
+	insertCommunityStatHistory(t, c.DB, "2027-12-31", 20, 9, 20, 175, 35, 159, 7200)
+
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-06-14"})
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-07-31"})
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2027-12-31"})
+
+	for _, want := range []struct {
+		threadID string
+		title    string
+		contains []string
+	}{
+		{
+			threadID: "bbslists_week_2026w24",
+			title:    "Weekly activity history 2026-W24",
+			contains: []string{"Period: 2026-06-08 to 2026-06-14", "Days captured: 2", "New posts: 14", "Logins: 15", "2026-06-14: 24 posts (+12)", "2026-06-08: 12 posts (+2)"},
+		},
+		{
+			threadID: "bbslists_month_202607",
+			title:    "Monthly activity history 2026-07",
+			contains: []string{"Period: 2026-07-01 to 2026-07-31", "Days captured: 2", "New posts: 30", "Logins: 25", "2026-07-31: 60 posts (+25)"},
+		},
+		{
+			threadID: "bbslists_year_2027",
+			title:    "Yearly activity history 2027",
+			contains: []string{"Period: 2027-01-01 to 2027-12-31", "Days captured: 1", "New posts: 95", "Logins: 79", "2027-12-31: 175 posts (+95)"},
+		},
+	} {
+		threads, err := c.ListThreads("BBSLists", 100, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasThreadSummary(threads, want.threadID, want.title) {
+			t.Fatalf("expected generated period thread %s / %s, got %+v", want.threadID, want.title, threads)
+		}
+		posts, err := c.ListPosts(want.threadID, 10, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(posts) != 1 {
+			t.Fatalf("expected one generated period post for %s, got %+v", want.threadID, posts)
+		}
+		for _, text := range want.contains {
+			if !strings.Contains(posts[0].Body, text) {
+				t.Fatalf("expected generated period post %s to contain %q, got:\n%s", want.threadID, text, posts[0].Body)
+			}
+		}
+	}
+}
+
 func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
@@ -2144,6 +2205,24 @@ func hasArchiveRankingBoard(archives []core.ArchiveRanking, boardID string) bool
 		}
 	}
 	return false
+}
+
+func insertCommunityStatHistory(t *testing.T, db *sql.DB, day string, users, boards, threads, posts, reactions, logins int, onlineSeconds int64) {
+	t.Helper()
+	at, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO community_stat_history (
+		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+		total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
+		online_guests, max_online_users, max_online_at, max_online_guests,
+		max_online_guests_at, head_seq
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		day, at.UnixMilli(), users, boards, threads, posts, reactions, 0, 0, logins, onlineSeconds, 0, 0, users, at.UnixMilli(), 0, int64(0), posts,
+	); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPublishSystemNoticeCreatesPublicNoticeBoard(t *testing.T) {

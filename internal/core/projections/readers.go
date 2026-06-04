@@ -205,6 +205,62 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	return out, nil
 }
 
+func ListCommunityStatHistoryRange(db *sql.DB, startDay, endDay string) ([]CommunityStatHistory, error) {
+	rows, err := QQuery(db,
+		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+		        total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
+		        online_guests, max_online_users, max_online_at, max_online_guests,
+		        max_online_guests_at, head_seq
+		   FROM community_stat_history
+		  WHERE day >= ? AND day <= ?
+		  ORDER BY day DESC`,
+		startDay, endDay,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CommunityStatHistory{}
+	for rows.Next() {
+		var h CommunityStatHistory
+		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalLogins, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.OnlineGuests, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.MaxOnlineGuests, &h.MaxOnlineGuestsAt, &h.HeadSeq); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var previous CommunityStatHistory
+	hasPrevious := false
+	err = QQueryRow(db,
+		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+		        total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
+		        online_guests, max_online_users, max_online_at, max_online_guests,
+		        max_online_guests_at, head_seq
+		   FROM community_stat_history
+		  WHERE day < ?
+		  ORDER BY day DESC
+		  LIMIT 1`,
+		startDay,
+	).Scan(&previous.Day, &previous.SnapshotAt, &previous.TotalUsers, &previous.TotalBoards, &previous.TotalThreads, &previous.TotalPosts, &previous.TotalReactions, &previous.TotalMail, &previous.TotalDirectMessages, &previous.TotalLogins, &previous.TotalOnlineSeconds, &previous.OnlineUsers, &previous.OnlineGuests, &previous.MaxOnlineUsers, &previous.MaxOnlineAt, &previous.MaxOnlineGuests, &previous.MaxOnlineGuestsAt, &previous.HeadSeq)
+	if err == nil {
+		hasPrevious = true
+	} else if err != sql.ErrNoRows {
+		return nil, err
+	}
+	for i := range out {
+		if i+1 < len(out) {
+			out[i].applyDeltaFrom(out[i+1])
+			continue
+		}
+		if hasPrevious {
+			out[i].applyDeltaFrom(previous)
+		}
+	}
+	return out, nil
+}
+
 func (h *CommunityStatHistory) applyDeltaFrom(previous CommunityStatHistory) {
 	h.DeltaUsers = h.TotalUsers - previous.TotalUsers
 	h.DeltaBoards = h.TotalBoards - previous.TotalBoards

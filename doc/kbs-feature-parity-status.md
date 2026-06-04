@@ -106,7 +106,8 @@ ranking surface:
   /api/v1/stats/community/snapshot`.
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has deterministic `BBSLists` snapshot, login-count
-  history, board-activity history, and hot-topic history threads.
+  history, board-activity history, hot-topic history, and completed
+  week/month/year period-summary threads.
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters, max-online users/time, and
   day-over-day deltas for user, board, thread, post, reaction, mail, direct
@@ -140,6 +141,10 @@ ranking surface:
   `BBSLists` hot-topic history threads showing ranked public hot topics,
   distinct participant counts, post/reaction counts, decayed score, and last
   activity times.
+- On completed period boundaries, stat snapshots create deterministic KBS
+  `poststat`-style `BBSLists` weekly, monthly, and yearly activity-history
+  threads from daily stat-history rows, including period totals, ending
+  counters, max-online peaks, and daily rows.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
   stat history with trend deltas, cumulative login count, cumulative online/stay
   time, anonymous guest counts, active boards, hot threads, latest replies, top
@@ -152,7 +157,7 @@ ranking surface:
 
 This does not yet implement every historical/stat-log board from KBS local
 utilities beyond the generated `BBSLists` snapshot, login-history, and
-board-activity/hot-topic history threads.
+board-activity/hot-topic/period-summary history threads.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -850,8 +855,8 @@ social graph:
   distinct-participant hot-topic scoring, top-poster rankings, latest-reply
   rankings, blessing rankings/rituals, archive-path rankings, automatic
   `BBSLists` generated stat snapshots and login-count, board-activity, and
-  hot-topic history posts, and a web `Rankings` surface with selectable 30-day
-  history charts.
+  hot-topic history posts plus completed week/month/year period summaries, and
+  a web `Rankings` surface with selectable 30-day history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

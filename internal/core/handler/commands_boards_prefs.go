@@ -1140,6 +1140,13 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsHotTopicHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	day, err := time.Parse("2006-01-02", dateLabel)
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := h.ensureStatsPeriodHistorySystemPosts(actor, day, ts); err != nil {
+		return internalErr(err)
+	}
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
@@ -1301,6 +1308,91 @@ func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, d
 	}
 	body := formatStatsHotTopicHistoryBody(dateLabel, stats, threads)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Hot topic history "+dateLabel, body, ts)
+}
+
+type statsPeriodHistorySpec struct {
+	ThreadID string
+	PostID   string
+	Title    string
+	Label    string
+	StartDay string
+	EndDay   string
+}
+
+func (h *Handler) ensureStatsPeriodHistorySystemPosts(actor *User, day time.Time, ts int64) error {
+	for _, spec := range statsPeriodHistorySpecs(day) {
+		if _, _, err := h.ensureStatsPeriodHistorySystemPost(actor, spec, ts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func statsPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
+	day = day.UTC()
+	out := []statsPeriodHistorySpec{}
+	if day.Weekday() == time.Sunday {
+		isoYear, isoWeek := day.ISOWeek()
+		start := day.AddDate(0, 0, -6)
+		label := fmt.Sprintf("%04d-W%02d", isoYear, isoWeek)
+		id := fmt.Sprintf("%04dw%02d", isoYear, isoWeek)
+		out = append(out, statsPeriodHistorySpec{
+			ThreadID: "bbslists_week_" + id,
+			PostID:   "bbslists_week_post_" + id,
+			Title:    "Weekly activity history " + label,
+			Label:    label,
+			StartDay: start.Format("2006-01-02"),
+			EndDay:   day.Format("2006-01-02"),
+		})
+	}
+	tomorrow := day.AddDate(0, 0, 1)
+	if tomorrow.Day() == 1 {
+		label := day.Format("2006-01")
+		id := day.Format("200601")
+		out = append(out, statsPeriodHistorySpec{
+			ThreadID: "bbslists_month_" + id,
+			PostID:   "bbslists_month_post_" + id,
+			Title:    "Monthly activity history " + label,
+			Label:    label,
+			StartDay: time.Date(day.Year(), day.Month(), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02"),
+			EndDay:   day.Format("2006-01-02"),
+		})
+	}
+	if day.Month() == time.December && day.Day() == 31 {
+		label := day.Format("2006")
+		out = append(out, statsPeriodHistorySpec{
+			ThreadID: "bbslists_year_" + label,
+			PostID:   "bbslists_year_post_" + label,
+			Title:    "Yearly activity history " + label,
+			Label:    label,
+			StartDay: time.Date(day.Year(), time.January, 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02"),
+			EndDay:   day.Format("2006-01-02"),
+		})
+	}
+	return out
+}
+
+func (h *Handler) ensureStatsPeriodHistorySystemPost(actor *User, spec statsPeriodHistorySpec, ts int64) (string, int64, error) {
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, spec.ThreadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return spec.ThreadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	history, err := projections.ListCommunityStatHistoryRange(h.db, spec.StartDay, spec.EndDay)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsPeriodHistoryBody(spec, history)
+	return h.ensureStatsSystemPost(actor, spec.ThreadID, spec.PostID, spec.Title, body, ts)
 }
 
 func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, body string, ts int64) (string, int64, error) {
@@ -1597,6 +1689,91 @@ func formatStatsHotTopicHistoryBody(dateLabel string, stats *projections.Communi
 			thread.ReactionCount,
 			thread.Score,
 			lastActivity)
+	}
+	return b.String()
+}
+
+func formatStatsPeriodHistoryBody(spec statsPeriodHistorySpec, history []projections.CommunityStatHistory) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", spec.Title)
+	fmt.Fprintf(&b, "- Period: %s to %s\n", spec.StartDay, spec.EndDay)
+	fmt.Fprintf(&b, "- Days captured: %d\n", len(history))
+	if len(history) == 0 {
+		b.WriteString("\n- No daily stat history exists for this completed period yet.\n")
+		return b.String()
+	}
+
+	newest := history[0]
+	var posts, threads, boards, users, reactions, mail, messages, logins int
+	var onlineSeconds int64
+	var guestDelta int
+	maxOnlineUsers := newest.MaxOnlineUsers
+	maxOnlineAt := newest.MaxOnlineAt
+	maxOnlineGuests := newest.MaxOnlineGuests
+	maxOnlineGuestsAt := newest.MaxOnlineGuestsAt
+	for _, day := range history {
+		posts += day.DeltaPosts
+		threads += day.DeltaThreads
+		boards += day.DeltaBoards
+		users += day.DeltaUsers
+		reactions += day.DeltaReactions
+		mail += day.DeltaMail
+		messages += day.DeltaDirectMessages
+		logins += day.DeltaLogins
+		onlineSeconds += day.DeltaOnlineSeconds
+		guestDelta += day.DeltaGuests
+		if day.MaxOnlineUsers > maxOnlineUsers {
+			maxOnlineUsers = day.MaxOnlineUsers
+			maxOnlineAt = day.MaxOnlineAt
+		}
+		if day.MaxOnlineGuests > maxOnlineGuests {
+			maxOnlineGuests = day.MaxOnlineGuests
+			maxOnlineGuestsAt = day.MaxOnlineGuestsAt
+		}
+	}
+
+	b.WriteString("\n## Period totals\n")
+	fmt.Fprintf(&b, "- New users: %d\n", users)
+	fmt.Fprintf(&b, "- New boards: %d\n", boards)
+	fmt.Fprintf(&b, "- New threads: %d\n", threads)
+	fmt.Fprintf(&b, "- New posts: %d\n", posts)
+	fmt.Fprintf(&b, "- New reactions: %d\n", reactions)
+	fmt.Fprintf(&b, "- New mail messages: %d\n", mail)
+	fmt.Fprintf(&b, "- New direct messages: %d\n", messages)
+	fmt.Fprintf(&b, "- Logins: %d\n", logins)
+	fmt.Fprintf(&b, "- Online time added: %s\n", formatStatsDuration(onlineSeconds))
+	fmt.Fprintf(&b, "- Guest delta: %+d\n", guestDelta)
+	fmt.Fprintf(&b, "- Ending users: %d\n", newest.TotalUsers)
+	fmt.Fprintf(&b, "- Ending boards: %d\n", newest.TotalBoards)
+	fmt.Fprintf(&b, "- Ending threads: %d\n", newest.TotalThreads)
+	fmt.Fprintf(&b, "- Ending posts: %d\n", newest.TotalPosts)
+	fmt.Fprintf(&b, "- Peak online users: %d", maxOnlineUsers)
+	if maxOnlineAt > 0 {
+		fmt.Fprintf(&b, " at %s UTC", time.UnixMilli(maxOnlineAt).UTC().Format("2006-01-02 15:04"))
+	}
+	b.WriteByte('\n')
+	fmt.Fprintf(&b, "- Peak online guests: %d", maxOnlineGuests)
+	if maxOnlineGuestsAt > 0 {
+		fmt.Fprintf(&b, " at %s UTC", time.UnixMilli(maxOnlineGuestsAt).UTC().Format("2006-01-02 15:04"))
+	}
+	b.WriteString("\n\n## Daily rows\n")
+	for _, day := range history {
+		fmt.Fprintf(&b, "- %s: %d posts%s, %d threads%s, %d boards%s, %d users%s, %s%s, %d reactions%s, %s online time%s\n",
+			day.Day,
+			day.TotalPosts,
+			formatStatsDelta(day.DeltaPosts),
+			day.TotalThreads,
+			formatStatsDelta(day.DeltaThreads),
+			day.TotalBoards,
+			formatStatsDelta(day.DeltaBoards),
+			day.TotalUsers,
+			formatStatsDelta(day.DeltaUsers),
+			formatStatsCount(day.TotalLogins, "login", "logins"),
+			formatStatsDelta(day.DeltaLogins),
+			day.TotalReactions,
+			formatStatsDelta(day.DeltaReactions),
+			formatStatsDuration(day.TotalOnlineSeconds),
+			formatStatsDurationDelta(day.DeltaOnlineSeconds))
 	}
 	return b.String()
 }
