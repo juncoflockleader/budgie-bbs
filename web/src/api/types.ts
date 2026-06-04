@@ -6,21 +6,36 @@ export interface Board {
   description: string
 }
 
+export interface Category {
+  id: string
+  name: string
+  description: string
+  parentId?: string
+  position: number
+  visibility: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface Thread {
   id: string
   board: string
   author: string
+  authorId?: string
   title: string
   locked: boolean
   postCount: number
   lastSeq: number
   createdTs: number
+  createdAt?: number
+  updatedAt?: number
 }
 
 export interface Post {
   id: string
   thread: string
   author: string
+  authorId?: string
   body: string
   contentType: string
   replyTo?: string
@@ -28,6 +43,8 @@ export interface Post {
   redacted: boolean
   createdSeq: number
   updatedSeq: number
+  createdAt?: number
+  updatedAt?: number
 }
 
 // ── Wire ───────────────────────────────────────────────────────────────────
@@ -79,6 +96,8 @@ export type EventKind =
   | 'poll.voted'
   | 'user.mentioned'
   | 'trust.changed'
+  | 'post.flagged'
+  | 'review.resolved'
 
 export interface BudgieEvent {
   event: EventKind
@@ -89,11 +108,11 @@ export interface BudgieEvent {
 }
 
 export interface ThreadNewPayload {
-  id: string; board: string; author: string; title: string; ts: number
+  id: string; board: string; author: string; authorId?: string; title: string; ts: number
 }
 export interface PostAppendedPayload {
   id: string; thread: string; author: string; body: string
-  contentType: string; replyTo?: string; ts: number
+  authorId?: string; contentType: string; replyTo?: string; ts: number
 }
 export interface PostEditedPayload {
   id: string; thread: string; newBody: string; version: number; ts: number
@@ -106,6 +125,20 @@ export interface PostRestoredPayload {
 }
 export interface ThreadLockedPayload {
   thread: string; locked: boolean; by: string; ts: number
+}
+export interface PostFlaggedPayload {
+  reviewId: string
+  postId: string
+  thread: string
+  reporter: string
+  reason?: string
+  ts: number
+}
+export interface ReviewResolvedPayload {
+  reviewId: string
+  resolution: string
+  by: string
+  ts: number
 }
 export interface ChatLinePayload {
   id: string; room: string; user: string; text: string; ts: number
@@ -154,6 +187,33 @@ export interface Notification {
   actor: string
   read: boolean
   ts: number
+}
+
+export interface UserProfile {
+  id: string
+  name: string
+  role: string
+  displayName: string
+  bio: string
+  avatar: string
+  created: number
+  postsCreated: number
+  reactionsReceived: number
+  trustLevel: number
+}
+
+export interface ModerationReview {
+  id: string
+  kind: string
+  status: string
+  targetId: string
+  targetKind: string
+  reporter: string
+  reason: string
+  resolution: string
+  actor: string
+  createdAt: number
+  updatedAt: number
 }
 
 // ── M9: Trust ───────────────────────────────────────────────────────────────

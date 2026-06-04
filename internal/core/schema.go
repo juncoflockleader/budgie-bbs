@@ -1,6 +1,12 @@
 package core
 
 const ddl = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    INTEGER PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    applied_at INTEGER NOT NULL
+);
+
 -- Append-only event log. seq is the global monotonic cursor.
 CREATE TABLE IF NOT EXISTS events (
     seq     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -10,6 +16,14 @@ CREATE TABLE IF NOT EXISTS events (
     payload TEXT    NOT NULL,  -- JSON
     ts      INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS event_scopes (
+    seq   INTEGER NOT NULL REFERENCES events(seq) ON DELETE CASCADE,
+    scope TEXT    NOT NULL,
+    PRIMARY KEY (seq, scope)
+);
+CREATE INDEX IF NOT EXISTS idx_event_scopes_scope_seq
+    ON event_scopes(scope, seq);
 
 -- Projection tables — derived from the log, rebuildable by full replay.
 
@@ -31,24 +45,30 @@ CREATE TABLE IF NOT EXISTS threads (
     id         TEXT PRIMARY KEY,
     board      TEXT NOT NULL REFERENCES boards(id),
     author     TEXT NOT NULL,
+    author_id  TEXT NOT NULL DEFAULT '',
     title      TEXT NOT NULL,
     locked     INTEGER NOT NULL DEFAULT 0,
     post_count INTEGER NOT NULL DEFAULT 0,
     last_seq   INTEGER NOT NULL DEFAULT 0,
-    created_ts INTEGER NOT NULL
+    created_ts INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS posts (
     id           TEXT PRIMARY KEY,
     thread       TEXT NOT NULL REFERENCES threads(id),
     author       TEXT NOT NULL,
+    author_id    TEXT NOT NULL DEFAULT '',
     body         TEXT NOT NULL,
     content_type TEXT NOT NULL DEFAULT 'markup',
     reply_to     TEXT,
     version      INTEGER NOT NULL DEFAULT 1,
     redacted     INTEGER NOT NULL DEFAULT 0,
     created_seq  INTEGER NOT NULL,
-    updated_seq  INTEGER NOT NULL
+    updated_seq  INTEGER NOT NULL,
+    created_at   INTEGER NOT NULL DEFAULT 0,
+    updated_at   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS cursors (
@@ -58,10 +78,27 @@ CREATE TABLE IF NOT EXISTS cursors (
 
 -- Idempotency: deduplicate commands by cid within a 10-minute window.
 CREATE TABLE IF NOT EXISTS processed_commands (
-    cid          TEXT PRIMARY KEY,
+    actor_id     TEXT    NOT NULL DEFAULT '',
+    cid          TEXT    NOT NULL,
+    command_hash TEXT    NOT NULL DEFAULT '',
     result_json  TEXT    NOT NULL,
-    processed_at INTEGER NOT NULL
+    processed_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, cid)
 );
+
+CREATE TABLE IF NOT EXISTS outbox_jobs (
+    id           TEXT PRIMARY KEY,
+    kind         TEXT    NOT NULL,
+    payload      TEXT    NOT NULL,
+    status       TEXT    NOT NULL DEFAULT 'pending',
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    next_run_at  INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT    NOT NULL DEFAULT '',
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_jobs_ready
+    ON outbox_jobs(status, next_run_at, created_at);
 
 -- SSH public-key credentials bound to accounts.
 CREATE TABLE IF NOT EXISTS auth_pubkeys (
@@ -94,6 +131,45 @@ CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
 -- Seed the default board.
 INSERT OR IGNORE INTO boards (id, name, description)
     VALUES ('general', 'General', 'General discussion');
+
+-- Categories are the modern forum projection. Boards remain as a compatibility
+-- surface and as the BBS-facing name for categories.
+CREATE TABLE IF NOT EXISTS categories (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    parent_id   TEXT NOT NULL DEFAULT '',
+    position    INTEGER NOT NULL DEFAULT 0,
+    visibility  TEXT NOT NULL DEFAULT 'public',
+    created_at  INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO categories (id, name, description, position)
+    VALUES ('general', 'General', 'General discussion', 0);
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id      TEXT PRIMARY KEY REFERENCES users(id),
+    display_name TEXT NOT NULL DEFAULT '',
+    bio          TEXT NOT NULL DEFAULT '',
+    avatar       TEXT NOT NULL DEFAULT '',
+    updated_at   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS moderation_reviews (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'open',
+    target_id  TEXT NOT NULL,
+    target_kind TEXT NOT NULL,
+    reporter   TEXT NOT NULL REFERENCES users(id),
+    reason     TEXT NOT NULL DEFAULT '',
+    resolution TEXT NOT NULL DEFAULT '',
+    actor      TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_moderation_reviews_status_created
+    ON moderation_reviews(status, created_at DESC);
 
 -- ── M10: Reactions ───────────────────────────────────────────────────────────
 -- One reaction per user per post (emoji is reserved for future multi-reaction).

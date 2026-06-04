@@ -9,9 +9,9 @@ import (
 )
 
 type commandRequest struct {
-	CID     string              `json:"cid"`
-	Command proto.CommandName   `json:"command"`
-	Payload json.RawMessage     `json:"payload"`
+	CID     string            `json:"cid"`
+	Command proto.CommandName `json:"command"`
+	Payload json.RawMessage   `json:"payload"`
 }
 
 // handleCommand serves POST /api/v1/commands (uniform endpoint).
@@ -245,6 +245,93 @@ func (s *Server) handlePurgePost(w http.ResponseWriter, r *http.Request) {
 	raw, _ := json.Marshal(p)
 	cid := r.Header.Get("X-Command-Id")
 	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdPurgePost, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+type updateProfileRequest struct {
+	DisplayName string `json:"displayName"`
+	Bio         string `json:"bio"`
+	Avatar      string `json:"avatar"`
+}
+
+func (s *Server) handleUpdateOwnProfile(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	var req updateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	if req.DisplayName == "" {
+		req.DisplayName = actor.Name
+	}
+	if err := s.core.UpdateUserProfile(actor.ID, req.DisplayName, req.Bio, req.Avatar); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleFlagPost(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	postID := r.PathValue("post")
+
+	var p proto.FlagPostPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		p = proto.FlagPostPayload{}
+	}
+	p.Post = postID
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdFlagPost, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	reviewID := r.PathValue("id")
+
+	var p proto.ResolveReviewPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Review = reviewID
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdResolveReview, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+func (s *Server) handleSanctionUser(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	name := r.PathValue("name")
+	target, err := s.core.UserByName(name)
+	if err != nil || target == nil {
+		writeError(w, http.StatusNotFound, "not_found", "user not found", false)
+		return
+	}
+	var p proto.SanctionUserPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.User = target.ID
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSanctionUser, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+func (s *Server) handleCreateBoard(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	var req proto.CreateBoardPayload
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	raw, _ := json.Marshal(req)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdCreateBoard, raw, cid)
 	writeAck(w, cid, reply)
 }
 

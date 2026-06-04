@@ -401,11 +401,14 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 				ID:          p.ID,
 				Thread:      p.Thread,
 				Author:      p.Author,
+				AuthorID:    p.AuthorID,
 				Body:        p.Body,
 				ContentType: p.ContentType,
 				ReplyTo:     p.ReplyTo,
 				CreatedSeq:  evt.Seq,
 				UpdatedSeq:  evt.Seq,
+				CreatedAt:   p.TS,
+				UpdatedAt:   p.TS,
 			})
 			m.rebuildPostView()
 			m.vp.GotoBottom()
@@ -584,7 +587,14 @@ func (m *model) selectedThread() *core.Thread {
 func (m *model) rebuildPostView() {
 	var b strings.Builder
 	for i, p := range m.posts {
-		ts := time.UnixMilli(p.CreatedSeq).Format("2006-01-02 15:04")
+		createdAt := p.CreatedAt
+		if createdAt == 0 {
+			createdAt = p.CreatedSeq
+		}
+		ts := fmt.Sprintf("#%d", p.CreatedSeq)
+		if createdAt > 1_000_000_000_000 {
+			ts = time.UnixMilli(createdAt).Format("2006-01-02 15:04")
+		}
 		author := styleAuthor.Render(p.Author)
 		b.WriteString(fmt.Sprintf("%s  %s  #%d", author, styleDim.Render(ts), i+1))
 		if p.Version > 1 {

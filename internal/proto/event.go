@@ -31,6 +31,10 @@ const (
 	// M9 — Trust levels
 	EvtTrustLevelChanged EventKind = "user.trust_level_changed"
 
+	// Modern forum moderation review queue
+	EvtPostFlagged    EventKind = "post.flagged"
+	EvtReviewResolved EventKind = "review.resolved"
+
 	// Ephemeral events — carry eseq, best-effort, prunable.
 	EvtChatLine       EventKind = "chat.line"
 	EvtPresenceUpdate EventKind = "presence.update"
@@ -57,7 +61,7 @@ func (e *Event) IsDurable() bool {
 		EvtPostRestored, EvtPostPurged, EvtThreadLocked, EvtThreadMoved,
 		EvtUserSanctioned, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated,
 		EvtPostReacted, EvtPostUnreacted, EvtPollVoted,
-		EvtMentioned, EvtTrustLevelChanged:
+		EvtMentioned, EvtTrustLevelChanged, EvtPostFlagged, EvtReviewResolved:
 		return true
 	}
 	return false
@@ -66,17 +70,19 @@ func (e *Event) IsDurable() bool {
 // Durable event payloads.
 
 type ThreadNewPayload struct {
-	ID     string `json:"id"`
-	Board  string `json:"board"`
-	Author string `json:"author"`
-	Title  string `json:"title"`
-	TS     int64  `json:"ts"`
+	ID       string `json:"id"`
+	Board    string `json:"board"`
+	Author   string `json:"author"`
+	AuthorID string `json:"authorId,omitempty"`
+	Title    string `json:"title"`
+	TS       int64  `json:"ts"`
 }
 
 type PostAppendedPayload struct {
 	ID          string `json:"id"`
 	Thread      string `json:"thread"`
 	Author      string `json:"author"`
+	AuthorID    string `json:"authorId,omitempty"`
 	Body        string `json:"body"`
 	ContentType string `json:"contentType"`
 	ReplyTo     string `json:"replyTo,omitempty"`
@@ -193,8 +199,8 @@ type PollVotedPayload struct {
 // M8 — Notification payload (durable mention event).
 
 type MentionedPayload struct {
-	User     string `json:"user"`     // mentioned user ID
-	By       string `json:"by"`       // author username
+	User     string `json:"user"` // mentioned user ID
+	By       string `json:"by"`   // author username
 	PostID   string `json:"postId"`
 	ThreadID string `json:"threadId"`
 	TS       int64  `json:"ts"`
@@ -207,6 +213,22 @@ type TrustLevelChangedPayload struct {
 	OldLevel int    `json:"oldLevel"`
 	NewLevel int    `json:"newLevel"`
 	TS       int64  `json:"ts"`
+}
+
+type PostFlaggedPayload struct {
+	ReviewID string `json:"reviewId"`
+	PostID   string `json:"postId"`
+	Thread   string `json:"thread"`
+	Reporter string `json:"reporter"`
+	Reason   string `json:"reason,omitempty"`
+	TS       int64  `json:"ts"`
+}
+
+type ReviewResolvedPayload struct {
+	ReviewID   string `json:"reviewId"`
+	Resolution string `json:"resolution"`
+	By         string `json:"by"`
+	TS         int64  `json:"ts"`
 }
 
 // Ephemeral event payloads.

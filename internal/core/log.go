@@ -15,20 +15,32 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.Exec(
-		`INSERT INTO events (id, kind, scopes, payload, ts) VALUES (?,?,?,?,?)`,
-		id, string(kind), strings.Join(scopes, ","), string(raw), nowMS(),
-	)
+	query := `INSERT INTO events (id, kind, scopes, payload, ts) VALUES (?,?,?,?,?)`
+	if currentSQLFlavor == postgresFlavor {
+		query = `INSERT INTO events (id, kind, scopes, payload, ts) VALUES (?,?,?,CAST(? AS JSONB),?)`
+	}
+
+	res, err := execReturningSeq(tx, query, id, string(kind), strings.Join(scopes, ","), string(raw), nowMS())
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	seq := res
+	for _, scope := range scopes {
+		if _, err := qExec(tx,
+			`INSERT INTO event_scopes (seq, scope) VALUES (?,?)
+			 ON CONFLICT (seq, scope) DO NOTHING`,
+			seq, scope,
+		); err != nil {
+			return 0, err
+		}
+	}
+	return seq, nil
 }
 
 // headSeq returns the highest seq currently in the events table.
 func headSeq(db *sql.DB) (int64, error) {
 	var head sql.NullInt64
-	if err := db.QueryRow(`SELECT MAX(seq) FROM events`).Scan(&head); err != nil {
+	if err := qQueryRow(db, `SELECT MAX(seq) FROM events`).Scan(&head); err != nil {
 		return 0, err
 	}
 	return head.Int64, nil
@@ -37,7 +49,7 @@ func headSeq(db *sql.DB) (int64, error) {
 // replayEvents returns events with seq > after, optionally filtered to the
 // given scopes (pass nil for all events).
 func replayEvents(db *sql.DB, after int64, filterScopes []string, limit int) ([]*proto.Event, error) {
-	rows, err := db.Query(
+	rows, err := qQuery(db,
 		`SELECT seq, kind, scopes, payload, ts FROM events WHERE seq > ? ORDER BY seq`,
 		after,
 	)
@@ -116,6 +128,10 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.MentionedPayload)
 	case proto.EvtTrustLevelChanged:
 		dst = new(proto.TrustLevelChangedPayload)
+	case proto.EvtPostFlagged:
+		dst = new(proto.PostFlaggedPayload)
+	case proto.EvtReviewResolved:
+		dst = new(proto.ReviewResolvedPayload)
 	case proto.EvtThreadLocked:
 		dst = new(proto.ThreadLockedPayload)
 	case proto.EvtThreadMoved:

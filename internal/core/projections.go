@@ -13,16 +13,30 @@ type Board struct {
 	Description string `json:"description"`
 }
 
+type Category struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ParentID    string `json:"parentId,omitempty"`
+	Position    int    `json:"position"`
+	Visibility  string `json:"visibility"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
+}
+
 // Thread is the projection of a thread.
 type Thread struct {
 	ID        string `json:"id"`
 	Board     string `json:"board"`
 	Author    string `json:"author"`
+	AuthorID  string `json:"authorId,omitempty"`
 	Title     string `json:"title"`
 	Locked    bool   `json:"locked"`
 	PostCount int    `json:"postCount"`
 	LastSeq   int64  `json:"lastSeq"`
 	CreatedTS int64  `json:"createdTs"`
+	CreatedAt int64  `json:"createdAt"`
+	UpdatedAt int64  `json:"updatedAt"`
 }
 
 // Post is the projection of a post.
@@ -30,6 +44,7 @@ type Post struct {
 	ID          string `json:"id"`
 	Thread      string `json:"thread"`
 	Author      string `json:"author"`
+	AuthorID    string `json:"authorId,omitempty"`
 	Body        string `json:"body"`
 	ContentType string `json:"contentType"`
 	ReplyTo     string `json:"replyTo,omitempty"`
@@ -37,6 +52,8 @@ type Post struct {
 	Redacted    bool   `json:"redacted"`
 	CreatedSeq  int64  `json:"createdSeq"`
 	UpdatedSeq  int64  `json:"updatedSeq"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedAt   int64  `json:"updatedAt"`
 }
 
 // User is the projection of an account.
@@ -48,6 +65,44 @@ type User struct {
 	Created  int64
 }
 
+type UserProfile struct {
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Role              string `json:"role"`
+	DisplayName       string `json:"displayName"`
+	Bio               string `json:"bio"`
+	Avatar            string `json:"avatar"`
+	Created           int64  `json:"created"`
+	PostsCreated      int    `json:"postsCreated"`
+	ReactionsReceived int    `json:"reactionsReceived"`
+	TrustLevel        int    `json:"trustLevel"`
+}
+
+type ModerationReview struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	TargetID   string `json:"targetId"`
+	TargetKind string `json:"targetKind"`
+	Reporter   string `json:"reporter"`
+	Reason     string `json:"reason"`
+	Resolution string `json:"resolution,omitempty"`
+	Actor      string `json:"actor,omitempty"`
+	CreatedAt  int64  `json:"createdAt"`
+	UpdatedAt  int64  `json:"updatedAt"`
+}
+
+type UserSanction struct {
+	ID        string `json:"id"`
+	UserID    string `json:"userId"`
+	Kind      string `json:"kind"`
+	Scope     string `json:"scope"`
+	ExpiresAt int64  `json:"expiresAt"`
+	By        string `json:"by"`
+	Reason    string `json:"reason"`
+	Seq       int64  `json:"seq"`
+}
+
 // Role helpers.
 func (u *User) IsMod() bool   { return u.Role == "moderator" || u.Role == "admin" }
 func (u *User) IsAdmin() bool { return u.Role == "admin" }
@@ -56,7 +111,7 @@ func (u *User) IsAdmin() bool { return u.Role == "admin" }
 
 func getBoard(db *sql.DB, id string) (*Board, error) {
 	b := &Board{}
-	err := db.QueryRow(`SELECT id, name, description FROM boards WHERE id=?`, id).
+	err := qQueryRow(db, `SELECT id, name, description FROM boards WHERE id=?`, id).
 		Scan(&b.ID, &b.Name, &b.Description)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -65,7 +120,7 @@ func getBoard(db *sql.DB, id string) (*Board, error) {
 }
 
 func listBoards(db *sql.DB) ([]Board, error) {
-	rows, err := db.Query(`SELECT id, name, description FROM boards ORDER BY name`)
+	rows, err := qQuery(db, `SELECT id, name, description FROM boards ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -81,9 +136,29 @@ func listBoards(db *sql.DB) ([]Board, error) {
 	return boards, rows.Err()
 }
 
+func listCategories(db *sql.DB) ([]Category, error) {
+	rows, err := qQuery(db,
+		`SELECT id, name, description, parent_id, position, visibility, created_at, updated_at
+		 FROM categories ORDER BY position, name`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var categories []Category
+	for rows.Next() {
+		var c Category
+		if err := rows.Scan(&c.ID, &c.Name, &c.Description, &c.ParentID, &c.Position, &c.Visibility, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		categories = append(categories, c)
+	}
+	return categories, rows.Err()
+}
+
 func listThreads(db *sql.DB, boardID string, limit, offset int) ([]Thread, error) {
-	rows, err := db.Query(
-		`SELECT id, board, author, title, locked, post_count, last_seq, created_ts
+	rows, err := qQuery(db,
+		`SELECT id, board, author, COALESCE(author_id,''), title, locked, post_count, last_seq, created_ts, created_at, updated_at
 		 FROM threads WHERE board=? ORDER BY last_seq DESC LIMIT ? OFFSET ?`,
 		boardID, limit, offset,
 	)
@@ -95,8 +170,14 @@ func listThreads(db *sql.DB, boardID string, limit, offset int) ([]Thread, error
 	for rows.Next() {
 		var t Thread
 		var locked int
-		if err := rows.Scan(&t.ID, &t.Board, &t.Author, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS); err != nil {
+		if err := rows.Scan(&t.ID, &t.Board, &t.Author, &t.AuthorID, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if t.CreatedAt == 0 {
+			t.CreatedAt = t.CreatedTS
+		}
+		if t.UpdatedAt == 0 {
+			t.UpdatedAt = t.CreatedAt
 		}
 		t.Locked = locked != 0
 		threads = append(threads, t)
@@ -107,22 +188,28 @@ func listThreads(db *sql.DB, boardID string, limit, offset int) ([]Thread, error
 func getThread(db *sql.DB, id string) (*Thread, error) {
 	t := &Thread{}
 	var locked int
-	err := db.QueryRow(
-		`SELECT id, board, author, title, locked, post_count, last_seq, created_ts FROM threads WHERE id=?`, id,
-	).Scan(&t.ID, &t.Board, &t.Author, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS)
+	err := qQueryRow(db,
+		`SELECT id, board, author, COALESCE(author_id,''), title, locked, post_count, last_seq, created_ts, created_at, updated_at FROM threads WHERE id=?`, id,
+	).Scan(&t.ID, &t.Board, &t.Author, &t.AuthorID, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if t.CreatedAt == 0 {
+		t.CreatedAt = t.CreatedTS
+	}
+	if t.UpdatedAt == 0 {
+		t.UpdatedAt = t.CreatedAt
+	}
 	t.Locked = locked != 0
 	return t, nil
 }
 
 func listPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
-	rows, err := db.Query(
-		`SELECT id, thread, author, body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq
+	rows, err := qQuery(db,
+		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq, created_at, updated_at
 		 FROM posts WHERE thread=? ORDER BY created_seq LIMIT ? OFFSET ?`,
 		threadID, limit, offset,
 	)
@@ -134,8 +221,14 @@ func listPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	for rows.Next() {
 		var p Post
 		var redacted int
-		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq); err != nil {
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if p.CreatedAt == 0 {
+			p.CreatedAt = p.CreatedSeq
+		}
+		if p.UpdatedAt == 0 {
+			p.UpdatedAt = p.CreatedAt
 		}
 		p.Redacted = redacted != 0
 		posts = append(posts, p)
@@ -146,14 +239,20 @@ func listPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 func getPost(db *sql.DB, id string) (*Post, error) {
 	p := &Post{}
 	var redacted int
-	err := db.QueryRow(
-		`SELECT id, thread, author, body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq FROM posts WHERE id=?`, id,
-	).Scan(&p.ID, &p.Thread, &p.Author, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq)
+	err := qQueryRow(db,
+		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
+	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if p.CreatedAt == 0 {
+		p.CreatedAt = p.CreatedSeq
+	}
+	if p.UpdatedAt == 0 {
+		p.UpdatedAt = p.CreatedAt
 	}
 	p.Redacted = redacted != 0
 	return p, nil
@@ -161,7 +260,7 @@ func getPost(db *sql.DB, id string) (*Post, error) {
 
 func getUserByID(db *sql.DB, id string) (*User, error) {
 	u := &User{}
-	err := db.QueryRow(`SELECT id, name, role, password, created FROM users WHERE id=?`, id).
+	err := qQueryRow(db, `SELECT id, name, role, password, created FROM users WHERE id=?`, id).
 		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -171,7 +270,7 @@ func getUserByID(db *sql.DB, id string) (*User, error) {
 
 func getUserByName(db *sql.DB, name string) (*User, error) {
 	u := &User{}
-	err := db.QueryRow(`SELECT id, name, role, password, created FROM users WHERE name=?`, name).
+	err := qQueryRow(db, `SELECT id, name, role, password, created FROM users WHERE name=?`, name).
 		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -181,7 +280,7 @@ func getUserByName(db *sql.DB, name string) (*User, error) {
 
 func getUserByPubkey(db *sql.DB, pubkey string) (*User, error) {
 	var userID string
-	err := db.QueryRow(`SELECT user_id FROM auth_pubkeys WHERE pubkey=?`, pubkey).Scan(&userID)
+	err := qQueryRow(db, `SELECT user_id FROM auth_pubkeys WHERE pubkey=?`, pubkey).Scan(&userID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -193,58 +292,152 @@ func getUserByPubkey(db *sql.DB, pubkey string) (*User, error) {
 
 func countUsers(db *sql.DB) (int, error) {
 	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&n)
+	err := qQueryRow(db, `SELECT COUNT(*) FROM users`).Scan(&n)
 	return n, err
+}
+
+func getUserProfileByName(db *sql.DB, name string) (*UserProfile, error) {
+	p := &UserProfile{}
+	err := qQueryRow(db,
+		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
+		        COALESCE(up.bio,''), COALESCE(up.avatar,''), u.created,
+		        COALESCE(ua.posts_created,0), COALESCE(ua.reactions_recv,0), COALESCE(ua.trust_level,0)
+		 FROM users u
+		 LEFT JOIN user_profiles up ON up.user_id = u.id
+		 LEFT JOIN user_activity ua ON ua.user_id = u.id
+		 WHERE u.name=?`,
+		name,
+	).Scan(&p.ID, &p.Name, &p.Role, &p.DisplayName, &p.Bio, &p.Avatar, &p.Created,
+		&p.PostsCreated, &p.ReactionsReceived, &p.TrustLevel)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return p, err
+}
+
+func updateUserProfile(db *sql.DB, userID, displayName, bio, avatar string) error {
+	_, err := qExec(db,
+		`INSERT INTO user_profiles (user_id, display_name, bio, avatar, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET
+		    display_name=excluded.display_name,
+		    bio=excluded.bio,
+		    avatar=excluded.avatar,
+		    updated_at=excluded.updated_at`,
+		userID, displayName, bio, avatar, nowMS(),
+	)
+	return err
+}
+
+func listModerationReviews(db *sql.DB, status string, limit, offset int) ([]ModerationReview, error) {
+	q := `SELECT id, kind, status, target_id, target_kind, reporter, reason, resolution, actor, created_at, updated_at
+	      FROM moderation_reviews`
+	var args []any
+	if status != "" {
+		q += ` WHERE status=?`
+		args = append(args, status)
+	}
+	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := qQuery(db, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ModerationReview
+	for rows.Next() {
+		var r ModerationReview
+		if err := rows.Scan(&r.ID, &r.Kind, &r.Status, &r.TargetID, &r.TargetKind, &r.Reporter, &r.Reason, &r.Resolution, &r.Actor, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func listUserSanctions(db *sql.DB, userID string, limit, offset int) ([]UserSanction, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := qQuery(db,
+		`SELECT id, user_id, kind, scope, expires_at, by, reason, seq
+		   FROM user_sanctions
+		  WHERE user_id = ?
+		  ORDER BY seq DESC LIMIT ? OFFSET ?`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []UserSanction
+	for rows.Next() {
+		var s UserSanction
+		if err := rows.Scan(&s.ID, &s.UserID, &s.Kind, &s.Scope, &s.ExpiresAt, &s.By, &s.Reason, &s.Seq); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // --- Writers — called only from the single-writer goroutine inside a tx ---
 
 func insertThread(tx *sql.Tx, t *Thread) error {
-	_, err := tx.Exec(
-		`INSERT INTO threads (id, board, author, title, locked, post_count, last_seq, created_ts)
-		 VALUES (?,?,?,?,0,0,?,?)`,
-		t.ID, t.Board, t.Author, t.Title, t.LastSeq, t.CreatedTS,
+	_, err := qExec(tx,
+		`INSERT INTO threads (id, board, author, author_id, title, locked, post_count, last_seq, created_ts, created_at, updated_at)
+		 VALUES (?,?,?,?,?,0,0,?,?,?,?)`,
+		t.ID, t.Board, t.Author, t.AuthorID, t.Title, t.LastSeq, t.CreatedTS, t.CreatedAt, t.UpdatedAt,
 	)
 	return err
 }
 
 func insertPost(tx *sql.Tx, p *Post) error {
-	_, err := tx.Exec(
-		`INSERT INTO posts (id, thread, author, body, content_type, reply_to, version, redacted, created_seq, updated_seq)
-		 VALUES (?,?,?,?,?,?,1,0,?,?)`,
-		p.ID, p.Thread, p.Author, p.Body, p.ContentType, nullStr(p.ReplyTo), p.CreatedSeq, p.CreatedSeq,
+	_, err := qExec(tx,
+		`INSERT INTO posts (id, thread, author, author_id, body, content_type, reply_to, version, redacted, created_seq, updated_seq, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,1,0,?,?,?,?)`,
+		p.ID, p.Thread, p.Author, p.AuthorID, p.Body, p.ContentType, nullStr(p.ReplyTo), p.CreatedSeq, p.CreatedSeq, p.CreatedAt, p.UpdatedAt,
 	)
 	return err
 }
 
 func bumpThread(tx *sql.Tx, threadID string, seq int64) error {
-	_, err := tx.Exec(
-		`UPDATE threads SET post_count=post_count+1, last_seq=? WHERE id=?`,
-		seq, threadID,
+	_, err := qExec(tx,
+		`UPDATE threads SET post_count=post_count+1, last_seq=?, updated_at=? WHERE id=?`,
+		seq, nowMS(), threadID,
 	)
 	return err
 }
 
 func updatePostBody(tx *sql.Tx, postID string, body string, seq int64) error {
-	_, err := tx.Exec(
-		`UPDATE posts SET body=?, version=version+1, updated_seq=? WHERE id=?`,
-		body, seq, postID,
+	_, err := qExec(tx,
+		`UPDATE posts SET body=?, version=version+1, updated_seq=?, updated_at=? WHERE id=?`,
+		body, seq, nowMS(), postID,
 	)
 	return err
 }
 
 func markPostRedacted(tx *sql.Tx, postID string, seq int64) error {
-	_, err := tx.Exec(
-		`UPDATE posts SET redacted=1, updated_seq=? WHERE id=?`,
-		seq, postID,
+	_, err := qExec(tx,
+		`UPDATE posts SET redacted=1, updated_seq=?, updated_at=? WHERE id=?`,
+		seq, nowMS(), postID,
 	)
 	return err
 }
 
 func markPostRestored(tx *sql.Tx, postID string, seq int64) error {
-	_, err := tx.Exec(
-		`UPDATE posts SET redacted=0, updated_seq=? WHERE id=?`,
-		seq, postID,
+	_, err := qExec(tx,
+		`UPDATE posts SET redacted=0, updated_seq=?, updated_at=? WHERE id=?`,
+		seq, nowMS(), postID,
 	)
 	return err
 }
@@ -254,9 +447,9 @@ func markPostRestored(tx *sql.Tx, postID string, seq int64) error {
 // post is kept redacted. The event log still contains the original content —
 // true GDPR compliance would require crypto-shredding or log scrubbing.
 func markPostPurged(tx *sql.Tx, postID string, seq int64) error {
-	_, err := tx.Exec(
-		`UPDATE posts SET body='', redacted=1, updated_seq=? WHERE id=?`,
-		seq, postID,
+	_, err := qExec(tx,
+		`UPDATE posts SET body='', redacted=1, updated_seq=?, updated_at=? WHERE id=?`,
+		seq, nowMS(), postID,
 	)
 	return err
 }
@@ -266,32 +459,65 @@ func setThreadLocked(tx *sql.Tx, threadID string, locked bool) error {
 	if locked {
 		v = 1
 	}
-	_, err := tx.Exec(`UPDATE threads SET locked=? WHERE id=?`, v, threadID)
+	_, err := qExec(tx, `UPDATE threads SET locked=? WHERE id=?`, v, threadID)
 	return err
 }
 
 func moveThreadBoard(tx *sql.Tx, threadID, toBoard string) error {
-	_, err := tx.Exec(`UPDATE threads SET board=? WHERE id=?`, toBoard, threadID)
+	_, err := qExec(tx, `UPDATE threads SET board=? WHERE id=?`, toBoard, threadID)
 	return err
 }
 
 func setUserRole(tx *sql.Tx, userID, role string) error {
-	_, err := tx.Exec(`UPDATE users SET role=? WHERE id=?`, role, userID)
+	_, err := qExec(tx, `UPDATE users SET role=? WHERE id=?`, role, userID)
 	return err
 }
 
 func insertBoard(tx *sql.Tx, id, name, description string) error {
-	_, err := tx.Exec(
+	if _, err := qExec(tx,
 		`INSERT INTO boards (id, name, description) VALUES (?,?,?)`,
 		id, name, description,
+	); err != nil {
+		return err
+	}
+	_, err := qExec(tx,
+		`INSERT OR IGNORE INTO categories (id, name, description, created_at, updated_at) VALUES (?,?,?,?,?)`,
+		id, name, description, nowMS(), nowMS(),
 	)
 	return err
+}
+
+func insertModerationReview(tx *sql.Tx, id, kind, targetID, targetKind, reporter, reason string, ts int64) error {
+	_, err := qExec(tx,
+		`INSERT INTO moderation_reviews (id, kind, status, target_id, target_kind, reporter, reason, created_at, updated_at)
+		 VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+		id, kind, targetID, targetKind, reporter, reason, ts, ts,
+	)
+	return err
+}
+
+func resolveModerationReview(tx *sql.Tx, id, actor, resolution string, ts int64) error {
+	res, err := qExec(tx,
+		`UPDATE moderation_reviews SET status='resolved', actor=?, resolution=?, updated_at=? WHERE id=? AND status='open'`,
+		actor, resolution, ts, id,
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // --- FTS helpers ---
 
 func ftsInsertPost(tx *sql.Tx, postID, threadID, boardID, author, body string) error {
-	_, err := tx.Exec(
+	_, err := qExec(tx,
 		`INSERT INTO posts_fts (post_id, thread_id, board_id, author, body) VALUES (?,?,?,?,?)`,
 		postID, threadID, boardID, author, body,
 	)
@@ -299,12 +525,12 @@ func ftsInsertPost(tx *sql.Tx, postID, threadID, boardID, author, body string) e
 }
 
 func ftsUpdatePost(tx *sql.Tx, postID, newBody string) error {
-	_, err := tx.Exec(`UPDATE posts_fts SET body=? WHERE post_id=?`, newBody, postID)
+	_, err := qExec(tx, `UPDATE posts_fts SET body=? WHERE post_id=?`, newBody, postID)
 	return err
 }
 
 func ftsDeletePost(tx *sql.Tx, postID string) error {
-	_, err := tx.Exec(`DELETE FROM posts_fts WHERE post_id=?`, postID)
+	_, err := qExec(tx, `DELETE FROM posts_fts WHERE post_id=?`, postID)
 	return err
 }
 
@@ -312,9 +538,9 @@ func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 	var rows *sql.Rows
 	var err error
 	if boardID != "" {
-		rows, err = db.Query(
-			`SELECT p.id, p.thread, p.author, p.body, p.content_type,
-			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq
+		rows, err = qQuery(db,
+			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, p.content_type,
+			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq, p.created_at, p.updated_at
 			 FROM posts_fts f
 			 JOIN posts p ON p.id = f.post_id
 			 WHERE f.board_id=? AND posts_fts MATCH ? AND p.redacted=0
@@ -322,9 +548,9 @@ func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 			boardID, query, limit,
 		)
 	} else {
-		rows, err = db.Query(
-			`SELECT p.id, p.thread, p.author, p.body, p.content_type,
-			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq
+		rows, err = qQuery(db,
+			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, p.content_type,
+			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq, p.created_at, p.updated_at
 			 FROM posts_fts f
 			 JOIN posts p ON p.id = f.post_id
 			 WHERE posts_fts MATCH ? AND p.redacted=0
@@ -340,9 +566,15 @@ func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 	for rows.Next() {
 		var p Post
 		var redacted int
-		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.Body, &p.ContentType,
-			&p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq); err != nil {
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType,
+			&p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if p.CreatedAt == 0 {
+			p.CreatedAt = p.CreatedSeq
+		}
+		if p.UpdatedAt == 0 {
+			p.UpdatedAt = p.CreatedAt
 		}
 		p.Redacted = redacted != 0
 		posts = append(posts, p)
@@ -354,7 +586,7 @@ func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 
 // insertSanction records an active sanction.
 func insertSanction(tx *sql.Tx, id, userID, kind, scope string, expiresAt int64, by, reason string, seq int64) error {
-	_, err := tx.Exec(
+	_, err := qExec(tx,
 		`INSERT OR REPLACE INTO user_sanctions (id, user_id, kind, scope, expires_at, by, reason, seq)
 		 VALUES (?,?,?,?,?,?,?,?)`,
 		id, userID, kind, scope, expiresAt, by, reason, seq,
@@ -369,7 +601,7 @@ func activeSanction(db *sql.DB, userID, scope string) (string, bool) {
 	var kind string
 	var err error
 	if scope != "" {
-		err = db.QueryRow(
+		err = qQueryRow(db,
 			`SELECT kind FROM user_sanctions
 			 WHERE user_id=? AND (scope=? OR scope='global')
 			   AND (expires_at=0 OR expires_at>?)
@@ -377,7 +609,7 @@ func activeSanction(db *sql.DB, userID, scope string) (string, bool) {
 			userID, scope, now,
 		).Scan(&kind)
 	} else {
-		err = db.QueryRow(
+		err = qQueryRow(db,
 			`SELECT kind FROM user_sanctions
 			 WHERE user_id=? AND scope='global'
 			   AND (expires_at=0 OR expires_at>?)
@@ -396,27 +628,33 @@ func activeSanction(db *sql.DB, userID, scope string) (string, bool) {
 
 // --- Idempotency helpers ---
 
-func checkProcessed(db *sql.DB, cid string) (string, bool) {
-	var result string
-	err := db.QueryRow(`SELECT result_json FROM processed_commands WHERE cid=?`, cid).Scan(&result)
+func checkProcessed(db *sql.DB, actorID, cid, commandHash string) (string, bool, bool) {
+	var result, storedHash string
+	err := qQueryRow(db,
+		`SELECT result_json, command_hash FROM processed_commands WHERE actor_id=? AND cid=?`,
+		actorID, cid,
+	).Scan(&result, &storedHash)
 	if err == sql.ErrNoRows {
-		return "", false
+		return "", false, false
 	}
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
-	return result, true
+	if storedHash != "" && storedHash != commandHash {
+		return "", false, true
+	}
+	return result, true, false
 }
 
-func recordProcessed(tx *sql.Tx, cid, resultJSON string) error {
+func recordProcessed(tx *sql.Tx, actorID, cid, commandHash, resultJSON string) error {
 	// Prune entries older than 10 minutes while we're here.
 	cutoff := time.Now().Add(-10 * time.Minute).UnixMilli()
-	if _, err := tx.Exec(`DELETE FROM processed_commands WHERE processed_at<?`, cutoff); err != nil {
+	if _, err := qExec(tx, `DELETE FROM processed_commands WHERE processed_at<?`, cutoff); err != nil {
 		return err
 	}
-	_, err := tx.Exec(
-		`INSERT OR REPLACE INTO processed_commands (cid, result_json, processed_at) VALUES (?,?,?)`,
-		cid, resultJSON, nowMS(),
+	_, err := qExec(tx,
+		`INSERT OR REPLACE INTO processed_commands (actor_id, cid, command_hash, result_json, processed_at) VALUES (?,?,?,?,?)`,
+		actorID, cid, commandHash, resultJSON, nowMS(),
 	)
 	return err
 }
@@ -425,7 +663,7 @@ func recordProcessed(tx *sql.Tx, cid, resultJSON string) error {
 
 // upsertReaction inserts or replaces a reaction (one per user per post).
 func upsertReaction(tx *sql.Tx, postID, userID, emoji string, ts int64) error {
-	_, err := tx.Exec(
+	_, err := qExec(tx,
 		`INSERT OR REPLACE INTO post_reactions (post_id, user_id, emoji, ts) VALUES (?,?,?,?)`,
 		postID, userID, emoji, ts,
 	)
@@ -433,25 +671,25 @@ func upsertReaction(tx *sql.Tx, postID, userID, emoji string, ts int64) error {
 }
 
 func deleteReaction(tx *sql.Tx, postID, userID string) error {
-	_, err := tx.Exec(`DELETE FROM post_reactions WHERE post_id=? AND user_id=?`, postID, userID)
+	_, err := qExec(tx, `DELETE FROM post_reactions WHERE post_id=? AND user_id=?`, postID, userID)
 	return err
 }
 
 func reactionCount(db *sql.DB, postID string) (int, error) {
 	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM post_reactions WHERE post_id=?`, postID).Scan(&n)
+	err := qQueryRow(db, `SELECT COUNT(*) FROM post_reactions WHERE post_id=?`, postID).Scan(&n)
 	return n, err
 }
 
 func reactionCountTx(tx *sql.Tx, postID string) (int, error) {
 	var n int
-	err := tx.QueryRow(`SELECT COUNT(*) FROM post_reactions WHERE post_id=?`, postID).Scan(&n)
+	err := qQueryRow(tx, `SELECT COUNT(*) FROM post_reactions WHERE post_id=?`, postID).Scan(&n)
 	return n, err
 }
 
 func userReacted(db *sql.DB, postID, userID string) (bool, error) {
 	var n int
-	err := db.QueryRow(
+	err := qQueryRow(db,
 		`SELECT COUNT(*) FROM post_reactions WHERE post_id=? AND user_id=?`, postID, userID,
 	).Scan(&n)
 	return n > 0, err
@@ -477,7 +715,7 @@ type PollOption struct {
 }
 
 func insertPoll(tx *sql.Tx, id, postID, question string, expiresAt, ts int64) error {
-	_, err := tx.Exec(
+	_, err := qExec(tx,
 		`INSERT INTO polls (id, post_id, question, expires_at, ts) VALUES (?,?,?,?,?)`,
 		id, postID, question, expiresAt, ts,
 	)
@@ -485,7 +723,7 @@ func insertPoll(tx *sql.Tx, id, postID, question string, expiresAt, ts int64) er
 }
 
 func insertPollOption(tx *sql.Tx, id, pollID, text string, position int) error {
-	_, err := tx.Exec(
+	_, err := qExec(tx,
 		`INSERT INTO poll_options (id, poll_id, text, position) VALUES (?,?,?,?)`,
 		id, pollID, text, position,
 	)
@@ -493,7 +731,7 @@ func insertPollOption(tx *sql.Tx, id, pollID, text string, position int) error {
 }
 
 func castVote(tx *sql.Tx, pollID, optionID, userID string, ts int64) error {
-	_, err := tx.Exec(
+	_, err := qExec(tx,
 		`INSERT OR REPLACE INTO poll_votes (poll_id, option_id, user_id, ts) VALUES (?,?,?,?)`,
 		pollID, optionID, userID, ts,
 	)
@@ -502,7 +740,7 @@ func castVote(tx *sql.Tx, pollID, optionID, userID string, ts int64) error {
 
 func getPollByPostID(db *sql.DB, postID string) (*Poll, error) {
 	p := &Poll{}
-	err := db.QueryRow(
+	err := qQueryRow(db,
 		`SELECT id, post_id, question, expires_at, ts FROM polls WHERE post_id=?`, postID,
 	).Scan(&p.ID, &p.PostID, &p.Question, &p.ExpiresAt, &p.TS)
 	if err == sql.ErrNoRows {
@@ -516,7 +754,7 @@ func getPollByPostID(db *sql.DB, postID string) (*Poll, error) {
 
 func getPollWithVotes(db *sql.DB, pollID, viewerUserID string) (*Poll, error) {
 	p := &Poll{}
-	err := db.QueryRow(
+	err := qQueryRow(db,
 		`SELECT id, post_id, question, expires_at, ts FROM polls WHERE id=?`, pollID,
 	).Scan(&p.ID, &p.PostID, &p.Question, &p.ExpiresAt, &p.TS)
 	if err == sql.ErrNoRows {
@@ -526,7 +764,7 @@ func getPollWithVotes(db *sql.DB, pollID, viewerUserID string) (*Poll, error) {
 		return nil, err
 	}
 	// Load options with counts.
-	rows, err := db.Query(
+	rows, err := qQuery(db,
 		`SELECT po.id, po.text,
 		        (SELECT COUNT(*) FROM poll_votes pv WHERE pv.option_id=po.id) AS cnt
 		 FROM poll_options po WHERE po.poll_id=? ORDER BY po.position`, pollID,
@@ -548,7 +786,7 @@ func getPollWithVotes(db *sql.DB, pollID, viewerUserID string) (*Poll, error) {
 	// Check if viewer voted.
 	if viewerUserID != "" {
 		var votedOptionID string
-		err := db.QueryRow(
+		err := qQueryRow(db,
 			`SELECT option_id FROM poll_votes WHERE poll_id=? AND user_id=?`, pollID, viewerUserID,
 		).Scan(&votedOptionID)
 		if err != nil && err != sql.ErrNoRows {
@@ -572,7 +810,7 @@ func pollsForPosts(db *sql.DB, postIDs []string, viewerUserID string) (map[strin
 	}
 	placeholder := strings.Repeat("?,", len(postIDs))
 	placeholder = placeholder[:len(placeholder)-1] // trim trailing comma
-	rows, err := db.Query(
+	rows, err := qQuery(db,
 		`SELECT id, post_id, question, expires_at, ts FROM polls WHERE post_id IN (`+placeholder+`)`,
 		args...,
 	)
@@ -618,7 +856,7 @@ type Notification struct {
 }
 
 func insertNotification(db *sql.DB, id, userID, kind, threadID, postID, actor string, ts int64) error {
-	_, err := db.Exec(
+	_, err := qExec(db,
 		`INSERT OR IGNORE INTO notifications (id, user_id, kind, thread_id, post_id, actor, read, ts)
 		 VALUES (?,?,?,?,?,?,0,?)`,
 		id, userID, kind, threadID, postID, actor, ts,
@@ -633,7 +871,7 @@ func listNotifications(db *sql.DB, userID string, limit, offset int, unreadOnly 
 		q += ` AND read=0`
 	}
 	q += ` ORDER BY ts DESC LIMIT ? OFFSET ?`
-	rows, err := db.Query(q, userID, limit, offset)
+	rows, err := qQuery(db, q, userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -653,31 +891,31 @@ func listNotifications(db *sql.DB, userID string, limit, offset int, unreadOnly 
 
 func countUnreadNotifications(db *sql.DB, userID string) (int, error) {
 	var n int
-	err := db.QueryRow(
+	err := qQueryRow(db,
 		`SELECT COUNT(*) FROM notifications WHERE user_id=? AND read=0`, userID,
 	).Scan(&n)
 	return n, err
 }
 
 func markNotificationRead(db *sql.DB, id, userID string) error {
-	_, err := db.Exec(
+	_, err := qExec(db,
 		`UPDATE notifications SET read=1 WHERE id=? AND user_id=?`, id, userID,
 	)
 	return err
 }
 
 func markAllNotificationsRead(db *sql.DB, userID string) error {
-	_, err := db.Exec(`UPDATE notifications SET read=1 WHERE user_id=?`, userID)
+	_, err := qExec(db, `UPDATE notifications SET read=1 WHERE user_id=?`, userID)
 	return err
 }
 
 func setThreadPref(db *sql.DB, userID, threadID, level string) error {
 	if level == "normal" {
 		// "normal" = remove the row (default).
-		_, err := db.Exec(`DELETE FROM thread_prefs WHERE user_id=? AND thread_id=?`, userID, threadID)
+		_, err := qExec(db, `DELETE FROM thread_prefs WHERE user_id=? AND thread_id=?`, userID, threadID)
 		return err
 	}
-	_, err := db.Exec(
+	_, err := qExec(db,
 		`INSERT OR REPLACE INTO thread_prefs (user_id, thread_id, level) VALUES (?,?,?)`,
 		userID, threadID, level,
 	)
@@ -687,7 +925,7 @@ func setThreadPref(db *sql.DB, userID, threadID, level string) error {
 // watchersOfThread returns user IDs with level='watch' for the given thread,
 // excluding excludeUserID (usually the post author).
 func watchersOfThread(db *sql.DB, threadID, excludeUserID string) ([]string, error) {
-	rows, err := db.Query(
+	rows, err := qQuery(db,
 		`SELECT user_id FROM thread_prefs WHERE thread_id=? AND level='watch' AND user_id!=?`,
 		threadID, excludeUserID,
 	)
@@ -718,7 +956,7 @@ type TrustLevelInfo struct {
 
 // ensureActivity creates or returns the activity row for a user (idempotent).
 func ensureActivity(db *sql.DB, userID string) error {
-	_, err := db.Exec(
+	_, err := qExec(db,
 		`INSERT OR IGNORE INTO user_activity (user_id) VALUES (?)`, userID,
 	)
 	return err
@@ -728,12 +966,12 @@ func ensureActivity(db *sql.DB, userID string) error {
 // Returns (oldLevel, newLevel, error).
 func recordPostCreated(db *sql.DB, userID string) (int, int, error) {
 	today := nowDay()
-	_, err := db.Exec(`INSERT OR IGNORE INTO user_activity (user_id) VALUES (?)`, userID)
+	_, err := qExec(db, `INSERT OR IGNORE INTO user_activity (user_id) VALUES (?)`, userID)
 	if err != nil {
 		return 0, 0, err
 	}
 	// Bump posts_created; conditionally bump days_visited.
-	_, err = db.Exec(`
+	_, err = qExec(db, `
 		UPDATE user_activity SET
 		    posts_created = posts_created + 1,
 		    days_visited  = days_visited + CASE WHEN last_visit_day != ? THEN 1 ELSE 0 END,
@@ -747,7 +985,7 @@ func recordPostCreated(db *sql.DB, userID string) (int, int, error) {
 
 // recordReactionReceived increments the reactions_recv counter.
 func recordReactionReceived(db *sql.DB, postAuthorID string) error {
-	_, err := db.Exec(`
+	_, err := qExec(db, `
 		INSERT INTO user_activity (user_id, reactions_recv) VALUES (?,1)
 		ON CONFLICT(user_id) DO UPDATE SET reactions_recv = reactions_recv + 1`,
 		postAuthorID,
@@ -756,7 +994,7 @@ func recordReactionReceived(db *sql.DB, postAuthorID string) error {
 }
 
 func recordReactionRemoved(db *sql.DB, postAuthorID string) error {
-	_, err := db.Exec(`
+	_, err := qExec(db, `
 		UPDATE user_activity SET reactions_recv = MAX(0, reactions_recv - 1) WHERE user_id=?`,
 		postAuthorID,
 	)
@@ -767,7 +1005,7 @@ func recordReactionRemoved(db *sql.DB, postAuthorID string) error {
 // Returns (oldLevel, newLevel, error).
 func recomputeTrust(db *sql.DB, userID string) (int, int, error) {
 	var posts, days, oldLevel int
-	err := db.QueryRow(
+	err := qQueryRow(db,
 		`SELECT posts_created, days_visited, trust_level FROM user_activity WHERE user_id=?`, userID,
 	).Scan(&posts, &days, &oldLevel)
 	if err == sql.ErrNoRows {
@@ -778,7 +1016,7 @@ func recomputeTrust(db *sql.DB, userID string) (int, int, error) {
 	}
 	newLevel := computeTrustLevel(posts, days, oldLevel)
 	if newLevel != oldLevel {
-		_, err = db.Exec(
+		_, err = qExec(db,
 			`UPDATE user_activity SET trust_level=? WHERE user_id=?`, newLevel, userID,
 		)
 	}
@@ -807,7 +1045,7 @@ func computeTrustLevel(postsCreated, daysVisited, currentLevel int) int {
 func trustInfo(db *sql.DB, userID string) (*TrustLevelInfo, error) {
 	_ = ensureActivity(db, userID)
 	t := &TrustLevelInfo{}
-	err := db.QueryRow(
+	err := qQueryRow(db,
 		`SELECT posts_created, days_visited, reactions_recv, trust_level
 		 FROM user_activity WHERE user_id=?`, userID,
 	).Scan(&t.PostsCreated, &t.DaysVisited, &t.ReactionsRecv, &t.TrustLevel)

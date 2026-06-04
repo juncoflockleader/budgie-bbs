@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -87,8 +89,15 @@ func (h *Handler) Execute(ctx context.Context, actor *User, name proto.CommandNa
 // --- Idempotency wrapper ---
 
 func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.RawMessage, cid string) Reply {
+	actorID := ""
+	if actor != nil {
+		actorID = actor.ID
+	}
+	commandHash := hashCommand(name, payload)
 	if cid != "" {
-		if cached, ok := checkProcessed(h.db, cid); ok {
+		if cached, ok, conflict := checkProcessed(h.db, actorID, cid, commandHash); conflict {
+			return Reply{Err: errDetail(proto.ErrConflict, "command id was already used with a different payload", false)}
+		} else if ok {
 			var r proto.AckResult
 			_ = json.Unmarshal([]byte(cached), &r)
 			return Reply{Result: &r}
@@ -102,11 +111,16 @@ func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.Raw
 		// Record inside its own tiny tx; non-fatal if it fails.
 		tx, err := h.db.Begin()
 		if err == nil {
-			_ = recordProcessed(tx, cid, string(raw))
+			_ = recordProcessed(tx, actorID, cid, commandHash, string(raw))
 			_ = tx.Commit()
 		}
 	}
 	return reply
+}
+
+func hashCommand(name proto.CommandName, payload json.RawMessage) string {
+	sum := sha256.Sum256(append([]byte(name+"\x00"), payload...))
+	return hex.EncodeToString(sum[:])
 }
 
 func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMessage) Reply {
@@ -237,6 +251,20 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.setThreadPref(actor, p)
 
+	case proto.CmdFlagPost:
+		var p proto.FlagPostPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.flagPost(actor, p)
+
+	case proto.CmdResolveReview:
+		var p proto.ResolveReviewPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.resolveReview(actor, p)
+
 	default:
 		return Reply{Err: errDetail(proto.ErrValidationFailed, fmt.Sprintf("unknown command: %s", name), false)}
 	}
@@ -271,7 +299,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Verify board exists.
 	var boardName string
-	if err := tx.QueryRow(`SELECT name FROM boards WHERE id=?`, p.Board).Scan(&boardName); err == sql.ErrNoRows {
+	if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, p.Board).Scan(&boardName); err == sql.ErrNoRows {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	} else if err != nil {
 		return internalErr(err)
@@ -281,7 +309,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Append thread.new
 	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: p.Board, Author: actor.Name, Title: p.Title, TS: ts,
+		ID: threadID, Board: p.Board, Author: actor.Name, AuthorID: actor.ID, Title: p.Title, TS: ts,
 	})
 	if err != nil {
 		return internalErr(err)
@@ -291,7 +319,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Append post.appended (the first post in the thread)
 	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.Name, Body: p.Body,
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: p.Body,
 		ContentType: ct, TS: ts,
 	})
 	if err != nil {
@@ -300,14 +328,14 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Update projections.
 	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: p.Board, Author: actor.Name, Title: p.Title,
-		LastSeq: tseq, CreatedTS: ts,
+		ID: threadID, Board: p.Board, Author: actor.Name, AuthorID: actor.ID, Title: p.Title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
 	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: actor.Name,
-		Body: p.Body, ContentType: ct, CreatedSeq: pseq,
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
+		Body: p.Body, ContentType: ct, CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
@@ -317,6 +345,12 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if err := ftsInsertPost(tx, postID, threadID, p.Board, actor.Name, p.Body); err != nil {
 		return internalErr(err)
 	}
+	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
+		ActorID: actor.ID, ActorName: actor.Name, PostID: postID, ThreadID: threadID,
+		BoardID: p.Board, Body: p.Body, TS: ts, Seq: pseq,
+	}, ts); err != nil {
+		return internalErr(err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
@@ -324,12 +358,9 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Publish both events.
 	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: p.Board, Author: actor.Name, Title: p.Title, TS: ts}, TS: ts})
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: p.Board, Author: actor.Name, AuthorID: actor.ID, Title: p.Title, TS: ts}, TS: ts})
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, Body: p.Body, ContentType: ct, TS: ts}, TS: ts})
-
-	// Post-commit activity tracking (best-effort, non-blocking).
-	go h.postCommitWork(actor, postID, threadID, p.Board, p.Body, "", ts, pseq)
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: p.Body, ContentType: ct, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }
@@ -387,15 +418,15 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: p.Thread, Author: actor.Name, Body: p.Body,
+		ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID, Body: p.Body,
 		ContentType: ct, ReplyTo: p.ReplyTo, TS: ts,
 	})
 	if err != nil {
 		return internalErr(err)
 	}
 	if err := insertPost(tx, &Post{
-		ID: postID, Thread: p.Thread, Author: actor.Name,
-		Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, CreatedSeq: seq,
+		ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID,
+		Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, CreatedSeq: seq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
@@ -423,17 +454,19 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 			}
 		}
 	}
+	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
+		ActorID: actor.ID, ActorName: actor.Name, PostID: postID, ThreadID: p.Thread,
+		BoardID: thread.Board, Body: p.Body, ReplyTo: p.ReplyTo, TS: ts, Seq: seq,
+	}, ts); err != nil {
+		return internalErr(err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: actor.Name, Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, TS: ts}, TS: ts})
-
-	// Post-commit: record activity + trust level change; fan out notifications.
-	// These are best-effort and do not affect the command reply.
-	go h.postCommitWork(actor, postID, p.Thread, thread.Board, p.Body, p.ReplyTo, ts, seq)
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID, Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
 }
@@ -461,8 +494,11 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrConflict, "cannot edit a redacted post", false)}
 	}
 
-	isAuthor := post.Author == actor.ID
-	withinWindow := time.Now().UnixMilli()-post.CreatedSeq < editWindowDur.Milliseconds()
+	isAuthor := post.AuthorID == actor.ID
+	if post.AuthorID == "" {
+		isAuthor = post.Author == actor.Name
+	}
+	withinWindow := time.Now().UnixMilli()-post.CreatedAt < editWindowDur.Milliseconds()
 	if !actor.IsMod() && !(isAuthor && withinWindow) {
 		return Reply{Err: errDetail(proto.ErrEditWindowExpired, "edit window has expired", false)}
 	}
@@ -518,8 +554,11 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrConflict, "post is already redacted", false)}
 	}
 
-	isAuthor := post.Author == actor.ID
-	withinWindow := time.Now().UnixMilli()-post.CreatedSeq < editWindowDur.Milliseconds()
+	isAuthor := post.AuthorID == actor.ID
+	if post.AuthorID == "" {
+		isAuthor = post.Author == actor.Name
+	}
+	withinWindow := time.Now().UnixMilli()-post.CreatedAt < editWindowDur.Milliseconds()
 	if !actor.IsMod() && !(isAuthor && withinWindow) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "insufficient permissions to redact this post", false)}
 	}
@@ -664,7 +703,7 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 	}
 
 	var destName string
-	if err := tx.QueryRow(`SELECT name FROM boards WHERE id=?`, p.ToBoard).Scan(&destName); err == sql.ErrNoRows {
+	if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, p.ToBoard).Scan(&destName); err == sql.ErrNoRows {
 		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
 	} else if err != nil {
 		return internalErr(err)
@@ -779,10 +818,10 @@ func (h *Handler) sendChatLine(actor *User, p proto.SendChatLinePayload) Reply {
 	scopes := []string{"chat:" + p.Room}
 
 	h.bus.Publish(&proto.Event{
-		Kind:   proto.EvtChatLine,
-		Scopes: scopes,
+		Kind:    proto.EvtChatLine,
+		Scopes:  scopes,
 		Payload: &proto.ChatLinePayload{ID: id, Room: p.Room, User: actor.Name, Text: p.Text, TS: ts},
-		TS:     ts,
+		TS:      ts,
 	})
 
 	return Reply{Result: &proto.AckResult{ID: id}}
@@ -848,7 +887,7 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 	// Validate scope is "global" or an existing board.
 	if scope != "global" {
 		var boardName string
-		if err := tx.QueryRow(`SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
+		if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
 			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		} else if err != nil {
 			return internalErr(err)
@@ -1021,9 +1060,13 @@ func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
 		return internalErr(err)
 	}
 
+	postAuthorID := post.AuthorID
+	if postAuthorID == "" {
+		postAuthorID = post.Author
+	}
 	// Update activity for post author (best-effort).
-	if post.Author != actor.ID {
-		go recordReactionReceived(h.db, post.Author) //nolint
+	if postAuthorID != actor.ID {
+		go recordReactionReceived(h.db, postAuthorID) //nolint
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostReacted, Seq: seq, Scopes: scopes,
@@ -1087,8 +1130,12 @@ func (h *Handler) unreactPost(actor *User, p proto.ReactPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	if post.Author != actor.ID {
-		go recordReactionRemoved(h.db, post.Author) //nolint
+	postAuthorID := post.AuthorID
+	if postAuthorID == "" {
+		postAuthorID = post.Author
+	}
+	if postAuthorID != actor.ID {
+		go recordReactionRemoved(h.db, postAuthorID) //nolint
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostUnreacted, Seq: seq, Scopes: scopes,
@@ -1186,60 +1233,85 @@ func (h *Handler) setThreadPref(actor *User, p proto.SetThreadPrefPayload) Reply
 	return Reply{Result: &proto.AckResult{ID: p.Thread}}
 }
 
-// ── Post-commit work (goroutine) ─────────────────────────────────────────────
+// ── Modern moderation review queue ──────────────────────────────────────────
 
-// postCommitWork runs after a post is committed: records activity/trust,
-// fans out mention notifications, and notifies thread watchers.
-// Called in a goroutine — must not use the TX or hold any locks.
-func (h *Handler) postCommitWork(
-	actor *User, postID, threadID, boardID, body, replyTo string, ts, seq int64,
-) {
-	// 1. Record activity and recompute trust level.
-	oldTL, newTL, err := recordPostCreated(h.db, actor.ID)
-	if err == nil && newTL != oldTL {
-		// Emit trust level change event (best-effort, separate mini-tx).
-		if tx, err2 := h.db.Begin(); err2 == nil {
-			scopes := []string{"account:" + actor.ID}
-			evtSeq, err3 := appendEvent(tx, newID("evt_"), proto.EvtTrustLevelChanged, scopes,
-				&proto.TrustLevelChangedPayload{User: actor.ID, OldLevel: oldTL, NewLevel: newTL, TS: ts})
-			if err3 == nil {
-				_ = tx.Commit()
-				h.bus.Publish(&proto.Event{Kind: proto.EvtTrustLevelChanged, Seq: evtSeq, Scopes: scopes,
-					Payload: &proto.TrustLevelChangedPayload{User: actor.Name, OldLevel: oldTL, NewLevel: newTL, TS: ts}, TS: ts})
-			} else {
-				_ = tx.Rollback()
-			}
-		}
+func (h *Handler) flagPost(actor *User, p proto.FlagPostPayload) Reply {
+	if p.Post == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	ts := nowMS()
+
+	post, err := getPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil || thread == nil {
+		return internalErr(err)
 	}
 
-	// 2. Fan out mention notifications.
-	mentions := parseMentions(body)
-	for _, username := range mentions {
-		u, err := getUserByName(h.db, username)
-		if err != nil || u == nil || u.ID == actor.ID {
-			continue
-		}
-		_ = insertNotification(h.db, newID("ntf_"), u.ID, "mention", threadID, postID, actor.Name, ts)
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
 	}
+	defer tx.Rollback() //nolint
 
-	// 3. Notify reply-to author.
-	if replyTo != "" {
-		parent, err := getPost(h.db, replyTo)
-		if err == nil && parent != nil && parent.Author != actor.ID {
-			_ = insertNotification(h.db, newID("ntf_"), parent.Author, "reply", threadID, postID, actor.Name, ts)
-		}
+	reviewID := newID("rev_")
+	if err := insertModerationReview(tx, reviewID, "post_flag", post.ID, "post", actor.ID, p.Reason, ts); err != nil {
+		return internalErr(err)
 	}
-
-	// 4. Notify thread watchers (excluding the author).
-	watchers, err := watchersOfThread(h.db, threadID, actor.ID)
-	if err == nil {
-		for _, watcherID := range watchers {
-			_ = insertNotification(h.db, newID("ntf_"), watcherID, "watched", threadID, postID, actor.Name, ts)
-		}
+	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board, "moderation:global"}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, &proto.PostFlaggedPayload{
+		ReviewID: reviewID, PostID: post.ID, Thread: post.Thread, Reporter: actor.ID, Reason: p.Reason, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
 	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostFlagged, Seq: seq, Scopes: scopes,
+		Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, PostID: post.ID, Thread: post.Thread, Reporter: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+	return Reply{Result: &proto.AckResult{ID: reviewID, Seq: seq}}
+}
 
-	// 5. Ephemeral notification event for live-connected clients.
-	_ = seq // available for future use
+func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply {
+	if !actor.IsMod() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
+	}
+	if p.Review == "" || p.Resolution == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "review and resolution are required", false)}
+	}
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if err := resolveModerationReview(tx, p.Review, actor.ID, p.Resolution, ts); err != nil {
+		if err == sql.ErrNoRows {
+			return Reply{Err: errDetail(proto.ErrNotFound, "review not found", false)}
+		}
+		return internalErr(err)
+	}
+	scopes := []string{"moderation:global"}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtReviewResolved, scopes, &proto.ReviewResolvedPayload{
+		ReviewID: p.Review, Resolution: p.Resolution, By: actor.ID, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtReviewResolved, Seq: seq, Scopes: scopes,
+		Payload: &proto.ReviewResolvedPayload{ReviewID: p.Review, Resolution: p.Resolution, By: actor.Name, TS: ts}, TS: ts})
+	return Reply{Result: &proto.AckResult{ID: p.Review, Seq: seq}}
 }
 
 // parseMentions extracts unique @usernames from post body text.
@@ -1306,14 +1378,20 @@ func extractPoll(body string) (*pollBlock, string) {
 func getThreadTx(tx *sql.Tx, id string) (*Thread, error) {
 	t := &Thread{}
 	var locked int
-	err := tx.QueryRow(
-		`SELECT id, board, author, title, locked, post_count, last_seq, created_ts FROM threads WHERE id=?`, id,
-	).Scan(&t.ID, &t.Board, &t.Author, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS)
+	err := qQueryRow(tx,
+		`SELECT id, board, author, COALESCE(author_id,''), title, locked, post_count, last_seq, created_ts, created_at, updated_at FROM threads WHERE id=?`, id,
+	).Scan(&t.ID, &t.Board, &t.Author, &t.AuthorID, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS, &t.CreatedAt, &t.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if t.CreatedAt == 0 {
+		t.CreatedAt = t.CreatedTS
+	}
+	if t.UpdatedAt == 0 {
+		t.UpdatedAt = t.CreatedAt
 	}
 	t.Locked = locked != 0
 	return t, nil
@@ -1322,14 +1400,20 @@ func getThreadTx(tx *sql.Tx, id string) (*Thread, error) {
 func getPostTx(tx *sql.Tx, id string) (*Post, error) {
 	p := &Post{}
 	var redacted int
-	err := tx.QueryRow(
-		`SELECT id, thread, author, body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq FROM posts WHERE id=?`, id,
-	).Scan(&p.ID, &p.Thread, &p.Author, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq)
+	err := qQueryRow(tx,
+		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
+	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if p.CreatedAt == 0 {
+		p.CreatedAt = p.CreatedSeq
+	}
+	if p.UpdatedAt == 0 {
+		p.UpdatedAt = p.CreatedAt
 	}
 	p.Redacted = redacted != 0
 	return p, nil
@@ -1337,7 +1421,7 @@ func getPostTx(tx *sql.Tx, id string) (*Post, error) {
 
 func getUserTx(tx *sql.Tx, id string) (*User, error) {
 	u := &User{}
-	err := tx.QueryRow(`SELECT id, name, role, password, created FROM users WHERE id=?`, id).
+	err := qQueryRow(tx, `SELECT id, name, role, password, created FROM users WHERE id=?`, id).
 		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created)
 	if err == sql.ErrNoRows {
 		return nil, nil

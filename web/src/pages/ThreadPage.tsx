@@ -277,6 +277,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
           const rx = reactions[post.id] ?? { count: 0, reacted: false }
           const poll = polls[post.id] // null = loading, Poll = loaded, undefined = none
           const tl = trustLevels[post.author]
+          const createdAt = post.createdAt ?? post.createdSeq
 
           return (
             <div key={post.id} className="post-card">
@@ -287,7 +288,9 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
                     {TL_LABEL[tl] ?? `TL${tl}`}
                   </span>
                 )}
-                <span className="muted post-time">#{post.createdSeq}</span>
+                <span className="muted post-time">
+                  {createdAt > 1_000_000_000_000 ? new Date(createdAt).toLocaleString() : `#${post.createdSeq}`}
+                </span>
                 <span className="post-actions">
                   <button
                     className={`link-btn react-btn${rx.reacted ? ' react-btn--active' : ''}`}
@@ -302,7 +305,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
                       setComposing(true)
                     }}>Reply</button>
                   )}
-                  {(isMod || post.author === currentUserId) && !post.redacted && (
+                  {(isMod || post.authorId === currentUserId) && !post.redacted && (
                     <button className="link-btn danger" onClick={() => redactPost(post.id)}>Redact</button>
                   )}
                   {isMod && post.redacted && (

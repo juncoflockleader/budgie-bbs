@@ -30,10 +30,14 @@ const (
 
 	// M8 — Notifications
 	CmdSetThreadPref CommandName = "setThreadPref"
+
+	// Modern forum moderation
+	CmdFlagPost      CommandName = "flagPost"
+	CmdResolveReview CommandName = "resolveReview"
 )
 
 type CreateBoardPayload struct {
-	ID          string `json:"id"`          // URL-safe slug
+	ID          string `json:"id"` // URL-safe slug
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
@@ -124,6 +128,16 @@ type VotePollPayload struct {
 type SetThreadPrefPayload struct {
 	Thread string `json:"thread"`
 	Level  string `json:"level"` // "watch" | "normal" | "mute"
+}
+
+type FlagPostPayload struct {
+	Post   string `json:"post"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type ResolveReviewPayload struct {
+	Review     string `json:"review"`
+	Resolution string `json:"resolution"`
 }
 
 type SubscribePayload struct {

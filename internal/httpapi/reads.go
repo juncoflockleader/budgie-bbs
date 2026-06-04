@@ -16,6 +16,15 @@ func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"boards": boards})
 }
 
+func (s *Server) handleListCategories(w http.ResponseWriter, r *http.Request) {
+	categories, err := s.core.ListCategories()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"categories": categories})
+}
+
 func (s *Server) handleListThreads(w http.ResponseWriter, r *http.Request) {
 	boardID := r.PathValue("board")
 	limit, offset := paginate(r)
@@ -168,6 +177,64 @@ func (s *Server) handleGetTrust(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+// GET /api/v1/users/{name}
+func (s *Server) handleGetUserProfile(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	profile, err := s.core.UserProfileByName(name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	if profile == nil {
+		writeError(w, http.StatusNotFound, "not_found", "user not found", false)
+		return
+	}
+	writeJSON(w, http.StatusOK, profile)
+}
+
+// GET /api/v1/mod/reviewables?status=open
+func (s *Server) handleListReviewables(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	if !actor.IsMod() {
+		writeError(w, http.StatusForbidden, proto.ErrForbidden, "moderator role required", false)
+		return
+	}
+	limit, offset := paginate(r)
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = "open"
+	}
+	reviews, err := s.core.ListModerationReviews(status, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reviewables": reviews})
+}
+
+// GET /api/v1/users/{name}/sanctions
+func (s *Server) handleListUserSanctions(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	name := r.PathValue("name")
+	target, err := s.core.UserByName(name)
+	if err != nil || target == nil {
+		writeError(w, http.StatusNotFound, "not_found", "user not found", false)
+		return
+	}
+	if !actor.IsMod() && actor.ID != target.ID {
+		writeError(w, http.StatusForbidden, proto.ErrForbidden, "moderator role required", false)
+		return
+	}
+
+	limit, offset := paginate(r)
+	rows, err := s.core.ListUserSanctions(target.ID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sanctions": rows})
 }
 
 func paginate(r *http.Request) (limit, offset int) {

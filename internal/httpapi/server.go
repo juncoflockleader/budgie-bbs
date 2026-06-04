@@ -41,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	auth := s.requireAuth
 	mux.Handle("GET /api/v1/events", auth(http.HandlerFunc(s.handleEvents)))
 	mux.Handle("GET /api/v1/events/stream", auth(http.HandlerFunc(s.handleEventsStream)))
+	mux.Handle("GET /api/v1/categories", auth(http.HandlerFunc(s.handleListCategories)))
 	mux.Handle("GET /api/v1/boards", auth(http.HandlerFunc(s.handleListBoards)))
 	mux.Handle("GET /api/v1/boards/{board}/threads", auth(http.HandlerFunc(s.handleListThreads)))
 	mux.Handle("GET /api/v1/threads/{thread}", auth(http.HandlerFunc(s.handleGetThread)))
@@ -51,9 +52,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/polls/{poll}", auth(http.HandlerFunc(s.handleGetPoll)))
 	mux.Handle("GET /api/v1/posts/{post}/poll", auth(http.HandlerFunc(s.handleGetPollByPost)))
 	mux.Handle("GET /api/v1/users/{name}/trust", auth(http.HandlerFunc(s.handleGetTrust)))
+	mux.Handle("GET /api/v1/users/{name}", auth(http.HandlerFunc(s.handleGetUserProfile)))
+	mux.Handle("GET /api/v1/mod/reviewables", auth(http.HandlerFunc(s.handleListReviewables)))
+	mux.Handle("GET /api/v1/users/{name}/sanctions", auth(http.HandlerFunc(s.handleListUserSanctions)))
 
 	// Authenticated write endpoints
 	mux.Handle("POST /api/v1/auth/pubkey", auth(http.HandlerFunc(s.handleAddPubkey)))
+	mux.Handle("PATCH /api/v1/users/me", auth(http.HandlerFunc(s.handleUpdateOwnProfile)))
+	mux.Handle("POST /api/v1/boards", auth(http.HandlerFunc(s.handleCreateBoard)))
 	mux.Handle("POST /api/v1/commands", auth(http.HandlerFunc(s.handleCommand)))
 	mux.Handle("POST /api/v1/boards/{board}/threads", auth(http.HandlerFunc(s.handleCreateThread)))
 	mux.Handle("POST /api/v1/threads/{thread}/posts", auth(http.HandlerFunc(s.handleAppendPost)))
@@ -61,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/posts/{post}", auth(http.HandlerFunc(s.handleRedactPost)))
 	mux.Handle("POST /api/v1/posts/{post}/restore", auth(http.HandlerFunc(s.handleRestorePost)))
 	mux.Handle("POST /api/v1/posts/{post}/purge", auth(http.HandlerFunc(s.handlePurgePost)))
+	mux.Handle("POST /api/v1/posts/{post}/flag", auth(http.HandlerFunc(s.handleFlagPost)))
 	mux.Handle("POST /api/v1/posts/{post}/react", auth(http.HandlerFunc(s.handleReactPost)))
 	mux.Handle("DELETE /api/v1/posts/{post}/react", auth(http.HandlerFunc(s.handleUnreactPost)))
 	mux.Handle("POST /api/v1/polls/{poll}/vote", auth(http.HandlerFunc(s.handleVotePoll)))
@@ -68,6 +75,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/notifications/read-all", auth(http.HandlerFunc(s.handleMarkAllRead)))
 	mux.Handle("PUT /api/v1/threads/{thread}/prefs", auth(http.HandlerFunc(s.handleSetThreadPref)))
 	mux.Handle("POST /api/v1/threads/{thread}/lock", auth(http.HandlerFunc(s.handleLockThread)))
+	mux.Handle("POST /api/v1/mod/reviewables/{id}/resolve", auth(http.HandlerFunc(s.handleResolveReview)))
+	mux.Handle("POST /api/v1/users/{name}/sanctions", auth(http.HandlerFunc(s.handleSanctionUser)))
 	mux.Handle("POST /api/v1/chat/{room}/lines", auth(http.HandlerFunc(s.handleSendChatLine)))
 
 	// SPA static files (must come last — catches everything not matched above).

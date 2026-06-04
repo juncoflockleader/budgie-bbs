@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"testing"
@@ -255,5 +256,273 @@ func TestIdempotency(t *testing.T) {
 	}
 	if len(threads) != 1 {
 		t.Errorf("expected 1 thread after idempotent create, got %d", len(threads))
+	}
+}
+
+type forumSnapshot struct {
+	thread          *core.Thread
+	posts           []core.Post
+	pollQuestion    string
+	pollOptionTexts []string
+	pollVoteTotal   int
+	reviews         []core.ModerationReview
+}
+
+type sanctionRow struct {
+	ID      string
+	UserID  string
+	Kind    string
+	Scope   string
+	Expires int64
+	By      string
+	Reason  string
+	Seq     int64
+}
+
+func captureForumSnapshot(t *testing.T, c *core.Core, threadID, firstPostID string) forumSnapshot {
+	t.Helper()
+
+	thread, err := c.GetThread(threadID)
+	if err != nil || thread == nil {
+		t.Fatalf("thread not found before rebuild: %v", err)
+	}
+
+	posts, err := c.ListPosts(threadID, 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap := forumSnapshot{
+		thread: thread,
+		posts:  posts,
+	}
+
+	poll, err := c.GetPollByPostID(firstPostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		snap.pollQuestion = poll.Question
+		full, err := c.GetPoll(poll.ID, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if full == nil {
+			t.Fatalf("poll not found for post %s", firstPostID)
+		}
+		total := 0
+		for _, opt := range full.Options {
+			snap.pollOptionTexts = append(snap.pollOptionTexts, opt.Text)
+			total += opt.VoteCount
+		}
+		snap.pollVoteTotal = total
+	}
+
+	reviews, err := c.ListModerationReviews("", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.reviews = reviews
+	return snap
+}
+
+func clearProjectionTablesForTest(t *testing.T, c *core.Core) {
+	t.Helper()
+	tables := []string{
+		"posts_fts",
+		"posts",
+		"threads",
+		"poll_votes",
+		"poll_options",
+		"polls",
+		"post_reactions",
+		"moderation_reviews",
+		"user_sanctions",
+		"user_activity",
+	}
+	for _, table := range tables {
+		if _, err := c.DB.Exec(`DELETE FROM ` + table); err != nil {
+			t.Fatalf("clear table %s: %v", table, err)
+		}
+	}
+}
+
+func loadSanctionsForTest(t *testing.T, c *core.Core) map[int64]sanctionRow {
+	t.Helper()
+	rows, err := c.DB.Query(`SELECT id, user_id, kind, scope, expires_at, by, reason, seq FROM user_sanctions ORDER BY seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	out := map[int64]sanctionRow{}
+	for rows.Next() {
+		var r sanctionRow
+		if err := rows.Scan(&r.ID, &r.UserID, &r.Kind, &r.Scope, &r.Expires, &r.By, &r.Reason, &r.Seq); err != nil {
+			t.Fatal(err)
+		}
+		out[r.Seq] = r
+	}
+	if err := rows.Err(); err != nil && err != sql.ErrNoRows {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func reviewsMap(in []core.ModerationReview) map[string]core.ModerationReview {
+	out := map[string]core.ModerationReview{}
+	for _, r := range in {
+		out[r.ID] = r
+	}
+	return out
+}
+
+func TestRebuildProjectionsFromEventLog(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:   "archive",
+		Name: "Archive",
+	})
+
+	threadRes := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Migrations test",
+		Body:  "First post",
+	})
+	threadID := threadRes.ID
+
+	threadPosts, err := c.ListPosts(threadID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadPollPost := exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: threadID,
+		Body:   "[poll]\nColor\n- red\n- blue\n[/poll]",
+	})
+	pollPostID := threadPollPost.ID
+	threadPosts, err = c.ListPosts(threadID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threadPosts) < 2 {
+		t.Fatalf("expected thread and poll posts before rebuild")
+	}
+
+	exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: threadID,
+		Body:   "Reply for moderation",
+	})
+	exec(t, c, admin, proto.CmdMoveThread, proto.MoveThreadPayload{
+		Thread:  threadID,
+		ToBoard: "archive",
+	})
+	poll, err := c.GetPollByPostID(pollPostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatalf("expected valid poll projection before rebuild")
+	}
+
+	review := exec(t, c, bob, proto.CmdFlagPost, proto.FlagPostPayload{
+		Post:   pollPostID,
+		Reason: "needs cleanup",
+	})
+	exec(t, c, admin, proto.CmdResolveReview, proto.ResolveReviewPayload{
+		Review:     review.ID,
+		Resolution: "approved",
+	})
+	exec(t, c, admin, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User:   bob.ID,
+		Kind:   "mute",
+		Scope:  "global",
+		Reason: "test path",
+	})
+
+	// Snapshot live projection state.
+	beforeSnapshot := captureForumSnapshot(t, c, threadID, pollPostID)
+	beforeSanctions := loadSanctionsForTest(t, c)
+
+	clearProjectionTablesForTest(t, c)
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatalf("rebuild failed: %v", err)
+	}
+
+	afterSnapshot := captureForumSnapshot(t, c, threadID, pollPostID)
+	afterSanctions := loadSanctionsForTest(t, c)
+
+	// Core state should be identical after replay.
+	if beforeSnapshot.thread.ID != afterSnapshot.thread.ID {
+		t.Fatalf("thread ID changed by rebuild: %q vs %q", beforeSnapshot.thread.ID, afterSnapshot.thread.ID)
+	}
+	if beforeSnapshot.thread.Board != afterSnapshot.thread.Board {
+		t.Fatalf("thread board changed by rebuild: %q vs %q", beforeSnapshot.thread.Board, afterSnapshot.thread.Board)
+	}
+	if beforeSnapshot.thread.PostCount != afterSnapshot.thread.PostCount {
+		t.Fatalf("thread post count changed by rebuild: %d vs %d", beforeSnapshot.thread.PostCount, afterSnapshot.thread.PostCount)
+	}
+	if len(beforeSnapshot.posts) != len(afterSnapshot.posts) {
+		t.Fatalf("post count changed by rebuild: %d vs %d", len(beforeSnapshot.posts), len(afterSnapshot.posts))
+	}
+	for i := range beforeSnapshot.posts {
+		if beforeSnapshot.posts[i].ID != afterSnapshot.posts[i].ID ||
+			beforeSnapshot.posts[i].Body != afterSnapshot.posts[i].Body ||
+			beforeSnapshot.posts[i].ReplyTo != afterSnapshot.posts[i].ReplyTo {
+			t.Fatalf("post mismatch at index %d", i)
+		}
+	}
+	if beforeSnapshot.pollQuestion != afterSnapshot.pollQuestion {
+		t.Fatalf("poll question changed by rebuild: %q vs %q", beforeSnapshot.pollQuestion, afterSnapshot.pollQuestion)
+	}
+	if len(beforeSnapshot.pollOptionTexts) != len(afterSnapshot.pollOptionTexts) {
+		t.Fatalf("poll option count changed by rebuild: %d vs %d", len(beforeSnapshot.pollOptionTexts), len(afterSnapshot.pollOptionTexts))
+	}
+	for i := range beforeSnapshot.pollOptionTexts {
+		if beforeSnapshot.pollOptionTexts[i] != afterSnapshot.pollOptionTexts[i] {
+			t.Fatalf("poll option changed at index %d: %q vs %q", i, beforeSnapshot.pollOptionTexts[i], afterSnapshot.pollOptionTexts[i])
+		}
+	}
+	if beforeSnapshot.pollVoteTotal != afterSnapshot.pollVoteTotal {
+		t.Fatalf("poll vote total changed by rebuild: %d vs %d", beforeSnapshot.pollVoteTotal, afterSnapshot.pollVoteTotal)
+	}
+	beforeReviews := reviewsMap(beforeSnapshot.reviews)
+	afterReviews := reviewsMap(afterSnapshot.reviews)
+	if len(beforeReviews) != len(afterReviews) {
+		t.Fatalf("moderation review count changed by rebuild: %d vs %d", len(beforeReviews), len(afterReviews))
+	}
+	for id, reviewBefore := range beforeReviews {
+		reviewAfter, ok := afterReviews[id]
+		if !ok {
+			t.Fatalf("rebuild missing review %s", id)
+		}
+		if reviewBefore.Kind != reviewAfter.Kind ||
+			reviewBefore.Status != reviewAfter.Status ||
+			reviewBefore.Resolution != reviewAfter.Resolution ||
+			reviewBefore.Actor != reviewAfter.Actor {
+			t.Fatalf("moderation review changed: %s", id)
+		}
+	}
+	if len(beforeSanctions) != len(afterSanctions) {
+		t.Fatalf("sanction count changed by rebuild: %d vs %d", len(beforeSanctions), len(afterSanctions))
+	}
+	for seq, sanctionBefore := range beforeSanctions {
+		sanctionAfter, ok := afterSanctions[seq]
+		if !ok {
+			t.Fatalf("rebuild missing sanction seq=%d", seq)
+		}
+		if sanctionBefore.UserID != sanctionAfter.UserID ||
+			sanctionBefore.Kind != sanctionAfter.Kind ||
+			sanctionBefore.Scope != sanctionAfter.Scope ||
+			sanctionBefore.Expires != sanctionAfter.Expires ||
+			sanctionBefore.By != sanctionAfter.By ||
+			sanctionBefore.Reason != sanctionAfter.Reason {
+			t.Fatalf("sanction changed for seq=%d", seq)
+		}
 	}
 }

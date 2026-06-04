@@ -28,13 +28,39 @@ type Core struct {
 
 // New opens the SQLite database, runs migrations, and returns a ready Core.
 func New(dbPath string) (*Core, error) {
+	setSQLFlavor(sqliteFlavor)
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 	db.SetMaxOpenConns(1) // SQLite WAL: one writer is plenty
-	if _, err := db.Exec(ddl); err != nil {
+	if err := applySQLiteMigrations(db); err != nil {
+		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+
+	bus := NewMemBus()
+	c := &Core{
+		DB:      db,
+		Bus:     bus,
+		handler: newHandler(db, bus),
+	}
+	return c, nil
+}
+
+// NewPostgres opens a Postgres database and applies the production schema.
+//
+// It is intentionally explicit and minimal: single-writer semantics still live in Core,
+// but SQL execution is normalized to Postgres placeholder style.
+func NewPostgres(dsn string) (*Core, error) {
+	setSQLFlavor(postgresFlavor)
+	db, err := OpenPostgres(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres db: %w", err)
+	}
+
+	if err := ApplyPostgresMigrations(context.Background(), db); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 
@@ -49,6 +75,7 @@ func New(dbPath string) (*Core, error) {
 
 // Run starts the single-writer goroutine. Returns when ctx is cancelled.
 func (c *Core) Run(ctx context.Context) {
+	go runOutboxWorker(ctx, c.DB, c.Bus)
 	c.handler.Run(ctx)
 }
 
@@ -98,13 +125,17 @@ func (c *Core) RegisterUser(name, password string) (*User, error) {
 		role = "admin"
 	}
 
-	_, err = c.DB.Exec(
+	_, err = qExec(c.DB,
 		`INSERT INTO users (id, name, role, password, created) VALUES (?,?,?,?,?)`,
 		id, name, role, string(hash), ts,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
+	_, _ = qExec(c.DB,
+		`INSERT OR IGNORE INTO user_profiles (user_id, display_name, updated_at) VALUES (?,?,?)`,
+		id, name, ts,
+	)
 	slog.Info("user registered", "id", id, "name", name, "role", role)
 	return &User{ID: id, Name: name, Role: role, Created: ts}, nil
 }
@@ -123,7 +154,7 @@ func (c *Core) AuthenticateUser(name, password string) (*User, error) {
 
 // AddPubkey registers an SSH public key for the given user.
 func (c *Core) AddPubkey(userID, pubkey string) error {
-	_, err := c.DB.Exec(
+	_, err := qExec(c.DB,
 		`INSERT OR IGNORE INTO auth_pubkeys (user_id, pubkey) VALUES (?,?)`,
 		userID, pubkey,
 	)
@@ -147,8 +178,9 @@ func (c *Core) UserByName(name string) (*User, error) {
 
 // --- Projection readers (safe for concurrent access) ---
 
-func (c *Core) ListBoards() ([]Board, error) { return listBoards(c.DB) }
-func (c *Core) GetBoard(id string) (*Board, error) { return getBoard(c.DB, id) }
+func (c *Core) ListBoards() ([]Board, error)        { return listBoards(c.DB) }
+func (c *Core) ListCategories() ([]Category, error) { return listCategories(c.DB) }
+func (c *Core) GetBoard(id string) (*Board, error)  { return getBoard(c.DB, id) }
 func (c *Core) ListThreads(board string, limit, offset int) ([]Thread, error) {
 	return listThreads(c.DB, board, limit, offset)
 }
@@ -156,6 +188,7 @@ func (c *Core) GetThread(id string) (*Thread, error) { return getThread(c.DB, id
 func (c *Core) ListPosts(thread string, limit, offset int) ([]Post, error) {
 	return listPosts(c.DB, thread, limit, offset)
 }
+func (c *Core) GetPost(id string) (*Post, error) { return getPost(c.DB, id) }
 func (c *Core) SearchPosts(query, boardID string, limit int) ([]Post, error) {
 	return searchPosts(c.DB, query, boardID, limit)
 }
@@ -205,4 +238,28 @@ func (c *Core) MarkAllNotificationsRead(userID string) error {
 
 func (c *Core) TrustInfo(userID string) (*TrustLevelInfo, error) {
 	return trustInfo(c.DB, userID)
+}
+
+// ── Modern forum projections ───────────────────────────────────────────────
+
+func (c *Core) UserProfileByName(name string) (*UserProfile, error) {
+	return getUserProfileByName(c.DB, name)
+}
+
+func (c *Core) UpdateUserProfile(userID, displayName, bio, avatar string) error {
+	return updateUserProfile(c.DB, userID, displayName, bio, avatar)
+}
+
+func (c *Core) ListModerationReviews(status string, limit, offset int) ([]ModerationReview, error) {
+	return listModerationReviews(c.DB, status, limit, offset)
+}
+
+func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]UserSanction, error) {
+	return listUserSanctions(c.DB, userID, limit, offset)
+}
+
+// RebuildProjectionsFromEventLog truncates projection tables and replays all durable
+// events from the given sequence onward to rebuild event-derived state.
+func (c *Core) RebuildProjectionsFromEventLog(fromSeq int64) error {
+	return rebuildProjectionsFromEventLog(c.DB, fromSeq)
 }

@@ -1,4 +1,17 @@
-import type { AuthResponse, Board, Thread, Post, AckResult, ApiResponse, Notification, Poll, TrustInfo } from './types'
+import type {
+  AckResult,
+  ApiResponse,
+  AuthResponse,
+  Board,
+  Category,
+  Notification,
+  Poll,
+  Post,
+  TrustInfo,
+  Thread,
+  UserProfile,
+  ModerationReview,
+} from './types'
 
 const BASE = '/api/v1'
 
@@ -59,6 +72,13 @@ export async function listPosts(token: string, thread: string, limit = 50, offse
   const r = await json<{ posts: Post[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.posts ?? [] }
+}
+
+export async function listCategories(token: string): Promise<ApiResponse<Category[]>> {
+  const res = await fetch(`${BASE}/categories`, { headers: authHeaders(token) })
+  const r = await json<{ categories: Category[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.categories ?? [] }
 }
 
 export async function search(token: string, q: string, board?: string): Promise<ApiResponse<Post[]>> {
@@ -142,6 +162,71 @@ export async function getTrust(token: string, username: string): Promise<ApiResp
   return json<TrustInfo>(res)
 }
 
+export async function getUserProfile(token: string, username: string): Promise<ApiResponse<UserProfile>> {
+  const res = await fetch(`${BASE}/users/${username}`, { headers: authHeaders(token) })
+  return json<UserProfile>(res)
+}
+
+export async function updateMyProfile(
+  token: string,
+  payload: { displayName?: string; bio?: string; avatar?: string },
+): Promise<ApiResponse<unknown>> {
+  const res = await fetch(`${BASE}/users/me`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return json<unknown>(res)
+}
+
+export async function flagPost(token: string, postId: string, reason = ''): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/posts/${postId}/flag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ reason }),
+  })
+  return json<AckResult>(res)
+}
+
+export async function listReviewables(
+  token: string,
+  status = 'open',
+  limit = 50,
+  offset = 0,
+): Promise<ApiResponse<ModerationReview[]>> {
+  const params = new URLSearchParams({ status, limit: String(limit), offset: String(offset) })
+  const res = await fetch(`${BASE}/mod/reviewables?${params}`, { headers: authHeaders(token) })
+  const r = await json<{ reviewables: ModerationReview[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.reviewables ?? [] }
+}
+
+export async function resolveReview(
+  token: string,
+  reviewId: string,
+  resolution: string,
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/mod/reviewables/${reviewId}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ resolution }),
+  })
+  return json<AckResult>(res)
+}
+
+export async function sanctionUser(
+  token: string,
+  username: string,
+  payload: { kind: 'mute' | 'ban'; scope?: string; durationSec?: number; reason?: string },
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/users/${username}/sanctions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return json<AckResult>(res)
+}
+
 // ── Commands ───────────────────────────────────────────────────────────────
 
 export type CommandName =
@@ -149,6 +234,7 @@ export type CommandName =
   | 'lockThread' | 'moveThread' | 'sanctionUser' | 'grantRole' | 'revokeRole'
   | 'sendChatLine' | 'setPresence' | 'createBoard' | 'purgePost'
   | 'reactPost' | 'unreactPost' | 'votePoll' | 'setThreadPref'
+  | 'flagPost' | 'resolveReview'
 
 export async function execCommand(
   token: string,
