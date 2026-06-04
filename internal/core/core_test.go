@@ -614,6 +614,36 @@ func TestPollCreationMissingCloseTagLeavesBodyIntact(t *testing.T) {
 	}
 }
 
+func TestPollCreationRequiresQuestionText(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll]\n- Option A\n- Option B\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Missing question", Body: threadBody,
+	})
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+	if posts[0].Body != threadBody {
+		t.Fatalf("expected malformed poll body to remain intact, got %q", posts[0].Body)
+	}
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		t.Fatal("expected no poll when question is missing")
+	}
+}
+
 type forumSnapshot struct {
 	thread          *core.Thread
 	posts           []core.Post

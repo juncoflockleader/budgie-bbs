@@ -1388,7 +1388,7 @@ func extractPoll(body string) (*pollBlock, string) {
 			}
 		}
 	}
-	if len(options) < 2 {
+	if question == "" || len(options) < 2 {
 		return nil, body // not a valid poll
 	}
 	cleanBody := strings.TrimSpace(body[:start])
