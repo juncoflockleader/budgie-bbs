@@ -76,6 +76,26 @@ export function App() {
 
   useStream({ token: auth.token ?? null }, onEvent)
 
+  useEffect(() => {
+    if (auth.token) return
+    const sessionId = getGuestSessionId()
+    const ping = () => {
+      void api.setGuestPresence({
+        sessionId,
+        status: document.visibilityState === 'hidden' ? 'idle' : 'active',
+        location: 'web',
+      })
+    }
+    ping()
+    const interval = window.setInterval(ping, 60_000)
+    document.addEventListener('visibilitychange', ping)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', ping)
+      void api.setGuestPresence({ sessionId, status: 'offline', location: 'web' })
+    }
+  }, [auth.token])
+
   if (!auth.token || !auth.user) {
     return <AuthPage onLogin={login} />
   }
@@ -252,4 +272,13 @@ export function App() {
       </main>
     </div>
   )
+}
+
+function getGuestSessionId() {
+  const key = 'budgieGuestSessionId'
+  const existing = window.localStorage.getItem(key)
+  if (existing) return existing
+  const generated = `guest_${window.crypto?.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`}`
+  window.localStorage.setItem(key, generated)
+  return generated
 }

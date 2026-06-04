@@ -1297,9 +1297,15 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 	fmt.Fprintf(&b, "- Total direct messages: %d\n", stats.TotalDirectMessages)
 	fmt.Fprintf(&b, "- Total online time: %s\n", formatStatsDuration(stats.TotalOnlineSeconds))
 	fmt.Fprintf(&b, "- Online users: %d\n", stats.OnlineUsers)
+	fmt.Fprintf(&b, "- Online guests: %d\n", stats.OnlineGuests)
 	fmt.Fprintf(&b, "- Max online users: %d", stats.MaxOnlineUsers)
 	if stats.MaxOnlineAt > 0 {
 		fmt.Fprintf(&b, " at %s UTC", time.UnixMilli(stats.MaxOnlineAt).UTC().Format("2006-01-02 15:04"))
+	}
+	b.WriteByte('\n')
+	fmt.Fprintf(&b, "- Max online guests: %d", stats.MaxOnlineGuests)
+	if stats.MaxOnlineGuestsAt > 0 {
+		fmt.Fprintf(&b, " at %s UTC", time.UnixMilli(stats.MaxOnlineGuestsAt).UTC().Format("2006-01-02 15:04"))
 	}
 	b.WriteByte('\n')
 	fmt.Fprintf(&b, "- Event head: %d\n\n", stats.HeadSeq)
@@ -1313,10 +1319,16 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 		if day.MaxOnlineAt > 0 {
 			maxAt = time.UnixMilli(day.MaxOnlineAt).UTC().Format("2006-01-02 15:04")
 		}
-		fmt.Fprintf(&b, "- %s: %d users%s, %d posts%s, %d reactions%s, %s online time%s, %d online now, max %d online at %s UTC\n",
+		guestMaxAt := "n/a"
+		if day.MaxOnlineGuestsAt > 0 {
+			guestMaxAt = time.UnixMilli(day.MaxOnlineGuestsAt).UTC().Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(&b, "- %s: %d users%s, %d guests%s, %d posts%s, %d reactions%s, %s online time%s, %d users online now, max %d users at %s UTC, max %d guests at %s UTC\n",
 			day.Day,
 			day.TotalUsers,
 			formatStatsDelta(day.DeltaUsers),
+			day.OnlineGuests,
+			formatStatsDelta(day.DeltaGuests),
 			day.TotalPosts,
 			formatStatsDelta(day.DeltaPosts),
 			day.TotalReactions,
@@ -1325,7 +1337,9 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 			formatStatsDurationDelta(day.DeltaOnlineSeconds),
 			day.OnlineUsers,
 			day.MaxOnlineUsers,
-			maxAt)
+			maxAt,
+			day.MaxOnlineGuests,
+			guestMaxAt)
 	}
 	b.WriteByte('\n')
 

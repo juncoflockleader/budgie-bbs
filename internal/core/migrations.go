@@ -58,6 +58,9 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"user_activity", "login_count", "login_count INTEGER NOT NULL DEFAULT 0"},
 		{"user_activity", "total_online_seconds", "total_online_seconds INTEGER NOT NULL DEFAULT 0"},
 		{"community_stat_history", "total_online_seconds", "total_online_seconds INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "online_guests", "online_guests INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "max_online_guests", "max_online_guests INTEGER NOT NULL DEFAULT 0"},
+		{"community_stat_history", "max_online_guests_at", "max_online_guests_at INTEGER NOT NULL DEFAULT 0"},
 		{"board_member_requirements", "min_score", "min_score INTEGER NOT NULL DEFAULT 0"},
 		{"board_member_requirements", "min_board_post_count", "min_board_post_count INTEGER NOT NULL DEFAULT 0"},
 		{"board_member_requirements", "min_board_original_post_count", "min_board_original_post_count INTEGER NOT NULL DEFAULT 0"},
@@ -111,6 +114,19 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen ON user_presence_sessions(board_id, last_seen DESC)`); err != nil {
 		return fmt.Errorf("ensure user presence sessions board index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS guest_presence_sessions (
+		    session_id     TEXT    PRIMARY KEY,
+		    status         TEXT    NOT NULL DEFAULT 'active',
+		    location_label TEXT    NOT NULL DEFAULT '',
+		    from_host      TEXT    NOT NULL DEFAULT '',
+		    last_seen      INTEGER NOT NULL DEFAULT 0,
+		    updated_at     INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure guest presence sessions table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_guest_presence_sessions_last_seen ON guest_presence_sessions(last_seen DESC)`); err != nil {
+		return fmt.Errorf("ensure guest presence sessions last_seen index: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS community_stat_history (
 		    day                   TEXT    PRIMARY KEY,
 		    snapshot_at           INTEGER NOT NULL DEFAULT 0,
@@ -123,8 +139,11 @@ func applySQLiteMigrations(db *sql.DB) error {
 		    total_direct_messages INTEGER NOT NULL DEFAULT 0,
 		    total_online_seconds  INTEGER NOT NULL DEFAULT 0,
 		    online_users          INTEGER NOT NULL DEFAULT 0,
+		    online_guests         INTEGER NOT NULL DEFAULT 0,
 		    max_online_users      INTEGER NOT NULL DEFAULT 0,
 		    max_online_at         INTEGER NOT NULL DEFAULT 0,
+		    max_online_guests     INTEGER NOT NULL DEFAULT 0,
+		    max_online_guests_at  INTEGER NOT NULL DEFAULT 0,
 		    head_seq              INTEGER NOT NULL DEFAULT 0
 		)`); err != nil {
 		return fmt.Errorf("ensure community stat history table: %w", err)

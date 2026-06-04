@@ -433,6 +433,7 @@ Returns: the ack envelope.
 | `PUT /api/v1/users/{user}/login-watch` | `setLoginWatch` |
 | `DELETE /api/v1/users/{user}/login-watch` | `setLoginWatch` |
 | `POST /api/v1/users/{user}/bless` | `blessUser` |
+| `POST /api/v1/presence/guest` | public anonymous guest presence ping |
 | `POST /api/v1/chat/{room}/lines` | `sendChatLine` |
 | `POST /api/v1/mod/reviewables/{id}/resolve` | `resolveReview` |
 | `POST /api/v1/admin/content-filters` | `setContentFilter` |
@@ -659,15 +660,22 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   the same date again returns the existing generated thread instead of
   duplicating it.
 - Presence changes and stats snapshots upsert `community_stat_history` rows.
-  `GET /api/v1/stats/community` exposes current `onlineUsers` plus historical
-  `maxOnlineUsers`, `maxOnlineAt`, and cumulative `totalOnlineSeconds`;
-  `GET /api/v1/stats/community/history` returns daily stat-log rows ordered
-  newest first with derived `deltaUsers`, `deltaBoards`, `deltaThreads`,
-  `deltaPosts`, `deltaReactions`, `deltaMail`, `deltaDirectMessages`, and
-  `deltaOnlineSeconds` fields compared to the next older fetched row.
+  `GET /api/v1/stats/community` exposes current authenticated `onlineUsers`,
+  anonymous web `onlineGuests`, historical `maxOnlineUsers`, `maxOnlineAt`,
+  `maxOnlineGuests`, `maxOnlineGuestsAt`, and cumulative
+  `totalOnlineSeconds`; `GET /api/v1/stats/community/history` returns daily
+  stat-log rows ordered newest first with derived `deltaUsers`, `deltaBoards`,
+  `deltaThreads`, `deltaPosts`, `deltaReactions`, `deltaMail`,
+  `deltaDirectMessages`, `deltaOnlineSeconds`, and `deltaGuests` fields
+  compared to the next older fetched row.
 - Presence updates accrue per-user `totalOnlineSeconds` while the previous
   session status was visibly online. A single update contributes at most five
   minutes so stale sessions do not create inflated stay-time totals.
+- `POST /api/v1/presence/guest` is public and records anonymous web guest
+  sessions by opaque `sessionId`, `status`, optional `location`, and request
+  host. The web SPA pings it while unauthenticated, and guest sessions age out
+  of current counters after the same five-minute freshness window used for
+  authenticated online users.
 - The `budgied` server also runs an automatic stat publisher by default
   (`-auto-stats=true`). On startup and hourly thereafter it ensures the current
   UTC day has the same deterministic `BBSLists` snapshot, authored by the

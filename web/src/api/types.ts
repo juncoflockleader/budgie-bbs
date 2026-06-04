@@ -42,8 +42,11 @@ export interface CommunityStats {
   totalDirectMessages: number
   totalOnlineSeconds: number
   onlineUsers: number
+  onlineGuests: number
   maxOnlineUsers: number
   maxOnlineAt: number
+  maxOnlineGuests: number
+  maxOnlineGuestsAt: number
   headSeq: number
 }
 
@@ -59,8 +62,11 @@ export interface CommunityStatHistory {
   totalDirectMessages: number
   totalOnlineSeconds: number
   onlineUsers: number
+  onlineGuests: number
   maxOnlineUsers: number
   maxOnlineAt: number
+  maxOnlineGuests: number
+  maxOnlineGuestsAt: number
   headSeq: number
   deltaUsers: number
   deltaBoards: number
@@ -70,6 +76,7 @@ export interface CommunityStatHistory {
   deltaMail: number
   deltaDirectMessages: number
   deltaOnlineSeconds: number
+  deltaGuests: number
 }
 
 export interface BoardRanking {

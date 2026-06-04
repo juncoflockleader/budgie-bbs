@@ -508,6 +508,17 @@ CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_last_seen
 CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen
     ON user_presence_sessions(board_id, last_seen DESC);
 
+CREATE TABLE IF NOT EXISTS guest_presence_sessions (
+    session_id     TEXT PRIMARY KEY,
+    status         TEXT NOT NULL DEFAULT 'active',
+    location_label TEXT NOT NULL DEFAULT '',
+    from_host      TEXT NOT NULL DEFAULT '',
+    last_seen      BIGINT NOT NULL DEFAULT 0,
+    updated_at     BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_guest_presence_sessions_last_seen
+    ON guest_presence_sessions(last_seen DESC);
+
 CREATE TABLE IF NOT EXISTS community_stat_history (
     day                   TEXT PRIMARY KEY,
     snapshot_at           BIGINT NOT NULL DEFAULT 0,
@@ -520,8 +531,11 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  BIGINT NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
+    online_guests         INTEGER NOT NULL DEFAULT 0,
     max_online_users      INTEGER NOT NULL DEFAULT 0,
     max_online_at         BIGINT NOT NULL DEFAULT 0,
+    max_online_guests     INTEGER NOT NULL DEFAULT 0,
+    max_online_guests_at  BIGINT NOT NULL DEFAULT 0,
     head_seq              BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
@@ -1546,8 +1560,11 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  BIGINT NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
+    online_guests         INTEGER NOT NULL DEFAULT 0,
     max_online_users      INTEGER NOT NULL DEFAULT 0,
     max_online_at         BIGINT NOT NULL DEFAULT 0,
+    max_online_guests     INTEGER NOT NULL DEFAULT 0,
+    max_online_guests_at  BIGINT NOT NULL DEFAULT 0,
     head_seq              BIGINT NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
@@ -1621,6 +1638,33 @@ ALTER TABLE community_stat_history
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (33, 'postgres-total-online-seconds', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 34,
+			Name:    "postgres-guest-presence-stats",
+			SQL: `
+CREATE TABLE IF NOT EXISTS guest_presence_sessions (
+    session_id     TEXT PRIMARY KEY,
+    status         TEXT NOT NULL DEFAULT 'active',
+    location_label TEXT NOT NULL DEFAULT '',
+    from_host      TEXT NOT NULL DEFAULT '',
+    last_seen      BIGINT NOT NULL DEFAULT 0,
+    updated_at     BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_guest_presence_sessions_last_seen
+    ON guest_presence_sessions(last_seen DESC);
+
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS online_guests INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS max_online_guests INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS max_online_guests_at BIGINT NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (34, 'postgres-guest-presence-stats', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

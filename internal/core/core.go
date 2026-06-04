@@ -923,6 +923,14 @@ func (c *Core) ListCommunityStatHistory(limit, offset int) ([]CommunityStatHisto
 	return listCommunityStatHistory(c.DB, limit, offset)
 }
 
+func (c *Core) SetGuestPresence(sessionID, status, locationLabel, fromHost string, at time.Time) error {
+	ts := at.UTC().UnixMilli()
+	if at.IsZero() {
+		ts = time.Now().UTC().UnixMilli()
+	}
+	return projections.SetGuestPresence(c.DB, sessionID, status, locationLabel, fromHost, ts)
+}
+
 func (c *Core) PublishDailyStatsSnapshot(ctx context.Context, at time.Time) (*proto.AckResult, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()

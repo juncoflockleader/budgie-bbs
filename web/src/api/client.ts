@@ -104,6 +104,20 @@ export async function getCommunityStats(token: string): Promise<ApiResponse<Comm
   return json<CommunityStats>(res)
 }
 
+export async function setGuestPresence(payload: {
+  sessionId: string
+  status?: string
+  location?: string
+  fromHost?: string
+}): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/presence/guest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return json<AckResult>(res)
+}
+
 export async function listCommunityStatHistory(token: string, limit = 30): Promise<ApiResponse<CommunityStatHistory[]>> {
   const params = new URLSearchParams({ limit: String(limit) })
   const res = await fetch(`${BASE}/stats/community/history?${params}`, { headers: authHeaders(token) })

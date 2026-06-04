@@ -37,6 +37,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/password-recovery", s.handleRequestPasswordRecovery)
+	mux.HandleFunc("POST /api/v1/presence/guest", s.handleSetGuestPresence)
 
 	// Authenticated read-only endpoints
 	auth := s.requireAuth

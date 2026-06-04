@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -52,6 +53,33 @@ func (s *Server) handleSetPresence(w http.ResponseWriter, r *http.Request) {
 	cid := r.Header.Get("X-Command-Id")
 	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetPresence, raw, cid)
 	writeAck(w, cid, reply)
+}
+
+type guestPresenceRequest struct {
+	SessionID string `json:"sessionId"`
+	Status    string `json:"status"`
+	Location  string `json:"location"`
+	FromHost  string `json:"fromHost"`
+}
+
+func (s *Server) handleSetGuestPresence(w http.ResponseWriter, r *http.Request) {
+	var p guestPresenceRequest
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	if strings.TrimSpace(p.SessionID) == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "sessionId is required", false)
+		return
+	}
+	if p.FromHost == "" {
+		p.FromHost = requestHost(r)
+	}
+	if err := s.core.SetGuestPresence(p.SessionID, p.Status, p.Location, p.FromHost, time.Now().UTC()); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeAck(w, r.Header.Get("X-Command-Id"), core.Reply{Result: &proto.AckResult{}})
 }
 
 func requestHost(r *http.Request) string {

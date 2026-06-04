@@ -373,6 +373,17 @@ CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_last_seen
 CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen
     ON user_presence_sessions(board_id, last_seen DESC);
 
+CREATE TABLE IF NOT EXISTS guest_presence_sessions (
+    session_id     TEXT    PRIMARY KEY,
+    status         TEXT    NOT NULL DEFAULT 'active',
+    location_label TEXT    NOT NULL DEFAULT '',
+    from_host      TEXT    NOT NULL DEFAULT '',
+    last_seen      INTEGER NOT NULL DEFAULT 0,
+    updated_at     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_guest_presence_sessions_last_seen
+    ON guest_presence_sessions(last_seen DESC);
+
 CREATE TABLE IF NOT EXISTS community_stat_history (
     day                   TEXT    PRIMARY KEY,
     snapshot_at           INTEGER NOT NULL DEFAULT 0,
@@ -385,8 +396,11 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  INTEGER NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
+    online_guests         INTEGER NOT NULL DEFAULT 0,
     max_online_users      INTEGER NOT NULL DEFAULT 0,
     max_online_at         INTEGER NOT NULL DEFAULT 0,
+    max_online_guests     INTEGER NOT NULL DEFAULT 0,
+    max_online_guests_at  INTEGER NOT NULL DEFAULT 0,
     head_seq              INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot

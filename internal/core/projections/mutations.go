@@ -1449,6 +1449,55 @@ func SetUserPresence(db *sql.DB, userID, sessionID, status, mode, boardID, threa
 	return UpsertCommunityStatHistoryFromCurrent(db, ts)
 }
 
+func SetGuestPresence(db *sql.DB, sessionID, status, locationLabel, fromHost string, ts int64) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("guest session id required")
+	}
+	if len(sessionID) > 120 {
+		sessionID = sessionID[:120]
+	}
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "active"
+	}
+	if len(status) > 40 {
+		status = status[:40]
+	}
+	locationLabel = strings.TrimSpace(locationLabel)
+	if len(locationLabel) > 120 {
+		locationLabel = locationLabel[:120]
+	}
+	fromHost = strings.TrimSpace(fromHost)
+	if len(fromHost) > 120 {
+		fromHost = fromHost[:120]
+	}
+	if ts <= 0 {
+		ts = NowMS()
+	}
+	_, err := QExec(db,
+		`INSERT INTO guest_presence_sessions (session_id, status, location_label, from_host, last_seen, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(session_id)
+		 DO UPDATE SET
+		    status=excluded.status,
+		    location_label=excluded.location_label,
+		    from_host=excluded.from_host,
+		    last_seen=excluded.last_seen,
+		    updated_at=excluded.updated_at`,
+		sessionID,
+		status,
+		locationLabel,
+		fromHost,
+		ts,
+		ts,
+	)
+	if err != nil {
+		return err
+	}
+	return UpsertCommunityStatHistoryFromCurrent(db, ts)
+}
+
 const maxPresenceAccrualMS int64 = 5 * 60 * 1000
 
 func presenceOnlineAccrualSeconds(previousStatus string, previousLastSeen, ts int64) int64 {
@@ -1484,12 +1533,17 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 	if stats.OnlineUsers > 0 {
 		maxOnlineAt = ts
 	}
+	maxGuestAt := int64(0)
+	if stats.OnlineGuests > 0 {
+		maxGuestAt = ts
+	}
 	_, err = QExec(db,
 		`INSERT INTO community_stat_history (
 		    day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 		    total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
-		    max_online_users, max_online_at, head_seq
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    online_guests, max_online_users, max_online_at, max_online_guests,
+		    max_online_guests_at, head_seq
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(day)
 		 DO UPDATE SET
 		    snapshot_at=excluded.snapshot_at,
@@ -1502,6 +1556,7 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		    total_direct_messages=excluded.total_direct_messages,
 		    total_online_seconds=excluded.total_online_seconds,
 		    online_users=excluded.online_users,
+		    online_guests=excluded.online_guests,
 		    max_online_users=CASE
 		      WHEN excluded.online_users > community_stat_history.max_online_users THEN excluded.online_users
 		      ELSE community_stat_history.max_online_users
@@ -1509,6 +1564,14 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		    max_online_at=CASE
 		      WHEN excluded.online_users > community_stat_history.max_online_users THEN excluded.max_online_at
 		      ELSE community_stat_history.max_online_at
+		    END,
+		    max_online_guests=CASE
+		      WHEN excluded.online_guests > community_stat_history.max_online_guests THEN excluded.online_guests
+		      ELSE community_stat_history.max_online_guests
+		    END,
+		    max_online_guests_at=CASE
+		      WHEN excluded.online_guests > community_stat_history.max_online_guests THEN excluded.max_online_guests_at
+		      ELSE community_stat_history.max_online_guests_at
 		    END,
 		    head_seq=excluded.head_seq`,
 		day,
@@ -1522,8 +1585,11 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		stats.TotalDirectMessages,
 		stats.TotalOnlineSeconds,
 		stats.OnlineUsers,
+		stats.OnlineGuests,
 		stats.OnlineUsers,
 		maxOnlineAt,
+		stats.OnlineGuests,
+		maxGuestAt,
 		stats.HeadSeq,
 	)
 	return err

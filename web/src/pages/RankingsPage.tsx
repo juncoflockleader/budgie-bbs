@@ -74,7 +74,9 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
           <Stat label="Posts" value={stats.totalPosts} />
           <Stat label="Reactions" value={stats.totalReactions} />
           <Stat label="Online" value={stats.onlineUsers} />
+          <Stat label="Guests" value={stats.onlineGuests} />
           <Stat label="Max Online" value={stats.maxOnlineUsers ?? 0} />
+          <Stat label="Max Guests" value={stats.maxOnlineGuests ?? 0} />
           <Stat label="Online Time" value={formatDuration(stats.totalOnlineSeconds)} />
         </section>
       )}
@@ -92,7 +94,10 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
                 online time {formatDuration(day.totalOnlineSeconds)} {formatDurationDelta(day.deltaOnlineSeconds)}
               </span>
               <span className="item-meta muted">
-                max {day.maxOnlineUsers} online {formatDateTime(day.maxOnlineAt)}
+                {day.onlineUsers} users online / {day.onlineGuests} guests {formatDelta(day.deltaGuests)}
+              </span>
+              <span className="item-meta muted">
+                max {day.maxOnlineUsers} users {formatDateTime(day.maxOnlineAt)} / max {day.maxOnlineGuests} guests {formatDateTime(day.maxOnlineGuestsAt)}
               </span>
             </span>
             <span className="ranking-score">{day.onlineUsers}</span>

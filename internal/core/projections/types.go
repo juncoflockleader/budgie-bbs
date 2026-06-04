@@ -49,8 +49,11 @@ type CommunityStats struct {
 	TotalDirectMessages int   `json:"totalDirectMessages"`
 	TotalOnlineSeconds  int64 `json:"totalOnlineSeconds"`
 	OnlineUsers         int   `json:"onlineUsers"`
+	OnlineGuests        int   `json:"onlineGuests"`
 	MaxOnlineUsers      int   `json:"maxOnlineUsers"`
 	MaxOnlineAt         int64 `json:"maxOnlineAt"`
+	MaxOnlineGuests     int   `json:"maxOnlineGuests"`
+	MaxOnlineGuestsAt   int64 `json:"maxOnlineGuestsAt"`
 	HeadSeq             int64 `json:"headSeq"`
 }
 
@@ -66,8 +69,11 @@ type CommunityStatHistory struct {
 	TotalDirectMessages int    `json:"totalDirectMessages"`
 	TotalOnlineSeconds  int64  `json:"totalOnlineSeconds"`
 	OnlineUsers         int    `json:"onlineUsers"`
+	OnlineGuests        int    `json:"onlineGuests"`
 	MaxOnlineUsers      int    `json:"maxOnlineUsers"`
 	MaxOnlineAt         int64  `json:"maxOnlineAt"`
+	MaxOnlineGuests     int    `json:"maxOnlineGuests"`
+	MaxOnlineGuestsAt   int64  `json:"maxOnlineGuestsAt"`
 	HeadSeq             int64  `json:"headSeq"`
 	DeltaUsers          int    `json:"deltaUsers"`
 	DeltaBoards         int    `json:"deltaBoards"`
@@ -77,6 +83,7 @@ type CommunityStatHistory struct {
 	DeltaMail           int    `json:"deltaMail"`
 	DeltaDirectMessages int    `json:"deltaDirectMessages"`
 	DeltaOnlineSeconds  int64  `json:"deltaOnlineSeconds"`
+	DeltaGuests         int    `json:"deltaGuests"`
 }
 
 type ContentFilter struct {

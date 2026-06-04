@@ -97,7 +97,9 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		    (SELECT COUNT(*) FROM direct_messages),
 		    COALESCE((SELECT SUM(total_online_seconds) FROM user_activity), 0),
 		    (SELECT COUNT(DISTINCT user_id) FROM user_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')),
+		    (SELECT COUNT(*) FROM guest_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'inactive')),
 		    COALESCE((SELECT MAX(seq) FROM events), 0)`,
+		cutoff,
 		cutoff,
 	).Scan(
 		&stats.TotalUsers,
@@ -109,6 +111,7 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		&stats.TotalDirectMessages,
 		&stats.TotalOnlineSeconds,
 		&stats.OnlineUsers,
+		&stats.OnlineGuests,
 		&stats.HeadSeq,
 	)
 	if err != nil {
@@ -133,9 +136,24 @@ func applyCommunityStatsMaxOnline(db *sql.DB, stats *CommunityStats) error {
 	stats.MaxOnlineAt = maxAt
 	if stats.OnlineUsers > stats.MaxOnlineUsers {
 		stats.MaxOnlineUsers = stats.OnlineUsers
-		if stats.MaxOnlineAt == 0 {
-			stats.MaxOnlineAt = NowMS()
-		}
+		stats.MaxOnlineAt = NowMS()
+	}
+	var maxGuests int
+	var maxGuestsAt int64
+	err = QQueryRow(db,
+		`SELECT max_online_guests, max_online_guests_at
+		   FROM community_stat_history
+		  ORDER BY max_online_guests DESC, max_online_guests_at DESC
+		  LIMIT 1`,
+	).Scan(&maxGuests, &maxGuestsAt)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	stats.MaxOnlineGuests = maxGuests
+	stats.MaxOnlineGuestsAt = maxGuestsAt
+	if stats.OnlineGuests > stats.MaxOnlineGuests {
+		stats.MaxOnlineGuests = stats.OnlineGuests
+		stats.MaxOnlineGuestsAt = NowMS()
 	}
 	return nil
 }
@@ -151,7 +169,8 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	rows, err := QQuery(db,
 		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 		        total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
-		        max_online_users, max_online_at, head_seq
+		        online_guests, max_online_users, max_online_at, max_online_guests,
+		        max_online_guests_at, head_seq
 		   FROM community_stat_history
 		  ORDER BY day DESC
 		  LIMIT ? OFFSET ?`,
@@ -164,7 +183,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	out := []CommunityStatHistory{}
 	for rows.Next() {
 		var h CommunityStatHistory
-		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.HeadSeq); err != nil {
+		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.OnlineGuests, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.MaxOnlineGuests, &h.MaxOnlineGuestsAt, &h.HeadSeq); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -193,6 +212,7 @@ func (h *CommunityStatHistory) applyDeltaFrom(previous CommunityStatHistory) {
 	h.DeltaMail = h.TotalMail - previous.TotalMail
 	h.DeltaDirectMessages = h.TotalDirectMessages - previous.TotalDirectMessages
 	h.DeltaOnlineSeconds = h.TotalOnlineSeconds - previous.TotalOnlineSeconds
+	h.DeltaGuests = h.OnlineGuests - previous.OnlineGuests
 }
 
 func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]BoardRanking, error) {

@@ -82,8 +82,8 @@ KBS surfaced community attention through hot topics, board statistics, public
 counters, and generated list boards. Budgie now has the first projection-backed
 ranking surface:
 
-- Authenticated community counters including cumulative online/stay time:
-  `GET /api/v1/stats/community`.
+- Authenticated community counters including cumulative online/stay time and
+  anonymous web guest counters: `GET /api/v1/stats/community`.
 - Authenticated daily stat history with derived trend deltas: `GET
   /api/v1/stats/community/history`.
 - Authenticated active-board rankings: `GET /api/v1/rankings/boards`.
@@ -99,9 +99,12 @@ ranking surface:
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters, max-online users/time, and
   day-over-day deltas for user, board, thread, post, reaction, mail, and direct
-  message totals, plus cumulative online/stay-time totals.
+  message totals, plus cumulative online/stay-time and guest totals.
 - Presence updates accrue per-user total online seconds from visible sessions
   with a five-minute cap per update so stale clients do not inflate stay time.
+- Public guest-presence pings (`POST /api/v1/presence/guest`) maintain anonymous
+  web guest sessions, daily guest deltas, and max guest peaks without granting
+  content access.
 - Hot-thread scores combine visible post count, reaction count, and a 48-hour
   recency half-life so stale activity decays behind fresh conversation.
 - Board, thread, reply, and archive rankings hide member-read boards from users
@@ -112,12 +115,13 @@ ranking surface:
   max-online history, recent daily stat-history rows with trend deltas, plus
   public-safe board, thread, latest-reply, user, blessing, and archive rankings.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
-  stat history with trend deltas, cumulative online/stay time, active boards,
-  hot threads, latest replies, top posters, blessing counts, and archive paths,
-  with board/thread/reply/archive rows opening the relevant reading surface.
+  stat history with trend deltas, cumulative online/stay time, anonymous guest
+  counts, active boards, hot threads, latest replies, top posters, blessing
+  counts, and archive paths, with board/thread/reply/archive rows opening the
+  relevant reading surface.
 
-This does not yet implement guest counters or richer historical visualization
-beyond daily trend rows.
+This does not yet implement richer historical visualization beyond daily trend
+rows.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -774,11 +778,13 @@ social graph:
 - Friend login-watch notifications.
 - Multiple-session presence, user-level invisible presence, and privileged
   cloak presence.
+- Anonymous web guest presence pings, online guest counters, daily guest deltas,
+  and max guest peaks.
 - Direct-message shortcuts from online People rows and board online chips.
-- Community counters including cumulative online/stay time, active-board
-  rankings, hot-thread rankings, top-poster rankings, latest-reply rankings,
-  blessing rankings/rituals, archive-path rankings, automatic `BBSLists`
-  generated stat snapshots, and a web `Rankings` surface.
+- Community counters including cumulative online/stay time and anonymous guest
+  counters, active-board rankings, hot-thread rankings, top-poster rankings,
+  latest-reply rankings, blessing rankings/rituals, archive-path rankings,
+  automatic `BBSLists` generated stat snapshots, and a web `Rankings` surface.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

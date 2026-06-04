@@ -1450,14 +1450,25 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if stats.TotalOnlineSeconds != 120 {
 		t.Fatalf("expected total online seconds in community stats, got %+v", stats)
 	}
+	if err := projections.SetGuestPresence(c.DB, "guest_web", "active", "web", "203.0.113.10", time.Now().UTC().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.OnlineGuests != 1 || stats.MaxOnlineGuests != 1 || stats.MaxOnlineGuestsAt == 0 {
+		t.Fatalf("expected guest counters in community stats, got %+v", stats)
+	}
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
 	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 		total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
-		max_online_users, max_online_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		online_guests, max_online_users, max_online_at, max_online_guests,
+		max_online_guests_at, head_seq
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
-		2, 3, 1, 2, 0, 0, 0, int64(60), 0, 1, previousAt.UnixMilli(), 1,
+		2, 3, 1, 2, 0, 0, 0, int64(60), 0, 0, 1, previousAt.UnixMilli(), 0, int64(0), 1,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1473,6 +1484,9 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	}
 	if history[0].TotalOnlineSeconds != 120 || history[0].DeltaOnlineSeconds != 60 {
 		t.Fatalf("expected newest daily stat history row to include online-time totals and deltas, got %+v", history[0])
+	}
+	if history[0].OnlineGuests != 1 || history[0].DeltaGuests != 1 || history[0].MaxOnlineGuests != 1 || history[0].MaxOnlineGuestsAt == 0 {
+		t.Fatalf("expected newest daily stat history row to include guest counters and deltas, got %+v", history[0])
 	}
 	if history[1].DeltaUsers != 0 || history[1].DeltaPosts != 0 || history[1].DeltaReactions != 0 {
 		t.Fatalf("expected oldest fetched daily stat history row to have zero deltas without an older comparison row, got %+v", history[1])
@@ -1603,7 +1617,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
 	}
 	body := systemPosts[0].Body
-	for _, want := range []string{"Total users: 3", "Total posts: 5", "Total online time: 2m", "Max online users: 2", "Recent daily history", "3 users (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
