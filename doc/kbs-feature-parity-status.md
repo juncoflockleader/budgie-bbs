@@ -119,9 +119,13 @@ ranking surface:
   counts, active boards, hot threads, latest replies, top posters, blessing
   counts, and archive paths, with board/thread/reply/archive rows opening the
   relevant reading surface.
+- Web `Rankings` includes a 30-day selectable history chart for post deltas,
+  user totals, reaction deltas, online-time deltas, max-online users, and max
+  anonymous guests, plus compact latest/previous/low/high summaries for the
+  selected metric.
 
-This does not yet implement richer historical visualization beyond daily trend
-rows.
+This does not yet implement separate historical/stat-log boards beyond the
+generated `BBSLists` snapshot board.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -785,7 +789,8 @@ social graph:
 - Community counters including cumulative online/stay time and anonymous guest
   counters, active-board rankings, hot-thread rankings, top-poster rankings,
   latest-reply rankings, blessing rankings/rituals, archive-path rankings,
-  automatic `BBSLists` generated stat snapshots, and a web `Rankings` surface.
+  automatic `BBSLists` generated stat snapshots, and a web `Rankings` surface
+  with selectable 30-day history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

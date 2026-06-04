@@ -10,9 +10,28 @@ interface Props {
   onOpenThread: (board: Board, thread: Thread) => void
 }
 
+type HistoryMetricKey = 'posts' | 'users' | 'reactions' | 'onlineTime' | 'maxOnline' | 'maxGuests'
+
+interface HistoryMetric {
+  key: HistoryMetricKey
+  label: string
+  value: (day: CommunityStatHistory) => number
+  format: (value: number) => string
+}
+
+const historyMetrics: HistoryMetric[] = [
+  { key: 'posts', label: 'Posts', value: day => day.deltaPosts, format: formatCompactNumber },
+  { key: 'users', label: 'Users', value: day => day.totalUsers, format: formatCompactNumber },
+  { key: 'reactions', label: 'Reactions', value: day => day.deltaReactions, format: formatCompactNumber },
+  { key: 'onlineTime', label: 'Online Time', value: day => day.deltaOnlineSeconds, format: formatDuration },
+  { key: 'maxOnline', label: 'Max Online', value: day => day.maxOnlineUsers, format: formatCompactNumber },
+  { key: 'maxGuests', label: 'Max Guests', value: day => day.maxOnlineGuests, format: formatCompactNumber },
+]
+
 export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props) {
   const [stats, setStats] = useState<CommunityStats | null>(null)
   const [history, setHistory] = useState<CommunityStatHistory[]>([])
+  const [historyMetricKey, setHistoryMetricKey] = useState<HistoryMetricKey>('posts')
   const [boards, setBoards] = useState<BoardRanking[]>([])
   const [threads, setThreads] = useState<ThreadRanking[]>([])
   const [replies, setReplies] = useState<ReplyRanking[]>([])
@@ -28,7 +47,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
     setError(null)
     Promise.all([
       api.getCommunityStats(token),
-      api.listCommunityStatHistory(token, 7),
+      api.listCommunityStatHistory(token, 30),
       api.listBoardRankings(token, 12),
       api.listThreadRankings(token, 12),
       api.listReplyRankings(token, 12),
@@ -59,6 +78,9 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
 
   if (loading) return <Spinner />
 
+  const selectedHistoryMetric = historyMetrics.find(metric => metric.key === historyMetricKey) ?? historyMetrics[0]
+  const recentHistory = history.slice(0, 12)
+
   return (
     <div className="rankings-page">
       <div className="page-header">
@@ -80,9 +102,20 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
           <Stat label="Online Time" value={formatDuration(stats.totalOnlineSeconds)} />
         </section>
       )}
+      <RankingPanel title="History Chart">
+        {history.length === 0 && <p className="muted empty-state">No daily stat history yet.</p>}
+        {history.length > 0 && (
+          <HistoryChart
+            history={history}
+            metric={selectedHistoryMetric}
+            selectedKey={historyMetricKey}
+            onSelectMetric={setHistoryMetricKey}
+          />
+        )}
+      </RankingPanel>
       <RankingPanel title="Daily History">
         {history.length === 0 && <p className="muted empty-state">No daily stat history yet.</p>}
-        {history.map((day, index) => (
+        {recentHistory.map((day, index) => (
           <div key={day.day} className="ranking-row">
             <span className="ranking-index">{index + 1}</span>
             <span className="ranking-main">
@@ -220,6 +253,93 @@ function Stat({ label, value }: { label: string; value: ReactNode }) {
   )
 }
 
+function HistoryChart({
+  history,
+  metric,
+  selectedKey,
+  onSelectMetric,
+}: {
+  history: CommunityStatHistory[]
+  metric: HistoryMetric
+  selectedKey: HistoryMetricKey
+  onSelectMetric: (key: HistoryMetricKey) => void
+}) {
+  const days = history.slice().reverse()
+  const values = days.map(day => metric.value(day))
+  const rawMax = Math.max(...values, 0)
+  const rawMin = Math.min(...values, 0)
+  const range = Math.max(rawMax - rawMin, 1)
+  const max = rawMax
+  const min = rawMin
+  const width = 640
+  const height = 180
+  const padX = 34
+  const padY = 24
+  const plotWidth = width - padX * 2
+  const plotHeight = height - padY * 2
+  const pointFor = (value: number, index: number) => {
+    const x = days.length <= 1 ? width / 2 : padX + (index / (days.length - 1)) * plotWidth
+    const y = padY + (1 - ((value - min) / range)) * plotHeight
+    return { x, y }
+  }
+  const points = values.map(pointFor)
+  const zeroY = padY + (1 - ((0 - min) / range)) * plotHeight
+  const path = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ')
+  const areaPath = points.length > 0
+    ? `${path} L ${points[points.length - 1].x.toFixed(1)} ${zeroY.toFixed(1)} L ${points[0].x.toFixed(1)} ${zeroY.toFixed(1)} Z`
+    : ''
+  const latest = values[values.length - 1] ?? 0
+  const previous = values[values.length - 2] ?? latest
+  const firstDay = days[0]?.day ?? ''
+  const lastDay = days[days.length - 1]?.day ?? ''
+
+  return (
+    <div className="history-chart-panel">
+      <div className="history-metric-tabs" role="tablist" aria-label="History metric">
+        {historyMetrics.map(option => (
+          <button
+            key={option.key}
+            type="button"
+            className={`history-metric-tab${option.key === selectedKey ? ' active' : ''}`}
+            onClick={() => onSelectMetric(option.key)}
+            role="tab"
+            aria-selected={option.key === selectedKey}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <div className="history-chart">
+        <svg className="history-chart-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${metric.label} history`}>
+          <line className="history-chart-grid" x1={padX} y1={padY} x2={width - padX} y2={padY} />
+          <line className="history-chart-grid" x1={padX} y1={height - padY} x2={width - padX} y2={height - padY} />
+          <line className="history-chart-zero" x1={padX} y1={zeroY} x2={width - padX} y2={zeroY} />
+          {areaPath && <path className="history-chart-area" d={areaPath} />}
+          {path && <path className="history-chart-line" d={path} />}
+          {points.map((point, index) => (
+            <circle
+              key={`${days[index]?.day ?? index}:${selectedKey}`}
+              className="history-chart-point"
+              cx={point.x}
+              cy={point.y}
+              r={index === points.length - 1 ? 4.5 : 3}
+            />
+          ))}
+          <text className="history-chart-axis" x={padX} y={padY - 8}>{metric.format(max)}</text>
+          <text className="history-chart-axis" x={padX} y={height - 6}>{firstDay}</text>
+          <text className="history-chart-axis history-chart-axis-end" x={width - padX} y={height - 6}>{lastDay}</text>
+        </svg>
+      </div>
+      <div className="history-chart-summary">
+        <Stat label="Latest" value={metric.format(latest)} />
+        <Stat label="Previous" value={metric.format(previous)} />
+        <Stat label="Low" value={metric.format(min)} />
+        <Stat label="High" value={metric.format(max)} />
+      </div>
+    </div>
+  )
+}
+
 function formatDate(ts: number) {
   if (!ts) return 'never'
   return new Date(ts).toLocaleDateString()
@@ -252,6 +372,10 @@ function formatDuration(seconds: number) {
   const days = Math.floor(hours / 24)
   const hourRemainder = hours % 24
   return hourRemainder ? `${days}d ${hourRemainder}h` : `${days}d`
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, notation: 'compact' }).format(value)
 }
 
 function rankingToThread(thread: ThreadRanking): Thread {

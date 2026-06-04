@@ -1003,6 +1003,80 @@ button.ranking-row:hover {
   font-size: 0.85em;
   font-weight: 600;
 }
+.history-chart-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.history-metric-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.history-metric-tab {
+  min-height: 2rem;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  color: var(--c-muted);
+  font-size: 0.82em;
+  font-weight: 600;
+}
+.history-metric-tab.active {
+  border-color: var(--c-accent);
+  color: var(--c-text);
+  background: rgba(91,155,213,0.16);
+}
+.history-chart {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+.history-chart-svg {
+  display: block;
+  width: 100%;
+  min-height: 12rem;
+}
+.history-chart-grid {
+  stroke: rgba(255,255,255,0.12);
+  stroke-width: 1;
+}
+.history-chart-zero {
+  stroke: rgba(158,207,255,0.28);
+  stroke-dasharray: 4 5;
+  stroke-width: 1;
+}
+.history-chart-area {
+  fill: rgba(91,155,213,0.18);
+}
+.history-chart-line {
+  fill: none;
+  stroke: var(--c-accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+.history-chart-point {
+  fill: var(--c-accent2);
+  stroke: var(--c-bg);
+  stroke-width: 1.5;
+}
+.history-chart-axis {
+  fill: var(--c-muted);
+  font-size: 0.72rem;
+}
+.history-chart-axis-end {
+  text-anchor: end;
+}
+.history-chart-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.5rem;
+}
 
 /* ── Cross-board unread queue ──────────────────────────────────────────── */
 .unread-page {
