@@ -504,6 +504,9 @@ type Post struct {
 	ReplyDepth    int              `json:"replyDepth,omitempty"`
 	Version       int              `json:"version"`
 	Redacted      bool             `json:"redacted"`
+	Marked        bool             `json:"marked"`
+	Recommended   bool             `json:"recommended"`
+	NoReply       bool             `json:"noReply"`
 	ReactionCount int              `json:"ReactionCount"`
 	Attachments   []PostAttachment `json:"attachments,omitempty"`
 	CreatedSeq    int64            `json:"createdSeq"`

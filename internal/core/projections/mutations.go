@@ -113,6 +113,14 @@ func MarkPostPurged(tx *sql.Tx, postID string, seq int64) error {
 	return err
 }
 
+func SetPostFlags(tx *sql.Tx, postID string, marked, recommended, noReply bool, seq int64) error {
+	_, err := QExec(tx,
+		`UPDATE posts SET marked=?, recommended=?, no_reply=?, updated_seq=?, updated_at=? WHERE id=?`,
+		boolInt(marked), boolInt(recommended), boolInt(noReply), seq, NowMS(), postID,
+	)
+	return err
+}
+
 func SetThreadLocked(tx *sql.Tx, threadID string, locked bool) error {
 	v := 0
 	if locked {

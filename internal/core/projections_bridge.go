@@ -78,6 +78,10 @@ func getPost(db *sql.DB, id string) (*Post, error) {
 	return projections.GetPost(db, id)
 }
 
+func setPostFlags(tx *sql.Tx, postID string, marked, recommended, noReply bool, seq int64) error {
+	return projections.SetPostFlags(tx, postID, marked, recommended, noReply, seq)
+}
+
 func getThread(db *sql.DB, id string) (*Thread, error) {
 	return projections.GetThread(db, id)
 }

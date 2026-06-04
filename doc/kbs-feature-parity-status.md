@@ -174,6 +174,25 @@ thread. Budgie now has the first thread-level version:
 - Authenticated reply-tree reads and a web `Reply tree` focus mode expose root
   plus descendant reply traversal inside a thread.
 
+### Article Metadata Flags
+
+KBS articles carried local metadata flags beyond the body text. Budgie now has
+the first article-flag workflow:
+
+- Posts carry KBS-style `marked`, `recommended`, and `noReply` metadata.
+- Uniform command:
+  - `setPostFlag`
+- REST alias:
+  - `PATCH /api/v1/posts/{post}/flags`
+- `marked` and `recommended` require board curation permission.
+- `noReply` requires board thread-moderation permission.
+- A no-reply thread starter blocks ordinary replies to the thread.
+- A no-reply parent article blocks ordinary direct replies to that article.
+- Board thread moderators and delegated `canModerateThreads` members can
+  bypass article-local reply stops.
+- Web thread readers show article flag badges and expose mark/recommend/no-reply
+  controls to users with the corresponding board permissions.
+
 ### Board Policy Flags And Moderator Lists
 
 KBS boards carry local policy and moderator metadata. Budgie now has the first
@@ -262,10 +281,12 @@ enforced version:
     public audit board.
 - Delegated board members can now:
   - Review applications and edit the member roster with `canManageMembers`.
-  - Curate digest/archive/recommended/pinned entries with `canCurate`.
+  - Mark/recommend articles and curate digest/archive/recommended/pinned entries
+    with `canCurate`.
   - Curate announcement entries with `canAnnounce`.
   - Redact and restore board posts with `canModeratePosts`.
-  - Lock and move threads with `canModerateThreads`.
+  - Lock/move threads and toggle article no-reply flags with
+    `canModerateThreads`.
   - Publish public poll-result records with `canManagePolls`.
   - Edit board policy flags and member admission requirements with
     `canSetBoardSettings`.
@@ -648,6 +669,7 @@ social graph:
 - First/last post jumps, same-author trails inside a loaded thread, and
   cross-board same-author reading through authenticated author-post streams.
 - Reply-tree-specific traversal inside a loaded thread.
+- KBS-style article flags for marked, recommended, and no-reply articles.
 - Board policy flags, board detail reads, board-local moderator lists, and
   board-local member rolls.
 - Enforced read-only, no-reply, anonymous-posting, board-moderator, and
@@ -725,11 +747,13 @@ social graph:
   workflows.
 - Remaining special system boards, historical/stat-log boards, and richer
   community statistics.
-- Richer article metadata beyond attachment listings and signatures.
+- Further article metadata such as original/cross-post lineage, TeX flags, and
+  mail-back reply flags.
 - Optional social/services layer: games and campus utilities.
 
 ## Suggested Next Slices
 
 1. KBS member-manager edge permissions not yet modeled in Budgie.
-2. Richer article metadata beyond attachment listings and signatures.
+2. Further article metadata such as original/cross-post lineage and mail-back
+   reply flags.
 3. Remaining BBS social utilities and games.

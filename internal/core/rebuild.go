@@ -183,6 +183,25 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 		if err := ftsUpdatePost(tx, evt.ID, evt.NewBody); err != nil {
 			return err
 		}
+	case *proto.PostFlagsSetPayload:
+		marked := 0
+		if evt.Marked {
+			marked = 1
+		}
+		recommended := 0
+		if evt.Recommended {
+			recommended = 1
+		}
+		noReply := 0
+		if evt.NoReply {
+			noReply = 1
+		}
+		if _, err := qExec(tx,
+			`UPDATE posts SET marked=?, recommended=?, no_reply=?, updated_seq=?, updated_at=? WHERE id=?`,
+			marked, recommended, noReply, seq, evt.TS, evt.ID,
+		); err != nil {
+			return err
+		}
 	case *proto.PostRedactedPayload:
 		if _, err := qExec(tx,
 			`UPDATE posts SET redacted=1, updated_seq=?, updated_at=? WHERE id=?`,

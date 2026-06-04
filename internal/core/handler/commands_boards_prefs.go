@@ -1755,6 +1755,13 @@ func (h *Handler) actorCanAnnounceBoard(actor *User, boardID string) bool {
 	return h.actorHasBoardMemberPermission(actor, boardID, "can_announce")
 }
 
+func (h *Handler) actorCanModerateBoardThreads(actor *User, boardID string) bool {
+	if h.actorCanModerateBoard(actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermission(actor, boardID, "can_moderate_threads")
+}
+
 func (h *Handler) actorCanManageBoardPolls(actor *User, boardID string) bool {
 	if h.actorCanModerateBoard(actor, boardID) {
 		return true

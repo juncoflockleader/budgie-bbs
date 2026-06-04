@@ -169,7 +169,7 @@ Scope grammar: `type:id`.
 | Scope | Delivers |
 |---|---|
 | `board:<id>` | `thread.new`, `thread.moved`, `thread.locked` in that board |
-| `thread:<id>` | `post.appended`, `post.edited`, `post.redacted`, `post.restored` in that thread |
+| `thread:<id>` | `post.appended`, `post.edited`, `post.flags_set`, `post.redacted`, `post.restored` in that thread |
 | `chat:<room>` | `chat.line` in that room (ephemeral) |
 | `presence:global` or `presence:<board>` | `user.joined`, `user.left`, `presence.update` |
 | `account:self` | events targeting this account (always implicitly subscribed) |
@@ -419,6 +419,7 @@ Returns: the ack envelope.
 | `PATCH /api/v1/messages/settings` | `setDirectMessageSettings` |
 | `POST /api/v1/messages/{id}/read` | `markDirectMessageRead` |
 | `DELETE /api/v1/messages/{id}` | `deleteDirectMessage` |
+| `PATCH /api/v1/posts/{id}/flags` | `setPostFlag` |
 | `PUT /api/v1/users/{user}/friend` | `setUserRelationship` |
 | `DELETE /api/v1/users/{user}/friend` | `setUserRelationship` |
 | `PUT /api/v1/users/{user}/ignore` | `setUserRelationship` |
@@ -453,6 +454,7 @@ appendPost     { thread*, body*, replyTo, contentType, anonymous, attachments[] 
 postBoardMail  { board, thread, subject, body*, contentType, attachments[] } -> thread.new or post.appended
 attachPost     { post*, filename*, contentType, sizeBytes } -> post.attachment_added
 editPost       { post*, body* }                             -> post.edited
+setPostFlag    { post*, marked?, recommended?, noReply? }   -> post.flags_set
 redactPost     { post*, reason }                            -> post.redacted
 restorePost    { post* }                                    -> post.restored
 flagPost       { post*, reason }                             -> post.flagged
@@ -484,6 +486,11 @@ flagPost       { post*, reason }                             -> post.flagged
   saved signatures. Later signature edits do not rewrite old posts. Anonymous
   posts omit signatures.
 - `replyTo`: optional parent post id for shallow threading. Depth is capped server-side (open question #1 in Decisions doc); over-deep replies are flattened, not rejected.
+- `setPostFlag` stores KBS-style article metadata. `marked` and `recommended`
+  require board curation permission; `noReply` requires board thread-moderation
+  permission. A `noReply` thread starter blocks ordinary replies to the thread,
+  and a `noReply` parent article blocks ordinary direct replies to that article;
+  board thread moderators may bypass those article-local reply stops.
 
 ### Moderation & structure
 
@@ -571,9 +578,11 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
 - Board members can carry a short board-local title and explicit position for
   KBS-style ordered member rolls.
   `canManageMembers` delegates member roster and application review,
-  `canCurate` delegates digest/archive/recommended/pinned curation,
+  `canCurate` delegates article mark/recommend flags plus
+  digest/archive/recommended/pinned curation,
   `canAnnounce` delegates announcement entries, `canModeratePosts` delegates
-  redact/restore, `canModerateThreads` delegates lock/move, and
+  redact/restore, `canModerateThreads` delegates lock/move and article no-reply
+  flags, `canManagePolls` delegates poll result publishing, and
   `canSetBoardSettings` delegates board policy and member-requirement edits.
   Delegated member managers cannot grant or revoke those delegation flags.
 - Board membership requirements expose KBS-style admission knobs. `maxMembers`,
@@ -863,6 +872,7 @@ board.created   { id, name, description, parentId, position, by, ts }
 thread.new      { id, board, author, title, ts }
 post.appended   { id, thread, author, body, signature, contentType, replyTo, ts }
 post.edited     { id, thread, newBody, version, ts }
+post.flags_set  { id, thread, marked, recommended, noReply, by, ts }
 post.redacted   { id, thread, by, reason, ts }        // body NOT included
 post.restored   { id, thread, by, ts }
 thread.locked   { thread, locked, by, ts }

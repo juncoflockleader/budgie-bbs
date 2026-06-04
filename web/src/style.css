@@ -527,6 +527,15 @@ label {
 }
 .post-author { color: var(--c-accent2); font-weight: bold }
 .post-time { font-size: 0.85em }
+.post-flag-badge {
+  background: rgba(180, 210, 120, 0.14);
+  border: 1px solid rgba(180, 210, 120, 0.28);
+  border-radius: 3px;
+  color: #b7d477;
+  font-size: 0.72em;
+  font-weight: 700;
+  padding: 0.08rem 0.35rem;
+}
 .post-actions {
   display: flex;
   flex-wrap: wrap;

@@ -9,6 +9,7 @@ const (
 	EvtPostAppended        EventKind = "post.appended"
 	EvtPostAttachmentAdded EventKind = "post.attachment_added"
 	EvtPostEdited          EventKind = "post.edited"
+	EvtPostFlagsSet        EventKind = "post.flags_set"
 	EvtPostRedacted        EventKind = "post.redacted"
 	EvtPostRestored        EventKind = "post.restored"
 	EvtThreadLocked        EventKind = "thread.locked"
@@ -65,7 +66,7 @@ type Event struct {
 func (e *Event) IsDurable() bool {
 	switch e.Kind {
 	case EvtThreadNew, EvtPostAppended, EvtPostAttachmentAdded, EvtPostEdited, EvtPostRedacted,
-		EvtPostRestored, EvtPostPurged, EvtThreadLocked, EvtThreadMoved,
+		EvtPostFlagsSet, EvtPostRestored, EvtPostPurged, EvtThreadLocked, EvtThreadMoved,
 		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated,
 		EvtMailSent, EvtMailAttachmentAdded, EvtDirectMessageSent,
 		EvtUserBlessed, EvtPostReacted, EvtPostUnreacted, EvtPollVoted,
@@ -117,6 +118,16 @@ type PostEditedPayload struct {
 	NewBody string `json:"newBody"`
 	Version int    `json:"version"`
 	TS      int64  `json:"ts"`
+}
+
+type PostFlagsSetPayload struct {
+	ID          string `json:"id"`
+	Thread      string `json:"thread"`
+	Marked      bool   `json:"marked"`
+	Recommended bool   `json:"recommended"`
+	NoReply     bool   `json:"noReply"`
+	By          string `json:"by"`
+	TS          int64  `json:"ts"`
 }
 
 type PostRedactedPayload struct {

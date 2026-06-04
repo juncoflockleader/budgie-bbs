@@ -76,6 +76,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.editPost(actor, p)
 
+	case proto.CmdSetPostFlag:
+		var p proto.SetPostFlagPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.setPostFlag(actor, p)
+
 	case proto.CmdRedactPost:
 		var p proto.RedactPostPayload
 		if err := json.Unmarshal(payload, &p); err != nil {

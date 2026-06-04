@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../api/client'
 import type { AttachmentPayload, BoardInfo, Thread, ThreadSummary, Post, Poll, BudgieEvent, PostAttachment } from '../api/types'
 import type {
-  PostAppendedPayload, PostAttachmentAddedPayload, PostEditedPayload, PostRedactedPayload, PostRestoredPayload,
+  PostAppendedPayload, PostAttachmentAddedPayload, PostEditedPayload, PostFlagsSetPayload, PostRedactedPayload, PostRestoredPayload,
   ThreadLockedPayload, PostReactedPayload, PostUnreactedPayload, PollVotedPayload,
 } from '../api/types'
 import { Markup } from '../components/Markup'
@@ -237,6 +237,9 @@ export function ThreadPage({
         body: p.body, signature: p.signature, contentType: p.contentType,
         replyTo: p.replyTo, version: 1, redacted: false,
         reactionCount: 0,
+        marked: false,
+        recommended: false,
+        noReply: false,
         attachments: eventAttachments(p),
         createdSeq: evt.seq ?? 0, updatedSeq: evt.seq ?? 0,
       }
@@ -291,6 +294,14 @@ export function ThreadPage({
       ))
       setReplyTreePosts(prev => prev?.map(post =>
         post.id === p.id ? { ...post, body: p.newBody, version: p.version } : post
+      ) ?? prev)
+    } else if (evt.event === 'post.flags_set') {
+      const p = evt.payload as PostFlagsSetPayload
+      setPosts(prev => prev.map(post =>
+        post.id === p.id ? { ...post, marked: p.marked, recommended: p.recommended, noReply: p.noReply } : post
+      ))
+      setReplyTreePosts(prev => prev?.map(post =>
+        post.id === p.id ? { ...post, marked: p.marked, recommended: p.recommended, noReply: p.noReply } : post
       ) ?? prev)
     } else if (evt.event === 'post.redacted') {
       const p = evt.payload as PostRedactedPayload
@@ -446,6 +457,20 @@ export function ThreadPage({
     alert('Poll result published.')
   }
 
+  function patchPostState(postId: string, patch: Partial<Post>) {
+    setPosts(prev => prev.map(post => post.id === postId ? { ...post, ...patch } : post))
+    setReplyTreePosts(prev => prev?.map(post => post.id === postId ? { ...post, ...patch } : post) ?? prev)
+  }
+
+  async function setArticleFlag(post: Post, patch: { marked?: boolean; recommended?: boolean; noReply?: boolean }) {
+    const res = await api.setPostFlag(token, post.id, patch)
+    if (res.error) {
+      alert(res.error.message)
+      return
+    }
+    patchPostState(post.id, patch)
+  }
+
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
 
@@ -455,6 +480,7 @@ export function ThreadPage({
   const unreadPosts = displayedPosts.filter(post => !post.redacted && post.createdSeq > readSeq)
   const focusedUnreadIndex = focusedPostId ? unreadPosts.findIndex(post => post.id === focusedPostId) : -1
   const readablePosts = displayedPosts.filter(post => !post.redacted)
+  const threadStarterNoReply = Boolean(posts[0]?.noReply)
   const sameAuthorPosts = authorFocus ? readablePosts.filter(post => post.author === authorFocus) : []
   const focusedAuthorIndex = focusedPostId ? sameAuthorPosts.findIndex(post => post.id === focusedPostId) : -1
   const otherUnreadThreadCount = boardUnreadThreads.filter(item => item.id !== thread.id).length
@@ -696,6 +722,7 @@ export function ThreadPage({
           const tl = trustLevels[post.author]
           const createdAt = post.createdAt ?? post.createdSeq
           const canPublishPollResult = canManagePolls || post.authorId === currentUserId || thread.authorId === currentUserId
+          const canReplyToPost = canReplyInBoard && (!threadStarterNoReply || canModerateThreads) && (!post.noReply || canModerateThreads)
 
           return (
             <div
@@ -719,6 +746,9 @@ export function ThreadPage({
                 <span className="muted post-time">
                   {createdAt > 1_000_000_000_000 ? new Date(createdAt).toLocaleString() : `#${post.createdSeq}`}
                 </span>
+                {!post.redacted && post.marked && <span className="post-flag-badge">Marked</span>}
+                {!post.redacted && post.recommended && <span className="post-flag-badge">Recommended</span>}
+                {!post.redacted && post.noReply && <span className="post-flag-badge">No replies</span>}
                 <span className="post-actions">
                   {post.createdSeq > readSeq && !post.redacted && (
                     <button className="link-btn" onClick={() => markPostReadThrough(post)}>Mark to here</button>
@@ -741,6 +771,15 @@ export function ThreadPage({
                   {canUseCurationAction && !post.redacted && (
                     <button className="link-btn" onClick={() => curatePostDigest(post)}>Digest</button>
                   )}
+                  {canCurateBoard && !post.redacted && (
+                    <>
+                      <button className="link-btn" onClick={() => setArticleFlag(post, { marked: !post.marked })}>{post.marked ? 'Unmark' : 'Mark'}</button>
+                      <button className="link-btn" onClick={() => setArticleFlag(post, { recommended: !post.recommended })}>{post.recommended ? 'Unrecommend' : 'Recommend'}</button>
+                    </>
+                  )}
+                  {canModerateThreads && !post.redacted && (
+                    <button className="link-btn" onClick={() => setArticleFlag(post, { noReply: !post.noReply })}>{post.noReply ? 'Allow replies' : 'No replies'}</button>
+                  )}
                   {canAttach && !post.redacted && (canManageBoard || post.authorId === currentUserId) && (
                     <button className="link-btn" onClick={() => uploadAttachment(post)}>Upload file</button>
                   )}
@@ -751,7 +790,7 @@ export function ThreadPage({
                   >
                     {rx.reacted ? '❤️' : '🤍'}{rx.count > 0 ? ` ${rx.count}` : ''}
                   </button>
-                  {canReplyInBoard && !post.redacted && (
+                  {canReplyToPost && !post.redacted && (
                     <button className="link-btn" onClick={() => {
                       setReplyTo(post.id)
                       setComposing(true)

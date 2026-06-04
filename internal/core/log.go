@@ -114,6 +114,8 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.PostAttachmentAddedPayload)
 	case proto.EvtPostEdited:
 		dst = new(proto.PostEditedPayload)
+	case proto.EvtPostFlagsSet:
+		dst = new(proto.PostFlagsSetPayload)
 	case proto.EvtPostRedacted:
 		dst = new(proto.PostRedactedPayload)
 	case proto.EvtPostRestored:

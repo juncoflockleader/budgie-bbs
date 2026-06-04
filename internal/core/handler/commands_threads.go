@@ -204,11 +204,19 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
 	canModerateBoard := h.actorCanModerateBoard(actor, thread.Board)
+	canModerateThread := h.actorCanModerateBoardThreads(actor, thread.Board)
 	if thread.Locked && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrThreadLocked, "thread is locked", false)}
 	}
 	if (settings.ReadOnly || settings.NoReply) && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board is not accepting replies", false)}
+	}
+	rootNoReply, err := threadRootPostNoReply(h.db, thread.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if rootNoReply && !canModerateThread {
+		return Reply{Err: errDetail(proto.ErrForbidden, "thread starter is not accepting replies", false)}
 	}
 	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
@@ -247,6 +255,12 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		}
 		if parent == nil {
 			return Reply{Err: errDetail(proto.ErrNotFound, "replyTo post not found", false)}
+		}
+		if parent.Thread != thread.ID {
+			return Reply{Err: errDetail(proto.ErrValidationFailed, "replyTo post belongs to another thread", false)}
+		}
+		if parent.NoReply && !canModerateThread {
+			return Reply{Err: errDetail(proto.ErrForbidden, "article is not accepting replies", false)}
 		}
 		if parent.ReplyTo != "" {
 			// Already depth-1 reply — flatten to grandparent.
@@ -330,6 +344,18 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	h.publishGeneratedEvents(filterGeneratedEvents)
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
+}
+
+func threadRootPostNoReply(db *sql.DB, threadID string) (bool, error) {
+	var noReply int
+	err := qQueryRow(db,
+		`SELECT no_reply FROM posts WHERE thread=? ORDER BY created_seq LIMIT 1`,
+		threadID,
+	).Scan(&noReply)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return noReply != 0, err
 }
 
 func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply {
@@ -632,6 +658,81 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostEdited, Seq: seq, Scopes: scopes,
 		Payload: &proto.PostEditedPayload{ID: post.ID, Thread: post.Thread, NewBody: p.Body, Version: post.Version + 1, TS: ts}, TS: ts})
 
+	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
+}
+
+func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
+	if p.Post == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	if p.Marked == nil && p.Recommended == nil && p.NoReply == nil {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "at least one article flag is required", false)}
+	}
+	post, err := getPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+	if post.Redacted {
+		return Reply{Err: errDetail(proto.ErrConflict, "cannot flag a redacted post", false)}
+	}
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil || thread == nil {
+		return internalErr(err)
+	}
+
+	marked := post.Marked
+	recommended := post.Recommended
+	noReply := post.NoReply
+	curatorChange := false
+	threadModerationChange := false
+	if p.Marked != nil {
+		curatorChange = curatorChange || *p.Marked != post.Marked
+		marked = *p.Marked
+	}
+	if p.Recommended != nil {
+		curatorChange = curatorChange || *p.Recommended != post.Recommended
+		recommended = *p.Recommended
+	}
+	if p.NoReply != nil {
+		threadModerationChange = *p.NoReply != post.NoReply
+		noReply = *p.NoReply
+	}
+	if curatorChange && !h.actorCanCurateBoard(actor, thread.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board curator permission required", false)}
+	}
+	if threadModerationChange && !h.actorCanModerateBoardThreads(actor, thread.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
+	}
+	if !curatorChange && !threadModerationChange {
+		return Reply{Result: &proto.AckResult{ID: post.ID}}
+	}
+
+	ts := nowMS()
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagsSet, scopes, &proto.PostFlagsSetPayload{
+		ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, By: actor.ID, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := setPostFlags(tx, post.ID, marked, recommended, noReply, seq); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostFlagsSet, Seq: seq, Scopes: scopes,
+		Payload: &proto.PostFlagsSetPayload{ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, By: actor.Name, TS: ts}, TS: ts})
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 

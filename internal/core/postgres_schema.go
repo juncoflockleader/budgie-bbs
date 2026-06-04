@@ -568,6 +568,9 @@ CREATE TABLE IF NOT EXISTS posts (
     reply_to     TEXT,
     version      INTEGER NOT NULL DEFAULT 1,
     redacted     BOOLEAN NOT NULL DEFAULT FALSE,
+    marked       BOOLEAN NOT NULL DEFAULT FALSE,
+    recommended  BOOLEAN NOT NULL DEFAULT FALSE,
+    no_reply     BOOLEAN NOT NULL DEFAULT FALSE,
     created_seq  BIGINT NOT NULL,
     updated_seq  BIGINT NOT NULL,
     created_at   BIGINT NOT NULL,
@@ -1539,6 +1542,22 @@ CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (29, 'postgres-community-stat-history', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 30,
+			Name:    "postgres-post-article-flags",
+			SQL: `
+ALTER TABLE posts
+    ADD COLUMN IF NOT EXISTS marked BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE posts
+    ADD COLUMN IF NOT EXISTS recommended BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE posts
+    ADD COLUMN IF NOT EXISTS no_reply BOOLEAN NOT NULL DEFAULT FALSE;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (30, 'postgres-post-article-flags', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

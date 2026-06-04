@@ -45,6 +45,7 @@ func newHandler(db *sql.DB, bus Bus) *Handler {
 		MarkPostRedacted:             markPostRedacted,
 		MarkPostRestored:             markPostRestored,
 		MarkPostPurged:               markPostPurged,
+		SetPostFlags:                 setPostFlags,
 		SetThreadLocked:              setThreadLocked,
 		MoveThreadBoard:              moveThreadBoard,
 		SetUserRole:                  setUserRole,
@@ -180,10 +181,10 @@ func getThreadTx(tx *sql.Tx, id string) (*Thread, error) {
 
 func getPostTx(tx *sql.Tx, id string) (*Post, error) {
 	p := &Post{}
-	var redacted int
+	var redacted, marked, recommended, noReply int
 	err := qQueryRow(tx,
-		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
-	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version, redacted, marked, recommended, no_reply, created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
+	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &marked, &recommended, &noReply, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -197,5 +198,8 @@ func getPostTx(tx *sql.Tx, id string) (*Post, error) {
 		p.UpdatedAt = p.CreatedAt
 	}
 	p.Redacted = redacted != 0
+	p.Marked = marked != 0
+	p.Recommended = recommended != 0
+	p.NoReply = noReply != 0
 	return p, nil
 }

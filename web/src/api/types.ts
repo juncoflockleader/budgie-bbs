@@ -399,6 +399,9 @@ export interface Post {
   version: number
   reactionCount: number
   redacted: boolean
+  marked: boolean
+  recommended: boolean
+  noReply: boolean
   attachments?: PostAttachment[]
   createdSeq: number
   updatedSeq: number
@@ -456,6 +459,7 @@ export type EventKind =
   | 'post.appended'
   | 'post.attachment_added'
   | 'post.edited'
+  | 'post.flags_set'
   | 'post.redacted'
   | 'post.restored'
   | 'thread.locked'
@@ -502,6 +506,9 @@ export interface PostAttachmentAddedPayload {
 }
 export interface PostEditedPayload {
   id: string; thread: string; newBody: string; version: number; ts: number
+}
+export interface PostFlagsSetPayload {
+  id: string; thread: string; marked: boolean; recommended: boolean; noReply: boolean; by: string; ts: number
 }
 export interface PostRedactedPayload {
   id: string; thread: string; by: string; reason?: string; ts: number

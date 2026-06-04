@@ -9,6 +9,7 @@ const (
 	CmdPostBoardMail              CommandName = "postBoardMail"
 	CmdAttachPost                 CommandName = "attachPost"
 	CmdEditPost                   CommandName = "editPost"
+	CmdSetPostFlag                CommandName = "setPostFlag"
 	CmdRedactPost                 CommandName = "redactPost"
 	CmdRestorePost                CommandName = "restorePost"
 	CmdLockThread                 CommandName = "lockThread"
@@ -433,6 +434,13 @@ type AttachPostPayload struct {
 type EditPostPayload struct {
 	Post string `json:"post"`
 	Body string `json:"body"`
+}
+
+type SetPostFlagPayload struct {
+	Post        string `json:"post"`
+	Marked      *bool  `json:"marked,omitempty"`
+	Recommended *bool  `json:"recommended,omitempty"`
+	NoReply     *bool  `json:"noReply,omitempty"`
 }
 
 type RedactPostPayload struct {

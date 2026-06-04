@@ -1514,6 +1514,19 @@ export async function flagPost(token: string, postId: string, reason = ''): Prom
   return json<AckResult>(res)
 }
 
+export async function setPostFlag(
+  token: string,
+  postId: string,
+  payload: { marked?: boolean; recommended?: boolean; noReply?: boolean },
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/posts/${postId}/flags`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return json<AckResult>(res)
+}
+
 export async function listReviewables(
   token: string,
   status = 'open',
@@ -1602,7 +1615,7 @@ export async function clearUserSanction(
 // ── Commands ───────────────────────────────────────────────────────────────
 
 export type CommandName =
-  | 'createThread' | 'appendPost' | 'postBoardMail' | 'editPost' | 'redactPost' | 'restorePost'
+  | 'createThread' | 'appendPost' | 'postBoardMail' | 'editPost' | 'setPostFlag' | 'redactPost' | 'restorePost'
   | 'lockThread' | 'moveThread' | 'sanctionUser' | 'clearUserSanction' | 'setContentFilter' | 'grantRole' | 'revokeRole' | 'publishStatsSnapshot'
   | 'sendChatLine' | 'setPresence' | 'createBoard' | 'purgePost'
   | 'setBoardSettings' | 'setBoardMemberRequirements' | 'setBoardModerator'

@@ -2368,8 +2368,26 @@ func attachPostAttachments(db *sql.DB, posts []Post) ([]Post, error) {
 			return nil, err
 		}
 		posts[i].Attachments = attachments
+		if err := hydratePostFlags(db, &posts[i]); err != nil {
+			return nil, err
+		}
 	}
 	return posts, nil
+}
+
+func hydratePostFlags(db *sql.DB, post *Post) error {
+	var marked, recommended, noReply int
+	err := QQueryRow(db, `SELECT marked, recommended, no_reply FROM posts WHERE id=?`, post.ID).Scan(&marked, &recommended, &noReply)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	post.Marked = marked != 0
+	post.Recommended = recommended != 0
+	post.NoReply = noReply != 0
+	return nil
 }
 
 func ListPostsByAuthor(db *sql.DB, name string, limit, offset int) ([]Post, error) {
@@ -2540,6 +2558,9 @@ func GetPost(db *sql.DB, id string) (*Post, error) {
 		return nil, err
 	}
 	p.Attachments = attachments
+	if err := hydratePostFlags(db, p); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 

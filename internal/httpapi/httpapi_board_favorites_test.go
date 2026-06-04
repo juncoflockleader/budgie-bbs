@@ -170,6 +170,9 @@ type postsResponse struct {
 		ThreadTitle string `json:"threadTitle"`
 		Author      string `json:"author"`
 		ReplyDepth  int    `json:"replyDepth"`
+		Marked      bool   `json:"marked"`
+		Recommended bool   `json:"recommended"`
+		NoReply     bool   `json:"noReply"`
 	} `json:"posts"`
 }
 
@@ -2142,6 +2145,76 @@ func TestHTTPDelegatedBoardMemberPermissions(t *testing.T) {
 		"title": "club notice",
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("bob announcement curate status: %d error=%+v", status, ack.Error)
+	}
+}
+
+func TestHTTPPostArticleFlagsAndNoReply(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+	carolToken := registerUser(t, handler, "carol")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Article flags",
+		"body":  "root post",
+	}, &ack); status != http.StatusCreated || ack.Result == nil {
+		t.Fatalf("create article flag thread status: %d error=%+v", status, ack.Error)
+	}
+	threadID := ack.Result.ID
+	posts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list article flag posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected root post, got %+v", posts.Posts)
+	}
+	rootPostID := posts.Posts[0].ID
+
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/posts/"+rootPostID+"/flags", bobToken, map[string]bool{
+		"marked": true,
+	}, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected ordinary user cannot mark post, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/general/members/alice", adminToken, map[string]bool{
+		"canCurate": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("grant alice curator status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/general/members/bob", adminToken, map[string]bool{
+		"canModerateThreads": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("grant bob thread manager status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/posts/"+rootPostID+"/flags", aliceToken, map[string]bool{
+		"marked":      true,
+		"recommended": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("alice mark/recommend status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/posts/"+rootPostID+"/flags", bobToken, map[string]bool{
+		"noReply": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("bob no-reply status: %d error=%+v", status, ack.Error)
+	}
+	posts = postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list flagged posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 || !posts.Posts[0].Marked || !posts.Posts[0].Recommended || !posts.Posts[0].NoReply {
+		t.Fatalf("expected article flags in post response, got %+v", posts.Posts)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", carolToken, map[string]string{
+		"body": "ordinary reply",
+	}, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected article no-reply to block ordinary reply, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", bobToken, map[string]string{
+		"body": "thread manager reply",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("expected thread manager to bypass article no-reply, got %d error=%+v", status, ack.Error)
 	}
 }
 

@@ -5207,6 +5207,86 @@ func TestPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
 	}
 }
 
+func TestPostArticleFlagsAndNoReply(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
+
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Article flags", Body: "root post",
+	})
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected root post, got %+v", posts)
+	}
+	rootPostID := posts[0].ID
+
+	execExpectErr(t, c, bob, proto.CmdSetPostFlag, proto.SetPostFlagPayload{
+		Post:   rootPostID,
+		Marked: boolPtr(true),
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:     "general",
+		User:      "alice",
+		Member:    true,
+		CanCurate: boolPtr(true),
+	})
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:              "general",
+		User:               "bob",
+		Member:             true,
+		CanModerateThreads: boolPtr(true),
+	})
+
+	exec(t, c, alice, proto.CmdSetPostFlag, proto.SetPostFlagPayload{
+		Post:        rootPostID,
+		Marked:      boolPtr(true),
+		Recommended: boolPtr(true),
+	})
+	exec(t, c, bob, proto.CmdSetPostFlag, proto.SetPostFlagPayload{
+		Post:    rootPostID,
+		NoReply: boolPtr(true),
+	})
+
+	root, err := c.GetPost(rootPostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root == nil || !root.Marked || !root.Recommended || !root.NoReply {
+		t.Fatalf("expected marked/recommended/no-reply root post, got %+v", root)
+	}
+	execExpectErr(t, c, carol, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: threadRes.ID,
+		Body:   "ordinary reply",
+	}, proto.ErrForbidden)
+	reply := exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: threadRes.ID,
+		Body:   "thread manager reply",
+	})
+	if reply.ID == "" {
+		t.Fatalf("expected thread manager to bypass article no-reply, got %+v", reply)
+	}
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatal(err)
+	}
+	root, err = c.GetPost(rootPostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root == nil || !root.Marked || !root.Recommended || !root.NoReply {
+		t.Fatalf("expected rebuild to preserve article flags, got %+v", root)
+	}
+}
+
 func TestBoardPostingSanctionsCreateDenyPostRecords(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
