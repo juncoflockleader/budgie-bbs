@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../api/client'
 import type { Thread, Post, Poll, BudgieEvent } from '../api/types'
 import type {
@@ -9,6 +9,7 @@ import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
 import { PollComposer } from '../components/PollComposer'
 import { PollWidget } from '../components/PollWidget'
+import { validatePollMarkup } from '../pollValidation'
 import { useStream } from '../hooks/useStream'
 
 interface Props {
@@ -41,6 +42,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
   const [draftBody, setDraftBody] = useState('')
   const [replyTo, setReplyTo] = useState<string | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
+  const [composeError, setComposeError] = useState<string | null>(null)
   // postId → reaction state
   const [reactions, setReactions] = useState<Record<string, ReactionState>>({})
   // postId → Poll (null means "loading", undefined means "not loaded")
@@ -52,6 +54,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
   const bottomRef = useRef<HTMLDivElement>(null)
   const isMod = currentUserRole === 'moderator' || currentUserRole === 'admin'
   const isAdmin = currentUserRole === 'admin'
+  const draftPollValidation = useMemo(() => validatePollMarkup(draftBody), [draftBody])
 
   // Fetch trust level for an author if not already loaded
   async function loadTrust(author: string) {
@@ -208,6 +211,12 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
   async function submitPost() {
     if (!draftBody.trim()) return
     setSubmitting(true)
+    setComposeError(null)
+    if (draftPollValidation.hasPollTag && !draftPollValidation.valid) {
+      setComposeError(draftPollValidation.message ?? 'Poll syntax is invalid')
+      setSubmitting(false)
+      return
+    }
     const res = await api.execCommand(token, 'appendPost', {
       thread: thread.id,
       body: draftBody,
@@ -215,11 +224,13 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
     })
     setSubmitting(false)
     if (res.error) {
+      setComposeError(res.error.message)
       alert(res.error.message)
     } else {
       setDraftBody('')
       setReplyTo(undefined)
       setComposing(false)
+      setComposeError(null)
     }
   }
 
@@ -393,13 +404,20 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
               autoFocus
               className="compose-textarea"
               value={draftBody}
-              onChange={e => setDraftBody(e.target.value)}
+              onChange={e => {
+                setDraftBody(e.target.value)
+                if (composeError) setComposeError(null)
+              }}
               placeholder="Write your reply…"
               rows={6}
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitPost()
               }}
             />
+            {draftPollValidation.hasPollTag && !draftPollValidation.valid && (
+              <p className="error">{draftPollValidation.message}</p>
+            )}
+            {composeError && <p className="error">{composeError}</p>}
             <div className="compose-actions">
               <PollComposer
                 onInsert={insertPollIntoDraft}

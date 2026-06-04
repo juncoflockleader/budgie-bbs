@@ -1,7 +1,8 @@
-import { useEffect, FormEvent, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
 import type { Board } from '../api/types'
 import { PollComposer } from '../components/PollComposer'
+import { validatePollMarkup } from '../pollValidation'
 
 interface Props {
   token: string
@@ -18,6 +19,7 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
   const [busy, setBusy] = useState(false)
   const [isTrustLoaded, setIsTrustLoaded] = useState(false)
   const [canCreatePoll, setCanCreatePoll] = useState(false)
+  const pollValidation = useMemo(() => validatePollMarkup(body), [body])
 
   function appendPoll(markup: string) {
     setBody(prev => {
@@ -43,6 +45,11 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
     e.preventDefault()
     setBusy(true)
     setError(null)
+    if (pollValidation.hasPollTag && !pollValidation.valid) {
+      setError(pollValidation.message ?? 'Poll syntax is invalid')
+      setBusy(false)
+      return
+    }
     const res = await api.execCommand(token, 'createThread', {
       board: board.id,
       title,
@@ -77,12 +84,18 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
           Body
           <textarea
             value={body}
-            onChange={e => setBody(e.target.value)}
+            onChange={e => {
+              setBody(e.target.value)
+              if (error) setError(null)
+            }}
             required
             rows={8}
             placeholder="Markdown-light markup: **bold**, `code`, > quote"
           />
         </label>
+        {pollValidation.hasPollTag && !pollValidation.valid && (
+          <p className="error">{pollValidation.message}</p>
+        )}
         <div className="compose-actions">
           <PollComposer
             onInsert={appendPoll}
