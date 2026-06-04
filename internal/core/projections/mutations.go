@@ -527,12 +527,15 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 	if patch.StatsExcluded != nil {
 		settings.StatsExcluded = *patch.StatsExcluded
 	}
+	if patch.ZapAllowed != nil {
+		settings.ZapAllowed = *patch.ZapAllowed
+	}
 	ts := NowMS()
 	_, err = QExec(db,
 		`INSERT INTO board_settings (
 		    board_id, anonymous_allowed, read_only, no_reply, attachments_allowed,
-		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, stats_excluded, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, stats_excluded, zap_allowed, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(board_id)
 		 DO UPDATE SET
 		    anonymous_allowed=excluded.anonymous_allowed,
@@ -544,6 +547,7 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 		    member_read_mode=excluded.member_read_mode,
 		    member_post_mode=excluded.member_post_mode,
 		    stats_excluded=excluded.stats_excluded,
+		    zap_allowed=excluded.zap_allowed,
 		    updated_at=excluded.updated_at`,
 		boardID,
 		boolInt(settings.AnonymousAllowed),
@@ -555,7 +559,24 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 		boolInt(settings.MemberReadMode),
 		boolInt(settings.MemberPostMode),
 		boolInt(settings.StatsExcluded),
+		boolInt(settings.ZapAllowed),
 		ts,
+	)
+	return err
+}
+
+func SetBoardZap(db *sql.DB, userID, boardID string, zapped bool) error {
+	ts := NowMS()
+	if !zapped {
+		_, err := QExec(db, `DELETE FROM board_zaps WHERE user_id=? AND board_id=?`, userID, boardID)
+		return err
+	}
+	_, err := QExec(db,
+		`INSERT INTO board_zaps (user_id, board_id, created_at, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(user_id, board_id)
+		 DO UPDATE SET updated_at=excluded.updated_at`,
+		userID, boardID, ts, ts,
 	)
 	return err
 }

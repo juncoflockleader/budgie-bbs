@@ -76,6 +76,7 @@ type Runtime struct {
 	CastVote                     func(tx *sql.Tx, pollID, optionID, userID string, ts int64) error
 	SetThreadPref                func(db *sql.DB, userID, threadID, level string) error
 	SetBoardFavorite             func(db *sql.DB, userID, boardID, folderID string, position *int, favorite bool) error
+	SetBoardZap                  func(db *sql.DB, userID, boardID string, zapped bool) error
 	CreateFavoriteFolder         func(db *sql.DB, userID, folderID, parentID, name string, position *int) error
 	UpdateFavoriteFolder         func(db *sql.DB, userID, folderID, name string, parentID *string, position *int) error
 	DeleteFavoriteFolder         func(db *sql.DB, userID, folderID string) error

@@ -78,6 +78,7 @@ func newHandler(db *sql.DB, bus Bus) *Handler {
 		CastVote:                     castVote,
 		SetThreadPref:                setThreadPref,
 		SetBoardFavorite:             setBoardFavorite,
+		SetBoardZap:                  setBoardZap,
 		CreateFavoriteFolder:         createFavoriteFolder,
 		UpdateFavoriteFolder:         updateFavoriteFolder,
 		DeleteFavoriteFolder:         deleteFavoriteFolder,

@@ -279,6 +279,10 @@ func setBoardFavorite(db *sql.DB, userID, boardID, folderID string, position *in
 	return currentRuntime().SetBoardFavorite(db, userID, boardID, folderID, position, favorite)
 }
 
+func setBoardZap(db *sql.DB, userID, boardID string, zapped bool) error {
+	return currentRuntime().SetBoardZap(db, userID, boardID, zapped)
+}
+
 func createFavoriteFolder(db *sql.DB, userID, folderID, parentID, name string, position *int) error {
 	return currentRuntime().CreateFavoriteFolder(db, userID, folderID, parentID, name, position)
 }

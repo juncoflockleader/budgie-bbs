@@ -77,6 +77,7 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"board_members", "can_set_board_settings", "can_set_board_settings INTEGER NOT NULL DEFAULT 0"},
 		{"board_members", "position", "position INTEGER NOT NULL DEFAULT 0"},
 		{"board_settings", "stats_excluded", "stats_excluded INTEGER NOT NULL DEFAULT 0"},
+		{"board_settings", "zap_allowed", "zap_allowed INTEGER NOT NULL DEFAULT 1"},
 		{"digest_entries", "body", "body TEXT NOT NULL DEFAULT ''"},
 		{"digest_entries", "body_edited", "body_edited INTEGER NOT NULL DEFAULT 0"},
 		{"user_presence", "mode", "mode TEXT NOT NULL DEFAULT ''"},
@@ -95,6 +96,18 @@ func applySQLiteMigrations(db *sql.DB) error {
 	}
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_members_board_position ON board_members(board_id, position, user_id)`); err != nil {
 		return fmt.Errorf("ensure board member position index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS board_zaps (
+		    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    board_id   TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0,
+		    PRIMARY KEY (user_id, board_id)
+		)`); err != nil {
+		return fmt.Errorf("ensure board zaps table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_zaps_user ON board_zaps(user_id, board_id)`); err != nil {
+		return fmt.Errorf("ensure board zaps index: %w", err)
 	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_presence_sessions (
 		    user_id        TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,

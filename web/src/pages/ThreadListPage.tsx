@@ -158,7 +158,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   }
 
   function toggleSetting(key: keyof Pick<BoardSettings,
-    'anonymousAllowed' | 'readOnly' | 'noReply' | 'attachmentsAllowed' | 'mailInAllowed' | 'relayEnabled' | 'memberReadMode' | 'memberPostMode' | 'statsExcluded'>) {
+    'anonymousAllowed' | 'readOnly' | 'noReply' | 'attachmentsAllowed' | 'mailInAllowed' | 'relayEnabled' | 'memberReadMode' | 'memberPostMode' | 'statsExcluded' | 'zapAllowed'>) {
     setSettingsDraft(current => current ? { ...current, [key]: !current[key] } : current)
   }
 
@@ -496,6 +496,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
         {settings?.memberReadMode && <span className="policy-badge">Member read</span>}
         {settings?.memberPostMode && <span className="policy-badge">Member post</span>}
         {settings?.statsExcluded && <span className="policy-badge">Hidden from stats</span>}
+        {settings && !settings.zapAllowed && <span className="policy-badge">No zap</span>}
         {(settings?.memberReadMode || settings?.memberPostMode) && !currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={applyForMembership}>Apply</button>}
         {currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={leaveMembership}>Leave</button>}
         {canOpenBoardSettings && <button className="link-btn" onClick={() => setSettingsOpen(open => !open)}>Board settings</button>}
@@ -536,6 +537,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                   ['memberReadMode', 'Member read'],
                   ['memberPostMode', 'Member post'],
                   ['statsExcluded', 'Hide from stats'],
+                  ['zapAllowed', 'Zap allowed'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="setting-toggle">
                     <input type="checkbox" checked={settingsDraft[key]} onChange={() => toggleSetting(key)} />

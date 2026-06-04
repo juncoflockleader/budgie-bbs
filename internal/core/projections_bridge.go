@@ -530,6 +530,10 @@ func setBoardFavorite(db *sql.DB, userID, boardID, folderID string, position *in
 	return projections.SetBoardFavorite(db, userID, boardID, folderID, position, favorite)
 }
 
+func setBoardZap(db *sql.DB, userID, boardID string, zapped bool) error {
+	return projections.SetBoardZap(db, userID, boardID, zapped)
+}
+
 func createFavoriteFolder(db *sql.DB, userID, folderID, parentID, name string, position *int) error {
 	return projections.CreateFavoriteFolder(db, userID, folderID, parentID, name, position)
 }

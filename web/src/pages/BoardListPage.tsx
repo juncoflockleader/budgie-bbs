@@ -58,7 +58,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   if (error) return <p className="error">{error}</p>
 
   const visibleBoards = sortBoards(boards.filter(board => matchesBoardSearch(board, boardQuery)), boardSort)
-  const unreadBoards = visibleBoards.filter(board => board.unreadPosts > 0)
+  const unreadBoards = visibleBoards.filter(board => board.unreadPosts > 0 && !board.zapped)
   const newBoards = visibleBoards.filter(board => board.newBoard)
   const recommendedVisibleBoards = sortRecommendedBoards(recommendedBoards.filter(board => matchesBoardSearch(board, boardQuery)))
   const boardsById = indexBoardsById(visibleBoards)
@@ -113,6 +113,16 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     e.stopPropagation()
     const wasFavorite = board.favorite
     const res = await api.setBoardFavorite(token, board.id, !wasFavorite)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    await reloadBoards()
+  }
+
+  async function toggleZap(board: BoardSummary, e: MouseEvent<HTMLButtonElement>) {
+    e.stopPropagation()
+    const res = await api.setBoardZap(token, board.id, !board.zapped)
     if (res.error) {
       setError(res.error.message)
       return
@@ -339,7 +349,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
           {board.description && <span className="item-desc muted">{board.description}</span>}
           <BoardStats board={board} />
           <PolicyBadges board={board} />
-          {board.unreadPosts > 0 && (
+          {!board.zapped && board.unreadPosts > 0 && (
             <span className="item-meta unread-meta">
               {board.unreadPosts} unread post{board.unreadPosts === 1 ? '' : 's'}
               {board.unreadThreads > 0 && ` across ${board.unreadThreads} thread${board.unreadThreads === 1 ? '' : 's'}`}
@@ -377,6 +387,16 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
               Apply
             </button>
           )}
+          {board.zapAllowed && (
+            <button
+              className={`board-action-btn${board.zapped ? ' favorite-btn--active' : ''}`}
+              onClick={e => toggleZap(board, e)}
+              title={board.zapped ? 'Show in unread' : 'Hide from unread'}
+              aria-label={board.zapped ? `Show ${board.name} in unread` : `Hide ${board.name} from unread`}
+            >
+              Zap
+            </button>
+          )}
           <button
             className={`favorite-btn${isFavorite ? ' favorite-btn--active' : ''}`}
             onClick={e => toggleFavorite(board, e)}
@@ -391,7 +411,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   }
 
   function renderFavoriteBoard(board: FavoriteBoardEntry) {
-    const summary = favoriteEntryToSummary(board)
+    const summary = favoriteEntryToSummary(board, boardsById[board.id])
     const siblings = favoritesByFolder[board.folderId ?? ''] ?? []
     const index = siblings.findIndex(item => item.id === board.id)
     return (
@@ -422,11 +442,21 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
           </select>
           <button className="board-action-btn" disabled={index <= 0} onClick={e => reorderFavoriteBoard(board, 'up', e)} title="Move up">↑</button>
           <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => reorderFavoriteBoard(board, 'down', e)} title="Move down">↓</button>
-          {summary.unreadPosts > 0 && (
+          {!summary.zapped && summary.unreadPosts > 0 && (
             <button className="board-action-btn" onClick={e => markRead(summary, e)} title="Mark board read" aria-label={`Mark ${summary.name} read`}>✓</button>
           )}
           {summary.readSeq > 0 && (
             <button className="board-action-btn" onClick={e => restoreRead(summary, e)} title="Restore read marker" aria-label={`Restore ${summary.name} read marker`}>↶</button>
+          )}
+          {summary.zapAllowed && (
+            <button
+              className={`board-action-btn${summary.zapped ? ' favorite-btn--active' : ''}`}
+              onClick={e => toggleZap(summary, e)}
+              title={summary.zapped ? 'Show in unread' : 'Hide from unread'}
+              aria-label={summary.zapped ? `Show ${summary.name} in unread` : `Hide ${summary.name} from unread`}
+            >
+              Zap
+            </button>
           )}
           <button className="favorite-btn favorite-btn--active" onClick={e => toggleFavorite(summary, e)} title="Remove favorite" aria-label={`Remove ${summary.name} from favorites`}>★</button>
         </span>
@@ -457,7 +487,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     const folderBoards = favoritesByFolder[folder.id] ?? []
     const siblings = foldersByParent[folder.parentId ?? ''] ?? []
     const index = siblings.findIndex(item => item.id === folder.id)
-    const stats = favoriteScopeStats(folder.id, foldersByParent, favoritesByFolder)
+    const stats = favoriteScopeStats(folder.id, foldersByParent, favoritesByFolder, boardsById)
     return (
       <div key={folder.id} className="favorite-folder" style={{ marginLeft: `${depth * 0.75}rem` }}>
         <div className="favorite-folder-header">
@@ -526,7 +556,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     )
   }
 
-  const favoriteStats = favoriteScopeStats('', foldersByParent, favoritesByFolder)
+  const favoriteStats = favoriteScopeStats('', foldersByParent, favoritesByFolder, boardsById)
 
   return (
     <div className="board-list">
@@ -706,19 +736,20 @@ function favoriteScopeStats(
   folderId: string,
   foldersByParent: Record<string, FavoriteFolder[]>,
   favoritesByFolder: Record<string, FavoriteBoardEntry[]>,
+  boardsById: Record<string, BoardSummary>,
 ) {
   const boards = favoritesByFolder[folderId] ?? []
-  let unreadPosts = boards.reduce((sum, board) => sum + board.unreadPosts, 0)
+  let unreadPosts = boards.reduce((sum, board) => (boardsById[board.id]?.zapped ? sum : sum + board.unreadPosts), 0)
   let hasReadMarker = boards.some(board => board.readSeq > 0)
   for (const child of foldersByParent[folderId] ?? []) {
-    const childStats = favoriteScopeStats(child.id, foldersByParent, favoritesByFolder)
+    const childStats = favoriteScopeStats(child.id, foldersByParent, favoritesByFolder, boardsById)
     unreadPosts += childStats.unreadPosts
     hasReadMarker = hasReadMarker || childStats.hasReadMarker
   }
   return { unreadPosts, hasReadMarker }
 }
 
-function favoriteEntryToSummary(board: FavoriteBoardEntry): BoardSummary {
+function favoriteEntryToSummary(board: FavoriteBoardEntry, existing?: BoardSummary): BoardSummary {
   return {
     id: board.id,
     name: board.name,
@@ -742,6 +773,8 @@ function favoriteEntryToSummary(board: FavoriteBoardEntry): BoardSummary {
     memberReadMode: false,
     memberPostMode: false,
     statsExcluded: false,
+    zapAllowed: existing?.zapAllowed ?? true,
+    zapped: existing?.zapped ?? false,
     moderatorCount: 0,
   }
 }
@@ -770,6 +803,8 @@ function recommendedBoardToSummary(board: RecommendedBoard, existing?: BoardSumm
     memberReadMode: existing?.memberReadMode ?? false,
     memberPostMode: existing?.memberPostMode ?? false,
     statsExcluded: existing?.statsExcluded ?? false,
+    zapAllowed: existing?.zapAllowed ?? true,
+    zapped: existing?.zapped ?? false,
     moderatorCount: board.moderatorCount,
   }
 }
@@ -795,6 +830,8 @@ function PolicyBadges({ board }: { board: BoardSummary }) {
     board.memberReadMode && 'Member read',
     board.memberPostMode && 'Member post',
     board.statsExcluded && 'Hidden from stats',
+    !board.zapAllowed && 'No zap',
+    board.zapped && 'Zapped',
     board.moderatorCount > 0 && `${board.moderatorCount} mod${board.moderatorCount === 1 ? '' : 's'}`,
   ].filter(Boolean)
   if (badges.length === 0) return null

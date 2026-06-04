@@ -13,6 +13,7 @@ export interface Board {
   memberReadMode?: boolean
   memberPostMode?: boolean
   statsExcluded?: boolean
+  zapAllowed?: boolean
   moderatorCount?: number
 }
 
@@ -36,6 +37,8 @@ export interface BoardSummary extends Board {
   memberReadMode: boolean
   memberPostMode: boolean
   statsExcluded: boolean
+  zapAllowed: boolean
+  zapped: boolean
   moderatorCount: number
 }
 
@@ -187,6 +190,7 @@ export interface BoardSettings {
   memberReadMode: boolean
   memberPostMode: boolean
   statsExcluded: boolean
+  zapAllowed: boolean
   updatedAt: number
 }
 

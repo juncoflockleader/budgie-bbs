@@ -5181,6 +5181,106 @@ func TestBoardReadMarkersLifecycle(t *testing.T) {
 	}, proto.ErrNotFound)
 }
 
+func TestBoardZapHidesUnreadWorkflows(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Zapped unread",
+		Body:  "First post",
+	})
+
+	unread, err := c.ListBoardSummaries(alice.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 || unread[0].ID != "general" {
+		t.Fatalf("expected general unread before zap, got %+v", unread)
+	}
+	unreadThreads, err := c.ListUnreadThreadSummaries(alice, false, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unreadThreads) != 1 || unreadThreads[0].Board != "general" {
+		t.Fatalf("expected general unread thread before zap, got %+v", unreadThreads)
+	}
+
+	exec(t, c, alice, proto.CmdSetBoardZap, proto.SetBoardZapPayload{Board: "general", Zapped: true})
+
+	summaries, err := c.ListBoardSummaries(alice.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var general *core.BoardSummary
+	for i := range summaries {
+		if summaries[i].ID == "general" {
+			general = &summaries[i]
+			break
+		}
+	}
+	if general == nil || !general.Zapped || !general.ZapAllowed || general.UnreadPosts != 1 {
+		t.Fatalf("expected zapped summary to retain unread state, got %+v", general)
+	}
+	unread, err = c.ListBoardSummaries(alice.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 0 {
+		t.Fatalf("expected zapped board hidden from unread boards, got %+v", unread)
+	}
+	unreadThreads, err = c.ListUnreadThreadSummaries(alice, false, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unreadThreads) != 0 {
+		t.Fatalf("expected zapped board hidden from unread threads, got %+v", unreadThreads)
+	}
+
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:      "general",
+		ZapAllowed: boolPtr(false),
+	})
+
+	summaries, err = c.ListBoardSummaries(alice.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	general = nil
+	for i := range summaries {
+		if summaries[i].ID == "general" {
+			general = &summaries[i]
+			break
+		}
+	}
+	if general == nil || general.Zapped || general.ZapAllowed {
+		t.Fatalf("expected non-zappable board to ignore stored zap, got %+v", general)
+	}
+	unread, err = c.ListBoardSummaries(alice.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundGeneralUnread := false
+	for _, board := range unread {
+		if board.ID == "general" {
+			foundGeneralUnread = true
+			break
+		}
+	}
+	if !foundGeneralUnread {
+		t.Fatalf("expected non-zappable board back in unread boards, got %+v", unread)
+	}
+	execExpectErr(t, c, alice, proto.CmdSetBoardZap, proto.SetBoardZapPayload{
+		Board:  "general",
+		Zapped: true,
+	}, proto.ErrConflict)
+
+	exec(t, c, alice, proto.CmdSetBoardZap, proto.SetBoardZapPayload{Board: "general", Zapped: false})
+}
+
 func TestBoardSummaryDiscoveryFilters(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

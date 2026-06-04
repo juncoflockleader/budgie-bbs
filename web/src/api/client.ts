@@ -376,6 +376,14 @@ export async function setBoardFavorite(
   return json<AckResult>(res)
 }
 
+export async function setBoardZap(token: string, board: string, zapped: boolean): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/boards/${board}/zap`, {
+    method: zapped ? 'PUT' : 'DELETE',
+    headers: authHeaders(token),
+  })
+  return json<AckResult>(res)
+}
+
 export async function createFavoriteFolder(
   token: string,
   name: string,

@@ -36,6 +36,8 @@ type boardSummariesResponse struct {
 		ReadSeq       int64  `json:"readSeq"`
 		CreatedAt     int64  `json:"createdAt"`
 		NewBoard      bool   `json:"newBoard"`
+		ZapAllowed    bool   `json:"zapAllowed"`
+		Zapped        bool   `json:"zapped"`
 	} `json:"boards"`
 }
 
@@ -56,6 +58,7 @@ type boardInfoResponse struct {
 		MemberReadMode   bool `json:"memberReadMode"`
 		MemberPostMode   bool `json:"memberPostMode"`
 		StatsExcluded    bool `json:"statsExcluded"`
+		ZapAllowed       bool `json:"zapAllowed"`
 	} `json:"settings"`
 	Requirements struct {
 		MinLoginCount             int    `json:"minLoginCount"`
@@ -5307,5 +5310,70 @@ func TestHTTPBoardReadMarkersLifecycle(t *testing.T) {
 	}
 	if len(unread.Boards) != 1 || unread.Boards[0].UnreadPosts != 1 {
 		t.Fatalf("expected restored unread board, got %+v", unread.Boards)
+	}
+}
+
+func TestHTTPBoardZapHidesUnreadBoards(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+
+	createAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Zapped unread board",
+		"body":  "First post",
+	}, &createAck); status != http.StatusCreated {
+		t.Fatalf("create thread status: %d error=%+v", status, createAck.Error)
+	}
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/general/zap", aliceToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("zap board status: %d error=%+v", status, ack.Error)
+	}
+
+	summary := boardSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/summary", aliceToken, nil, &summary); status != http.StatusOK {
+		t.Fatalf("list board summaries status: %d", status)
+	}
+	generalSummaryIndex := -1
+	for i := range summary.Boards {
+		if summary.Boards[i].ID == "general" {
+			generalSummaryIndex = i
+			break
+		}
+	}
+	if generalSummaryIndex < 0 || !summary.Boards[generalSummaryIndex].Zapped || !summary.Boards[generalSummaryIndex].ZapAllowed || summary.Boards[generalSummaryIndex].UnreadPosts != 1 {
+		t.Fatalf("expected zapped summary to retain unread state, got %+v", summary.Boards)
+	}
+
+	unread := boardSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/unread", aliceToken, nil, &unread); status != http.StatusOK {
+		t.Fatalf("list unread boards status: %d", status)
+	}
+	if len(unread.Boards) != 0 {
+		t.Fatalf("expected zapped board hidden from unread boards, got %+v", unread.Boards)
+	}
+
+	ack = ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/boards/general/zap", aliceToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("unzap board status: %d error=%+v", status, ack.Error)
+	}
+	unread = boardSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/unread", aliceToken, nil, &unread); status != http.StatusOK {
+		t.Fatalf("list unread after unzap status: %d", status)
+	}
+	if len(unread.Boards) != 1 || unread.Boards[0].ID != "general" {
+		t.Fatalf("expected unzapped board back in unread boards, got %+v", unread.Boards)
+	}
+
+	ack = ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/boards/general/settings", adminToken, map[string]bool{
+		"zapAllowed": false,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("set no-zap board setting status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/general/zap", aliceToken, nil, &ack); status != http.StatusConflict {
+		t.Fatalf("expected non-zappable board zap conflict, got %d error=%+v", status, ack.Error)
 	}
 }

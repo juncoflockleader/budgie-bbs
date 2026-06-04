@@ -244,6 +244,16 @@ CREATE INDEX IF NOT EXISTS idx_board_favorites_user_position
 CREATE INDEX IF NOT EXISTS idx_board_favorites_user_folder_position
     ON board_favorites(user_id, folder_id, position, board_id);
 
+CREATE TABLE IF NOT EXISTS board_zaps (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    board_id   TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    created_at BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, board_id)
+);
+CREATE INDEX IF NOT EXISTS idx_board_zaps_user
+    ON board_zaps(user_id, board_id);
+
 CREATE TABLE IF NOT EXISTS board_settings (
     board_id            TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
     anonymous_allowed   INTEGER NOT NULL DEFAULT 0,
@@ -255,6 +265,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     member_read_mode    INTEGER NOT NULL DEFAULT 0,
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
     stats_excluded      INTEGER NOT NULL DEFAULT 0,
+    zap_allowed         INTEGER NOT NULL DEFAULT 1,
     updated_at          BIGINT NOT NULL DEFAULT 0
 );
 
@@ -803,6 +814,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     member_read_mode    INTEGER NOT NULL DEFAULT 0,
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
     stats_excluded      INTEGER NOT NULL DEFAULT 0,
+    zap_allowed         INTEGER NOT NULL DEFAULT 1,
     updated_at          BIGINT NOT NULL DEFAULT 0
 );
 
@@ -1765,6 +1777,28 @@ CREATE INDEX IF NOT EXISTS idx_recommended_boards_position
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (39, 'postgres-recommended-boards', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 40,
+			Name:    "postgres-board-zaps",
+			SQL: `
+ALTER TABLE board_settings
+    ADD COLUMN IF NOT EXISTS zap_allowed INTEGER NOT NULL DEFAULT 1;
+
+CREATE TABLE IF NOT EXISTS board_zaps (
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    board_id   TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    created_at BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, board_id)
+);
+CREATE INDEX IF NOT EXISTS idx_board_zaps_user
+    ON board_zaps(user_id, board_id);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (40, 'postgres-board-zaps', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

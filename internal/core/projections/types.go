@@ -17,6 +17,7 @@ type Board struct {
 	MemberReadMode     bool   `json:"memberReadMode"`
 	MemberPostMode     bool   `json:"memberPostMode"`
 	StatsExcluded      bool   `json:"statsExcluded"`
+	ZapAllowed         bool   `json:"zapAllowed"`
 	ModeratorCount     int    `json:"moderatorCount"`
 }
 
@@ -43,6 +44,8 @@ type BoardSummary struct {
 	MemberReadMode     bool   `json:"memberReadMode"`
 	MemberPostMode     bool   `json:"memberPostMode"`
 	StatsExcluded      bool   `json:"statsExcluded"`
+	ZapAllowed         bool   `json:"zapAllowed"`
+	Zapped             bool   `json:"zapped"`
 	ModeratorCount     int    `json:"moderatorCount"`
 }
 
@@ -255,6 +258,7 @@ type BoardSettings struct {
 	MemberReadMode     bool   `json:"memberReadMode"`
 	MemberPostMode     bool   `json:"memberPostMode"`
 	StatsExcluded      bool   `json:"statsExcluded"`
+	ZapAllowed         bool   `json:"zapAllowed"`
 	UpdatedAt          int64  `json:"updatedAt"`
 }
 
@@ -268,6 +272,7 @@ type BoardSettingsPatch struct {
 	MemberReadMode     *bool
 	MemberPostMode     *bool
 	StatsExcluded      *bool
+	ZapAllowed         *bool
 }
 
 type BoardModerator struct {

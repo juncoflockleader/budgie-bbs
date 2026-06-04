@@ -59,6 +59,7 @@ const (
 	CmdSetLoginWatch              CommandName = "setLoginWatch"
 	CmdBlessUser                  CommandName = "blessUser"
 	CmdSetBoardFavorite           CommandName = "setBoardFavorite"
+	CmdSetBoardZap                CommandName = "setBoardZap"
 	CmdCreateFavoriteFolder       CommandName = "createFavoriteFolder"
 	CmdUpdateFavoriteFolder       CommandName = "updateFavoriteFolder"
 	CmdDeleteFavoriteFolder       CommandName = "deleteFavoriteFolder"
@@ -110,6 +111,7 @@ type SetBoardSettingsPayload struct {
 	MemberReadMode     *bool  `json:"memberReadMode,omitempty"`
 	MemberPostMode     *bool  `json:"memberPostMode,omitempty"`
 	StatsExcluded      *bool  `json:"statsExcluded,omitempty"`
+	ZapAllowed         *bool  `json:"zapAllowed,omitempty"`
 }
 
 type SetBoardModeratorPayload struct {
@@ -335,6 +337,11 @@ type SetBoardFavoritePayload struct {
 	Favorite bool   `json:"favorite"`
 	FolderID string `json:"folderId,omitempty"`
 	Position *int   `json:"position,omitempty"`
+}
+
+type SetBoardZapPayload struct {
+	Board  string `json:"board"`
+	Zapped bool   `json:"zapped"`
 }
 
 type CreateFavoriteFolderPayload struct {

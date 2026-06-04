@@ -99,6 +99,18 @@ CREATE INDEX IF NOT EXISTS idx_board_favorites_user_position
 CREATE INDEX IF NOT EXISTS idx_board_favorites_user_folder_position
     ON board_favorites(user_id, folder_id, position, board_id);
 
+-- KBS ZAP hides a board from a user's unread traversal while leaving the board
+-- itself readable and discoverable. Board settings can make a board non-zappable.
+CREATE TABLE IF NOT EXISTS board_zaps (
+    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    board_id   TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, board_id)
+);
+CREATE INDEX IF NOT EXISTS idx_board_zaps_user
+    ON board_zaps(user_id, board_id);
+
 -- Board policy metadata mirrors the high-context board flags of classic BBSes.
 -- The first enforced flags are read_only, no_reply, and anonymous_allowed;
 -- the remaining flags are exposed as board metadata for richer clients.
@@ -113,6 +125,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     member_read_mode    INTEGER NOT NULL DEFAULT 0,
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
     stats_excluded      INTEGER NOT NULL DEFAULT 0,
+    zap_allowed         INTEGER NOT NULL DEFAULT 1,
     updated_at          INTEGER NOT NULL DEFAULT 0
 );
 

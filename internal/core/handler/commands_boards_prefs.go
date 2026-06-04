@@ -30,6 +30,28 @@ func (h *Handler) setBoardFavorite(actor *User, p proto.SetBoardFavoritePayload)
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
+func (h *Handler) setBoardZap(actor *User, p proto.SetBoardZapPayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if p.Zapped {
+		settings, err := getBoardSettings(h.db, p.Board)
+		if err != nil {
+			return internalErr(err)
+		}
+		if settings != nil && !settings.ZapAllowed {
+			return Reply{Err: errDetail(proto.ErrConflict, "board cannot be zapped", false)}
+		}
+	}
+	if err := setBoardZap(h.db, actor.ID, p.Board, p.Zapped); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
 func (h *Handler) createFavoriteFolder(actor *User, p proto.CreateFavoriteFolderPayload) Reply {
 	name := strings.TrimSpace(p.Name)
 	if name == "" {
@@ -155,6 +177,7 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 		MemberReadMode:     p.MemberReadMode,
 		MemberPostMode:     p.MemberPostMode,
 		StatsExcluded:      p.StatsExcluded,
+		ZapAllowed:         p.ZapAllowed,
 	}
 	if err := setBoardSettings(h.db, p.Board, patch); err != nil {
 		return internalErr(err)
@@ -3763,6 +3786,7 @@ func boardSettingsAuditLines(p proto.SetBoardSettingsPayload) []string {
 		{"memberReadMode", p.MemberReadMode},
 		{"memberPostMode", p.MemberPostMode},
 		{"statsExcluded", p.StatsExcluded},
+		{"zapAllowed", p.ZapAllowed},
 	}
 	out := []string{}
 	for _, field := range fields {

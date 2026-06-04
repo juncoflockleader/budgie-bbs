@@ -432,6 +432,19 @@ func (s *Server) handleSetBoardFavorite(w http.ResponseWriter, r *http.Request) 
 	writeAck(w, cid, reply)
 }
 
+// PUT /api/v1/boards/{board}/zap
+// DELETE /api/v1/boards/{board}/zap
+func (s *Server) handleSetBoardZap(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	boardID := r.PathValue("board")
+
+	p := proto.SetBoardZapPayload{Board: boardID, Zapped: r.Method != http.MethodDelete}
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetBoardZap, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 // POST /api/v1/boards/favorites/import
 func (s *Server) handleImportFavoriteTree(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())

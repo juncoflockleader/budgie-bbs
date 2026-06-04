@@ -158,6 +158,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/boards/{board}/favorite", auth(http.HandlerFunc(s.handleSetBoardFavorite)))
 	mux.Handle("PATCH /api/v1/boards/{board}/favorite", auth(http.HandlerFunc(s.handleMoveBoardFavorite)))
 	mux.Handle("DELETE /api/v1/boards/{board}/favorite", auth(http.HandlerFunc(s.handleSetBoardFavorite)))
+	mux.Handle("PUT /api/v1/boards/{board}/zap", auth(http.HandlerFunc(s.handleSetBoardZap)))
+	mux.Handle("DELETE /api/v1/boards/{board}/zap", auth(http.HandlerFunc(s.handleSetBoardZap)))
 	mux.Handle("POST /api/v1/boards/favorites/import", auth(http.HandlerFunc(s.handleImportFavoriteTree)))
 	mux.Handle("POST /api/v1/boards/favorites/read", auth(http.HandlerFunc(s.handleMarkFavoriteFolderRead)))
 	mux.Handle("POST /api/v1/boards/favorites/read/restore", auth(http.HandlerFunc(s.handleRestoreFavoriteFolderRead)))

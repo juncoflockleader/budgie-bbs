@@ -368,6 +368,8 @@ Returns: the ack envelope.
 | `PUT /api/v1/boards/{id}/favorite` | `setBoardFavorite` |
 | `PATCH /api/v1/boards/{id}/favorite` | `moveBoardFavorite` |
 | `DELETE /api/v1/boards/{id}/favorite` | `setBoardFavorite` |
+| `PUT /api/v1/boards/{id}/zap` | `setBoardZap` |
+| `DELETE /api/v1/boards/{id}/zap` | `setBoardZap` |
 | `POST /api/v1/boards/favorites/import` | `importFavoriteTree` |
 | `POST /api/v1/boards/favorites/read` | `markFavoriteFolderRead` |
 | `POST /api/v1/boards/favorites/read/restore` | `restoreFavoriteFolderRead` |
@@ -539,7 +541,8 @@ votePoll        { poll*, option* }                             -> poll.voted
 publishPollResult { poll* }                                    -> thread.new (+ post.appended on vote)
 setBoardSettings { board*, anonymousAllowed?, readOnly?, noReply?,
                    attachmentsAllowed?, mailInAllowed?, relayEnabled?,
-                   memberReadMode?, memberPostMode? }        -> ack only
+                   memberReadMode?, memberPostMode?,
+                   statsExcluded?, zapAllowed? }             -> ack only
 setBoardMemberRequirements { board*, minLoginCount?, minPostCount?,
                    minTrustLevel?, minScore?, minBoardPostCount?,
                    minBoardOriginalPostCount?, minBoardDigestCount?,
@@ -804,6 +807,7 @@ blessUser           { user*, message? }                       -> user.blessed
 
 ```
 setBoardFavorite { board*, favorite*, folderId?, position? }  -> ack only
+setBoardZap      { board*, zapped* }                         -> ack only
 createFavoriteFolder { name*, parentId?, position? }          -> ack id=folder
 updateFavoriteFolder { folder*, name?, parentId?, position? } -> ack only
 deleteFavoriteFolder { folder* }                              -> ack only

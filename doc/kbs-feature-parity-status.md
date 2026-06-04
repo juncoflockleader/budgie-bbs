@@ -28,6 +28,14 @@ foldered personal board workspaces. Budgie now has the core workflow:
 - REST aliases for add/remove:
   - `PUT /api/v1/boards/{board}/favorite`
   - `DELETE /api/v1/boards/{board}/favorite`
+- KBS ZAP/no-ZAP board controls:
+  - Per-user ZAP rows hide a board from unread board lists and site-wide /
+    favorite-folder unread-thread traversal without deleting read state.
+  - Board policy can set `zapAllowed=false`, making old user zaps inert and
+    preventing new zaps for boards that must remain in the reading stream.
+  - REST aliases:
+    - `PUT /api/v1/boards/{board}/zap`
+    - `DELETE /api/v1/boards/{board}/zap`
 - REST aliases for folders and ordering:
   - `POST /api/v1/boards/favorites/folders`
   - `PATCH /api/v1/boards/favorites/folders/{folder}`
@@ -216,10 +224,13 @@ KBS put unread boards and read-marker management on the main reading path.
 Budgie now has the first board-level version:
 
 - A per-user `board_read_markers` projection.
+- A per-user `board_zaps` projection for KBS ZAP/unzap unread suppression.
 - A saved `previous_seq` marker for restoring after an accidental mark-read.
 - Authenticated summary APIs:
   - `GET /api/v1/boards/summary`
   - `GET /api/v1/boards/unread`
+- Unread board reads and cross-board unread-thread queues omit zapped boards
+  while leaving full board summaries and direct board reads available.
 - REST aliases:
   - `POST /api/v1/boards/{board}/read`
   - `POST /api/v1/boards/{board}/read/restore`
@@ -833,6 +844,7 @@ social graph:
 - Notifications for mentions, replies, and watched threads.
 - Thread watch/mute preferences.
 - Board-level unread counts and read-marker restore.
+- Board ZAP/no-ZAP controls for hiding boards from unread traversal.
 - Favorite tree import/export and favorite-folder read-marker restore.
 - Thread-level unread counts, first-unread opening, and read-marker restore.
 - Article-level mark-to-here controls and in-thread previous/next unread
@@ -855,7 +867,8 @@ social graph:
 - Cross-post/repost article creation with source post/thread/board/author
   lineage.
 - Board policy flags, board detail reads, board-local moderator lists, and
-  board-local member rolls, including KBS-style stats-excluded boards.
+  board-local member rolls, including KBS-style stats-excluded and non-zappable
+  boards.
 - Enforced read-only, no-reply, anonymous-posting, board-moderator, and
   member-only read/post flows.
 - Board member application, approval/rejection/blacklist, and self-leave flows.

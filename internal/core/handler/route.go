@@ -426,6 +426,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.setBoardFavorite(actor, p)
 
+	case proto.CmdSetBoardZap:
+		var p proto.SetBoardZapPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.setBoardZap(actor, p)
+
 	case proto.CmdCreateFavoriteFolder:
 		var p proto.CreateFavoriteFolderPayload
 		if err := json.Unmarshal(payload, &p); err != nil {
