@@ -535,7 +535,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				m.statusMsg = "focus body first"
 				return nil
 			}
-			m.insertPollTemplateWithExpires("7d")
+			m.insertPollTemplateWithExpires("1w")
 			return nil
 		case "ctrl+s":
 			if m.composingNewThread {
@@ -1195,6 +1195,9 @@ func (m model) resubscribeThread(threadID string) tea.Cmd {
 
 func (m model) submitPost(body string) tea.Cmd {
 	return func() tea.Msg {
+		if err := validatePollMarkup(body); err != nil {
+			return errMsg{fmt.Errorf("invalid poll markup: %w", err)}
+		}
 		p := proto.AppendPostPayload{Thread: m.currentThread, Body: body}
 		raw, err := json.Marshal(p)
 		if err != nil {
@@ -1218,6 +1221,9 @@ func (m model) submitNewThread() tea.Cmd {
 		}
 		if body == "" {
 			return errMsg{fmt.Errorf("body is required")}
+		}
+		if err := validatePollMarkup(body); err != nil {
+			return errMsg{fmt.Errorf("invalid poll markup: %w", err)}
 		}
 		p := proto.CreateThreadPayload{Board: board, Title: title, Body: body}
 		raw, err := json.Marshal(p)
