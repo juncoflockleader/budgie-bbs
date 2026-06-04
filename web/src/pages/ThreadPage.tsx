@@ -85,7 +85,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
 
       // Init reaction state (count=0 until server pushes updates)
       const rxMap: Record<string, ReactionState> = {}
-      loadedPosts.forEach(p => { rxMap[p.id] = { count: 0, reacted: false } })
+      loadedPosts.forEach(p => { rxMap[p.id] = { count: p.reactionCount, reacted: false } })
       setReactions(rxMap)
 
       // Lazily load trust levels and polls
@@ -103,6 +103,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
         id: p.id, thread: p.thread, author: p.author,
         body: p.body, contentType: p.contentType,
         replyTo: p.replyTo, version: 1, redacted: false,
+        reactionCount: 0,
         createdSeq: evt.seq ?? 0, updatedSeq: evt.seq ?? 0,
       }
       setPosts(prev => {

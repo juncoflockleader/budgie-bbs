@@ -40,6 +40,7 @@ export interface Post {
   contentType: string
   replyTo?: string
   version: number
+  reactionCount: number
   redacted: boolean
   createdSeq: number
   updatedSeq: number

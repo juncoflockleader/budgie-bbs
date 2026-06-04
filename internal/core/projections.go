@@ -41,19 +41,20 @@ type Thread struct {
 
 // Post is the projection of a post.
 type Post struct {
-	ID          string `json:"id"`
-	Thread      string `json:"thread"`
-	Author      string `json:"author"`
-	AuthorID    string `json:"authorId,omitempty"`
-	Body        string `json:"body"`
-	ContentType string `json:"contentType"`
-	ReplyTo     string `json:"replyTo,omitempty"`
-	Version     int    `json:"version"`
-	Redacted    bool   `json:"redacted"`
-	CreatedSeq  int64  `json:"createdSeq"`
-	UpdatedSeq  int64  `json:"updatedSeq"`
-	CreatedAt   int64  `json:"createdAt"`
-	UpdatedAt   int64  `json:"updatedAt"`
+	ID            string `json:"id"`
+	Thread        string `json:"thread"`
+	Author        string `json:"author"`
+	AuthorID      string `json:"authorId,omitempty"`
+	Body          string `json:"body"`
+	ContentType   string `json:"contentType"`
+	ReplyTo       string `json:"replyTo,omitempty"`
+	Version       int    `json:"version"`
+	Redacted      bool   `json:"redacted"`
+	ReactionCount int    `json:"reactionCount"`
+	CreatedSeq    int64  `json:"createdSeq"`
+	UpdatedSeq    int64  `json:"updatedSeq"`
+	CreatedAt     int64  `json:"createdAt"`
+	UpdatedAt     int64  `json:"updatedAt"`
 }
 
 // User is the projection of an account.
@@ -209,7 +210,9 @@ func getThread(db *sql.DB, id string) (*Thread, error) {
 
 func listPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	rows, err := qQuery(db,
-		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq, created_at, updated_at
+		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=posts.id), 0),
+		        created_seq, updated_seq, created_at, updated_at
 		 FROM posts WHERE thread=? ORDER BY created_seq LIMIT ? OFFSET ?`,
 		threadID, limit, offset,
 	)
@@ -221,7 +224,7 @@ func listPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	for rows.Next() {
 		var p Post
 		var redacted int
-		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if p.CreatedAt == 0 {
@@ -240,8 +243,10 @@ func getPost(db *sql.DB, id string) (*Post, error) {
 	p := &Post{}
 	var redacted int
 	err := qQueryRow(db,
-		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted, created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
-	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=posts.id), 0),
+		        created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
+	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -540,7 +545,9 @@ func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 	if boardID != "" {
 		rows, err = qQuery(db,
 			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, p.content_type,
-			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq, p.created_at, p.updated_at
+			        COALESCE(p.reply_to,''), p.version, p.redacted,
+			        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+			        p.created_seq, p.updated_seq, p.created_at, p.updated_at
 			 FROM posts_fts f
 			 JOIN posts p ON p.id = f.post_id
 			 WHERE f.board_id=? AND posts_fts MATCH ? AND p.redacted=0
@@ -550,7 +557,9 @@ func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 	} else {
 		rows, err = qQuery(db,
 			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, p.content_type,
-			        COALESCE(p.reply_to,''), p.version, p.redacted, p.created_seq, p.updated_seq, p.created_at, p.updated_at
+			        COALESCE(p.reply_to,''), p.version, p.redacted,
+			        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+			        p.created_seq, p.updated_seq, p.created_at, p.updated_at
 			 FROM posts_fts f
 			 JOIN posts p ON p.id = f.post_id
 			 WHERE posts_fts MATCH ? AND p.redacted=0
@@ -567,7 +576,7 @@ func searchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 		var p Post
 		var redacted int
 		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType,
-			&p.ReplyTo, &p.Version, &redacted, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			&p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if p.CreatedAt == 0 {
