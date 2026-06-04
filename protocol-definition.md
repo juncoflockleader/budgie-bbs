@@ -320,11 +320,12 @@ Board/thread/archive rankings hide member-read boards unless the viewer can read
 them; direct thread ranking queries scoped to an inaccessible board are
 rejected. Public generated system boards such as `newcomers`, `BBSLists`,
 `Registry`, `reject_registry`, `syssecurity`, `Goodbye`, `Blessing`,
-`GiveupNotice`, `bbsnet`, `notepad`, `Filter`, `denypost`, `undenypost`, `vote`,
-`0announce`, and `0moderation` remain directly readable boards but are excluded
-from community counters and ranking surfaces so generated logs do not masquerade
-as organic activity. Restricted generated boards such as `sysmail` use normal
-member-read policy and are also excluded from community counters and rankings.
+`GiveupNotice`, `bbsnet`, `notepad`, `Filter`, `Recommend`, `denypost`,
+`undenypost`, `vote`, `0announce`, and `0moderation` remain directly readable
+boards but are excluded from community counters and ranking surfaces so
+generated logs do not masquerade as organic activity. Restricted generated
+boards such as `sysmail` use normal member-read policy and are also excluded
+from community counters and rankings.
 
 ### Writes — uniform command endpoint
 
@@ -641,8 +642,10 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   paths require the same curator or announcement permission used for curation.
   Public-board `announcement` curation also lazily creates the `0announce`
   system board and a deterministic generated thread/post for the announcement;
-  member-read board announcements remain digest-only so private content is not
-  mirrored into a public system board.
+  public-board `recommended` curation does the same in the KBS-style
+  `Recommend` system board. Member-read announcements and recommendations
+  remain digest-only so private content is not mirrored into public system
+  boards.
 - `publishStatsSnapshot` is admin-only. It creates the `BBSLists` system board
   if needed and writes a deterministic daily generated thread/post containing
   community counters, max-online history, recent daily stat-history rows, plus

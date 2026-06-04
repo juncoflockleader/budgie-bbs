@@ -480,6 +480,11 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 			return internalErr(err)
 		}
 	}
+	if kind == "recommended" {
+		if err := h.ensureRecommendSystemPost(actor, entryID); err != nil {
+			return internalErr(err)
+		}
+	}
 	return Reply{Result: &proto.AckResult{ID: entryID}}
 }
 
@@ -522,6 +527,11 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 	}
 	if kind == "announcement" {
 		if err := h.ensureAnnouncementSystemPost(actor, entryID); err != nil {
+			return internalErr(err)
+		}
+	}
+	if kind == "recommended" {
+		if err := h.ensureRecommendSystemPost(actor, entryID); err != nil {
 			return internalErr(err)
 		}
 	}
@@ -829,6 +839,7 @@ func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath
 }
 
 const announcementSystemBoardID = "0announce"
+const recommendSystemBoardID = "Recommend"
 const statsSystemBoardID = "BBSLists"
 const registrySystemBoardID = "Registry"
 const rejectRegistrySystemBoardID = "reject_registry"
@@ -1340,12 +1351,46 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 	return b.String()
 }
 
+type digestMirrorSystemBoard struct {
+	Kind        string
+	BoardID     string
+	Name        string
+	Description string
+	ThreadID    string
+	PostID      string
+	Default     string
+}
+
 func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) error {
+	return h.ensureDigestMirrorSystemPost(actor, entryID, digestMirrorSystemBoard{
+		Kind:        "announcement",
+		BoardID:     announcementSystemBoardID,
+		Name:        "0Announce",
+		Description: "Generated site-wide announcements",
+		ThreadID:    "ann_thr_",
+		PostID:      "ann_pst_",
+		Default:     "Announcement",
+	})
+}
+
+func (h *Handler) ensureRecommendSystemPost(actor *User, entryID string) error {
+	return h.ensureDigestMirrorSystemPost(actor, entryID, digestMirrorSystemBoard{
+		Kind:        "recommended",
+		BoardID:     recommendSystemBoardID,
+		Name:        "Recommend",
+		Description: "Generated recommended articles and homepage recommendations",
+		ThreadID:    "recommend_thr_",
+		PostID:      "recommend_pst_",
+		Default:     "Recommended article",
+	})
+}
+
+func (h *Handler) ensureDigestMirrorSystemPost(actor *User, entryID string, mirror digestMirrorSystemBoard) error {
 	export, err := getDigestExport(h.db, entryID)
 	if err != nil || export == nil {
 		return err
 	}
-	if export.Entry.BoardID == announcementSystemBoardID {
+	if export.Entry.Kind != mirror.Kind || export.Entry.BoardID == mirror.BoardID {
 		return nil
 	}
 	settings, err := getBoardSettings(h.db, export.Entry.BoardID)
@@ -1356,8 +1401,8 @@ func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) erro
 		return nil
 	}
 
-	threadID := "ann_thr_" + entryID
-	postID := "ann_pst_" + entryID
+	threadID := mirror.ThreadID + entryID
+	postID := mirror.PostID + entryID
 	var exists int
 	err = qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
 	if err == nil {
@@ -1376,17 +1421,17 @@ func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) erro
 
 	boardCreated := false
 	var boardSeq int64
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, announcementSystemBoardID).Scan(&exists)
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, mirror.BoardID).Scan(&exists)
 	if err == sql.ErrNoRows {
 		position, err := boardCategoryPosition(tx, "", nil)
 		if err != nil {
 			return err
 		}
-		boardScopes := []string{"board:" + announcementSystemBoardID}
+		boardScopes := []string{"board:" + mirror.BoardID}
 		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          announcementSystemBoardID,
-			Name:        "0Announce",
-			Description: "Generated site-wide announcements",
+			ID:          mirror.BoardID,
+			Name:        mirror.Name,
+			Description: mirror.Description,
 			Position:    position,
 			By:          actor.ID,
 			TS:          ts,
@@ -1394,7 +1439,7 @@ func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) erro
 		if err != nil {
 			return err
 		}
-		if err := insertBoard(tx, announcementSystemBoardID, "0Announce", "Generated site-wide announcements", "", position); err != nil {
+		if err := insertBoard(tx, mirror.BoardID, mirror.Name, mirror.Description, "", position); err != nil {
 			return err
 		}
 		boardCreated = true
@@ -1404,14 +1449,14 @@ func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) erro
 
 	title := strings.TrimSpace(export.Entry.Title)
 	if title == "" {
-		title = "Announcement"
+		title = mirror.Default
 	}
 	body := projections.FormatDigestExportText(export)
 	authorName := actor.Name
 	authorID := actor.ID
-	scopes := []string{"board:" + announcementSystemBoardID}
+	scopes := []string{"board:" + mirror.BoardID}
 	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: announcementSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
+		ID: threadID, Board: mirror.BoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
 	})
 	if err != nil {
 		return err
@@ -1424,7 +1469,7 @@ func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) erro
 		return err
 	}
 	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: announcementSystemBoardID, Author: authorName, AuthorID: authorID, Title: title,
+		ID: threadID, Board: mirror.BoardID, Author: authorName, AuthorID: authorID, Title: title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return err
@@ -1438,7 +1483,7 @@ func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) erro
 	if err := bumpThread(tx, threadID, pseq); err != nil {
 		return err
 	}
-	if err := ftsInsertPost(tx, postID, threadID, announcementSystemBoardID, authorName, body); err != nil {
+	if err := ftsInsertPost(tx, postID, threadID, mirror.BoardID, authorName, body); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1446,11 +1491,11 @@ func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) erro
 	}
 
 	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + announcementSystemBoardID},
-			Payload: &proto.BoardCreatedPayload{ID: announcementSystemBoardID, Name: "0Announce", Description: "Generated site-wide announcements", By: actor.Name, TS: ts}, TS: ts})
+		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + mirror.BoardID},
+			Payload: &proto.BoardCreatedPayload{ID: mirror.BoardID, Name: mirror.Name, Description: mirror.Description, By: actor.Name, TS: ts}, TS: ts})
 	}
 	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: announcementSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: mirror.BoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
 		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
 	return nil

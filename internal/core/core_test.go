@@ -2613,6 +2613,53 @@ func TestDigestCurationLifecycle(t *testing.T) {
 	if entries[1].ID != postDigest.ID || entries[1].PostID != reply.ID || entries[1].Path != "faq" {
 		t.Fatalf("expected saved post digest entry, got %+v", entries)
 	}
+	recommendBoard, err := c.GetBoard("Recommend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recommendBoard == nil || recommendBoard.Name != "Recommend" {
+		t.Fatalf("expected generated Recommend board, got %+v", recommendBoard)
+	}
+	recommendThreads, err := c.ListThreads("Recommend", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recommendThreads) != 1 || recommendThreads[0].ID != "recommend_thr_"+threadDigest.ID || recommendThreads[0].Title != "Curatable topic" {
+		t.Fatalf("expected generated Recommend thread, got %+v", recommendThreads)
+	}
+	recommendPosts, err := c.ListPosts(recommendThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recommendPosts) != 1 || !strings.Contains(recommendPosts[0].Body, "Kind: recommended") || !strings.Contains(recommendPosts[0].Body, "Curatable topic") {
+		t.Fatalf("expected generated Recommend post body, got %+v", recommendPosts)
+	}
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "private_digest", Name: "Private digest"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "private_digest",
+		MemberReadMode: boolPtr(true),
+	})
+	privateThread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "private_digest",
+		Title: "Private recommendation",
+		Body:  "Members only",
+	})
+	privateRecommend := exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: privateThread.ID,
+		Kind:   "recommended",
+		Title:  "Private recommendation",
+	})
+	if privateRecommend.ID == "" {
+		t.Fatal("expected private recommended digest entry")
+	}
+	recommendThreads, err = c.ListThreads("Recommend", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recommendThreads) != 1 {
+		t.Fatalf("private member-read recommendation should not generate public Recommend post, got %+v", recommendThreads)
+	}
 
 	updated := exec(t, c, admin, proto.CmdCuratePost, proto.CuratePostPayload{
 		Post:  reply.ID,

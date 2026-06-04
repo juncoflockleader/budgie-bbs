@@ -2590,6 +2590,20 @@ func TestHTTPDigestCurationLifecycle(t *testing.T) {
 	if len(entries.Entries) != 2 || entries.Entries[0].ID != threadDigest.Result.ID || entries.Entries[1].ID != postDigest.Result.ID {
 		t.Fatalf("expected thread and post digest entries, got %+v", entries.Entries)
 	}
+	recommendThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/Recommend/threads", bobToken, nil, &recommendThreads); status != http.StatusOK {
+		t.Fatalf("list Recommend threads status: %d", status)
+	}
+	if len(recommendThreads.Threads) != 1 || recommendThreads.Threads[0].ID != "recommend_thr_"+threadDigest.Result.ID || recommendThreads.Threads[0].Title != "Curatable topic" {
+		t.Fatalf("expected generated Recommend thread, got %+v", recommendThreads.Threads)
+	}
+	recommendPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+recommendThreads.Threads[0].ID+"/posts", bobToken, nil, &recommendPosts); status != http.StatusOK {
+		t.Fatalf("list Recommend posts status: %d", status)
+	}
+	if len(recommendPosts.Posts) != 1 || !strings.Contains(recommendPosts.Posts[0].Body, "Kind: recommended") || !strings.Contains(recommendPosts.Posts[0].Body, "Curatable topic") {
+		t.Fatalf("expected generated Recommend post, got %+v", recommendPosts.Posts)
+	}
 
 	filtered := digestEntriesResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/digest?kind=digest&path=faq", bobToken, nil, &filtered); status != http.StatusOK {

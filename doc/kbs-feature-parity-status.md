@@ -406,6 +406,9 @@ archive areas. Budgie now has the first durable curation layer:
 - Public-board announcement curation lazily creates the `0announce` system board
   and a deterministic generated thread/post in it. Member-read board
   announcements stay digest-only to avoid exposing private content.
+- Public-board recommended curation lazily creates the KBS-style `Recommend`
+  system board and a deterministic generated thread/post in it. Member-read
+  recommendations stay digest-only to avoid exposing private content.
 - Admin-triggered and automatic stat snapshots lazily create the `BBSLists`
   system board and deterministic generated daily stat/ranking threads.
 - Public blessing rituals lazily create the `Blessing` system board and
@@ -748,6 +751,8 @@ social graph:
 - Archive entry rename/path move and edited-body/reset flows.
 - Archive path-subtree move/copy/delete flows.
 - Explicit empty archive-directory records.
+- Generated KBS-style `Recommend` board threads/posts for public recommended
+  curation.
 - Digest browsing and moderator/curator curation/removal controls in the web UI.
 - Authenticated inbound board mail posting for mail-in-enabled boards.
 - Pending outbound relay delivery queue for relay-enabled boards.

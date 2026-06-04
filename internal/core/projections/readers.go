@@ -9,7 +9,7 @@ import (
 )
 
 const DefaultMailQuotaBytes int64 = 10 << 20
-const generatedSystemBoardSQLList = "'0announce','0moderation','BBSLists','Blessing','Filter','Goodbye','GiveupNotice','Registry','bbsnet','denypost','newcomers','notepad','reject_registry','sysmail','syssecurity','undenypost','vote'"
+const generatedSystemBoardSQLList = "'0announce','0moderation','BBSLists','Blessing','Filter','Goodbye','GiveupNotice','Recommend','Registry','bbsnet','denypost','newcomers','notepad','reject_registry','sysmail','syssecurity','undenypost','vote'"
 
 // --- Readers ---
 
