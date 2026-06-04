@@ -1188,7 +1188,7 @@ func (m model) submitNewThread() tea.Cmd {
 }
 
 func (m *model) insertPollTemplate() {
-	template := "[poll]\nQuestion\nOption 1\nOption 2\n[/poll]"
+	template := "[poll expires=1h]\nQuestion\nOption 1\nOption 2\n[/poll]"
 	value := m.compose.Value()
 	body := strings.TrimRight(value, "\n")
 	if body == "" {
