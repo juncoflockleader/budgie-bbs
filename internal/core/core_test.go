@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -363,6 +364,74 @@ func TestPollCreationSupportsExpiry(t *testing.T) {
 
 	if poll.ExpiresAt != expiresAt.UnixMilli() {
 		t.Fatalf("expected expiresAt=%d, got %d", expiresAt.UnixMilli(), poll.ExpiresAt)
+	}
+}
+
+func TestPollCreationSupportsExpiryInUnixSeconds(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	expiresAt := time.Now().Add(4 * time.Minute).UTC().Truncate(time.Second)
+	expiresRaw := fmt.Sprintf("%d", expiresAt.Unix())
+	threadBody := "[poll expires=" + expiresRaw + "]\nQuestion?\nOption A\nOption B\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Unix expiry poll", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for timed poll")
+	}
+
+	if poll.ExpiresAt != expiresAt.UnixMilli() {
+		t.Fatalf("expected unix-second expiresAt=%d, got %d", expiresAt.UnixMilli(), poll.ExpiresAt)
+	}
+}
+
+func TestPollCreationRejectsInvalidExpires(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll expires=badformat]\nQuestion?\nOption A\nOption B\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Invalid expiry", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	if posts[0].Body != threadBody {
+		t.Fatalf("expected malformed expiry poll to remain intact, got %q", posts[0].Body)
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		t.Fatal("expected no poll row for malformed expiry")
 	}
 }
 
