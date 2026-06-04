@@ -330,6 +330,39 @@ func TestPollCreationRespectsTrustLevel(t *testing.T) {
 	}, proto.ErrForbidden)
 }
 
+func TestPollCreationPreservesBodyAroundMarkup(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "before line\n[poll]\nQuestion?\nOption A\nOption B\n[/poll]\nafter line"
+	raw, err := json.Marshal(proto.CreateThreadPayload{
+		Board: "general", Title: "Embedded poll", Body: threadBody,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := c.ExecCmd(context.Background(), alice, proto.CmdCreateThread, raw, "")
+	if reply.Err != nil {
+		t.Fatalf("trusted user should create poll thread: %s (%s)", reply.Err.Message, reply.Err.Code)
+	}
+
+	posts, err := c.ListPosts(reply.Result.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post in new thread, got %d", len(posts))
+	}
+
+	expectedBody := "before line\nafter line"
+	if posts[0].Body != expectedBody {
+		t.Fatalf("expected poll-stripped body %q, got %q", expectedBody, posts[0].Body)
+	}
+}
+
 type forumSnapshot struct {
 	thread          *core.Thread
 	posts           []core.Post
