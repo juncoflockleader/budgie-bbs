@@ -12,6 +12,7 @@ const KIND_LABEL: Record<Notification['kind'], string> = {
   mention: '@ mention',
   reply: '↩ reply',
   watched: '👁 watched',
+  login: 'login',
 }
 
 export function NotificationsPage({ token, onBack }: Props) {
@@ -71,8 +72,14 @@ export function NotificationsPage({ token, onBack }: Props) {
             >
               <span className="notif-kind">{KIND_LABEL[n.kind]}</span>
               <span className="notif-actor">{n.actor}</span>
-              <span className="muted"> in thread </span>
-              <span className="notif-thread">{n.threadId}</span>
+              {n.kind === 'login' ? (
+                <span className="muted"> is online</span>
+              ) : (
+                <>
+                  <span className="muted"> in thread </span>
+                  <span className="notif-thread">{n.threadId}</span>
+                </>
+              )}
               <span className="notif-time muted">{new Date(n.ts).toLocaleString()}</span>
               {!n.read && <span className="notif-dot" />}
             </div>

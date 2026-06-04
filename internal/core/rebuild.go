@@ -56,13 +56,22 @@ func rebuildProjectionsFromEventLog(db *sql.DB, fromSeq int64) error {
 func clearProjectionTables(tx *sql.Tx) error {
 	tables := []string{
 		"posts_fts",
+		"relay_deliveries",
+		"post_attachments",
+		"direct_messages",
+		"mail_copies",
+		"mail_attachment_blobs",
+		"mail_attachments",
+		"mail_messages",
 		"posts",
 		"threads",
 		"poll_votes",
 		"poll_options",
 		"polls",
 		"post_reactions",
+		"blessings",
 		"moderation_reviews",
+		"content_filters",
 		"user_sanctions",
 		"user_activity",
 	}
@@ -118,6 +127,7 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			Author:      evt.Author,
 			AuthorID:    authorID,
 			Body:        postBody,
+			Signature:   strings.TrimSpace(evt.Signature),
 			ContentType: evt.ContentType,
 			ReplyTo:     evt.ReplyTo,
 			CreatedSeq:  seq,
@@ -125,6 +135,19 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			UpdatedAt:   evt.TS,
 		}); err != nil {
 			return err
+		}
+		for i, att := range evt.Attachments {
+			attID := strings.TrimSpace(att.ID)
+			if attID == "" {
+				attID = fmt.Sprintf("%s_att_%d", evt.ID, i)
+			}
+			filename := strings.TrimSpace(att.Filename)
+			if filename == "" {
+				continue
+			}
+			if err := insertPostAttachment(tx, attID, evt.ID, filename, strings.TrimSpace(att.ContentType), att.SizeBytes, strings.TrimSpace(att.URL), authorID, evt.TS); err != nil {
+				return err
+			}
 		}
 
 		if err := upsertPostMeta(tx, seq, evt.Thread, evt.TS); err != nil {
@@ -142,6 +165,10 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			return err
 		}
 		if err := recordPostActivityFromEvent(tx, evt.AuthorID, seq, evt.TS); err != nil {
+			return err
+		}
+	case *proto.PostAttachmentAddedPayload:
+		if err := insertPostAttachment(tx, evt.ID, evt.Post, strings.TrimSpace(evt.Filename), strings.TrimSpace(evt.ContentType), evt.SizeBytes, "", evt.AuthorID, evt.TS); err != nil {
 			return err
 		}
 	case *proto.PostEditedPayload:
@@ -187,11 +214,23 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			return err
 		}
 	case *proto.UserSanctionedPayload:
+		scope := strings.TrimSpace(evt.Scope)
+		if scope == "" {
+			scope = "global"
+		}
 		expiresAt := int64(0)
 		if evt.DurationSec > 0 {
 			expiresAt = evt.TS + evt.DurationSec*1000
 		}
-		if err := insertSanction(tx, buildRebuildID("san", seq), evt.User, evt.Kind, evt.Scope, expiresAt, evt.By, evt.Reason, seq); err != nil {
+		if err := insertSanction(tx, buildRebuildID("san", seq), evt.User, evt.Kind, scope, expiresAt, evt.By, evt.Reason, seq); err != nil {
+			return err
+		}
+	case *proto.UserSanctionClearedPayload:
+		scope := strings.TrimSpace(evt.Scope)
+		if scope == "" {
+			scope = "global"
+		}
+		if _, err := clearUserSanctions(tx, evt.User, strings.TrimSpace(evt.Kind), scope); err != nil {
 			return err
 		}
 	case *proto.RoleGrantedPayload:
@@ -203,7 +242,58 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			return err
 		}
 	case *proto.BoardCreatedPayload:
-		if err := upsertBoardProjection(tx, evt.ID, evt.Name, evt.Description, evt.TS); err != nil {
+		if err := upsertBoardProjection(tx, evt.ID, evt.Name, evt.Description, evt.ParentID, evt.Position, evt.TS); err != nil {
+			return err
+		}
+	case *proto.MailSentPayload:
+		if err := insertMailMessage(tx, evt.ID, evt.FromUserID, evt.Subject, evt.Body, evt.ParentID, evt.TS, seq); err != nil {
+			return err
+		}
+		for i, att := range evt.Attachments {
+			attID := strings.TrimSpace(att.ID)
+			if attID == "" {
+				attID = fmt.Sprintf("%s_matt_%d", evt.ID, i)
+			}
+			filename := strings.TrimSpace(att.Filename)
+			if filename == "" {
+				continue
+			}
+			if err := insertMailAttachment(tx, attID, evt.ID, filename, strings.TrimSpace(att.ContentType), att.SizeBytes, strings.TrimSpace(att.URL), evt.FromUserID, evt.TS); err != nil {
+				return err
+			}
+		}
+		for _, userID := range evt.ToUserIDs {
+			if strings.TrimSpace(userID) == "" {
+				continue
+			}
+			if err := insertMailCopy(tx, evt.ID, userID, "recipient", "inbox", false, false, evt.TS); err != nil {
+				return err
+			}
+		}
+		if evt.SaveSent {
+			if err := insertMailCopy(tx, evt.ID, evt.FromUserID, "sender", "sent", true, false, evt.TS); err != nil {
+				return err
+			}
+		}
+	case *proto.MailAttachmentAddedPayload:
+		if err := insertMailAttachment(tx, evt.ID, evt.Mail, strings.TrimSpace(evt.Filename), strings.TrimSpace(evt.ContentType), evt.SizeBytes, "", evt.AuthorID, evt.TS); err != nil {
+			return err
+		}
+	case *proto.DirectMessageSentPayload:
+		if err := insertDirectMessage(tx, evt.ID, evt.ConversationID, evt.FromUserID, evt.ToUserID, evt.Body, evt.TS, seq); err != nil {
+			return err
+		}
+	case *proto.UserBlessedPayload:
+		if err := insertBlessing(tx, &Blessing{
+			ID:         evt.ID,
+			FromUserID: evt.FromUserID,
+			FromName:   evt.From,
+			ToUserID:   evt.ToUserID,
+			ToName:     evt.To,
+			Message:    evt.Message,
+			CreatedAt:  evt.TS,
+			Seq:        seq,
+		}); err != nil {
 			return err
 		}
 	case *proto.PostReactedPayload:
@@ -280,8 +370,20 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 		); err != nil {
 			return err
 		}
+	case *proto.ContentFilterSetPayload:
+		scope := strings.TrimSpace(evt.Scope)
+		if scope == "" {
+			scope = "global"
+		}
+		if err := upsertContentFilter(tx, evt.ID, evt.Pattern, scope, evt.Active, evt.By, evt.TS); err != nil {
+			return err
+		}
 	case *proto.PostFlaggedPayload:
-		if err := insertModerationReview(tx, evt.ReviewID, "post_flag", evt.PostID, "post", evt.Reporter, evt.Reason, evt.TS); err != nil {
+		kind := strings.TrimSpace(evt.Kind)
+		if kind == "" {
+			kind = "post_flag"
+		}
+		if err := insertModerationReview(tx, evt.ReviewID, kind, evt.PostID, "post", evt.Reporter, evt.Reason, evt.TS); err != nil {
 			return err
 		}
 	case *proto.ReviewResolvedPayload:
@@ -323,7 +425,7 @@ func setThreadLockedWithTime(tx *sql.Tx, threadID string, locked bool, ts int64)
 	return err
 }
 
-func upsertBoardProjection(tx *sql.Tx, id, name, description string, ts int64) error {
+func upsertBoardProjection(tx *sql.Tx, id, name, description, parentID string, position int, ts int64) error {
 	_, err := qExec(tx,
 		`INSERT INTO boards (id, name, description) VALUES (?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description`,
@@ -334,10 +436,10 @@ func upsertBoardProjection(tx *sql.Tx, id, name, description string, ts int64) e
 	}
 	_, err = qExec(tx,
 		`INSERT INTO categories (id, name, description, parent_id, position, visibility, created_at, updated_at)
-		 VALUES (?, ?, ?, '', 0, 'public', ?, ?)
+		 VALUES (?, ?, ?, ?, ?, 'public', ?, ?)
 		 ON CONFLICT(id)
-		 DO UPDATE SET name=excluded.name, description=excluded.description, updated_at=excluded.updated_at`,
-		id, name, description, ts, ts,
+		 DO UPDATE SET name=excluded.name, description=excluded.description, parent_id=excluded.parent_id, position=excluded.position, updated_at=excluded.updated_at`,
+		id, name, description, parentID, position, ts, ts,
 	)
 	return err
 }

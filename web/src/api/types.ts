@@ -4,6 +4,332 @@ export interface Board {
   id: string
   name: string
   description: string
+  anonymousAllowed?: boolean
+  readOnly?: boolean
+  noReply?: boolean
+  attachmentsAllowed?: boolean
+  mailInAllowed?: boolean
+  relayEnabled?: boolean
+  memberReadMode?: boolean
+  memberPostMode?: boolean
+  moderatorCount?: number
+}
+
+export interface BoardSummary extends Board {
+  favorite: boolean
+  unreadThreads: number
+  unreadPosts: number
+  lastSeq: number
+  readSeq: number
+  anonymousAllowed: boolean
+  readOnly: boolean
+  noReply: boolean
+  attachmentsAllowed: boolean
+  mailInAllowed: boolean
+  relayEnabled: boolean
+  memberReadMode: boolean
+  memberPostMode: boolean
+  moderatorCount: number
+}
+
+export interface CommunityStats {
+  totalUsers: number
+  totalBoards: number
+  totalThreads: number
+  totalPosts: number
+  totalReactions: number
+  totalMail: number
+  totalDirectMessages: number
+  onlineUsers: number
+  headSeq: number
+}
+
+export interface BoardRanking {
+  id: string
+  name: string
+  description: string
+  threadCount: number
+  postCount: number
+  lastSeq: number
+  lastPostAt: number
+  moderatorCount: number
+}
+
+export interface ThreadRanking {
+  id: string
+  board: string
+  boardName: string
+  title: string
+  author: string
+  authorId?: string
+  postCount: number
+  reactionCount: number
+  score: number
+  lastSeq: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UserRanking {
+  userId: string
+  name: string
+  role: string
+  postsCreated: number
+  reactionsReceived: number
+  loginCount: number
+  trustLevel: number
+}
+
+export interface BlessingRanking {
+  userId: string
+  name: string
+  blessingCount: number
+  lastBlessedAt: number
+}
+
+export interface ArchiveRanking {
+  boardId: string
+  boardName: string
+  kind: string
+  path: string
+  entryCount: number
+  editedCount: number
+  lastUpdatedAt: number
+}
+
+export interface BoardSettings {
+  boardId: string
+  anonymousAllowed: boolean
+  readOnly: boolean
+  noReply: boolean
+  attachmentsAllowed: boolean
+  mailInAllowed: boolean
+  relayEnabled: boolean
+  memberReadMode: boolean
+  memberPostMode: boolean
+  updatedAt: number
+}
+
+export interface BoardModerator {
+  userId: string
+  name: string
+  position: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface BoardMember {
+  userId: string
+  name: string
+  title?: string
+  position: number
+  canManageMembers: boolean
+  canCurate: boolean
+  canModeratePosts: boolean
+  canModerateThreads: boolean
+  canAnnounce: boolean
+  canSetBoardSettings: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface BoardMemberApplication {
+  id: string
+  boardId: string
+  userId: string
+  name: string
+  status: 'pending' | 'approved' | 'rejected' | 'blacklisted'
+  note?: string
+  title?: string
+  reviewerId?: string
+  reviewerName?: string
+  reviewNote?: string
+  createdAt: number
+  updatedAt: number
+  reviewedAt?: number
+}
+
+export interface BoardMemberRequirements {
+  boardId: string
+  minLoginCount: number
+  minPostCount: number
+  minTrustLevel: number
+  minScore: number
+  minBoardPostCount: number
+  minBoardOriginalPostCount: number
+  minBoardDigestCount: number
+  minBoardMarkCount: number
+  maxMembers: number
+  approvalMode: 'manual' | 'auto'
+  updatedAt: number
+}
+
+export interface BoardInfo {
+  board: Board
+  settings: BoardSettings
+  requirements: BoardMemberRequirements
+  moderators: BoardModerator[]
+  members: BoardMember[]
+}
+
+export interface DigestEntry {
+  id: string
+  boardId: string
+  boardName?: string
+  targetKind: 'post' | 'thread'
+  targetId: string
+  kind: string
+  title: string
+  path?: string
+  note?: string
+  bodyEdited?: boolean
+  createdBy: string
+  createdByName: string
+  createdAt: number
+  updatedAt: number
+  threadId: string
+  postId?: string
+  author?: string
+  excerpt?: string
+}
+
+export interface DigestPathNode {
+  path: string
+  name: string
+  parentPath: string
+  kind?: string
+  entryCount: number
+  childCount: number
+  explicit?: boolean
+}
+
+export interface MailItem {
+  id: string
+  fromUserId: string
+  fromName: string
+  toUserIds: string[]
+  toNames: string[]
+  subject: string
+  body?: string
+  excerpt?: string
+  parentId?: string
+  mailbox: string
+  role: string
+  read: boolean
+  kept: boolean
+  attachments?: MailAttachment[]
+  createdAt: number
+  updatedAt: number
+  seq: number
+}
+
+export interface MailUsage {
+  userId: string
+  usedBytes: number
+  quotaBytes: number
+  remainingBytes: number
+}
+
+export interface MailAttachment extends AttachmentPayload {
+  id: string
+  mailId: string
+  stored: boolean
+  createdBy?: string
+  createdAt: number
+}
+
+export interface DirectMessageConversation {
+  userId: string
+  name: string
+  lastMessageId: string
+  lastBody: string
+  lastFromName: string
+  lastAt: number
+  unreadCount: number
+}
+
+export interface MailGroupMember {
+  userId: string
+  name: string
+  position: number
+}
+
+export interface MailGroup {
+  id: string
+  name: string
+  members: MailGroupMember[]
+  builtIn?: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface DirectMessageSettings {
+  userId: string
+  policy: 'all' | 'friends' | 'none'
+  updatedAt: number
+}
+
+export interface SocialUser {
+  userId: string
+  sessionId?: string
+  name: string
+  displayName: string
+  role: string
+  note?: string
+  kind: string
+  mutual: boolean
+  ignored: boolean
+  status?: string
+  mode?: string
+  boardId?: string
+  boardName?: string
+  threadId?: string
+  locationLabel?: string
+  fromHost?: string
+  lastSeen: number
+  idleSeconds: number
+  online: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface DirectMessage {
+  id: string
+  conversationId: string
+  fromUserId: string
+  fromName: string
+  toUserId: string
+  toName: string
+  otherUserId: string
+  otherName: string
+  body: string
+  read: boolean
+  mine: boolean
+  createdAt: number
+  seq: number
+}
+
+export interface FavoriteFolder {
+  id: string
+  parentId?: string
+  name: string
+  position: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface FavoriteBoardEntry extends Board {
+  folderId?: string
+  position: number
+  unreadThreads: number
+  unreadPosts: number
+  lastSeq: number
+  readSeq: number
+}
+
+export interface FavoriteTree {
+  folders: FavoriteFolder[]
+  boards: FavoriteBoardEntry[]
 }
 
 export interface Category {
@@ -20,6 +346,7 @@ export interface Category {
 export interface Thread {
   id: string
   board: string
+  boardName?: string
   author: string
   authorId?: string
   title: string
@@ -31,21 +358,49 @@ export interface Thread {
   updatedAt?: number
 }
 
+export interface ThreadSummary extends Thread {
+  readSeq: number
+  unreadPosts: number
+  firstUnreadPostId?: string
+}
+
 export interface Post {
   id: string
   thread: string
+  board?: string
+  boardName?: string
+  threadTitle?: string
   author: string
   authorId?: string
   body: string
+  signature?: string
   contentType: string
   replyTo?: string
+  replyDepth?: number
   version: number
   reactionCount: number
   redacted: boolean
+  attachments?: PostAttachment[]
   createdSeq: number
   updatedSeq: number
   createdAt?: number
   updatedAt?: number
+}
+
+export interface AttachmentPayload {
+  id?: string
+  filename: string
+  contentType?: string
+  sizeBytes?: number
+  url?: string
+}
+
+export interface PostAttachment extends AttachmentPayload {
+  id: string
+  postId: string
+  stored: boolean
+  createdBy?: string
+  createdAt: number
 }
 
 // ── Wire ───────────────────────────────────────────────────────────────────
@@ -69,9 +424,10 @@ export interface ApiResponse<T> {
 // ── Auth ───────────────────────────────────────────────────────────────────
 
 export interface AuthResponse {
-  token: string
-  expiresAt: number
-  user: { id: string; name: string; role: string }
+  token?: string
+  expiresAt?: number
+  status?: string
+  user: { id: string; name: string; role: string; registrationStatus?: string }
 }
 
 // ── Events (incoming from WS/SSE) ─────────────────────────────────────────
@@ -79,15 +435,21 @@ export interface AuthResponse {
 export type EventKind =
   | 'thread.new'
   | 'post.appended'
+  | 'post.attachment_added'
   | 'post.edited'
   | 'post.redacted'
   | 'post.restored'
   | 'thread.locked'
   | 'thread.moved'
   | 'user.sanctioned'
+  | 'user.sanction_cleared'
+  | 'content_filter.set'
   | 'role.granted'
   | 'role.revoked'
   | 'board.created'
+  | 'mail.sent'
+  | 'mail.attachment_added'
+  | 'direct_message.sent'
   | 'chat.line'
   | 'presence.update'
   | 'user.joined'
@@ -113,7 +475,11 @@ export interface ThreadNewPayload {
 }
 export interface PostAppendedPayload {
   id: string; thread: string; author: string; body: string; rawBody?: string
-  authorId?: string; contentType: string; replyTo?: string; ts: number
+  authorId?: string; signature?: string; contentType: string; replyTo?: string; attachments?: AttachmentPayload[]; ts: number
+}
+export interface PostAttachmentAddedPayload {
+  id: string; post: string; thread: string; filename: string
+  contentType?: string; sizeBytes?: number; authorId?: string; ts: number
 }
 export interface PostEditedPayload {
   id: string; thread: string; newBody: string; version: number; ts: number
@@ -129,10 +495,19 @@ export interface ThreadLockedPayload {
 }
 export interface PostFlaggedPayload {
   reviewId: string
+  kind?: string
   postId: string
   thread: string
   reporter: string
   reason?: string
+  ts: number
+}
+export interface ContentFilterSetPayload {
+  id: string
+  pattern: string
+  scope?: string
+  active: boolean
+  by: string
   ts: number
 }
 export interface ReviewResolvedPayload {
@@ -145,7 +520,7 @@ export interface ChatLinePayload {
   id: string; room: string; user: string; text: string; ts: number
 }
 export interface PresenceUpdatePayload {
-  user: string; status: string; ts: number
+  user: string; userId?: string; sessionId?: string; status: string; mode?: string; board?: string; thread?: string; location?: string; fromHost?: string; ts: number
 }
 export interface UserJoinedPayload { user: string; ts: number }
 export interface UserLeftPayload   { user: string; ts: number }
@@ -183,7 +558,7 @@ export interface PollVotedPayload {
 // ── M8: Notifications ───────────────────────────────────────────────────────
 export interface Notification {
   id: string
-  kind: 'mention' | 'reply' | 'watched'
+  kind: 'mention' | 'reply' | 'watched' | 'login'
   threadId: string
   postId: string
   actor: string
@@ -198,12 +573,127 @@ export interface UserProfile {
   displayName: string
   bio: string
   avatar: string
+  signature: string
+  plan: string
+  homepage: string
   created: number
   lastSeen: number
   postsCreated: number
   reactionsReceived: number
   trustLevel: number
   pubkeys: string[]
+}
+
+export interface AccountRegistrationSettings {
+  requireApproval: boolean
+  updatedAt: number
+}
+
+export interface AccountRegistration {
+  id: string
+  name: string
+  role: string
+  status: 'pending' | 'approved' | 'rejected'
+  created: number
+  reviewedAt: number
+  reviewedBy: string
+  reviewedByName?: string
+  reviewReason: string
+}
+
+export interface PasswordRecoveryRequest {
+  id: string
+  userId: string
+  userName: string
+  status: 'pending' | 'resolved' | 'rejected'
+  submittedName: string
+  submittedEmail: string
+  note: string
+  reviewerId: string
+  reviewerName?: string
+  reviewNote: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UserPrivateProfile {
+  userId: string
+  realName: string
+  realEmail: string
+  registrationEmail: string
+  address: string
+  phone: string
+  mobile: string
+  birthday: string
+  school: string
+  contactNote: string
+  updatedAt: number
+}
+
+export interface UserPersonalFile {
+  userId: string
+  name: string
+  body: string
+  public: boolean
+  updatedAt: number
+}
+
+export interface UserSignature {
+  id: string
+  userId: string
+  label: string
+  body: string
+  position: number
+  active: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UserSignatureSettings {
+  userId: string
+  selectedSignatureId: string
+  randomEnabled: boolean
+  updatedAt: number
+}
+
+export interface UserSignatureBundle {
+  signatures: UserSignature[]
+  settings: UserSignatureSettings
+  maxCount: number
+}
+
+export interface UserSignatureRecount {
+  userId: string
+  count: number
+  activeCount: number
+  selectedSignatureId: string
+  randomEnabled: boolean
+  currentSignature: string
+  updatedAt: number
+}
+
+export interface UserLoginACLRule {
+  id: string
+  userId: string
+  pattern: string
+  note: string
+  position: number
+  active: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface UserLoginACLSettings {
+  userId: string
+  enabled: boolean
+  updatedAt: number
+}
+
+export interface UserLoginACLBundle {
+  rules: UserLoginACLRule[]
+  settings: UserLoginACLSettings
+  host?: string
+  allowed: boolean
 }
 
 export interface ModerationReview {
@@ -220,8 +710,19 @@ export interface ModerationReview {
   updatedAt: number
 }
 
+export interface ContentFilter {
+  id: string
+  pattern: string
+  scope: string
+  active: boolean
+  createdBy: string
+  createdAt: number
+  updatedAt: number
+}
+
 // ── M9: Trust ───────────────────────────────────────────────────────────────
 export interface TrustInfo {
+  loginCount: number
   postsCreated: number
   daysVisited: number
   reactionsReceived: number

@@ -1,0 +1,189 @@
+import { type ReactNode, useEffect, useState } from 'react'
+import * as api from '../api/client'
+import type { ArchiveRanking, BlessingRanking, Board, BoardRanking, CommunityStats, Thread, ThreadRanking, UserRanking } from '../api/types'
+import { Spinner } from '../components/Spinner'
+
+interface Props {
+  token: string
+  onBack: () => void
+  onOpenBoard: (board: Board) => void
+  onOpenThread: (board: Board, thread: Thread) => void
+}
+
+export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props) {
+  const [stats, setStats] = useState<CommunityStats | null>(null)
+  const [boards, setBoards] = useState<BoardRanking[]>([])
+  const [threads, setThreads] = useState<ThreadRanking[]>([])
+  const [users, setUsers] = useState<UserRanking[]>([])
+  const [blessings, setBlessings] = useState<BlessingRanking[]>([])
+  const [archives, setArchives] = useState<ArchiveRanking[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    Promise.all([
+      api.getCommunityStats(token),
+      api.listBoardRankings(token, 12),
+      api.listThreadRankings(token, 12),
+      api.listUserRankings(token, 12),
+      api.listBlessingRankings(token, 12),
+      api.listArchiveRankings(token, 12),
+    ]).then(([statsRes, boardRes, threadRes, userRes, blessingRes, archiveRes]) => {
+      if (cancelled) return
+      setLoading(false)
+      const failure = statsRes.error ?? boardRes.error ?? threadRes.error ?? userRes.error ?? blessingRes.error ?? archiveRes.error
+      if (failure) {
+        setError(failure.message)
+        return
+      }
+      setStats(statsRes.data ?? null)
+      setBoards(boardRes.data ?? [])
+      setThreads(threadRes.data ?? [])
+      setUsers(userRes.data ?? [])
+      setBlessings(blessingRes.data ?? [])
+      setArchives(archiveRes.data ?? [])
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  if (loading) return <Spinner />
+
+  return (
+    <div className="rankings-page">
+      <div className="page-header">
+        <button onClick={onBack}>Back</button>
+        <h2>Rankings</h2>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {stats && (
+        <section className="rankings-stats-grid">
+          <Stat label="Users" value={stats.totalUsers} />
+          <Stat label="Boards" value={stats.totalBoards} />
+          <Stat label="Threads" value={stats.totalThreads} />
+          <Stat label="Posts" value={stats.totalPosts} />
+          <Stat label="Reactions" value={stats.totalReactions} />
+          <Stat label="Online" value={stats.onlineUsers} />
+        </section>
+      )}
+      <section className="rankings-grid">
+        <RankingPanel title="Active Boards">
+          {boards.map((board, index) => (
+            <button
+              key={board.id}
+              className="ranking-row"
+              onClick={() => onOpenBoard(board)}
+            >
+              <span className="ranking-index">{index + 1}</span>
+              <span className="ranking-main">
+                <span className="item-title">{board.name}</span>
+                <span className="item-meta muted">{board.postCount} posts / {board.threadCount} threads</span>
+              </span>
+            </button>
+          ))}
+        </RankingPanel>
+        <RankingPanel title="Hot Threads">
+          {threads.map((thread, index) => (
+            <button
+              key={thread.id}
+              className="ranking-row"
+              onClick={() => onOpenThread(
+                { id: thread.board, name: thread.boardName, description: '' },
+                rankingToThread(thread),
+              )}
+            >
+              <span className="ranking-index">{index + 1}</span>
+              <span className="ranking-main">
+                <span className="item-title">{thread.title}</span>
+                <span className="item-meta muted">{thread.boardName} / {thread.postCount} posts / {thread.reactionCount} reactions</span>
+              </span>
+              <span className="ranking-score">{thread.score}</span>
+            </button>
+          ))}
+        </RankingPanel>
+        <RankingPanel title="Top Posters">
+          {users.map((user, index) => (
+            <div key={user.userId} className="ranking-row">
+              <span className="ranking-index">{index + 1}</span>
+              <span className="ranking-main">
+                <span className="item-title">{user.name}</span>
+                <span className="item-meta muted">{user.postsCreated} posts / {user.reactionsReceived} reactions / {user.loginCount} logins</span>
+              </span>
+              <span className="ranking-score">TL{user.trustLevel}</span>
+            </div>
+          ))}
+        </RankingPanel>
+        <RankingPanel title="Blessings">
+          {blessings.map((user, index) => (
+            <div key={user.userId} className="ranking-row">
+              <span className="ranking-index">{index + 1}</span>
+              <span className="ranking-main">
+                <span className="item-title">{user.name}</span>
+                <span className="item-meta muted">last blessed {formatDate(user.lastBlessedAt)}</span>
+              </span>
+              <span className="ranking-score">{user.blessingCount}</span>
+            </div>
+          ))}
+        </RankingPanel>
+        <RankingPanel title="Archive Paths">
+          {archives.map((archive, index) => (
+            <button
+              key={`${archive.boardId}:${archive.kind}:${archive.path}`}
+              className="ranking-row"
+              onClick={() => onOpenBoard({ id: archive.boardId, name: archive.boardName, description: '' })}
+            >
+              <span className="ranking-index">{index + 1}</span>
+              <span className="ranking-main">
+                <span className="item-title">{archive.path || '/'}</span>
+                <span className="item-meta muted">{archive.boardName} / {archive.entryCount} entries / {archive.editedCount} edited</span>
+              </span>
+            </button>
+          ))}
+        </RankingPanel>
+      </section>
+    </div>
+  )
+}
+
+function RankingPanel({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="ranking-panel">
+      <h3 className="board-section-title">{title}</h3>
+      <div className="ranking-list">{children}</div>
+    </section>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rankings-stat">
+      <span className="rankings-stat-value">{value}</span>
+      <span className="rankings-stat-label">{label}</span>
+    </div>
+  )
+}
+
+function formatDate(ts: number) {
+  if (!ts) return 'never'
+  return new Date(ts).toLocaleDateString()
+}
+
+function rankingToThread(thread: ThreadRanking): Thread {
+  return {
+    id: thread.id,
+    board: thread.board,
+    author: thread.author,
+    authorId: thread.authorId,
+    title: thread.title,
+    locked: false,
+    postCount: thread.postCount,
+    lastSeq: thread.lastSeq,
+    createdTs: thread.createdAt,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+  }
+}

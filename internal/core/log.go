@@ -110,6 +110,8 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.ThreadNewPayload)
 	case proto.EvtPostAppended:
 		dst = new(proto.PostAppendedPayload)
+	case proto.EvtPostAttachmentAdded:
+		dst = new(proto.PostAttachmentAddedPayload)
 	case proto.EvtPostEdited:
 		dst = new(proto.PostEditedPayload)
 	case proto.EvtPostRedacted:
@@ -138,12 +140,24 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.ThreadMovedPayload)
 	case proto.EvtUserSanctioned:
 		dst = new(proto.UserSanctionedPayload)
+	case proto.EvtUserSanctionCleared:
+		dst = new(proto.UserSanctionClearedPayload)
+	case proto.EvtContentFilterSet:
+		dst = new(proto.ContentFilterSetPayload)
 	case proto.EvtRoleGranted:
 		dst = new(proto.RoleGrantedPayload)
 	case proto.EvtRoleRevoked:
 		dst = new(proto.RoleRevokedPayload)
 	case proto.EvtBoardCreated:
 		dst = new(proto.BoardCreatedPayload)
+	case proto.EvtMailSent:
+		dst = new(proto.MailSentPayload)
+	case proto.EvtMailAttachmentAdded:
+		dst = new(proto.MailAttachmentAddedPayload)
+	case proto.EvtDirectMessageSent:
+		dst = new(proto.DirectMessageSentPayload)
+	case proto.EvtUserBlessed:
+		dst = new(proto.UserBlessedPayload)
 	case proto.EvtChatLine:
 		dst = new(proto.ChatLinePayload)
 	case proto.EvtPresenceUpdate:

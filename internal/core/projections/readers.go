@@ -2,24 +2,1738 @@ package projections
 
 import (
 	"database/sql"
+	"net/netip"
+	"sort"
 	"strings"
 	"time"
 )
+
+const DefaultMailQuotaBytes int64 = 10 << 20
+const generatedSystemBoardSQLList = "'0announce','0moderation','BBSLists','Blessing','Filter','Goodbye','GiveupNotice','Registry','bbsnet','denypost','newcomers','notepad','reject_registry','syssecurity','undenypost','vote'"
 
 // --- Readers ---
 
 func GetBoard(db *sql.DB, id string) (*Board, error) {
 	b := &Board{}
-	err := QQueryRow(db, `SELECT id, name, description FROM boards WHERE id=?`, id).
-		Scan(&b.ID, &b.Name, &b.Description)
+	var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
+	err := QQueryRow(db,
+		`SELECT b.id, b.name, b.description,
+		        COALESCE(s.anonymous_allowed, 0), COALESCE(s.read_only, 0), COALESCE(s.no_reply, 0),
+		        COALESCE(s.attachments_allowed, 0), COALESCE(s.mail_in_allowed, 0), COALESCE(s.relay_enabled, 0),
+		        COALESCE(s.member_read_mode, 0), COALESCE(s.member_post_mode, 0),
+		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0)
+		   FROM boards b
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE b.id=?`,
+		id,
+	).Scan(&b.ID, &b.Name, &b.Description, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return b, err
+	if err != nil {
+		return nil, err
+	}
+	applyBoardPolicyFlags(b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
+	return b, nil
 }
 
 func ListBoards(db *sql.DB) ([]Board, error) {
-	rows, err := QQuery(db, `SELECT id, name, description FROM boards ORDER BY name`)
+	rows, err := QQuery(db,
+		`SELECT b.id, b.name, b.description,
+		        COALESCE(s.anonymous_allowed, 0), COALESCE(s.read_only, 0), COALESCE(s.no_reply, 0),
+		        COALESCE(s.attachments_allowed, 0), COALESCE(s.mail_in_allowed, 0), COALESCE(s.relay_enabled, 0),
+		        COALESCE(s.member_read_mode, 0), COALESCE(s.member_post_mode, 0),
+		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0)
+		   FROM boards b
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  ORDER BY b.name`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var boards []Board
+	for rows.Next() {
+		var b Board
+		var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
+		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount); err != nil {
+			return nil, err
+		}
+		applyBoardPolicyFlags(&b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
+		boards = append(boards, b)
+	}
+	return boards, rows.Err()
+}
+
+func GetCommunityStats(db *sql.DB) (*CommunityStats, error) {
+	cutoff := NowMS() - 5*60*1000
+	stats := &CommunityStats{}
+	err := QQueryRow(db,
+		`SELECT
+		    (SELECT COUNT(*) FROM users),
+		    (SELECT COUNT(*) FROM boards WHERE id NOT IN (`+generatedSystemBoardSQLList+`)),
+		    (SELECT COUNT(*) FROM threads WHERE board NOT IN (`+generatedSystemBoardSQLList+`)),
+		    (SELECT COUNT(*)
+		       FROM posts p
+		       JOIN threads t ON t.id=p.thread
+		      WHERE p.redacted=0 AND t.board NOT IN (`+generatedSystemBoardSQLList+`)),
+		    (SELECT COUNT(*)
+		       FROM post_reactions pr
+		       JOIN posts p ON p.id=pr.post_id
+		       JOIN threads t ON t.id=p.thread
+		      WHERE t.board NOT IN (`+generatedSystemBoardSQLList+`)),
+		    (SELECT COUNT(*) FROM mail_messages),
+		    (SELECT COUNT(*) FROM direct_messages),
+		    (SELECT COUNT(DISTINCT user_id) FROM user_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')),
+		    COALESCE((SELECT MAX(seq) FROM events), 0)`,
+		cutoff,
+	).Scan(
+		&stats.TotalUsers,
+		&stats.TotalBoards,
+		&stats.TotalThreads,
+		&stats.TotalPosts,
+		&stats.TotalReactions,
+		&stats.TotalMail,
+		&stats.TotalDirectMessages,
+		&stats.OnlineUsers,
+		&stats.HeadSeq,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]BoardRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT b.id, b.name, b.description,
+		        COUNT(DISTINCT t.id) AS thread_count,
+		        COUNT(p.id) AS post_count,
+		        COALESCE(MAX(t.last_seq), 0) AS last_seq,
+		        COALESCE(MAX(p.created_at), 0) AS last_post_at,
+		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0) AS moderator_count
+		   FROM boards b
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		   LEFT JOIN threads t ON t.board=b.id
+		   LEFT JOIN posts p ON p.thread=t.id AND p.redacted=0
+		  WHERE b.id NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND (
+		      COALESCE(s.member_read_mode, 0)=0
+		      OR ?=1
+		      OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		      OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		    )
+		  GROUP BY b.id, b.name, b.description
+		  ORDER BY post_count DESC, thread_count DESC, last_seq DESC, b.name
+		  LIMIT ? OFFSET ?`,
+		boolInt(includePrivate), viewerID, viewerID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BoardRanking{}
+	for rows.Next() {
+		var rank BoardRanking
+		if err := rows.Scan(&rank.ID, &rank.Name, &rank.Description, &rank.ThreadCount, &rank.PostCount, &rank.LastSeq, &rank.LastPostAt, &rank.ModeratorCount); err != nil {
+			return nil, err
+		}
+		out = append(out, rank)
+	}
+	return out, rows.Err()
+}
+
+func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardID string, limit, offset int) ([]ThreadRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT t.id, t.board, b.name, t.title, t.author, COALESCE(t.author_id, ''),
+		        COUNT(DISTINCT p.id) AS post_count,
+		        COUNT(pr.post_id) AS reaction_count,
+		        (COUNT(DISTINCT p.id) + COUNT(pr.post_id) * 2) AS score,
+		        t.last_seq, t.created_at, t.updated_at
+		   FROM threads t
+		   JOIN boards b ON b.id=t.board
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		   LEFT JOIN posts p ON p.thread=t.id AND p.redacted=0
+		   LEFT JOIN post_reactions pr ON pr.post_id=p.id
+		  WHERE (? = '' OR t.board = ?)
+		    AND t.board NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND (
+		      COALESCE(s.member_read_mode, 0)=0
+		      OR ?=1
+		      OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		      OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		    )
+		  GROUP BY t.id, t.board, b.name, t.title, t.author, t.author_id, t.last_seq, t.created_at, t.updated_at
+		  ORDER BY score DESC, t.last_seq DESC
+		  LIMIT ? OFFSET ?`,
+		boardID, boardID, boolInt(includePrivate), viewerID, viewerID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ThreadRanking{}
+	for rows.Next() {
+		var rank ThreadRanking
+		if err := rows.Scan(&rank.ID, &rank.Board, &rank.BoardName, &rank.Title, &rank.Author, &rank.AuthorID, &rank.PostCount, &rank.ReactionCount, &rank.Score, &rank.LastSeq, &rank.CreatedAt, &rank.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rank)
+	}
+	return out, rows.Err()
+}
+
+func ListUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT u.id, u.name, u.role,
+		        COUNT(DISTINCT p.id) AS posts_created,
+		        COUNT(pr.post_id) AS reactions_received,
+		        COALESCE(ua.login_count, 0),
+		        COALESCE(ua.trust_level, 0)
+		   FROM users u
+		   LEFT JOIN user_activity ua ON ua.user_id=u.id
+		   LEFT JOIN posts p ON p.author_id=u.id AND p.redacted=0
+		        AND NOT EXISTS (
+		          SELECT 1 FROM threads pt
+		           WHERE pt.id=p.thread AND pt.board IN (`+generatedSystemBoardSQLList+`)
+		        )
+		   LEFT JOIN post_reactions pr ON pr.post_id=p.id
+		  GROUP BY u.id, u.name, u.role, ua.login_count, ua.trust_level
+		  ORDER BY posts_created DESC,
+		           reactions_received DESC,
+		           COALESCE(ua.login_count, 0) DESC,
+		           u.name
+		  LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserRanking{}
+	for rows.Next() {
+		var rank UserRanking
+		if err := rows.Scan(&rank.UserID, &rank.Name, &rank.Role, &rank.PostsCreated, &rank.ReactionsReceived, &rank.LoginCount, &rank.TrustLevel); err != nil {
+			return nil, err
+		}
+		out = append(out, rank)
+	}
+	return out, rows.Err()
+}
+
+func ListBlessingRankings(db *sql.DB, limit, offset int) ([]BlessingRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT u.id, u.name, COUNT(b.id) AS blessing_count, COALESCE(MAX(b.created_at), 0) AS last_blessed_at
+		   FROM blessings b
+		   JOIN users u ON u.id=b.to_user_id
+		  GROUP BY u.id, u.name
+		  ORDER BY blessing_count DESC, last_blessed_at DESC, u.name
+		  LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BlessingRanking{}
+	for rows.Next() {
+		var rank BlessingRanking
+		if err := rows.Scan(&rank.UserID, &rank.Name, &rank.BlessingCount, &rank.LastBlessedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rank)
+	}
+	return out, rows.Err()
+}
+
+func ListBlessings(db *sql.DB, limit, offset int) ([]Blessing, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT b.id, b.from_user_id, COALESCE(f.name,''), b.to_user_id, COALESCE(t.name,''),
+		        b.message, b.created_at, b.seq
+		   FROM blessings b
+		   LEFT JOIN users f ON f.id=b.from_user_id
+		   LEFT JOIN users t ON t.id=b.to_user_id
+		  ORDER BY b.created_at DESC, b.seq DESC
+		  LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Blessing{}
+	for rows.Next() {
+		var blessing Blessing
+		if err := rows.Scan(&blessing.ID, &blessing.FromUserID, &blessing.FromName, &blessing.ToUserID, &blessing.ToName, &blessing.Message, &blessing.CreatedAt, &blessing.Seq); err != nil {
+			return nil, err
+		}
+		out = append(out, blessing)
+	}
+	return out, rows.Err()
+}
+
+func ListArchiveRankings(db *sql.DB, viewerID string, includePrivate bool, kind string, limit, offset int) ([]ArchiveRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	kind = strings.TrimSpace(kind)
+	rows, err := QQuery(db,
+		`SELECT d.board_id, b.name, d.kind, d.path,
+		        COUNT(*) AS entry_count,
+		        COALESCE(SUM(CASE WHEN d.body_edited != 0 THEN 1 ELSE 0 END), 0) AS edited_count,
+		        COALESCE(MAX(d.updated_at), 0) AS last_updated_at
+		   FROM digest_entries d
+		   JOIN boards b ON b.id=d.board_id
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE (? = '' OR d.kind = ?)
+		    AND (
+		      COALESCE(s.member_read_mode, 0)=0
+		      OR ?=1
+		      OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		      OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		    )
+		  GROUP BY d.board_id, b.name, d.kind, d.path
+		  ORDER BY entry_count DESC, edited_count DESC, last_updated_at DESC, b.name, d.path
+		  LIMIT ? OFFSET ?`,
+		kind, kind, boolInt(includePrivate), viewerID, viewerID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ArchiveRanking{}
+	for rows.Next() {
+		var rank ArchiveRanking
+		if err := rows.Scan(&rank.BoardID, &rank.BoardName, &rank.Kind, &rank.Path, &rank.EntryCount, &rank.EditedCount, &rank.LastUpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rank)
+	}
+	return out, rows.Err()
+}
+
+func GetBoardSettings(db *sql.DB, boardID string) (*BoardSettings, error) {
+	var exists int
+	if err := QQueryRow(db, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists); err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	settings := &BoardSettings{BoardID: boardID}
+	var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
+	err := QQueryRow(db,
+		`SELECT COALESCE(anonymous_allowed, 0), COALESCE(read_only, 0), COALESCE(no_reply, 0),
+		        COALESCE(attachments_allowed, 0), COALESCE(mail_in_allowed, 0), COALESCE(relay_enabled, 0),
+		        COALESCE(member_read_mode, 0), COALESCE(member_post_mode, 0), COALESCE(updated_at, 0)
+		   FROM board_settings WHERE board_id=?`,
+		boardID,
+	).Scan(&anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &settings.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return settings, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	applySettingsFlags(settings, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
+	return settings, nil
+}
+
+func GetBoardMemberRequirements(db *sql.DB, boardID string) (*BoardMemberRequirements, error) {
+	var exists int
+	if err := QQueryRow(db, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists); err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	req := &BoardMemberRequirements{BoardID: boardID, ApprovalMode: "manual"}
+	err := QQueryRow(db,
+		`SELECT COALESCE(min_login_count, 0), COALESCE(min_post_count, 0),
+		        COALESCE(min_trust_level, 0), COALESCE(min_score, 0),
+		        COALESCE(min_board_post_count, 0), COALESCE(min_board_original_post_count, 0),
+		        COALESCE(min_board_digest_count, 0), COALESCE(min_board_mark_count, 0),
+		        COALESCE(max_members, 0),
+		        COALESCE(approval_mode, 'manual'), COALESCE(updated_at, 0)
+		   FROM board_member_requirements WHERE board_id=?`,
+		boardID,
+	).Scan(&req.MinLoginCount, &req.MinPostCount, &req.MinTrustLevel, &req.MinScore, &req.MinBoardPostCount, &req.MinBoardOriginalPostCount, &req.MinBoardDigestCount, &req.MinBoardMarkCount, &req.MaxMembers, &req.ApprovalMode, &req.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return req, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	req.ApprovalMode = strings.ToLower(strings.TrimSpace(req.ApprovalMode))
+	if req.ApprovalMode == "" {
+		req.ApprovalMode = "manual"
+	}
+	return req, nil
+}
+
+func ListBoardModerators(db *sql.DB, boardID string) ([]BoardModerator, error) {
+	rows, err := QQuery(db,
+		`SELECT bm.user_id, u.name, bm.position, bm.created_at, bm.updated_at
+		   FROM board_moderators bm
+		   JOIN users u ON u.id = bm.user_id
+		  WHERE bm.board_id=?
+		  ORDER BY bm.position, u.name`,
+		boardID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	mods := []BoardModerator{}
+	for rows.Next() {
+		var m BoardModerator
+		if err := rows.Scan(&m.UserID, &m.Name, &m.Position, &m.CreatedAt, &m.UpdatedAt); err != nil {
+			return nil, err
+		}
+		mods = append(mods, m)
+	}
+	return mods, rows.Err()
+}
+
+func GetBoardInfo(db *sql.DB, boardID string) (*BoardInfo, error) {
+	board, err := GetBoard(db, boardID)
+	if err != nil || board == nil {
+		return nil, err
+	}
+	settings, err := GetBoardSettings(db, boardID)
+	if err != nil {
+		return nil, err
+	}
+	requirements, err := GetBoardMemberRequirements(db, boardID)
+	if err != nil {
+		return nil, err
+	}
+	moderators, err := ListBoardModerators(db, boardID)
+	if err != nil {
+		return nil, err
+	}
+	members, err := ListBoardMembers(db, boardID)
+	if err != nil {
+		return nil, err
+	}
+	return &BoardInfo{Board: *board, Settings: *settings, Requirements: *requirements, Moderators: moderators, Members: members}, nil
+}
+
+func ListBoardMembers(db *sql.DB, boardID string) ([]BoardMember, error) {
+	rows, err := QQuery(db,
+		`SELECT bm.user_id, u.name, bm.title, COALESCE(bm.position, 0),
+		        COALESCE(bm.can_manage_members, 0), COALESCE(bm.can_curate, 0),
+		        COALESCE(bm.can_moderate_posts, 0), COALESCE(bm.can_moderate_threads, 0),
+		        COALESCE(bm.can_announce, 0), COALESCE(bm.can_set_board_settings, 0),
+		        bm.created_at, bm.updated_at
+		   FROM board_members bm
+		   JOIN users u ON u.id = bm.user_id
+		  WHERE bm.board_id=?
+		  ORDER BY COALESCE(bm.position, 0), u.name`,
+		boardID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BoardMember{}
+	for rows.Next() {
+		var m BoardMember
+		var canManageMembers, canCurate, canModeratePosts, canModerateThreads, canAnnounce, canSetBoardSettings int
+		if err := rows.Scan(
+			&m.UserID,
+			&m.Name,
+			&m.Title,
+			&m.Position,
+			&canManageMembers,
+			&canCurate,
+			&canModeratePosts,
+			&canModerateThreads,
+			&canAnnounce,
+			&canSetBoardSettings,
+			&m.CreatedAt,
+			&m.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		m.CanManageMembers = canManageMembers != 0
+		m.CanCurate = canCurate != 0
+		m.CanModeratePosts = canModeratePosts != 0
+		m.CanModerateThreads = canModerateThreads != 0
+		m.CanAnnounce = canAnnounce != 0
+		m.CanSetBoardSettings = canSetBoardSettings != 0
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func UserIsBoardMember(db *sql.DB, boardID, userID string) (bool, error) {
+	var found int
+	err := QQueryRow(db, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func LatestBoardMemberApplicationStatus(db *sql.DB, boardID, userID string) (string, error) {
+	var status string
+	err := QQueryRow(db,
+		`SELECT status FROM board_member_applications
+		  WHERE board_id=? AND user_id=?
+		    AND status IN ('pending', 'blacklisted')
+		  ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC LIMIT 1`,
+		boardID, userID,
+	).Scan(&status)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return status, err
+}
+
+func GetBoardMemberApplication(db *sql.DB, applicationID string) (*BoardMemberApplication, error) {
+	app := &BoardMemberApplication{}
+	err := QQueryRow(db,
+		`SELECT a.id, a.board_id, a.user_id, u.name, a.status, a.note, a.title,
+		        a.reviewer_id, COALESCE(r.name, ''), a.review_note, a.created_at, a.updated_at, a.reviewed_at
+		   FROM board_member_applications a
+		   JOIN users u ON u.id = a.user_id
+		   LEFT JOIN users r ON r.id = a.reviewer_id
+		  WHERE a.id=?`,
+		applicationID,
+	).Scan(&app.ID, &app.BoardID, &app.UserID, &app.Name, &app.Status, &app.Note, &app.Title, &app.ReviewerID, &app.ReviewerName, &app.ReviewNote, &app.CreatedAt, &app.UpdatedAt, &app.ReviewedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return app, err
+}
+
+func ListBoardMemberApplications(db *sql.DB, boardID, status, userID string, limit, offset int) ([]BoardMemberApplication, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT a.id, a.board_id, a.user_id, u.name, a.status, a.note, a.title,
+		        a.reviewer_id, COALESCE(r.name, ''), a.review_note, a.created_at, a.updated_at, a.reviewed_at
+		   FROM board_member_applications a
+		   JOIN users u ON u.id = a.user_id
+		   LEFT JOIN users r ON r.id = a.reviewer_id
+		  WHERE a.board_id=?
+		    AND (? = '' OR a.status = ?)
+		    AND (? = '' OR a.user_id = ?)
+		  ORDER BY a.updated_at DESC, a.created_at DESC
+		  LIMIT ? OFFSET ?`,
+		boardID, status, status, userID, userID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BoardMemberApplication{}
+	for rows.Next() {
+		var app BoardMemberApplication
+		if err := rows.Scan(&app.ID, &app.BoardID, &app.UserID, &app.Name, &app.Status, &app.Note, &app.Title, &app.ReviewerID, &app.ReviewerName, &app.ReviewNote, &app.CreatedAt, &app.UpdatedAt, &app.ReviewedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, app)
+	}
+	return out, rows.Err()
+}
+
+func ListDigestEntries(db *sql.DB, boardID, kind, path string, limit, offset int) ([]DigestEntry, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT d.id, d.board_id, b.name, d.target_kind, d.target_id, d.kind, d.title, d.path, d.note, d.body_edited,
+		        d.created_by, COALESCE(u.name, ''), d.created_at, d.updated_at,
+		        CASE WHEN d.target_kind='thread' THEN tt.id ELSE pt.id END AS thread_id,
+		        CASE WHEN d.target_kind='post' THEN p.id ELSE '' END AS post_id,
+		        CASE WHEN d.target_kind='thread' THEN tt.author ELSE p.author END AS author,
+		        CASE
+		          WHEN d.body_edited != 0 THEN SUBSTR(d.body, 1, 180)
+		          WHEN d.target_kind='post' THEN SUBSTR(p.body, 1, 180)
+		          ELSE tt.title
+		        END AS excerpt
+		   FROM digest_entries d
+		   JOIN boards b ON b.id = d.board_id
+		   LEFT JOIN users u ON u.id = d.created_by
+		   LEFT JOIN posts p ON d.target_kind='post' AND p.id = d.target_id
+		   LEFT JOIN threads pt ON pt.id = p.thread
+		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id = d.target_id
+		  WHERE d.board_id = ?
+		    AND (? = '' OR d.kind = ?)
+		    AND (? = '' OR d.path = ?)
+		  ORDER BY
+		    CASE d.kind WHEN 'pinned' THEN 0 WHEN 'recommended' THEN 1 WHEN 'digest' THEN 2 ELSE 3 END,
+		    d.updated_at DESC,
+		    d.title
+		  LIMIT ? OFFSET ?`,
+		boardID, kind, kind, path, path, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanDigestEntryRows(rows)
+}
+
+func ListDigestPathTree(db *sql.DB, boardID, kind string) ([]DigestPathNode, error) {
+	treeKind := strings.TrimSpace(kind)
+	rows, err := QQuery(db,
+		`SELECT COALESCE(path, ''), COUNT(*)
+		   FROM digest_entries
+		  WHERE board_id = ?
+		    AND (? = '' OR kind = ?)
+		  GROUP BY COALESCE(path, '')
+		  ORDER BY COALESCE(path, '')`,
+		boardID, kind, kind,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	nodes := map[string]*DigestPathNode{}
+	childSets := map[string]map[string]struct{}{}
+	ensureNode := func(path, nodeKind string) *DigestPathNode {
+		path = strings.Trim(strings.TrimSpace(path), "/")
+		if path == "" {
+			if nodes[path] == nil {
+				nodes[path] = &DigestPathNode{Path: "", Name: "/", Kind: nodeKind}
+			}
+			if nodes[path].Kind == "" {
+				nodes[path].Kind = nodeKind
+			}
+			return nodes[path]
+		}
+		if nodes[path] == nil {
+			name := path
+			parent := ""
+			if idx := strings.LastIndex(path, "/"); idx >= 0 {
+				parent = path[:idx]
+				name = path[idx+1:]
+			}
+			nodes[path] = &DigestPathNode{Path: path, Name: name, ParentPath: parent, Kind: nodeKind}
+		}
+		if nodes[path].Kind == "" {
+			nodes[path].Kind = nodeKind
+		}
+		return nodes[path]
+	}
+	addChild := func(parent, child string) {
+		if childSets[parent] == nil {
+			childSets[parent] = map[string]struct{}{}
+		}
+		childSets[parent][child] = struct{}{}
+	}
+	addPath := func(rawPath string, count int, explicit bool) {
+		path := strings.Trim(strings.TrimSpace(rawPath), "/")
+		ensureNode("", treeKind)
+		if path == "" {
+			node := ensureNode("", treeKind)
+			node.EntryCount += count
+			if explicit {
+				node.Explicit = true
+			}
+			return
+		}
+		current := ""
+		for _, part := range strings.Split(path, "/") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			parent := current
+			if current == "" {
+				current = part
+			} else {
+				current += "/" + part
+			}
+			ensureNode(current, treeKind)
+			addChild(parent, current)
+		}
+		node := ensureNode(path, treeKind)
+		node.EntryCount += count
+		if explicit {
+			node.Explicit = true
+		}
+	}
+
+	hasRows := false
+	for rows.Next() {
+		var rawPath string
+		var count int
+		if err := rows.Scan(&rawPath, &count); err != nil {
+			return nil, err
+		}
+		hasRows = true
+		addPath(rawPath, count, false)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	dirRows, err := QQuery(db,
+		`SELECT COALESCE(path, '')
+		   FROM digest_directories
+		  WHERE board_id = ?
+		    AND (? = '' OR kind = ?)
+		  ORDER BY COALESCE(path, '')`,
+		boardID, kind, kind,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer dirRows.Close()
+	for dirRows.Next() {
+		var rawPath string
+		if err := dirRows.Scan(&rawPath); err != nil {
+			return nil, err
+		}
+		hasRows = true
+		addPath(rawPath, 0, true)
+	}
+	if err := dirRows.Err(); err != nil {
+		return nil, err
+	}
+	if !hasRows {
+		return []DigestPathNode{}, nil
+	}
+	for parent, children := range childSets {
+		if node := nodes[parent]; node != nil {
+			node.ChildCount = len(children)
+		}
+	}
+	paths := make([]string, 0, len(nodes))
+	for path := range nodes {
+		paths = append(paths, path)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		if paths[i] == "" {
+			return true
+		}
+		if paths[j] == "" {
+			return false
+		}
+		return paths[i] < paths[j]
+	})
+	out := make([]DigestPathNode, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, *nodes[path])
+	}
+	return out, nil
+}
+
+func ListSiteDigestEntries(db *sql.DB, viewerID string, includePrivate bool, kind, path string, limit, offset int) ([]DigestEntry, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT d.id, d.board_id, b.name, d.target_kind, d.target_id, d.kind, d.title, d.path, d.note, d.body_edited,
+		        d.created_by, COALESCE(u.name, ''), d.created_at, d.updated_at,
+		        CASE WHEN d.target_kind='thread' THEN tt.id ELSE pt.id END AS thread_id,
+		        CASE WHEN d.target_kind='post' THEN p.id ELSE '' END AS post_id,
+		        CASE WHEN d.target_kind='thread' THEN tt.author ELSE p.author END AS author,
+		        CASE
+		          WHEN d.body_edited != 0 THEN SUBSTR(d.body, 1, 180)
+		          WHEN d.target_kind='post' THEN SUBSTR(p.body, 1, 180)
+		          ELSE tt.title
+		        END AS excerpt
+		   FROM digest_entries d
+		   JOIN boards b ON b.id = d.board_id
+		   LEFT JOIN board_settings s ON s.board_id = b.id
+		   LEFT JOIN users u ON u.id = d.created_by
+		   LEFT JOIN posts p ON d.target_kind='post' AND p.id = d.target_id
+		   LEFT JOIN threads pt ON pt.id = p.thread
+		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id = d.target_id
+		  WHERE (? = '' OR d.kind = ?)
+		    AND (? = '' OR d.path = ?)
+		    AND (
+		          COALESCE(s.member_read_mode, 0)=0
+		          OR ?=1
+		          OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		          OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		        )
+		  ORDER BY
+		    CASE d.kind WHEN 'announcement' THEN 0 WHEN 'pinned' THEN 1 WHEN 'recommended' THEN 2 WHEN 'digest' THEN 3 ELSE 4 END,
+		    d.updated_at DESC,
+		    b.name,
+		    d.title
+		  LIMIT ? OFFSET ?`,
+		kind, kind, path, path, boolInt(includePrivate), viewerID, viewerID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanDigestEntryRows(rows)
+}
+
+func SearchDigestEntries(db *sql.DB, viewerID string, includePrivate bool, boardID, kind, path, query string, limit, offset int) ([]DigestEntry, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	pattern := "%" + escapeLike(strings.ToLower(strings.TrimSpace(query))) + "%"
+	rows, err := QQuery(db,
+		`SELECT d.id, d.board_id, b.name, d.target_kind, d.target_id, d.kind, d.title, d.path, d.note, d.body_edited,
+		        d.created_by, COALESCE(u.name, ''), d.created_at, d.updated_at,
+		        CASE WHEN d.target_kind='thread' THEN tt.id ELSE pt.id END AS thread_id,
+		        CASE WHEN d.target_kind='post' THEN p.id ELSE '' END AS post_id,
+		        CASE WHEN d.target_kind='thread' THEN tt.author ELSE p.author END AS author,
+		        CASE
+		          WHEN d.body_edited != 0 THEN SUBSTR(d.body, 1, 180)
+		          WHEN d.target_kind='post' THEN SUBSTR(p.body, 1, 180)
+		          ELSE tt.title
+		        END AS excerpt
+		   FROM digest_entries d
+		   JOIN boards b ON b.id = d.board_id
+		   LEFT JOIN board_settings s ON s.board_id = b.id
+		   LEFT JOIN users u ON u.id = d.created_by
+		   LEFT JOIN posts p ON d.target_kind='post' AND p.id = d.target_id
+		   LEFT JOIN threads pt ON pt.id = p.thread
+		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id = d.target_id
+		  WHERE (? = '' OR d.board_id = ?)
+		    AND (? = '' OR d.kind = ?)
+		    AND (? = '' OR d.path = ?)
+		    AND (
+		          COALESCE(s.member_read_mode, 0)=0
+		          OR ?=1
+		          OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		          OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		        )
+		    AND (
+		          LOWER(COALESCE(d.title, '')) LIKE ? ESCAPE '\'
+		          OR LOWER(COALESCE(d.path, '')) LIKE ? ESCAPE '\'
+		          OR LOWER(COALESCE(d.note, '')) LIKE ? ESCAPE '\'
+		          OR LOWER(CASE
+		                WHEN d.body_edited != 0 THEN COALESCE(d.body, '')
+		                WHEN d.target_kind='post' THEN COALESCE(p.body, '')
+		                ELSE COALESCE(tt.title, '')
+		              END) LIKE ? ESCAPE '\'
+		          OR LOWER(CASE WHEN d.target_kind='thread' THEN COALESCE(tt.author, '') ELSE COALESCE(p.author, '') END) LIKE ? ESCAPE '\'
+		        )
+		  ORDER BY
+		    CASE
+		      WHEN LOWER(COALESCE(d.title, '')) LIKE ? ESCAPE '\' THEN 0
+		      WHEN LOWER(COALESCE(d.path, '')) LIKE ? ESCAPE '\' THEN 1
+		      ELSE 2
+		    END,
+		    CASE d.kind WHEN 'announcement' THEN 0 WHEN 'archive' THEN 1 WHEN 'pinned' THEN 2 WHEN 'recommended' THEN 3 WHEN 'digest' THEN 4 ELSE 5 END,
+		    d.updated_at DESC,
+		    b.name,
+		    d.title
+		  LIMIT ? OFFSET ?`,
+		boardID, boardID, kind, kind, path, path, boolInt(includePrivate), viewerID, viewerID,
+		pattern, pattern, pattern, pattern, pattern, pattern, pattern, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanDigestEntryRows(rows)
+}
+
+func GetDigestExport(db *sql.DB, entryID string) (*DigestExport, error) {
+	var e DigestEntry
+	var bodyEdited int
+	var editedBody string
+	var body string
+	err := QQueryRow(db,
+		`SELECT d.id, d.board_id, b.name, d.target_kind, d.target_id, d.kind, d.title, d.path, d.note, d.body_edited,
+		        d.created_by, COALESCE(u.name, ''), d.created_at, d.updated_at,
+		        CASE WHEN d.target_kind='thread' THEN tt.id ELSE pt.id END AS thread_id,
+		        CASE WHEN d.target_kind='post' THEN p.id ELSE '' END AS post_id,
+		        CASE WHEN d.target_kind='thread' THEN tt.author ELSE p.author END AS author,
+		        CASE
+		          WHEN d.body_edited != 0 THEN SUBSTR(d.body, 1, 180)
+		          WHEN d.target_kind='post' THEN SUBSTR(p.body, 1, 180)
+		          ELSE tt.title
+		        END AS excerpt,
+		        d.body,
+		        CASE WHEN d.target_kind='post' THEN COALESCE(p.body, '') ELSE '' END AS body
+		   FROM digest_entries d
+		   JOIN boards b ON b.id = d.board_id
+		   LEFT JOIN users u ON u.id = d.created_by
+		   LEFT JOIN posts p ON d.target_kind='post' AND p.id = d.target_id
+		   LEFT JOIN threads pt ON pt.id = p.thread
+		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id = d.target_id
+		  WHERE d.id=?`,
+		entryID,
+	).Scan(&e.ID, &e.BoardID, &e.BoardName, &e.TargetKind, &e.TargetID, &e.Kind, &e.Title, &e.Path, &e.Note, &bodyEdited, &e.CreatedBy, &e.CreatedByName, &e.CreatedAt, &e.UpdatedAt, &e.ThreadID, &e.PostID, &e.Author, &e.Excerpt, &editedBody, &body)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.BodyEdited = bodyEdited != 0
+	if e.BodyEdited {
+		body = editedBody
+		return &DigestExport{Entry: e, Body: body}, nil
+	}
+	if e.TargetKind == "thread" && e.ThreadID != "" {
+		threadBody, err := digestThreadTranscript(db, e.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		body = threadBody
+	}
+	return &DigestExport{Entry: e, Body: body}, nil
+}
+
+func digestThreadTranscript(db *sql.DB, threadID string) (string, error) {
+	rows, err := QQuery(db,
+		`SELECT author, body
+		   FROM posts
+		  WHERE thread=? AND redacted=0
+		  ORDER BY created_seq`,
+		threadID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var b strings.Builder
+	for rows.Next() {
+		var author, body string
+		if err := rows.Scan(&author, &body); err != nil {
+			return "", err
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n---\n\n")
+		}
+		b.WriteString("From: ")
+		b.WriteString(author)
+		b.WriteString("\n\n")
+		b.WriteString(body)
+	}
+	return b.String(), rows.Err()
+}
+
+func FormatDigestExportText(export *DigestExport) string {
+	if export == nil {
+		return ""
+	}
+	e := export.Entry
+	var b strings.Builder
+	b.WriteString(e.Title)
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("=", len(e.Title)))
+	b.WriteString("\n\n")
+	b.WriteString("Board: ")
+	if e.BoardName != "" {
+		b.WriteString(e.BoardName)
+		b.WriteString(" (")
+		b.WriteString(e.BoardID)
+		b.WriteString(")")
+	} else {
+		b.WriteString(e.BoardID)
+	}
+	b.WriteString("\nKind: ")
+	b.WriteString(e.Kind)
+	if e.Path != "" {
+		b.WriteString("\nPath: ")
+		b.WriteString(e.Path)
+	}
+	if e.Author != "" {
+		b.WriteString("\nAuthor: ")
+		b.WriteString(e.Author)
+	}
+	if e.Note != "" {
+		b.WriteString("\nNote: ")
+		b.WriteString(e.Note)
+	}
+	b.WriteString("\n\n")
+	b.WriteString(strings.TrimSpace(export.Body))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func scanDigestEntryRows(rows *sql.Rows) ([]DigestEntry, error) {
+	defer rows.Close()
+	entries := []DigestEntry{}
+	for rows.Next() {
+		var e DigestEntry
+		var bodyEdited int
+		if err := rows.Scan(&e.ID, &e.BoardID, &e.BoardName, &e.TargetKind, &e.TargetID, &e.Kind, &e.Title, &e.Path, &e.Note, &bodyEdited, &e.CreatedBy, &e.CreatedByName, &e.CreatedAt, &e.UpdatedAt, &e.ThreadID, &e.PostID, &e.Author, &e.Excerpt); err != nil {
+			return nil, err
+		}
+		e.BodyEdited = bodyEdited != 0
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+func ListMail(db *sql.DB, userID, mailbox string, limit, offset int, unreadOnly bool) ([]MailItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if strings.TrimSpace(mailbox) == "" {
+		mailbox = "inbox"
+	}
+	q := `SELECT m.id, m.from_user_id, COALESCE(u.name, ''), m.subject, m.body, m.parent_id,
+	             c.mailbox, c.role, c.read, c.kept, m.created_at, c.updated_at, m.seq
+	        FROM mail_copies c
+	        JOIN mail_messages m ON m.id = c.message_id
+	        LEFT JOIN users u ON u.id = m.from_user_id
+	       WHERE c.user_id=? AND c.mailbox=?`
+	args := []any{userID, mailbox}
+	if unreadOnly {
+		q += ` AND c.read=0`
+	}
+	q += ` ORDER BY c.updated_at DESC, m.created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := QQuery(db, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	items := []MailItem{}
+	for rows.Next() {
+		var item MailItem
+		var read, kept int
+		if err := rows.Scan(&item.ID, &item.FromUserID, &item.FromName, &item.Subject, &item.Body, &item.ParentID, &item.Mailbox, &item.Role, &read, &kept, &item.CreatedAt, &item.UpdatedAt, &item.Seq); err != nil {
+			return nil, err
+		}
+		item.Read = read != 0
+		item.Kept = kept != 0
+		item.Excerpt = excerpt(item.Body, 180)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if err := hydrateMailRecipients(db, &items[i]); err != nil {
+			return nil, err
+		}
+		if err := hydrateMailAttachments(db, &items[i]); err != nil {
+			return nil, err
+		}
+	}
+	return items, nil
+}
+
+func GetMail(db *sql.DB, userID, messageID string) (*MailItem, error) {
+	item := &MailItem{}
+	var read, kept int
+	err := QQueryRow(db,
+		`SELECT m.id, m.from_user_id, COALESCE(u.name, ''), m.subject, m.body, m.parent_id,
+		        c.mailbox, c.role, c.read, c.kept, m.created_at, c.updated_at, m.seq
+		   FROM mail_copies c
+		   JOIN mail_messages m ON m.id = c.message_id
+		   LEFT JOIN users u ON u.id = m.from_user_id
+		  WHERE c.user_id=? AND c.message_id=?
+		  ORDER BY CASE c.role WHEN 'recipient' THEN 0 ELSE 1 END
+		  LIMIT 1`,
+		userID, messageID,
+	).Scan(&item.ID, &item.FromUserID, &item.FromName, &item.Subject, &item.Body, &item.ParentID, &item.Mailbox, &item.Role, &read, &kept, &item.CreatedAt, &item.UpdatedAt, &item.Seq)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	item.Read = read != 0
+	item.Kept = kept != 0
+	item.Excerpt = excerpt(item.Body, 180)
+	if err := hydrateMailRecipients(db, item); err != nil {
+		return nil, err
+	}
+	if err := hydrateMailAttachments(db, item); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func CountUnreadMail(db *sql.DB, userID string) (int, error) {
+	var n int
+	err := QQueryRow(db,
+		`SELECT COUNT(*) FROM mail_copies WHERE user_id=? AND mailbox='inbox' AND role='recipient' AND read=0`,
+		userID,
+	).Scan(&n)
+	return n, err
+}
+
+func GetMailUsage(db *sql.DB, userID string) (*MailUsage, error) {
+	used, err := MailUsedBytes(db, userID)
+	if err != nil {
+		return nil, err
+	}
+	return mailUsageFromUsed(userID, used), nil
+}
+
+func MailUsedBytes(db *sql.DB, userID string) (int64, error) {
+	var used sql.NullInt64
+	err := QQueryRow(db,
+		`SELECT COALESCE(SUM(LENGTH(m.subject) + LENGTH(m.body) +
+		        COALESCE((SELECT SUM(size_bytes) FROM mail_attachments a WHERE a.message_id=m.id), 0)), 0)
+		   FROM mail_copies c
+		   JOIN mail_messages m ON m.id = c.message_id
+		  WHERE c.user_id=? AND c.mailbox <> 'trash'`,
+		userID,
+	).Scan(&used)
+	if err != nil {
+		return 0, err
+	}
+	return used.Int64, nil
+}
+
+func mailUsageFromUsed(userID string, used int64) *MailUsage {
+	remaining := DefaultMailQuotaBytes - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	return &MailUsage{
+		UserID:         userID,
+		UsedBytes:      used,
+		QuotaBytes:     DefaultMailQuotaBytes,
+		RemainingBytes: remaining,
+	}
+}
+
+func ListRelayDeliveries(db *sql.DB, status string, limit, offset int) ([]RelayDelivery, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	query := `SELECT id, board_id, thread_id, post_id, author_id, author_name, title, body,
+	                 status, last_error, created_at, updated_at, seq
+	            FROM relay_deliveries`
+	args := []any{}
+	if status != "" {
+		query += ` WHERE status=?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY seq, created_at, id LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := QQuery(db, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RelayDelivery{}
+	for rows.Next() {
+		var item RelayDelivery
+		if err := rows.Scan(
+			&item.ID,
+			&item.BoardID,
+			&item.ThreadID,
+			&item.PostID,
+			&item.AuthorID,
+			&item.AuthorName,
+			&item.Title,
+			&item.Body,
+			&item.Status,
+			&item.LastError,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&item.Seq,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func ListMailAttachments(db *sql.DB, mailID string) ([]MailAttachment, error) {
+	rows, err := QQuery(db,
+		`SELECT id, message_id, filename, content_type, size_bytes, url,
+		        EXISTS(SELECT 1 FROM mail_attachment_blobs b WHERE b.attachment_id=mail_attachments.id),
+		        created_by, created_at
+		   FROM mail_attachments WHERE message_id=? ORDER BY created_at, id`,
+		mailID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MailAttachment{}
+	for rows.Next() {
+		var att MailAttachment
+		var stored int
+		if err := rows.Scan(&att.ID, &att.MailID, &att.Filename, &att.ContentType, &att.SizeBytes, &att.URL, &stored, &att.CreatedBy, &att.CreatedAt); err != nil {
+			return nil, err
+		}
+		att.Stored = stored != 0
+		out = append(out, att)
+	}
+	return out, rows.Err()
+}
+
+func GetMailAttachment(db *sql.DB, attachmentID string) (*MailAttachment, error) {
+	att := &MailAttachment{}
+	var stored int
+	err := QQueryRow(db,
+		`SELECT id, message_id, filename, content_type, size_bytes, url,
+		        EXISTS(SELECT 1 FROM mail_attachment_blobs b WHERE b.attachment_id=mail_attachments.id),
+		        created_by, created_at
+		   FROM mail_attachments WHERE id=?`,
+		attachmentID,
+	).Scan(&att.ID, &att.MailID, &att.Filename, &att.ContentType, &att.SizeBytes, &att.URL, &stored, &att.CreatedBy, &att.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	att.Stored = stored != 0
+	return att, nil
+}
+
+func GetMailAttachmentBlob(db *sql.DB, attachmentID string) ([]byte, string, error) {
+	var data []byte
+	var contentType string
+	err := QQueryRow(db, `SELECT data, content_type FROM mail_attachment_blobs WHERE attachment_id=?`, attachmentID).Scan(&data, &contentType)
+	if err == sql.ErrNoRows {
+		return nil, "", nil
+	}
+	return data, contentType, err
+}
+
+func hydrateMailAttachments(db *sql.DB, item *MailItem) error {
+	attachments, err := ListMailAttachments(db, item.ID)
+	if err != nil {
+		return err
+	}
+	item.Attachments = attachments
+	return nil
+}
+
+func ListMailGroups(db *sql.DB, ownerID string) ([]MailGroup, error) {
+	rows, err := QQuery(db,
+		`SELECT id, name, created_at, updated_at
+		   FROM mail_groups
+		  WHERE user_id=?
+		  ORDER BY name`,
+		ownerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	groups := []MailGroup{}
+	for rows.Next() {
+		var g MailGroup
+		if err := rows.Scan(&g.ID, &g.Name, &g.CreatedAt, &g.UpdatedAt); err != nil {
+			return nil, err
+		}
+		groups = append(groups, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range groups {
+		members, err := ListMailGroupMembers(db, ownerID, groups[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		groups[i].Members = members
+	}
+	return groups, nil
+}
+
+func ListMailGroupMembers(db *sql.DB, ownerID, groupRef string) ([]MailGroupMember, error) {
+	rows, err := QQuery(db,
+		`SELECT gm.user_id, u.name, gm.position
+		   FROM mail_groups g
+		   JOIN mail_group_members gm ON gm.group_id = g.id
+		   JOIN users u ON u.id = gm.user_id
+		  WHERE g.user_id=? AND (g.id=? OR g.name=?)
+		  ORDER BY gm.position, u.name`,
+		ownerID, groupRef, groupRef,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	members := []MailGroupMember{}
+	for rows.Next() {
+		var m MailGroupMember
+		if err := rows.Scan(&m.UserID, &m.Name, &m.Position); err != nil {
+			return nil, err
+		}
+		members = append(members, m)
+	}
+	return members, rows.Err()
+}
+
+func GetMailGroupID(db *sql.DB, ownerID, groupRef string) (string, error) {
+	var id string
+	err := QQueryRow(db,
+		`SELECT id FROM mail_groups WHERE user_id=? AND (id=? OR name=?) LIMIT 1`,
+		ownerID, groupRef, groupRef,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func ListFriendUserIDs(db *sql.DB, ownerID string) ([]string, error) {
+	rows, err := QQuery(db,
+		`SELECT target_user_id FROM user_relationships WHERE user_id=? AND kind='friend' ORDER BY updated_at DESC`,
+		ownerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func ListDirectMessageConversations(db *sql.DB, userID string, limit, offset int) ([]DirectMessageConversation, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT d.id, d.from_user_id, COALESCE(f.name, ''), d.to_user_id, COALESCE(t.name, ''),
+		        d.body, d.created_at
+		   FROM direct_messages d
+		   LEFT JOIN users f ON f.id = d.from_user_id
+		   LEFT JOIN users t ON t.id = d.to_user_id
+		  WHERE (d.from_user_id=? AND d.sender_deleted=0)
+		     OR (d.to_user_id=? AND d.recipient_deleted=0)
+		  ORDER BY d.created_at DESC
+		  LIMIT 1000`,
+		userID, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	skipped := 0
+	out := []DirectMessageConversation{}
+	for rows.Next() {
+		var id, fromID, fromName, toID, toName, body string
+		var createdAt int64
+		if err := rows.Scan(&id, &fromID, &fromName, &toID, &toName, &body, &createdAt); err != nil {
+			return nil, err
+		}
+		otherID, otherName := fromID, fromName
+		if fromID == userID {
+			otherID, otherName = toID, toName
+		}
+		if seen[otherID] {
+			continue
+		}
+		seen[otherID] = true
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		out = append(out, DirectMessageConversation{
+			UserID:        otherID,
+			Name:          otherName,
+			LastMessageID: id,
+			LastBody:      excerpt(body, 160),
+			LastFromName:  fromName,
+			LastAt:        createdAt,
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		unread, err := countUnreadDirectMessagesWithUser(db, userID, out[i].UserID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].UnreadCount = unread
+	}
+	return out, nil
+}
+
+func ListDirectMessages(db *sql.DB, userID, otherUserID string, limit, offset int) ([]DirectMessage, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT d.id, d.conversation_id, d.from_user_id, COALESCE(f.name, ''),
+		        d.to_user_id, COALESCE(t.name, ''), d.body, d.read_at, d.created_at, d.seq
+		   FROM direct_messages d
+		   LEFT JOIN users f ON f.id = d.from_user_id
+		   LEFT JOIN users t ON t.id = d.to_user_id
+		  WHERE ((d.from_user_id=? AND d.to_user_id=? AND d.sender_deleted=0)
+		      OR (d.from_user_id=? AND d.to_user_id=? AND d.recipient_deleted=0))
+		  ORDER BY d.created_at ASC
+		  LIMIT ? OFFSET ?`,
+		userID, otherUserID, otherUserID, userID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DirectMessage{}
+	for rows.Next() {
+		var m DirectMessage
+		var readAt int64
+		if err := rows.Scan(&m.ID, &m.ConversationID, &m.FromUserID, &m.FromName, &m.ToUserID, &m.ToName, &m.Body, &readAt, &m.CreatedAt, &m.Seq); err != nil {
+			return nil, err
+		}
+		m.Mine = m.FromUserID == userID
+		m.Read = m.Mine || readAt != 0
+		m.OtherUserID, m.OtherName = m.FromUserID, m.FromName
+		if m.Mine {
+			m.OtherUserID, m.OtherName = m.ToUserID, m.ToName
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func CountUnreadDirectMessages(db *sql.DB, userID string) (int, error) {
+	var n int
+	err := QQueryRow(db,
+		`SELECT COUNT(*) FROM direct_messages
+		  WHERE to_user_id=? AND read_at=0 AND recipient_deleted=0`,
+		userID,
+	).Scan(&n)
+	return n, err
+}
+
+func GetDirectMessageSettings(db *sql.DB, userID string) (*DirectMessageSettings, error) {
+	settings := &DirectMessageSettings{UserID: userID, Policy: "all"}
+	err := QQueryRow(db,
+		`SELECT policy, updated_at FROM direct_message_settings WHERE user_id=?`,
+		userID,
+	).Scan(&settings.Policy, &settings.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return settings, nil
+	}
+	return settings, err
+}
+
+func ListSocialUsers(db *sql.DB, userID, list string, onlineOnly bool) ([]SocialUser, error) {
+	cutoff := NowMS() - 5*60*1000
+	var rows *sql.Rows
+	var err error
+	switch list {
+	case "friend", "friends":
+		q := `SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
+		             '', r.note, 'friend', r.created_at, r.updated_at,
+		             COALESCE(p.status, ''), COALESCE(p.last_seen, 0),
+		             COALESCE(p.mode, ''), COALESCE(p.board_id, ''), COALESCE(pb.name, ''),
+		             COALESCE(p.thread_id, ''), COALESCE(p.location_label, ''), COALESCE(p.from_host, ''),
+		             CASE WHEN EXISTS (
+		               SELECT 1 FROM user_relationships back
+		                WHERE back.user_id = u.id AND back.target_user_id = ? AND back.kind='friend'
+		             ) THEN 1 ELSE 0 END AS mutual,
+		             CASE WHEN EXISTS (
+		               SELECT 1 FROM user_relationships ig
+		                WHERE ig.user_id = ? AND ig.target_user_id = u.id AND ig.kind='ignore'
+		             ) THEN 1 ELSE 0 END AS ignored
+		        FROM user_relationships r
+		        JOIN users u ON u.id = r.target_user_id
+		        LEFT JOIN user_profiles up ON up.user_id = u.id
+		        LEFT JOIN user_presence p ON p.user_id = u.id
+		        LEFT JOIN boards pb ON pb.id = p.board_id
+		       WHERE r.user_id=? AND r.kind='friend'`
+		args := []any{userID, userID, userID}
+		if onlineOnly {
+			q += ` AND COALESCE(p.last_seen,0) >= ? AND LOWER(COALESCE(p.status,'')) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')`
+			args = append(args, cutoff)
+		}
+		q += ` ORDER BY CASE WHEN COALESCE(p.last_seen,0) >= ? AND LOWER(COALESCE(p.status,'')) NOT IN ('offline', 'invisible', 'cloak', 'cloaked') THEN 0 ELSE 1 END, u.name`
+		args = append(args, cutoff)
+		rows, err = QQuery(db, q, args...)
+	case "fan", "fans":
+		q := `SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
+		             '', '', 'fan', r.created_at, r.updated_at,
+		             COALESCE(p.status, ''), COALESCE(p.last_seen, 0),
+		             COALESCE(p.mode, ''), COALESCE(p.board_id, ''), COALESCE(pb.name, ''),
+		             COALESCE(p.thread_id, ''), COALESCE(p.location_label, ''), COALESCE(p.from_host, ''),
+		             CASE WHEN EXISTS (
+		               SELECT 1 FROM user_relationships mine
+		                WHERE mine.user_id = ? AND mine.target_user_id = u.id AND mine.kind='friend'
+		             ) THEN 1 ELSE 0 END AS mutual,
+		             CASE WHEN EXISTS (
+		               SELECT 1 FROM user_relationships ig
+		                WHERE ig.user_id = ? AND ig.target_user_id = u.id AND ig.kind='ignore'
+		             ) THEN 1 ELSE 0 END AS ignored
+		        FROM user_relationships r
+		        JOIN users u ON u.id = r.user_id
+		        LEFT JOIN user_profiles up ON up.user_id = u.id
+		        LEFT JOIN user_presence p ON p.user_id = u.id
+		        LEFT JOIN boards pb ON pb.id = p.board_id
+		       WHERE r.target_user_id=? AND r.kind='friend'`
+		args := []any{userID, userID, userID}
+		if onlineOnly {
+			q += ` AND COALESCE(p.last_seen,0) >= ? AND LOWER(COALESCE(p.status,'')) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')`
+			args = append(args, cutoff)
+		}
+		q += ` ORDER BY CASE WHEN COALESCE(p.last_seen,0) >= ? AND LOWER(COALESCE(p.status,'')) NOT IN ('offline', 'invisible', 'cloak', 'cloaked') THEN 0 ELSE 1 END, u.name`
+		args = append(args, cutoff)
+		rows, err = QQuery(db, q, args...)
+	case "ignore", "ignores":
+		q := `SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
+		             '', r.note, 'ignore', r.created_at, r.updated_at,
+		             COALESCE(p.status, ''), COALESCE(p.last_seen, 0),
+		             COALESCE(p.mode, ''), COALESCE(p.board_id, ''), COALESCE(pb.name, ''),
+		             COALESCE(p.thread_id, ''), COALESCE(p.location_label, ''), COALESCE(p.from_host, ''),
+		             0 AS mutual,
+		             1 AS ignored
+		        FROM user_relationships r
+		        JOIN users u ON u.id = r.target_user_id
+		        LEFT JOIN user_profiles up ON up.user_id = u.id
+		        LEFT JOIN user_presence p ON p.user_id = u.id
+		        LEFT JOIN boards pb ON pb.id = p.board_id
+		       WHERE r.user_id=? AND r.kind='ignore'`
+		args := []any{userID}
+		if onlineOnly {
+			q += ` AND COALESCE(p.last_seen,0) >= ? AND LOWER(COALESCE(p.status,'')) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')`
+			args = append(args, cutoff)
+		}
+		q += ` ORDER BY u.name`
+		rows, err = QQuery(db, q, args...)
+	default:
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialUser{}
+	for rows.Next() {
+		var u SocialUser
+		var mutual, ignored int
+		if err := rows.Scan(&u.UserID, &u.Name, &u.Role, &u.DisplayName, &u.SessionID, &u.Note, &u.Kind, &u.CreatedAt, &u.UpdatedAt, &u.Status, &u.LastSeen, &u.Mode, &u.BoardID, &u.BoardName, &u.ThreadID, &u.LocationLabel, &u.FromHost, &mutual, &ignored); err != nil {
+			return nil, err
+		}
+		u.Mutual = mutual != 0
+		u.Ignored = ignored != 0
+		u.Online = u.LastSeen >= cutoff && visibleOnlineStatus(u.Status)
+		if u.Online && u.LastSeen > 0 {
+			u.IdleSeconds = (NowMS() - u.LastSeen) / 1000
+		}
+		if !u.Online && hiddenOnlineStatus(u.Status) {
+			u.Status = ""
+			u.Mode = ""
+			u.BoardID = ""
+			u.BoardName = ""
+			u.ThreadID = ""
+			u.LocationLabel = ""
+			u.FromHost = ""
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func ListOnlineUsers(db *sql.DB, viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	cutoff := NowMS() - 5*60*1000
+	q := `SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
+	             p.session_id, '', 'online', 0, COALESCE(p.updated_at, 0),
+	             COALESCE(p.status, ''), COALESCE(p.last_seen, 0),
+	             COALESCE(p.mode, ''), COALESCE(p.board_id, ''), COALESCE(pb.name, ''),
+	             COALESCE(p.thread_id, ''), COALESCE(p.location_label, ''), COALESCE(p.from_host, ''),
+	             CASE WHEN EXISTS (
+	               SELECT 1 FROM user_relationships mine
+	                WHERE mine.user_id = ? AND mine.target_user_id = u.id AND mine.kind='friend'
+	             ) AND EXISTS (
+	               SELECT 1 FROM user_relationships back
+	                WHERE back.user_id = u.id AND back.target_user_id = ? AND back.kind='friend'
+	             ) THEN 1 ELSE 0 END AS mutual,
+	             CASE WHEN EXISTS (
+	               SELECT 1 FROM user_relationships ig
+	                WHERE ig.user_id = ? AND ig.target_user_id = u.id AND ig.kind='ignore'
+	             ) THEN 1 ELSE 0 END AS ignored
+	        FROM user_presence_sessions p
+	        JOIN users u ON u.id = p.user_id
+	        LEFT JOIN user_profiles up ON up.user_id = u.id
+	        LEFT JOIN boards pb ON pb.id = p.board_id
+	       WHERE p.last_seen >= ? AND LOWER(p.status) NOT IN ('offline', 'invisible')
+	         AND (LOWER(p.status) NOT IN ('cloak', 'cloaked')
+	           OR EXISTS (
+	             SELECT 1 FROM users viewer
+	              WHERE viewer.id = ? AND viewer.role IN ('moderator', 'admin')
+	           ))
+	         AND (? = '' OR p.board_id = ?)
+	       ORDER BY p.last_seen DESC, u.name
+	       LIMIT ? OFFSET ?`
+	rows, err := QQuery(db, q, viewerID, viewerID, viewerID, cutoff, viewerID, boardID, boardID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SocialUser{}
+	now := NowMS()
+	for rows.Next() {
+		var u SocialUser
+		var mutual, ignored int
+		if err := rows.Scan(&u.UserID, &u.Name, &u.Role, &u.DisplayName, &u.SessionID, &u.Note, &u.Kind, &u.CreatedAt, &u.UpdatedAt, &u.Status, &u.LastSeen, &u.Mode, &u.BoardID, &u.BoardName, &u.ThreadID, &u.LocationLabel, &u.FromHost, &mutual, &ignored); err != nil {
+			return nil, err
+		}
+		u.Mutual = mutual != 0
+		u.Ignored = ignored != 0
+		u.Online = true
+		if u.LastSeen > 0 {
+			u.IdleSeconds = (now - u.LastSeen) / 1000
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func visibleOnlineStatus(status string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return status != "" && !hiddenOnlineStatus(status)
+}
+
+func hiddenOnlineStatus(status string) bool {
+	status = strings.ToLower(strings.TrimSpace(status))
+	return status == "offline" || status == "invisible" || status == "cloak" || status == "cloaked"
+}
+
+func UserIgnores(db *sql.DB, userID, targetUserID string) (bool, error) {
+	var found int
+	err := QQueryRow(db,
+		`SELECT 1 FROM user_relationships WHERE user_id=? AND target_user_id=? AND kind='ignore' LIMIT 1`,
+		userID, targetUserID,
+	).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func hydrateMailRecipients(db *sql.DB, item *MailItem) error {
+	rows, err := QQuery(db,
+		`SELECT c.user_id, COALESCE(u.name, '')
+		   FROM mail_copies c
+		   LEFT JOIN users u ON u.id = c.user_id
+		  WHERE c.message_id=? AND c.role='recipient'
+		  ORDER BY u.name`,
+		item.ID,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	item.ToUserIDs = []string{}
+	item.ToNames = []string{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return err
+		}
+		item.ToUserIDs = append(item.ToUserIDs, id)
+		item.ToNames = append(item.ToNames, name)
+	}
+	return rows.Err()
+}
+
+func countUnreadDirectMessagesWithUser(db *sql.DB, userID, otherUserID string) (int, error) {
+	var n int
+	err := QQueryRow(db,
+		`SELECT COUNT(*) FROM direct_messages
+		  WHERE from_user_id=? AND to_user_id=? AND read_at=0 AND recipient_deleted=0`,
+		otherUserID, userID,
+	).Scan(&n)
+	return n, err
+}
+
+func excerpt(s string, max int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) <= max {
+		return s
+	}
+	return strings.TrimSpace(s[:max]) + "..."
+}
+
+func ListFavoriteBoards(db *sql.DB, userID string) ([]Board, error) {
+	rows, err := QQuery(db,
+		`SELECT b.id, b.name, b.description
+		 FROM board_favorites f
+		 JOIN boards b ON b.id = f.board_id
+		 WHERE f.user_id = ?
+		 ORDER BY f.folder_id, f.position, b.name`,
+		userID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -30,6 +1744,122 @@ func ListBoards(db *sql.DB) ([]Board, error) {
 		if err := rows.Scan(&b.ID, &b.Name, &b.Description); err != nil {
 			return nil, err
 		}
+		boards = append(boards, b)
+	}
+	return boards, rows.Err()
+}
+
+func ListFavoriteTree(db *sql.DB, userID string) (*FavoriteTree, error) {
+	folderRows, err := QQuery(db,
+		`SELECT id, parent_id, name, position, created_at, updated_at
+		 FROM favorite_folders
+		 WHERE user_id = ?
+		 ORDER BY parent_id, position, name`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer folderRows.Close()
+	tree := &FavoriteTree{
+		Folders: []FavoriteFolder{},
+		Boards:  []FavoriteBoardEntry{},
+	}
+	for folderRows.Next() {
+		var f FavoriteFolder
+		if err := folderRows.Scan(&f.ID, &f.ParentID, &f.Name, &f.Position, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		tree.Folders = append(tree.Folders, f)
+	}
+	if err := folderRows.Err(); err != nil {
+		return nil, err
+	}
+
+	boardRows, err := QQuery(db,
+		`SELECT b.id, b.name, b.description, f.folder_id, f.position,
+		        COALESCE((SELECT COUNT(*) FROM threads t WHERE t.board = b.id AND t.last_seq > COALESCE(m.last_seq, 0)), 0) AS unread_threads,
+		        COALESCE((SELECT COUNT(*)
+		                  FROM posts p
+		                  JOIN threads t ON t.id = p.thread
+		                  WHERE t.board = b.id
+		                    AND p.created_seq > COALESCE(m.last_seq, 0)
+		                    AND p.redacted = 0), 0) AS unread_posts,
+		        COALESCE((SELECT MAX(t.last_seq) FROM threads t WHERE t.board = b.id), 0) AS last_seq,
+		        COALESCE(m.last_seq, 0) AS read_seq
+		   FROM board_favorites f
+		   JOIN boards b ON b.id = f.board_id
+		   LEFT JOIN board_read_markers m ON m.board_id = b.id AND m.user_id = f.user_id
+		  WHERE f.user_id = ?
+		  ORDER BY f.folder_id, f.position, b.name`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer boardRows.Close()
+	for boardRows.Next() {
+		var b FavoriteBoardEntry
+		if err := boardRows.Scan(&b.ID, &b.Name, &b.Description, &b.FolderID, &b.Position, &b.UnreadThreads, &b.UnreadPosts, &b.LastSeq, &b.ReadSeq); err != nil {
+			return nil, err
+		}
+		tree.Boards = append(tree.Boards, b)
+	}
+	return tree, boardRows.Err()
+}
+
+func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool) ([]BoardSummary, error) {
+	unreadFilter := 0
+	if unreadOnly {
+		unreadFilter = 1
+	}
+	rows, err := QQuery(db,
+		`WITH board_state AS (
+		    SELECT b.id, b.name, b.description,
+		           CASE WHEN f.board_id IS NULL THEN 0 ELSE 1 END AS favorite,
+		           COALESCE(m.last_seq, 0) AS read_seq,
+		           COALESCE((SELECT MAX(t.last_seq) FROM threads t WHERE t.board = b.id), 0) AS last_seq,
+		           COALESCE((SELECT COUNT(*) FROM threads t WHERE t.board = b.id AND t.last_seq > COALESCE(m.last_seq, 0)), 0) AS unread_threads,
+		           COALESCE((SELECT COUNT(*)
+		                     FROM posts p
+		                     JOIN threads t ON t.id = p.thread
+		                     WHERE t.board = b.id
+		                       AND p.created_seq > COALESCE(m.last_seq, 0)
+		                       AND p.redacted = 0), 0) AS unread_posts
+		      FROM boards b
+		      LEFT JOIN board_favorites f ON f.board_id = b.id AND f.user_id = ?
+		      LEFT JOIN board_read_markers m ON m.board_id = b.id AND m.user_id = ?
+		      LEFT JOIN board_settings s ON s.board_id = b.id
+		)
+		SELECT id, name, description, favorite, unread_threads, unread_posts, last_seq, read_seq,
+		       COALESCE((SELECT anonymous_allowed FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT read_only FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT no_reply FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT attachments_allowed FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT mail_in_allowed FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT relay_enabled FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT member_read_mode FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT member_post_mode FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=id), 0)
+		  FROM board_state
+		 WHERE ? = 0 OR unread_posts > 0
+		 ORDER BY favorite DESC, name`,
+		userID, userID, unreadFilter,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var boards []BoardSummary
+	for rows.Next() {
+		var b BoardSummary
+		var favorite int
+		var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
+		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &favorite, &b.UnreadThreads, &b.UnreadPosts, &b.LastSeq, &b.ReadSeq, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount); err != nil {
+			return nil, err
+		}
+		b.Favorite = favorite != 0
+		applyBoardSummaryPolicyFlags(&b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
 		boards = append(boards, b)
 	}
 	return boards, rows.Err()
@@ -84,6 +1914,159 @@ func ListThreads(db *sql.DB, boardID string, limit, offset int) ([]Thread, error
 	return threads, rows.Err()
 }
 
+func ListThreadSummaries(db *sql.DB, userID, boardID string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	unreadFilter := 0
+	if unreadOnly {
+		unreadFilter = 1
+	}
+	rows, err := QQuery(db,
+		`WITH thread_state AS (
+		    SELECT t.id, t.board, b.name AS board_name, t.author, COALESCE(t.author_id,'') AS author_id, t.title, t.locked, t.post_count,
+		           t.last_seq, t.created_ts, t.created_at, t.updated_at,
+		           CASE
+		             WHEN COALESCE(trm.last_seq, 0) > COALESCE(brm.last_seq, 0) THEN COALESCE(trm.last_seq, 0)
+		             ELSE COALESCE(brm.last_seq, 0)
+		           END AS read_seq
+		      FROM threads t
+		      JOIN boards b ON b.id = t.board
+		      LEFT JOIN board_read_markers brm ON brm.board_id = t.board AND brm.user_id = ?
+		      LEFT JOIN thread_read_markers trm ON trm.thread_id = t.id AND trm.user_id = ?
+		     WHERE t.board = ?
+		)
+		SELECT id, board, board_name, author, author_id, title, locked, post_count, last_seq, created_ts, created_at, updated_at, read_seq,
+		       unread_posts,
+		       first_unread_post
+		  FROM (
+		    SELECT thread_state.*,
+		           COALESCE((SELECT COUNT(*) FROM posts p WHERE p.thread = thread_state.id AND p.created_seq > read_seq AND p.redacted = 0), 0) AS unread_posts,
+		           COALESCE((SELECT p.id FROM posts p WHERE p.thread = thread_state.id AND p.created_seq > read_seq AND p.redacted = 0 ORDER BY p.created_seq LIMIT 1), '') AS first_unread_post
+		      FROM thread_state
+		  ) summary
+		 WHERE ? = 0 OR unread_posts > 0
+		 ORDER BY last_seq DESC LIMIT ? OFFSET ?`,
+		userID, userID, boardID, unreadFilter, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var threads []ThreadSummary
+	for rows.Next() {
+		var t ThreadSummary
+		var locked int
+		if err := rows.Scan(&t.ID, &t.Board, &t.BoardName, &t.Author, &t.AuthorID, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS, &t.CreatedAt, &t.UpdatedAt, &t.ReadSeq, &t.UnreadPosts, &t.FirstUnreadPostID); err != nil {
+			return nil, err
+		}
+		if t.CreatedAt == 0 {
+			t.CreatedAt = t.CreatedTS
+		}
+		if t.UpdatedAt == 0 {
+			t.UpdatedAt = t.CreatedAt
+		}
+		t.Locked = locked != 0
+		threads = append(threads, t)
+	}
+	return threads, rows.Err()
+}
+
+func ListUnreadThreadSummaries(db *sql.DB, userID string, includePrivate bool, favoritesOnly bool, folderID string, limit, offset int) ([]ThreadSummary, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if folderID != "" {
+		favoritesOnly = true
+	}
+	rows, err := QQuery(db,
+		`WITH RECURSIVE folder_scope(id) AS (
+		    SELECT ? WHERE ? <> ''
+		    UNION ALL
+		    SELECT child.id
+		      FROM favorite_folders child
+		      JOIN folder_scope parent ON parent.id = child.parent_id
+		     WHERE child.user_id = ?
+		),
+		allowed_boards AS (
+		    SELECT b.id
+		      FROM boards b
+		      LEFT JOIN board_settings s ON s.board_id = b.id
+		     WHERE (
+		              COALESCE(s.member_read_mode, 0)=0
+		              OR ?=1
+		              OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		              OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		           )
+		       AND (
+		              ?=0
+		              OR EXISTS (
+		                SELECT 1 FROM board_favorites f
+		                 WHERE f.user_id=?
+		                   AND f.board_id=b.id
+		                   AND (?='' OR f.folder_id IN (SELECT id FROM folder_scope))
+		              )
+		           )
+		),
+		thread_state AS (
+		    SELECT t.id, t.board, b.name AS board_name, t.author, COALESCE(t.author_id,'') AS author_id, t.title, t.locked, t.post_count,
+		           t.last_seq, t.created_ts, t.created_at, t.updated_at,
+		           CASE
+		             WHEN COALESCE(trm.last_seq, 0) > COALESCE(brm.last_seq, 0) THEN COALESCE(trm.last_seq, 0)
+		             ELSE COALESCE(brm.last_seq, 0)
+		           END AS read_seq
+		      FROM threads t
+		      JOIN allowed_boards ab ON ab.id = t.board
+		      JOIN boards b ON b.id = t.board
+		      LEFT JOIN board_read_markers brm ON brm.board_id = t.board AND brm.user_id = ?
+		      LEFT JOIN thread_read_markers trm ON trm.thread_id = t.id AND trm.user_id = ?
+		)
+		SELECT id, board, board_name, author, author_id, title, locked, post_count, last_seq, created_ts, created_at, updated_at, read_seq,
+		       unread_posts,
+		       first_unread_post
+		  FROM (
+		    SELECT thread_state.*,
+		           COALESCE((SELECT COUNT(*) FROM posts p WHERE p.thread = thread_state.id AND p.created_seq > read_seq AND p.redacted = 0), 0) AS unread_posts,
+		           COALESCE((SELECT p.id FROM posts p WHERE p.thread = thread_state.id AND p.created_seq > read_seq AND p.redacted = 0 ORDER BY p.created_seq LIMIT 1), '') AS first_unread_post
+		      FROM thread_state
+		  ) summary
+		 WHERE unread_posts > 0
+		 ORDER BY last_seq DESC LIMIT ? OFFSET ?`,
+		folderID, folderID, userID,
+		boolInt(includePrivate), userID, userID,
+		boolInt(favoritesOnly), userID, folderID,
+		userID, userID,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var threads []ThreadSummary
+	for rows.Next() {
+		var t ThreadSummary
+		var locked int
+		if err := rows.Scan(&t.ID, &t.Board, &t.BoardName, &t.Author, &t.AuthorID, &t.Title, &locked, &t.PostCount, &t.LastSeq, &t.CreatedTS, &t.CreatedAt, &t.UpdatedAt, &t.ReadSeq, &t.UnreadPosts, &t.FirstUnreadPostID); err != nil {
+			return nil, err
+		}
+		if t.CreatedAt == 0 {
+			t.CreatedAt = t.CreatedTS
+		}
+		if t.UpdatedAt == 0 {
+			t.UpdatedAt = t.CreatedAt
+		}
+		t.Locked = locked != 0
+		threads = append(threads, t)
+	}
+	return threads, rows.Err()
+}
+
 func GetThread(db *sql.DB, id string) (*Thread, error) {
 	t := &Thread{}
 	var locked int
@@ -108,7 +2091,7 @@ func GetThread(db *sql.DB, id string) (*Thread, error) {
 
 func ListPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	rows, err := QQuery(db,
-		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted,
+		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version, redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=posts.id), 0),
 		        created_seq, updated_seq, created_at, updated_at
 		 FROM posts WHERE thread=? ORDER BY created_seq LIMIT ? OFFSET ?`,
@@ -117,12 +2100,66 @@ func ListPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	if err != nil {
 		return nil, err
 	}
+	return scanSearchPostRows(db, rows)
+}
+
+func SearchReadablePosts(db *sql.DB, viewerID string, includePrivate bool, query, boardID string, limit int) ([]Post, error) {
+	var rows *sql.Rows
+	var err error
+	if boardID != "" {
+		rows, err = QQuery(db,
+			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		        COALESCE(p.reply_to,''), p.version, p.redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
+		 FROM posts_fts f
+		 JOIN posts p ON p.id = f.post_id
+		 JOIN threads t ON t.id = p.thread
+		 LEFT JOIN board_settings s ON s.board_id = t.board
+		 WHERE f.board_id=? AND posts_fts MATCH ? AND p.redacted=0
+		   AND (
+		     COALESCE(s.member_read_mode, 0)=0
+		     OR ?=1
+		     OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=t.board AND bm.user_id=?)
+		     OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=t.board AND m.user_id=?)
+		   )
+		 ORDER BY rank LIMIT ?`,
+			boardID, query, boolInt(includePrivate), viewerID, viewerID, limit,
+		)
+	} else {
+		rows, err = QQuery(db,
+			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		        COALESCE(p.reply_to,''), p.version, p.redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
+		 FROM posts_fts f
+		 JOIN posts p ON p.id = f.post_id
+		 JOIN threads t ON t.id = p.thread
+		 LEFT JOIN board_settings s ON s.board_id = t.board
+		 WHERE posts_fts MATCH ? AND p.redacted=0
+		   AND (
+		     COALESCE(s.member_read_mode, 0)=0
+		     OR ?=1
+		     OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=t.board AND bm.user_id=?)
+		     OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=t.board AND m.user_id=?)
+		   )
+		 ORDER BY rank LIMIT ?`,
+			query, boolInt(includePrivate), viewerID, viewerID, limit,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return scanSearchPostRows(db, rows)
+}
+
+func scanSearchPostRows(db *sql.DB, rows *sql.Rows) ([]Post, error) {
 	defer rows.Close()
 	var posts []Post
 	for rows.Next() {
 		var p Post
 		var redacted int
-		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if p.CreatedAt == 0 {
@@ -134,7 +2171,137 @@ func ListPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 		p.Redacted = redacted != 0
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return attachPostAttachments(db, posts)
+}
+
+func ListReplyTreePosts(db *sql.DB, rootPostID string, limit, offset int) ([]Post, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`WITH RECURSIVE reply_tree(id, depth) AS (
+		    SELECT id, 0 FROM posts WHERE id=?
+		    UNION ALL
+		    SELECT child.id, reply_tree.depth + 1
+		      FROM posts child
+		      JOIN reply_tree ON child.reply_to=reply_tree.id
+		)
+		SELECT p.id, p.thread, t.board, b.name AS board_name, t.title AS thread_title,
+		       p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		       COALESCE(p.reply_to,''), reply_tree.depth, p.version, p.redacted,
+		       COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		       p.created_seq, p.updated_seq, p.created_at, p.updated_at
+		  FROM reply_tree
+		  JOIN posts p ON p.id=reply_tree.id
+		  JOIN threads t ON t.id=p.thread
+		  JOIN boards b ON b.id=t.board
+		 ORDER BY reply_tree.depth, p.created_seq
+		 LIMIT ? OFFSET ?`,
+		rootPostID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var posts []Post
+	for rows.Next() {
+		var p Post
+		var redacted int
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Board, &p.BoardName, &p.ThreadTitle, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType,
+			&p.ReplyTo, &p.ReplyDepth, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if p.CreatedAt == 0 {
+			p.CreatedAt = p.CreatedSeq
+		}
+		if p.UpdatedAt == 0 {
+			p.UpdatedAt = p.CreatedAt
+		}
+		p.Redacted = redacted != 0
+		posts = append(posts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return attachPostAttachments(db, posts)
+}
+
+func ListPostAttachments(db *sql.DB, postID string) ([]PostAttachment, error) {
+	rows, err := QQuery(db,
+		`SELECT id, post_id, filename, content_type, size_bytes, url,
+		        EXISTS(SELECT 1 FROM attachment_blobs b WHERE b.attachment_id=post_attachments.id),
+		        created_by, created_at
+		 FROM post_attachments WHERE post_id=? ORDER BY created_at, id`,
+		postID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PostAttachment{}
+	for rows.Next() {
+		var att PostAttachment
+		var stored int
+		if err := rows.Scan(&att.ID, &att.PostID, &att.Filename, &att.ContentType, &att.SizeBytes, &att.URL, &stored, &att.CreatedBy, &att.CreatedAt); err != nil {
+			return nil, err
+		}
+		att.Stored = stored != 0
+		out = append(out, att)
+	}
+	return out, rows.Err()
+}
+
+func GetPostAttachment(db *sql.DB, attachmentID string) (*PostAttachment, error) {
+	att := &PostAttachment{}
+	var stored int
+	err := QQueryRow(db,
+		`SELECT id, post_id, filename, content_type, size_bytes, url,
+		        EXISTS(SELECT 1 FROM attachment_blobs b WHERE b.attachment_id=post_attachments.id),
+		        created_by, created_at
+		   FROM post_attachments WHERE id=?`,
+		attachmentID,
+	).Scan(&att.ID, &att.PostID, &att.Filename, &att.ContentType, &att.SizeBytes, &att.URL, &stored, &att.CreatedBy, &att.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	att.Stored = stored != 0
+	return att, nil
+}
+
+func GetAttachmentBlob(db *sql.DB, attachmentID string) ([]byte, string, error) {
+	var data []byte
+	var contentType string
+	err := QQueryRow(db, `SELECT data, content_type FROM attachment_blobs WHERE attachment_id=?`, attachmentID).Scan(&data, &contentType)
+	if err == sql.ErrNoRows {
+		return nil, "", nil
+	}
+	return data, contentType, err
+}
+
+func attachPostAttachments(db *sql.DB, posts []Post) ([]Post, error) {
+	for i := range posts {
+		attachments, err := ListPostAttachments(db, posts[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		posts[i].Attachments = attachments
+	}
+	return posts, nil
 }
 
 func ListPostsByAuthor(db *sql.DB, name string, limit, offset int) ([]Post, error) {
@@ -145,13 +2312,18 @@ func ListPostsByAuthor(db *sql.DB, name string, limit, offset int) ([]Post, erro
 		offset = 0
 	}
 	rows, err := QQuery(db,
-		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type,
-		        COALESCE(reply_to,''), version, redacted,
-		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=posts.id), 0),
-		        created_seq, updated_seq, created_at, updated_at
-		 FROM posts
-		 WHERE author=? AND redacted=0
-		 ORDER BY created_seq DESC LIMIT ? OFFSET ?`,
+		`SELECT p.id, p.thread, t.board, b.name AS board_name, t.title AS thread_title,
+		        p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		        COALESCE(p.reply_to,''), p.version, p.redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		   JOIN boards b ON b.id=t.board
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE p.author=? AND p.redacted=0
+		    AND COALESCE(s.member_read_mode, 0)=0
+		  ORDER BY p.created_seq DESC LIMIT ? OFFSET ?`,
 		name, limit, offset,
 	)
 	if err != nil {
@@ -162,7 +2334,7 @@ func ListPostsByAuthor(db *sql.DB, name string, limit, offset int) ([]Post, erro
 	for rows.Next() {
 		var p Post
 		var redacted int
-		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType,
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Board, &p.BoardName, &p.ThreadTitle, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType,
 			&p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -175,17 +2347,113 @@ func ListPostsByAuthor(db *sql.DB, name string, limit, offset int) ([]Post, erro
 		p.Redacted = redacted != 0
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return attachPostAttachments(db, posts)
+}
+
+func ListReadablePostsByAuthor(db *sql.DB, viewerID string, includePrivate bool, name string, limit, offset int) ([]Post, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT p.id, p.thread, t.board, b.name AS board_name, t.title AS thread_title,
+		        p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		        COALESCE(p.reply_to,''), p.version, p.redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		   JOIN boards b ON b.id=t.board
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE p.author=? AND p.redacted=0
+		    AND (
+		           COALESCE(s.member_read_mode, 0)=0
+		           OR ?=1
+		           OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		           OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		        )
+		  ORDER BY p.created_seq DESC LIMIT ? OFFSET ?`,
+		name, boolInt(includePrivate), viewerID, viewerID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var posts []Post
+	for rows.Next() {
+		var p Post
+		var redacted int
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Board, &p.BoardName, &p.ThreadTitle, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType,
+			&p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if p.CreatedAt == 0 {
+			p.CreatedAt = p.CreatedSeq
+		}
+		if p.UpdatedAt == 0 {
+			p.UpdatedAt = p.CreatedAt
+		}
+		p.Redacted = redacted != 0
+		posts = append(posts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return attachPostAttachments(db, posts)
+}
+
+func applyBoardPolicyFlags(b *Board, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int) {
+	b.AnonymousAllowed = anonymousAllowed != 0
+	b.ReadOnly = readOnly != 0
+	b.NoReply = noReply != 0
+	b.AttachmentsAllowed = attachmentsAllowed != 0
+	b.MailInAllowed = mailInAllowed != 0
+	b.RelayEnabled = relayEnabled != 0
+	b.MemberReadMode = memberReadMode != 0
+	b.MemberPostMode = memberPostMode != 0
+}
+
+func applyBoardSummaryPolicyFlags(b *BoardSummary, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int) {
+	b.AnonymousAllowed = anonymousAllowed != 0
+	b.ReadOnly = readOnly != 0
+	b.NoReply = noReply != 0
+	b.AttachmentsAllowed = attachmentsAllowed != 0
+	b.MailInAllowed = mailInAllowed != 0
+	b.RelayEnabled = relayEnabled != 0
+	b.MemberReadMode = memberReadMode != 0
+	b.MemberPostMode = memberPostMode != 0
+}
+
+func applySettingsFlags(s *BoardSettings, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int) {
+	s.AnonymousAllowed = anonymousAllowed != 0
+	s.ReadOnly = readOnly != 0
+	s.NoReply = noReply != 0
+	s.AttachmentsAllowed = attachmentsAllowed != 0
+	s.MailInAllowed = mailInAllowed != 0
+	s.RelayEnabled = relayEnabled != 0
+	s.MemberReadMode = memberReadMode != 0
+	s.MemberPostMode = memberPostMode != 0
 }
 
 func GetPost(db *sql.DB, id string) (*Post, error) {
 	p := &Post{}
 	var redacted int
 	err := QQueryRow(db,
-		`SELECT id, thread, author, COALESCE(author_id,''), body, content_type, COALESCE(reply_to,''), version, redacted,
+		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version, redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=posts.id), 0),
 		        created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
-	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
+	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -199,13 +2467,23 @@ func GetPost(db *sql.DB, id string) (*Post, error) {
 		p.UpdatedAt = p.CreatedAt
 	}
 	p.Redacted = redacted != 0
+	attachments, err := ListPostAttachments(db, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	p.Attachments = attachments
 	return p, nil
 }
 
 func GetUserByID(db *sql.DB, id string) (*User, error) {
 	u := &User{}
-	err := QQueryRow(db, `SELECT id, name, role, password, created FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created)
+	err := QQueryRow(db, `SELECT id, name, role, password, created,
+	        COALESCE(NULLIF(registration_status,''), 'approved'), COALESCE(reviewed_at,0), COALESCE(reviewed_by,''), COALESCE(review_reason,''),
+	        COALESCE(deactivated_at,0), COALESCE(deactivated_by,''), COALESCE(deactivated_reason,'')
+	    FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created,
+			&u.RegistrationStatus, &u.ReviewedAt, &u.ReviewedBy, &u.ReviewReason,
+			&u.DeactivatedAt, &u.DeactivatedBy, &u.DeactivatedReason)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -214,12 +2492,148 @@ func GetUserByID(db *sql.DB, id string) (*User, error) {
 
 func GetUserByName(db *sql.DB, name string) (*User, error) {
 	u := &User{}
-	err := QQueryRow(db, `SELECT id, name, role, password, created FROM users WHERE name=?`, name).
-		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created)
+	err := QQueryRow(db, `SELECT id, name, role, password, created,
+	        COALESCE(NULLIF(registration_status,''), 'approved'), COALESCE(reviewed_at,0), COALESCE(reviewed_by,''), COALESCE(review_reason,''),
+	        COALESCE(deactivated_at,0), COALESCE(deactivated_by,''), COALESCE(deactivated_reason,'')
+	    FROM users WHERE name=?`, name).
+		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created,
+			&u.RegistrationStatus, &u.ReviewedAt, &u.ReviewedBy, &u.ReviewReason,
+			&u.DeactivatedAt, &u.DeactivatedBy, &u.DeactivatedReason)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return u, err
+}
+
+func GetAccountRegistrationSettings(db *sql.DB) (*AccountRegistrationSettings, error) {
+	out := &AccountRegistrationSettings{}
+	var requireApproval int
+	err := QQueryRow(db,
+		`SELECT require_approval, updated_at
+		   FROM account_registration_settings
+		  WHERE id='default'`,
+	).Scan(&requireApproval, &out.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out.RequireApproval = requireApproval != 0
+	return out, nil
+}
+
+func ListAccountRegistrations(db *sql.DB, status string, limit, offset int) ([]AccountRegistration, error) {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "pending"
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(u.registration_status,''), 'approved'),
+		        u.created, COALESCE(u.reviewed_at,0), COALESCE(u.reviewed_by,''), COALESCE(r.name,''), COALESCE(u.review_reason,'')
+		   FROM users u
+		   LEFT JOIN users r ON r.id = u.reviewed_by
+		  WHERE (?='all' OR COALESCE(NULLIF(u.registration_status,''), 'approved')=?)
+		  ORDER BY CASE COALESCE(NULLIF(u.registration_status,''), 'approved') WHEN 'pending' THEN 0 ELSE 1 END,
+		           u.created DESC, u.name
+		  LIMIT ? OFFSET ?`,
+		status, status, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AccountRegistration{}
+	for rows.Next() {
+		var row AccountRegistration
+		if err := rows.Scan(&row.ID, &row.Name, &row.Role, &row.Status, &row.Created, &row.ReviewedAt, &row.ReviewedBy, &row.ReviewedByName, &row.ReviewReason); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func GetAccountRegistrationByID(db *sql.DB, userID string) (*AccountRegistration, error) {
+	row := &AccountRegistration{}
+	err := QQueryRow(db,
+		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(u.registration_status,''), 'approved'),
+		        u.created, COALESCE(u.reviewed_at,0), COALESCE(u.reviewed_by,''), COALESCE(r.name,''), COALESCE(u.review_reason,'')
+		   FROM users u
+		   LEFT JOIN users r ON r.id = u.reviewed_by
+		  WHERE u.id=?`,
+		userID,
+	).Scan(&row.ID, &row.Name, &row.Role, &row.Status, &row.Created, &row.ReviewedAt, &row.ReviewedBy, &row.ReviewedByName, &row.ReviewReason)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+func ListPasswordRecoveryRequests(db *sql.DB, status string, limit, offset int) ([]PasswordRecoveryRequest, error) {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = "pending"
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT r.id, r.user_id, u.name, r.status, r.submitted_name, r.submitted_email, r.note,
+		        r.reviewer_id, COALESCE(rv.name,''), r.review_note, r.created_at, r.updated_at
+		   FROM password_recovery_requests r
+		   JOIN users u ON u.id = r.user_id
+		   LEFT JOIN users rv ON rv.id = r.reviewer_id
+		  WHERE (?='all' OR r.status=?)
+		  ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.updated_at DESC, r.created_at DESC
+		  LIMIT ? OFFSET ?`,
+		status, status, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PasswordRecoveryRequest{}
+	for rows.Next() {
+		var row PasswordRecoveryRequest
+		if err := rows.Scan(&row.ID, &row.UserID, &row.UserName, &row.Status, &row.SubmittedName, &row.SubmittedEmail, &row.Note, &row.ReviewerID, &row.ReviewerName, &row.ReviewNote, &row.CreatedAt, &row.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func GetPasswordRecoveryRequest(db *sql.DB, id string) (*PasswordRecoveryRequest, error) {
+	row := &PasswordRecoveryRequest{}
+	err := QQueryRow(db,
+		`SELECT r.id, r.user_id, u.name, r.status, r.submitted_name, r.submitted_email, r.note,
+		        r.reviewer_id, COALESCE(rv.name,''), r.review_note, r.created_at, r.updated_at
+		   FROM password_recovery_requests r
+		   JOIN users u ON u.id = r.user_id
+		   LEFT JOIN users rv ON rv.id = r.reviewer_id
+		  WHERE r.id=?`,
+		id,
+	).Scan(&row.ID, &row.UserID, &row.UserName, &row.Status, &row.SubmittedName, &row.SubmittedEmail, &row.Note, &row.ReviewerID, &row.ReviewerName, &row.ReviewNote, &row.CreatedAt, &row.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 func GetUserByPubkey(db *sql.DB, pubkey string) (*User, error) {
@@ -245,7 +2659,8 @@ func GetUserProfileByName(db *sql.DB, name string) (*UserProfile, error) {
 	var lastVisitDay string
 	err := QQueryRow(db,
 		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(up.display_name,''), u.name),
-		        COALESCE(up.bio,''), COALESCE(up.avatar,''), u.created,
+		        COALESCE(up.bio,''), COALESCE(up.avatar,''), COALESCE(up.signature,''),
+		        COALESCE(up.plan,''), COALESCE(up.homepage,''), u.created,
 		        COALESCE(ua.posts_created,0), COALESCE(ua.reactions_recv,0), COALESCE(ua.trust_level,0),
 		        COALESCE(ua.last_visit_day,'')
 		 FROM users u
@@ -253,7 +2668,8 @@ func GetUserProfileByName(db *sql.DB, name string) (*UserProfile, error) {
 		 LEFT JOIN user_activity ua ON ua.user_id = u.id
 		 WHERE u.name=?`,
 		name,
-	).Scan(&p.ID, &p.Name, &p.Role, &p.DisplayName, &p.Bio, &p.Avatar, &p.Created,
+	).Scan(&p.ID, &p.Name, &p.Role, &p.DisplayName, &p.Bio, &p.Avatar, &p.Signature,
+		&p.Plan, &p.Homepage, &p.Created,
 		&p.PostsCreated, &p.ReactionsReceived, &p.TrustLevel, &lastVisitDay)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -272,6 +2688,265 @@ func GetUserProfileByName(db *sql.DB, name string) (*UserProfile, error) {
 	}
 	p.Pubkeys = pubkeys
 	return p, err
+}
+
+func GetUserPrivateProfile(db *sql.DB, userID string) (*UserPrivateProfile, error) {
+	p := &UserPrivateProfile{UserID: userID}
+	err := QQueryRow(db,
+		`SELECT user_id, real_name, real_email, registration_email, address, phone, mobile,
+		        birthday, school, contact_note, updated_at
+		   FROM user_private_profiles
+		  WHERE user_id=?`,
+		userID,
+	).Scan(&p.UserID, &p.RealName, &p.RealEmail, &p.RegistrationEmail, &p.Address, &p.Phone, &p.Mobile,
+		&p.Birthday, &p.School, &p.ContactNote, &p.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return p, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func ListUserPersonalFiles(db *sql.DB, userID string, includePrivate bool) ([]UserPersonalFile, error) {
+	rows, err := QQuery(db,
+		`SELECT user_id, name, body, public, updated_at
+		   FROM user_personal_files
+		  WHERE user_id=? AND (?=1 OR public=1)
+		  ORDER BY name`,
+		userID, boolInt(includePrivate),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserPersonalFile{}
+	for rows.Next() {
+		var file UserPersonalFile
+		var public int
+		if err := rows.Scan(&file.UserID, &file.Name, &file.Body, &public, &file.UpdatedAt); err != nil {
+			return nil, err
+		}
+		file.Public = public != 0
+		out = append(out, file)
+	}
+	return out, rows.Err()
+}
+
+func GetUserPersonalFile(db *sql.DB, userID, name string, includePrivate bool) (*UserPersonalFile, error) {
+	file := &UserPersonalFile{}
+	var public int
+	err := QQueryRow(db,
+		`SELECT user_id, name, body, public, updated_at
+		   FROM user_personal_files
+		  WHERE user_id=? AND name=? AND (?=1 OR public=1)`,
+		userID, strings.TrimSpace(name), boolInt(includePrivate),
+	).Scan(&file.UserID, &file.Name, &file.Body, &public, &file.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	file.Public = public != 0
+	return file, nil
+}
+
+func GetUserSignature(db *sql.DB, userID, id string) (*UserSignature, error) {
+	sig := &UserSignature{}
+	var active int
+	err := QQueryRow(db,
+		`SELECT id, user_id, label, body, position, active, created_at, updated_at
+		   FROM user_signatures
+		  WHERE user_id=? AND id=?`,
+		userID, id,
+	).Scan(&sig.ID, &sig.UserID, &sig.Label, &sig.Body, &sig.Position, &active, &sig.CreatedAt, &sig.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sig.Active = active != 0
+	return sig, nil
+}
+
+func ListUserSignatures(db *sql.DB, userID string) (*UserSignatureBundle, error) {
+	bundle := &UserSignatureBundle{
+		Settings: UserSignatureSettings{UserID: userID},
+		MaxCount: MaxUserSignatures,
+	}
+	rows, err := QQuery(db,
+		`SELECT id, user_id, label, body, position, active, created_at, updated_at
+		   FROM user_signatures
+		  WHERE user_id=?
+		  ORDER BY position, updated_at, id`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sig UserSignature
+		var active int
+		if err := rows.Scan(&sig.ID, &sig.UserID, &sig.Label, &sig.Body, &sig.Position, &active, &sig.CreatedAt, &sig.UpdatedAt); err != nil {
+			return nil, err
+		}
+		sig.Active = active != 0
+		bundle.Signatures = append(bundle.Signatures, sig)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var randomEnabled int
+	err = QQueryRow(db,
+		`SELECT user_id, selected_signature_id, random_enabled, updated_at
+		   FROM user_signature_settings
+		  WHERE user_id=?`,
+		userID,
+	).Scan(&bundle.Settings.UserID, &bundle.Settings.SelectedSignatureID, &randomEnabled, &bundle.Settings.UpdatedAt)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	bundle.Settings.RandomEnabled = randomEnabled != 0
+	return bundle, nil
+}
+
+func GetUserLoginACLRule(db *sql.DB, userID, id string) (*UserLoginACLRule, error) {
+	rule := &UserLoginACLRule{}
+	var active int
+	err := QQueryRow(db,
+		`SELECT id, user_id, pattern, note, position, active, created_at, updated_at
+		   FROM user_login_acl_rules
+		  WHERE user_id=? AND id=?`,
+		userID, id,
+	).Scan(&rule.ID, &rule.UserID, &rule.Pattern, &rule.Note, &rule.Position, &active, &rule.CreatedAt, &rule.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rule.Active = active != 0
+	return rule, nil
+}
+
+func ListUserLoginACL(db *sql.DB, userID, host string) (*UserLoginACLBundle, error) {
+	bundle := &UserLoginACLBundle{
+		Settings: UserLoginACLSettings{UserID: userID},
+		Host:     strings.TrimSpace(host),
+		Allowed:  true,
+	}
+	rows, err := QQuery(db,
+		`SELECT id, user_id, pattern, note, position, active, created_at, updated_at
+		   FROM user_login_acl_rules
+		  WHERE user_id=?
+		  ORDER BY position, updated_at, id`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rule UserLoginACLRule
+		var active int
+		if err := rows.Scan(&rule.ID, &rule.UserID, &rule.Pattern, &rule.Note, &rule.Position, &active, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
+			return nil, err
+		}
+		rule.Active = active != 0
+		bundle.Rules = append(bundle.Rules, rule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var enabled int
+	err = QQueryRow(db,
+		`SELECT user_id, enabled, updated_at
+		   FROM user_login_acl_settings
+		  WHERE user_id=?`,
+		userID,
+	).Scan(&bundle.Settings.UserID, &enabled, &bundle.Settings.UpdatedAt)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	bundle.Settings.Enabled = enabled != 0
+	bundle.Allowed = LoginACLAllows(bundle, host)
+	return bundle, nil
+}
+
+func LoginACLAllows(bundle *UserLoginACLBundle, host string) bool {
+	if bundle == nil || !bundle.Settings.Enabled {
+		return true
+	}
+	host = normalizeLoginHost(host)
+	if host == "" {
+		return false
+	}
+	for _, rule := range bundle.Rules {
+		if !rule.Active {
+			continue
+		}
+		if loginACLPatternMatches(host, rule.Pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeLoginHost(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.String()
+	}
+	if addrPort, err := netip.ParseAddrPort(host); err == nil {
+		return addrPort.Addr().String()
+	}
+	return strings.ToLower(host)
+}
+
+func loginACLPatternMatches(host, pattern string) bool {
+	host = normalizeLoginHost(host)
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	if host == "" || pattern == "" {
+		return false
+	}
+	if pattern == "*" {
+		return true
+	}
+	if prefix, err := netip.ParsePrefix(pattern); err == nil {
+		if addr, err := netip.ParseAddr(host); err == nil {
+			return prefix.Contains(addr)
+		}
+	}
+	if strings.Contains(pattern, "*") {
+		parts := strings.Split(pattern, "*")
+		if len(parts) == 2 && parts[1] == "" {
+			return strings.HasPrefix(host, parts[0])
+		}
+		cursor := 0
+		for i, part := range parts {
+			if part == "" {
+				continue
+			}
+			idx := strings.Index(host[cursor:], part)
+			if idx < 0 {
+				return false
+			}
+			if i == 0 && idx != 0 {
+				return false
+			}
+			cursor += idx + len(part)
+		}
+		last := parts[len(parts)-1]
+		return last == "" || strings.HasSuffix(host, last)
+	}
+	return host == normalizeLoginHost(pattern)
 }
 
 func ListPubkeyTitlesByUserName(db *sql.DB, username string) ([]string, error) {
@@ -345,6 +3020,90 @@ func ListModerationReviews(db *sql.DB, status string, limit, offset int) ([]Mode
 	return out, rows.Err()
 }
 
+func ListContentFilters(db *sql.DB, scope string, includeInactive bool, limit, offset int) ([]ContentFilter, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	q := `SELECT id, pattern, scope, active, created_by, created_at, updated_at FROM content_filters`
+	var args []any
+	var wheres []string
+	scope = strings.TrimSpace(scope)
+	if scope != "" {
+		wheres = append(wheres, `scope=?`)
+		args = append(args, scope)
+	}
+	if !includeInactive {
+		wheres = append(wheres, `active=1`)
+	}
+	if len(wheres) > 0 {
+		q += ` WHERE ` + strings.Join(wheres, ` AND `)
+	}
+	q += ` ORDER BY updated_at DESC, id LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := QQuery(db, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ContentFilter
+	for rows.Next() {
+		filter, err := scanContentFilter(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, filter)
+	}
+	return out, rows.Err()
+}
+
+func MatchContentFilter(db *sql.DB, boardID, text string) (*ContentFilter, error) {
+	needle := strings.ToLower(strings.TrimSpace(text))
+	if needle == "" {
+		return nil, nil
+	}
+	rows, err := QQuery(db,
+		`SELECT id, pattern, scope, active, created_by, created_at, updated_at
+		   FROM content_filters
+		  WHERE active=1 AND (scope='global' OR scope=?)
+		  ORDER BY CASE WHEN scope=? THEN 0 ELSE 1 END, updated_at DESC, id`,
+		boardID, boardID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		filter, err := scanContentFilter(rows)
+		if err != nil {
+			return nil, err
+		}
+		pattern := strings.ToLower(strings.TrimSpace(filter.Pattern))
+		if pattern != "" && strings.Contains(needle, pattern) {
+			return &filter, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+type contentFilterScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanContentFilter(row contentFilterScanner) (ContentFilter, error) {
+	var f ContentFilter
+	var active int
+	err := row.Scan(&f.ID, &f.Pattern, &f.Scope, &active, &f.CreatedBy, &f.CreatedAt, &f.UpdatedAt)
+	f.Active = active != 0
+	return f, err
+}
+
 func ListUserSanctions(db *sql.DB, userID string, limit, offset int) ([]UserSanction, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -384,7 +3143,7 @@ func SearchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 	var err error
 	if boardID != "" {
 		rows, err = QQuery(db,
-			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, p.content_type,
+			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
 		        COALESCE(p.reply_to,''), p.version, p.redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
 		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
@@ -396,7 +3155,7 @@ func SearchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 		)
 	} else {
 		rows, err = QQuery(db,
-			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, p.content_type,
+			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
 		        COALESCE(p.reply_to,''), p.version, p.redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
 		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
@@ -415,7 +3174,7 @@ func SearchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 	for rows.Next() {
 		var p Post
 		var redacted int
-		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.ContentType,
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType,
 			&p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -428,7 +3187,13 @@ func SearchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 		p.Redacted = redacted != 0
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return attachPostAttachments(db, posts)
 }
 
 func ReactionCount(db *sql.DB, postID string) (int, error) {
@@ -582,6 +3347,48 @@ func ActiveSanction(db *sql.DB, userID, scope string) (string, bool) {
 	return kind, true
 }
 
+func ListLoginWatchers(db *sql.DB, targetUserID string) ([]string, error) {
+	rows, err := QQuery(db,
+		`SELECT r.user_id
+		   FROM user_relationships r
+		  WHERE r.target_user_id=?
+		    AND r.kind='login_watch'
+		    AND EXISTS (
+		          SELECT 1 FROM user_relationships f
+		           WHERE f.user_id=r.user_id
+		             AND f.target_user_id=r.target_user_id
+		             AND f.kind='friend'
+		        )
+		    AND NOT EXISTS (
+		          SELECT 1 FROM user_relationships ig
+		           WHERE ig.user_id=r.user_id
+		             AND ig.target_user_id=r.target_user_id
+		             AND ig.kind='ignore'
+		        )
+		    AND NOT EXISTS (
+		          SELECT 1 FROM user_relationships tig
+		           WHERE tig.user_id=r.target_user_id
+		             AND tig.target_user_id=r.user_id
+		             AND tig.kind='ignore'
+		        )
+		  ORDER BY r.updated_at, r.user_id`,
+		targetUserID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		out = append(out, userID)
+	}
+	return out, rows.Err()
+}
+
 func ListNotifications(db *sql.DB, userID string, limit, offset int, unreadOnly bool) ([]Notification, error) {
 	q := `SELECT id, kind, thread_id, post_id, actor, read, ts
 	      FROM notifications WHERE user_id=?`
@@ -639,9 +3446,9 @@ func TrustInfo(db *sql.DB, userID string) (*TrustLevelInfo, error) {
 	_ = EnsureActivity(db, userID)
 	t := &TrustLevelInfo{}
 	err := QQueryRow(db,
-		`SELECT posts_created, days_visited, reactions_recv, trust_level
+		`SELECT login_count, posts_created, days_visited, reactions_recv, trust_level
 		 FROM user_activity WHERE user_id=?`, userID,
-	).Scan(&t.PostsCreated, &t.DaysVisited, &t.ReactionsRecv, &t.TrustLevel)
+	).Scan(&t.LoginCount, &t.PostsCreated, &t.DaysVisited, &t.ReactionsRecv, &t.TrustLevel)
 	if err == sql.ErrNoRows {
 		return t, nil
 	}

@@ -1,25 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../api/client'
-import type { Thread, Post, Poll, BudgieEvent } from '../api/types'
+import type { AttachmentPayload, BoardInfo, Thread, ThreadSummary, Post, Poll, BudgieEvent, PostAttachment } from '../api/types'
 import type {
-  PostAppendedPayload, PostEditedPayload, PostRedactedPayload, PostRestoredPayload,
+  PostAppendedPayload, PostAttachmentAddedPayload, PostEditedPayload, PostRedactedPayload, PostRestoredPayload,
   ThreadLockedPayload, PostReactedPayload, PostUnreactedPayload, PollVotedPayload,
 } from '../api/types'
 import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
 import { PollComposer } from '../components/PollComposer'
+import { AttachmentComposer } from '../components/AttachmentComposer'
 import { PollWidget } from '../components/PollWidget'
 import { validatePollMarkup } from '../pollValidation'
 import { useStream } from '../hooks/useStream'
 
 interface Props {
   token: string
-  thread: Thread
+  thread: Thread & Partial<Pick<ThreadSummary, 'readSeq' | 'unreadPosts' | 'firstUnreadPostId'>>
   currentUserId: string
   currentUserRole: string
   currentUsername: string
+  initialPostId?: string
   onBack: () => void
+  onOpenThread: (thread: ThreadSummary, initialPostId?: string) => void
   onOpenProfile: (username: string) => void
+  onOpenAuthorPosts: (username: string) => void
 }
 
 interface ReactionState {
@@ -29,17 +33,54 @@ interface ReactionState {
 
 const TL_LABEL = ['TL0', 'TL1', 'TL2', 'TL3', 'TL4']
 
+function formatBytes(size = 0) {
+  if (size <= 0) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function hasPollBlock(body: string) {
   return body.toLowerCase().includes('[poll')
 }
 
-export function ThreadPage({ token, thread, currentUserId, currentUsername, currentUserRole, onBack, onOpenProfile }: Props) {
+function promptDigestPayload(defaultTitle: string, defaultKind = 'digest') {
+  const kind = prompt('Digest kind:', defaultKind)
+  if (kind === null) return null
+  const title = prompt('Digest title:', defaultTitle)
+  if (title === null) return null
+  const path = prompt('Archive path:', '')
+  if (path === null) return null
+  const note = prompt('Note:', '')
+  if (note === null) return null
+  return {
+    kind: kind.trim() || 'digest',
+    title: title.trim() || defaultTitle,
+    path: path.trim(),
+    note: note.trim(),
+  }
+}
+
+export function ThreadPage({
+  token,
+  thread,
+  currentUserId,
+  currentUsername,
+  currentUserRole,
+  initialPostId,
+  onBack,
+  onOpenThread,
+  onOpenProfile,
+  onOpenAuthorPosts,
+}: Props) {
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [threadLocked, setThreadLocked] = useState(thread.locked)
   const [composing, setComposing] = useState(false)
   const [draftBody, setDraftBody] = useState('')
+  const [draftAttachments, setDraftAttachments] = useState<AttachmentPayload[]>([])
+  const [replyAnonymous, setReplyAnonymous] = useState(false)
   const [replyTo, setReplyTo] = useState<string | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
   const [composeError, setComposeError] = useState<string | null>(null)
@@ -51,8 +92,16 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
   const [trustLevels, setTrustLevels] = useState<Record<string, number>>({})
   const [canCreatePoll, setCanCreatePoll] = useState(false)
   const [isTrustLoaded, setIsTrustLoaded] = useState(false)
+  const [readSeq, setReadSeq] = useState(thread.readSeq ?? 0)
+  const [focusedPostId, setFocusedPostId] = useState<string | undefined>(initialPostId)
+  const [authorFocus, setAuthorFocus] = useState<string | undefined>(undefined)
+  const [replyTreeRoot, setReplyTreeRoot] = useState<string | undefined>(undefined)
+  const [replyTreePosts, setReplyTreePosts] = useState<Post[] | null>(null)
+  const [replyTreeLoading, setReplyTreeLoading] = useState(false)
+  const [boardUnreadThreads, setBoardUnreadThreads] = useState<ThreadSummary[]>([])
+  const [boardInfo, setBoardInfo] = useState<BoardInfo | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
-  const isMod = currentUserRole === 'moderator' || currentUserRole === 'admin'
+  const postRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const isAdmin = currentUserRole === 'admin'
   const draftPollValidation = useMemo(() => validatePollMarkup(draftBody), [draftBody])
 
@@ -107,13 +156,32 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
     })
   }, [token])
 
+  const refreshUnreadThreads = useCallback(async () => {
+    const res = await api.listThreads(token, thread.board, 100, 0, true)
+    if (res.error) {
+      setError(res.error.message)
+      return []
+    }
+    const summaries = res.data ?? []
+    setBoardUnreadThreads(summaries)
+    return summaries
+  }, [token, thread.board])
+
   useEffect(() => {
+    setReadSeq(thread.readSeq ?? 0)
+    setFocusedPostId(initialPostId)
+    setAuthorFocus(undefined)
+    setReplyTreeRoot(undefined)
+    setReplyTreePosts(null)
+    setReplyTreeLoading(false)
+    void refreshUnreadThreads()
     ;(async () => {
       setLoading(true)
       const [postsRes, pollsRes] = await Promise.all([
         api.listPosts(token, thread.id),
         api.listThreadPolls(token, thread.id),
       ])
+      const boardRes = await api.getBoardInfo(token, thread.board)
       setLoading(false)
 
       if (postsRes.error) {
@@ -123,8 +191,14 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
 
       const loadedPosts = postsRes.data ?? []
       setPosts(loadedPosts)
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
-
+      if (boardRes.data) setBoardInfo(boardRes.data)
+      setTimeout(() => {
+        if (initialPostId && postRefs.current[initialPostId]) {
+          postRefs.current[initialPostId]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        } else {
+          bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+        }
+      }, 50)
       if (pollsRes.data) {
         setPolls(pollsRes.data)
       }
@@ -135,10 +209,20 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
       setReactions(rxMap)
 
       // Lazily load trust levels
-      const uniqueAuthors = [...new Set(loadedPosts.map(p => p.author))]
+      const uniqueAuthors = [...new Set(loadedPosts.map(p => p.author).filter(author => author !== 'Anonymous'))]
       uniqueAuthors.forEach(a => loadTrust(a))
     })()
-  }, [token, thread.id])
+  }, [token, thread.id, initialPostId, refreshUnreadThreads])
+
+  useEffect(() => {
+    void api.setPresence(token, {
+      status: `reading:thread:${thread.id}`,
+      mode: 'reading',
+      board: thread.board,
+      thread: thread.id,
+      location: thread.title,
+    })
+  }, [token, thread.id, thread.board, thread.title])
 
   useEffect(() => {
     loadCurrentUserTrust()
@@ -150,9 +234,10 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
       if (p.thread !== thread.id) return
       const newPost: Post = {
         id: p.id, thread: p.thread, author: p.author,
-        body: p.body, contentType: p.contentType,
+        body: p.body, signature: p.signature, contentType: p.contentType,
         replyTo: p.replyTo, version: 1, redacted: false,
         reactionCount: 0,
+        attachments: eventAttachments(p),
         createdSeq: evt.seq ?? 0, updatedSeq: evt.seq ?? 0,
       }
       setPosts(prev => {
@@ -160,25 +245,69 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
         setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
         return [...prev, newPost]
       })
+      setReplyTreePosts(prev => {
+        if (!prev) return prev
+        const parent = prev.find(post => post.id === p.replyTo)
+        if (!parent) return prev
+        return [...prev, { ...newPost, replyDepth: (parent.replyDepth ?? 0) + 1 }]
+      })
       setReactions(prev => ({ ...prev, [p.id]: { count: 0, reacted: false } }))
       // Load trust + poll for the new post
-      loadTrust(p.author)
+      if (p.author !== 'Anonymous') loadTrust(p.author)
       loadPollForPost(p.id, p.rawBody || p.body)
+    } else if (evt.event === 'post.attachment_added') {
+      const p = evt.payload as PostAttachmentAddedPayload
+      if (p.thread !== thread.id) return
+      setPosts(prev => prev.map(post => post.id === p.post ? {
+        ...post,
+        attachments: [...(post.attachments ?? []), {
+          id: p.id,
+          postId: p.post,
+          filename: p.filename,
+          contentType: p.contentType,
+          sizeBytes: p.sizeBytes,
+          stored: true,
+          createdBy: p.authorId,
+          createdAt: p.ts,
+        }],
+      } : post))
+      setReplyTreePosts(prev => prev?.map(post => post.id === p.post ? {
+        ...post,
+        attachments: [...(post.attachments ?? []), {
+          id: p.id,
+          postId: p.post,
+          filename: p.filename,
+          contentType: p.contentType,
+          sizeBytes: p.sizeBytes,
+          stored: true,
+          createdBy: p.authorId,
+          createdAt: p.ts,
+        }],
+      } : post) ?? prev)
     } else if (evt.event === 'post.edited') {
       const p = evt.payload as PostEditedPayload
       setPosts(prev => prev.map(post =>
         post.id === p.id ? { ...post, body: p.newBody, version: p.version } : post
       ))
+      setReplyTreePosts(prev => prev?.map(post =>
+        post.id === p.id ? { ...post, body: p.newBody, version: p.version } : post
+      ) ?? prev)
     } else if (evt.event === 'post.redacted') {
       const p = evt.payload as PostRedactedPayload
       setPosts(prev => prev.map(post =>
         post.id === p.id ? { ...post, redacted: true } : post
       ))
+      setReplyTreePosts(prev => prev?.map(post =>
+        post.id === p.id ? { ...post, redacted: true } : post
+      ) ?? prev)
     } else if (evt.event === 'post.restored') {
       const p = evt.payload as PostRestoredPayload
       setPosts(prev => prev.map(post =>
         post.id === p.id ? { ...post, redacted: false } : post
       ))
+      setReplyTreePosts(prev => prev?.map(post =>
+        post.id === p.id ? { ...post, redacted: false } : post
+      ) ?? prev)
     } else if (evt.event === 'thread.locked') {
       const p = evt.payload as ThreadLockedPayload
       if (p.thread === thread.id) setThreadLocked(p.locked)
@@ -221,6 +350,8 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
       thread: thread.id,
       body: draftBody,
       replyTo,
+      anonymous: replyAnonymous,
+      attachments: cleanAttachments(draftAttachments),
     })
     setSubmitting(false)
     if (res.error) {
@@ -228,6 +359,8 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
       alert(res.error.message)
     } else {
       setDraftBody('')
+      setDraftAttachments([])
+      setReplyAnonymous(false)
       setReplyTo(undefined)
       setComposing(false)
       setComposeError(null)
@@ -307,7 +440,206 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
 
-  const replyToPost = replyTo ? posts.find(p => p.id === replyTo) : undefined
+  const displayedPosts = replyTreePosts ?? posts
+  const replyTreeRootPost = replyTreeRoot ? (posts.find(p => p.id === replyTreeRoot) ?? replyTreePosts?.find(p => p.id === replyTreeRoot)) : undefined
+  const replyToPost = replyTo ? (posts.find(p => p.id === replyTo) ?? replyTreePosts?.find(p => p.id === replyTo)) : undefined
+  const unreadPosts = displayedPosts.filter(post => !post.redacted && post.createdSeq > readSeq)
+  const focusedUnreadIndex = focusedPostId ? unreadPosts.findIndex(post => post.id === focusedPostId) : -1
+  const readablePosts = displayedPosts.filter(post => !post.redacted)
+  const sameAuthorPosts = authorFocus ? readablePosts.filter(post => post.author === authorFocus) : []
+  const focusedAuthorIndex = focusedPostId ? sameAuthorPosts.findIndex(post => post.id === focusedPostId) : -1
+  const otherUnreadThreadCount = boardUnreadThreads.filter(item => item.id !== thread.id).length
+  const canManageBoard = currentUserRole === 'admin' || currentUserRole === 'moderator' || Boolean(boardInfo?.moderators.some(m => m.userId === currentUserId))
+  const currentMember = boardInfo?.members.find(m => m.userId === currentUserId)
+  const canCurateBoard = canManageBoard || Boolean(currentMember?.canCurate)
+  const canAnnounceBoard = canManageBoard || Boolean(currentMember?.canAnnounce)
+  const canUseCurationAction = canCurateBoard || canAnnounceBoard
+  const curationDefaultKind = canCurateBoard ? 'digest' : 'announcement'
+  const canModeratePosts = canManageBoard || Boolean(currentMember?.canModeratePosts)
+  const canModerateThreads = canManageBoard || Boolean(currentMember?.canModerateThreads)
+  const boardBlocksReplies = Boolean(boardInfo?.settings.readOnly || boardInfo?.settings.noReply)
+  const canReplyInBoard = !threadLocked && (!boardBlocksReplies || canManageBoard)
+  const canAttach = Boolean(boardInfo?.settings.attachmentsAllowed || canManageBoard)
+
+  function scrollToPost(postId: string) {
+    setFocusedPostId(postId)
+    postRefs.current[postId]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function jumpUnread(direction: 'next' | 'previous') {
+    if (unreadPosts.length === 0) return
+    if (direction === 'previous') {
+      const target = focusedUnreadIndex <= 0 ? unreadPosts[unreadPosts.length - 1] : unreadPosts[focusedUnreadIndex - 1]
+      scrollToPost(target.id)
+      return
+    }
+    const target = focusedUnreadIndex < 0 || focusedUnreadIndex >= unreadPosts.length - 1
+      ? unreadPosts[0]
+      : unreadPosts[focusedUnreadIndex + 1]
+    scrollToPost(target.id)
+  }
+
+  function jumpTopicBoundary(boundary: 'first' | 'last') {
+    const target = boundary === 'first' ? readablePosts[0] : readablePosts[readablePosts.length - 1]
+    if (target) scrollToPost(target.id)
+  }
+
+  function pickUnreadThread(source: ThreadSummary[], direction: 'next' | 'previous') {
+    const otherUnread = source.filter(item => item.id !== thread.id)
+    if (otherUnread.length === 0) return undefined
+    const currentIndex = source.findIndex(item => item.id === thread.id)
+    if (currentIndex < 0) {
+      return direction === 'next' ? otherUnread[0] : otherUnread[otherUnread.length - 1]
+    }
+    const step = direction === 'next' ? 1 : -1
+    for (let i = 1; i <= source.length; i += 1) {
+      const idx = (currentIndex + (step * i) + source.length) % source.length
+      const candidate = source[idx]
+      if (candidate.id !== thread.id && candidate.unreadPosts > 0) return candidate
+    }
+    return undefined
+  }
+
+  async function jumpUnreadThread(direction: 'next' | 'previous') {
+    const summaries = await refreshUnreadThreads()
+    const target = pickUnreadThread(summaries, direction)
+    if (target) onOpenThread(target, target.firstUnreadPostId)
+  }
+
+  function startAuthorTrail(post: Post) {
+    setAuthorFocus(post.author)
+    scrollToPost(post.id)
+  }
+
+  async function startReplyTree(post: Post) {
+    setReplyTreeRoot(post.id)
+    setReplyTreeLoading(true)
+    setFocusedPostId(post.id)
+    const res = await api.listReplyTree(token, post.id, 100, 0)
+    setReplyTreeLoading(false)
+    if (res.error) {
+      setReplyTreeRoot(undefined)
+      setReplyTreePosts(null)
+      alert(res.error.message)
+      return
+    }
+    const tree = res.data ?? [post]
+    setReplyTreePosts(tree)
+    setReactions(prev => {
+      const next = { ...prev }
+      tree.forEach(item => {
+        if (!next[item.id]) next[item.id] = { count: item.reactionCount, reacted: false }
+      })
+      return next
+    })
+    tree.forEach(item => {
+      if (item.author !== 'Anonymous') loadTrust(item.author)
+      loadPollForPost(item.id, item.body)
+    })
+    setTimeout(() => postRefs.current[post.id]?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
+  function jumpAuthor(direction: 'next' | 'previous') {
+    if (sameAuthorPosts.length === 0) return
+    if (direction === 'previous') {
+      const target = focusedAuthorIndex <= 0 ? sameAuthorPosts[sameAuthorPosts.length - 1] : sameAuthorPosts[focusedAuthorIndex - 1]
+      scrollToPost(target.id)
+      return
+    }
+    const target = focusedAuthorIndex < 0 || focusedAuthorIndex >= sameAuthorPosts.length - 1
+      ? sameAuthorPosts[0]
+      : sameAuthorPosts[focusedAuthorIndex + 1]
+    scrollToPost(target.id)
+  }
+
+  async function curateThreadDigest() {
+    const payload = promptDigestPayload(thread.title, curationDefaultKind)
+    if (!payload) return
+    const res = await api.curateThread(token, thread.id, payload)
+    if (res.error) alert(res.error.message)
+  }
+
+  async function curatePostDigest(post: Post) {
+    const payload = promptDigestPayload(`${thread.title} #${post.createdSeq}`, curationDefaultKind)
+    if (!payload) return
+    const res = await api.curatePost(token, post.id, payload)
+    if (res.error) alert(res.error.message)
+  }
+
+  async function setAuthorRelationship(post: Post, kind: 'friend' | 'ignore') {
+    const note = kind === 'friend' ? prompt('Friend note:', '') ?? '' : ''
+    const res = await api.setUserRelationship(token, post.author, kind, true, note)
+    if (res.error) {
+      alert(res.error.message)
+      return
+    }
+    alert(kind === 'friend' ? `${post.author} added as friend.` : `${post.author} ignored.`)
+  }
+
+  async function uploadAttachment(post: Post) {
+    const file = await pickAttachmentFile()
+    if (!file) return
+    const res = await api.uploadPostAttachment(token, post.id, file)
+    if (res.error) {
+      alert(res.error.message)
+      return
+    }
+    const refreshed = await api.listPosts(token, thread.id)
+    if (refreshed.error) {
+      alert(refreshed.error.message)
+      return
+    }
+    setPosts(refreshed.data ?? [])
+  }
+
+  async function downloadAttachment(att: PostAttachment) {
+    const res = await api.downloadAttachment(token, att.id, att.filename)
+    if (res.error) alert(res.error.message)
+  }
+
+  async function markThreadRead() {
+    const previous = readSeq
+    const nextSeq = posts.reduce((max, post) => Math.max(max, post.createdSeq), readSeq)
+    setReadSeq(nextSeq)
+    const res = await api.markThreadRead(token, thread.id)
+    if (res.error) {
+      setReadSeq(previous)
+      alert(res.error.message)
+      return
+    }
+    void refreshUnreadThreads()
+  }
+
+  async function restoreThreadRead() {
+    const previous = readSeq
+    const res = await api.restoreThreadRead(token, thread.id)
+    if (res.error) {
+      alert(res.error.message)
+      return
+    }
+    const summaries = await api.listThreads(token, thread.board)
+    if (summaries.error) {
+      setReadSeq(previous)
+      alert(summaries.error.message)
+      return
+    }
+    const summary = summaries.data?.find(item => item.id === thread.id)
+    setReadSeq(summary?.readSeq ?? 0)
+    void refreshUnreadThreads()
+  }
+
+  async function markPostReadThrough(post: Post) {
+    const previous = readSeq
+    setReadSeq(post.createdSeq)
+    setFocusedPostId(post.id)
+    const res = await api.markPostRead(token, post.id)
+    if (res.error) {
+      setReadSeq(previous)
+      alert(res.error.message)
+      return
+    }
+    void refreshUnreadThreads()
+  }
 
   return (
     <div className="thread-page">
@@ -315,7 +647,32 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
         <button className="back-btn" onClick={onBack}>← Threads</button>
         <h2 className="thread-title">{thread.title}</h2>
         {threadLocked && <span className="locked-badge">🔒 Locked</span>}
-        {isMod && (
+        <span className="unread-pill">{unreadPosts.length} unread</span>
+        <button className="link-btn" disabled={unreadPosts.length === 0} onClick={() => jumpUnread('previous')}>Prev unread</button>
+        <button className="link-btn" disabled={unreadPosts.length === 0} onClick={() => jumpUnread('next')}>Next unread</button>
+        <button className="link-btn" disabled={readablePosts.length === 0} onClick={() => jumpTopicBoundary('first')}>First post</button>
+        <button className="link-btn" disabled={readablePosts.length === 0} onClick={() => jumpTopicBoundary('last')}>Last post</button>
+        <button className="link-btn" disabled={otherUnreadThreadCount === 0} onClick={() => jumpUnreadThread('previous')}>Prev unread thread</button>
+        <button className="link-btn" disabled={otherUnreadThreadCount === 0} onClick={() => jumpUnreadThread('next')}>Next unread thread</button>
+        {authorFocus && (
+          <>
+            <span className="reading-mode-pill">{authorFocus}</span>
+            <button className="link-btn" disabled={sameAuthorPosts.length < 2} onClick={() => jumpAuthor('previous')}>Prev author</button>
+            <button className="link-btn" disabled={sameAuthorPosts.length < 2} onClick={() => jumpAuthor('next')}>Next author</button>
+            <button className="link-btn" onClick={() => setAuthorFocus(undefined)}>Clear author</button>
+          </>
+        )}
+        {replyTreeRoot && (
+          <>
+            <span className="reading-mode-pill">Replies #{replyTreeRootPost?.createdSeq ?? ''}</span>
+            <button className="link-btn" onClick={() => { setReplyTreeRoot(undefined); setReplyTreePosts(null) }}>Clear replies</button>
+          </>
+        )}
+        {replyTreeLoading && <span className="muted">Loading replies...</span>}
+        {canUseCurationAction && <button className="link-btn" onClick={curateThreadDigest}>Digest thread</button>}
+        <button className="link-btn" disabled={unreadPosts.length === 0} onClick={markThreadRead}>Mark all read</button>
+        {readSeq > 0 && <button className="link-btn" onClick={restoreThreadRead}>Restore marker</button>}
+        {canModerateThreads && (
           <button className="link-btn" onClick={toggleLock}>
             {threadLocked ? '🔓 Unlock' : '🔒 Lock'}
           </button>
@@ -323,18 +680,26 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
       </div>
 
       <div className="post-list">
-        {posts.map(post => {
+        {displayedPosts.map(post => {
           const rx = reactions[post.id] ?? { count: 0, reacted: false }
           const poll = polls[post.id] // null = loading, Poll = loaded, undefined = none
           const tl = trustLevels[post.author]
           const createdAt = post.createdAt ?? post.createdSeq
 
           return (
-            <div key={post.id} className="post-card">
+            <div
+              key={post.id}
+              ref={el => { postRefs.current[post.id] = el }}
+              className={`post-card${post.id === focusedPostId ? ' post-card--target' : ''}`}
+            >
               <div className="post-meta">
-                <button className="post-author post-author-link" onClick={() => onOpenProfile(post.author)}>
-                  {post.author}
-                </button>
+                {post.author === 'Anonymous' && !post.authorId ? (
+                  <span className="post-author">{post.author}</span>
+                ) : (
+                  <button className="post-author post-author-link" onClick={() => onOpenProfile(post.author)}>
+                    {post.author}
+                  </button>
+                )}
                 {tl !== undefined && (
                   <span className={`trust-badge trust-badge--tl${tl}`} title={`Trust level ${tl}`}>
                     {TL_LABEL[tl] ?? `TL${tl}`}
@@ -344,6 +709,30 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
                   {createdAt > 1_000_000_000_000 ? new Date(createdAt).toLocaleString() : `#${post.createdSeq}`}
                 </span>
                 <span className="post-actions">
+                  {post.createdSeq > readSeq && !post.redacted && (
+                    <button className="link-btn" onClick={() => markPostReadThrough(post)}>Mark to here</button>
+                  )}
+                  {!post.redacted && post.author !== 'Anonymous' && (
+                    <>
+                      <button className="link-btn" onClick={() => startAuthorTrail(post)}>Same topic author</button>
+                      <button className="link-btn" onClick={() => onOpenAuthorPosts(post.author)}>Author posts</button>
+                    </>
+                  )}
+                  {!post.redacted && (
+                    <button className="link-btn" onClick={() => startReplyTree(post)}>Reply tree</button>
+                  )}
+                  {!post.redacted && post.author !== 'Anonymous' && post.authorId !== currentUserId && (
+                    <>
+                      <button className="link-btn" onClick={() => setAuthorRelationship(post, 'friend')}>Friend</button>
+                      <button className="link-btn danger" onClick={() => setAuthorRelationship(post, 'ignore')}>Ignore</button>
+                    </>
+                  )}
+                  {canUseCurationAction && !post.redacted && (
+                    <button className="link-btn" onClick={() => curatePostDigest(post)}>Digest</button>
+                  )}
+                  {canAttach && !post.redacted && (canManageBoard || post.authorId === currentUserId) && (
+                    <button className="link-btn" onClick={() => uploadAttachment(post)}>Upload file</button>
+                  )}
                   <button
                     className={`link-btn react-btn${rx.reacted ? ' react-btn--active' : ''}`}
                     onClick={() => toggleReact(post.id)}
@@ -351,16 +740,16 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
                   >
                     {rx.reacted ? '❤️' : '🤍'}{rx.count > 0 ? ` ${rx.count}` : ''}
                   </button>
-                  {!threadLocked && !post.redacted && (
+                  {canReplyInBoard && !post.redacted && (
                     <button className="link-btn" onClick={() => {
                       setReplyTo(post.id)
                       setComposing(true)
                     }}>Reply</button>
                   )}
-                  {(isMod || post.authorId === currentUserId) && !post.redacted && (
+                  {(canModeratePosts || post.authorId === currentUserId) && !post.redacted && (
                     <button className="link-btn danger" onClick={() => redactPost(post.id)}>Redact</button>
                   )}
-                  {isMod && post.redacted && (
+                  {canModeratePosts && post.redacted && (
                     <button className="link-btn" onClick={() => restorePost(post.id)}>Restore</button>
                   )}
                   {isAdmin && post.redacted && (
@@ -379,6 +768,32 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
                 <Markup body={post.body} redacted={post.redacted} />
               </div>
 
+              {!post.redacted && post.signature && (
+                <div className="post-signature">
+                  <Markup body={post.signature} />
+                </div>
+              )}
+
+              {!post.redacted && post.attachments && post.attachments.length > 0 && (
+                <div className="post-attachments">
+                  {post.attachments.map(att => (
+                    <span className="post-attachment" key={att.id}>
+                      {att.url ? (
+                        <a href={att.url} target="_blank" rel="noreferrer">{att.filename}</a>
+                      ) : (
+                        <span>{att.filename}</span>
+                      )}
+                      {att.stored && <button className="link-btn" onClick={() => downloadAttachment(att)}>Download</button>}
+                      {(att.contentType || att.sizeBytes) && (
+                        <span className="muted">
+                          {att.contentType}{att.contentType && att.sizeBytes ? ' · ' : ''}{formatBytes(att.sizeBytes)}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              )}
+
               {poll && (
                 <PollWidget
                   poll={poll}
@@ -391,7 +806,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
         <div ref={bottomRef} />
       </div>
 
-      {!threadLocked && (
+      {canReplyInBoard && (
         composing ? (
           <div className="compose-box">
             {replyToPost && (
@@ -418,16 +833,25 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
               <p className="error">{draftPollValidation.message}</p>
             )}
             {composeError && <p className="error">{composeError}</p>}
+            {canAttach && (
+              <AttachmentComposer attachments={draftAttachments} onChange={setDraftAttachments} disabled={submitting} />
+            )}
             <div className="compose-actions">
               <PollComposer
                 onInsert={insertPollIntoDraft}
                 disabled={!isTrustLoaded || !canCreatePoll}
                 disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
               />
+              {boardInfo?.settings.anonymousAllowed && (
+                <label className="inline-toggle">
+                  <input type="checkbox" checked={replyAnonymous} onChange={e => setReplyAnonymous(e.target.checked)} />
+                  Anonymous
+                </label>
+              )}
               <button onClick={submitPost} disabled={submitting || !draftBody.trim()}>
                 {submitting ? '…' : 'Post reply'}
               </button>
-              <button className="link-btn" onClick={() => { setComposing(false); setDraftBody(''); setReplyTo(undefined) }}>
+              <button className="link-btn" onClick={() => { setComposing(false); setDraftBody(''); setDraftAttachments([]); setReplyAnonymous(false); setReplyTo(undefined) }}>
                 Cancel
               </button>
               <span className="muted compose-hint">Ctrl+Enter to submit</span>
@@ -441,4 +865,40 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
       )}
     </div>
   )
+}
+
+function cleanAttachments(items: AttachmentPayload[]) {
+  return items
+    .map(item => ({
+      filename: item.filename.trim(),
+      contentType: item.contentType?.trim() || undefined,
+      sizeBytes: item.sizeBytes ?? 0,
+      url: item.url?.trim() || undefined,
+    }))
+    .filter(item => item.filename)
+}
+
+function eventAttachments(payload: PostAppendedPayload): PostAttachment[] | undefined {
+  if (!payload.attachments?.length) return undefined
+  return payload.attachments.map(att => ({
+    id: att.id ?? `${payload.id}-${att.filename}`,
+    postId: payload.id,
+    filename: att.filename,
+    contentType: att.contentType,
+    sizeBytes: att.sizeBytes,
+    url: att.url,
+    stored: false,
+    createdBy: payload.authorId,
+    createdAt: payload.ts,
+  }))
+}
+
+function pickAttachmentFile() {
+  return new Promise<File | null>(resolve => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.onchange = () => resolve(input.files?.[0] ?? null)
+    input.oncancel = () => resolve(null)
+    input.click()
+  })
 }

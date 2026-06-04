@@ -5,18 +5,25 @@ type EventKind string
 
 const (
 	// Durable events — carry seq, persist permanently, replayable.
-	EvtThreadNew      EventKind = "thread.new"
-	EvtPostAppended   EventKind = "post.appended"
-	EvtPostEdited     EventKind = "post.edited"
-	EvtPostRedacted   EventKind = "post.redacted"
-	EvtPostRestored   EventKind = "post.restored"
-	EvtThreadLocked   EventKind = "thread.locked"
-	EvtThreadMoved    EventKind = "thread.moved"
-	EvtUserSanctioned EventKind = "user.sanctioned"
-	EvtRoleGranted    EventKind = "role.granted"
-	EvtRoleRevoked    EventKind = "role.revoked"
-	EvtBoardCreated   EventKind = "board.created"
-	EvtPostPurged     EventKind = "post.purged" // GDPR hard-delete; body removed from projection
+	EvtThreadNew           EventKind = "thread.new"
+	EvtPostAppended        EventKind = "post.appended"
+	EvtPostAttachmentAdded EventKind = "post.attachment_added"
+	EvtPostEdited          EventKind = "post.edited"
+	EvtPostRedacted        EventKind = "post.redacted"
+	EvtPostRestored        EventKind = "post.restored"
+	EvtThreadLocked        EventKind = "thread.locked"
+	EvtThreadMoved         EventKind = "thread.moved"
+	EvtUserSanctioned      EventKind = "user.sanctioned"
+	EvtUserSanctionCleared EventKind = "user.sanction_cleared"
+	EvtContentFilterSet    EventKind = "content_filter.set"
+	EvtRoleGranted         EventKind = "role.granted"
+	EvtRoleRevoked         EventKind = "role.revoked"
+	EvtBoardCreated        EventKind = "board.created"
+	EvtPostPurged          EventKind = "post.purged" // GDPR hard-delete; body removed from projection
+	EvtMailSent            EventKind = "mail.sent"
+	EvtMailAttachmentAdded EventKind = "mail.attachment_added"
+	EvtDirectMessageSent   EventKind = "direct_message.sent"
+	EvtUserBlessed         EventKind = "user.blessed"
 
 	// M10 — Reactions
 	EvtPostReacted   EventKind = "post.reacted"
@@ -57,10 +64,11 @@ type Event struct {
 // IsDurable reports whether this is a permanent log event.
 func (e *Event) IsDurable() bool {
 	switch e.Kind {
-	case EvtThreadNew, EvtPostAppended, EvtPostEdited, EvtPostRedacted,
+	case EvtThreadNew, EvtPostAppended, EvtPostAttachmentAdded, EvtPostEdited, EvtPostRedacted,
 		EvtPostRestored, EvtPostPurged, EvtThreadLocked, EvtThreadMoved,
-		EvtUserSanctioned, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated,
-		EvtPostReacted, EvtPostUnreacted, EvtPollVoted,
+		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated,
+		EvtMailSent, EvtMailAttachmentAdded, EvtDirectMessageSent,
+		EvtUserBlessed, EvtPostReacted, EvtPostUnreacted, EvtPollVoted,
 		EvtMentioned, EvtTrustLevelChanged, EvtPostFlagged, EvtReviewResolved:
 		return true
 	}
@@ -79,14 +87,27 @@ type ThreadNewPayload struct {
 }
 
 type PostAppendedPayload struct {
+	ID          string              `json:"id"`
+	Thread      string              `json:"thread"`
+	Author      string              `json:"author"`
+	AuthorID    string              `json:"authorId,omitempty"`
+	Body        string              `json:"body"`
+	RawBody     string              `json:"rawBody,omitempty"`
+	Signature   string              `json:"signature,omitempty"`
+	ContentType string              `json:"contentType"`
+	ReplyTo     string              `json:"replyTo,omitempty"`
+	Attachments []AttachmentPayload `json:"attachments,omitempty"`
+	TS          int64               `json:"ts"`
+}
+
+type PostAttachmentAddedPayload struct {
 	ID          string `json:"id"`
+	Post        string `json:"post"`
 	Thread      string `json:"thread"`
-	Author      string `json:"author"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType,omitempty"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
 	AuthorID    string `json:"authorId,omitempty"`
-	Body        string `json:"body"`
-	RawBody     string `json:"rawBody,omitempty"`
-	ContentType string `json:"contentType"`
-	ReplyTo     string `json:"replyTo,omitempty"`
 	TS          int64  `json:"ts"`
 }
 
@@ -146,6 +167,24 @@ type UserSanctionedPayload struct {
 	TS          int64  `json:"ts"`
 }
 
+type UserSanctionClearedPayload struct {
+	User   string `json:"user"`
+	Kind   string `json:"kind,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	By     string `json:"by"`
+	Reason string `json:"reason,omitempty"`
+	TS     int64  `json:"ts"`
+}
+
+type ContentFilterSetPayload struct {
+	ID      string `json:"id"`
+	Pattern string `json:"pattern"`
+	Scope   string `json:"scope,omitempty"`
+	Active  bool   `json:"active"`
+	By      string `json:"by"`
+	TS      int64  `json:"ts"`
+}
+
 type RoleGrantedPayload struct {
 	User string `json:"user"`
 	Role string `json:"role"`
@@ -164,8 +203,56 @@ type BoardCreatedPayload struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	ParentID    string `json:"parentId,omitempty"`
+	Position    int    `json:"position,omitempty"`
 	By          string `json:"by"`
 	TS          int64  `json:"ts"`
+}
+
+type MailSentPayload struct {
+	ID          string              `json:"id"`
+	FromUserID  string              `json:"fromUserId"`
+	From        string              `json:"from"`
+	ToUserIDs   []string            `json:"toUserIds"`
+	To          []string            `json:"to"`
+	Subject     string              `json:"subject"`
+	Body        string              `json:"body"`
+	ParentID    string              `json:"parentId,omitempty"`
+	SaveSent    bool                `json:"saveSent"`
+	Attachments []AttachmentPayload `json:"attachments,omitempty"`
+	TS          int64               `json:"ts"`
+}
+
+type MailAttachmentAddedPayload struct {
+	ID          string `json:"id"`
+	Mail        string `json:"mail"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"contentType,omitempty"`
+	SizeBytes   int64  `json:"sizeBytes,omitempty"`
+	AuthorID    string `json:"authorId,omitempty"`
+	Author      string `json:"author,omitempty"`
+	TS          int64  `json:"ts"`
+}
+
+type DirectMessageSentPayload struct {
+	ID             string `json:"id"`
+	ConversationID string `json:"conversationId"`
+	FromUserID     string `json:"fromUserId"`
+	From           string `json:"from"`
+	ToUserID       string `json:"toUserId"`
+	To             string `json:"to"`
+	Body           string `json:"body"`
+	TS             int64  `json:"ts"`
+}
+
+type UserBlessedPayload struct {
+	ID         string `json:"id"`
+	FromUserID string `json:"fromUserId"`
+	From       string `json:"from"`
+	ToUserID   string `json:"toUserId"`
+	To         string `json:"to"`
+	Message    string `json:"message,omitempty"`
+	TS         int64  `json:"ts"`
 }
 
 // M10 — Reaction payloads.
@@ -218,6 +305,7 @@ type TrustLevelChangedPayload struct {
 
 type PostFlaggedPayload struct {
 	ReviewID string `json:"reviewId"`
+	Kind     string `json:"kind,omitempty"`
 	PostID   string `json:"postId"`
 	Thread   string `json:"thread"`
 	Reporter string `json:"reporter"`
@@ -243,9 +331,16 @@ type ChatLinePayload struct {
 }
 
 type PresenceUpdatePayload struct {
-	User   string `json:"user"`
-	Status string `json:"status"`
-	TS     int64  `json:"ts"`
+	User      string `json:"user"`
+	UserID    string `json:"userId,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	Status    string `json:"status"`
+	Mode      string `json:"mode,omitempty"`
+	Board     string `json:"board,omitempty"`
+	Thread    string `json:"thread,omitempty"`
+	Location  string `json:"location,omitempty"`
+	FromHost  string `json:"fromHost,omitempty"`
+	TS        int64  `json:"ts"`
 }
 
 type UserJoinedPayload struct {

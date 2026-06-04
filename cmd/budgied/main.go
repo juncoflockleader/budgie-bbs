@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
@@ -33,6 +34,7 @@ func main() {
 		pgDSN      = flag.String("postgres-dsn", "", "PostgreSQL DSN for migration or future postgres runtime (e.g. postgres://user:pass@127.0.0.1:5432/budgie)")
 		rebuild    = flag.Bool("rebuild-projections", false, "Rebuild projection tables from durable events and exit")
 		rebuildSeq = flag.Int64("rebuild-from-seq", 0, "Replay durable events with seq > value during projection rebuild")
+		autoStats  = flag.Bool("auto-stats", true, "Automatically publish the daily BBSLists stats snapshot")
 	)
 	flag.Parse()
 
@@ -97,6 +99,9 @@ func main() {
 			os.Exit(1)
 		}
 		go c.Run(ctx)
+		if *autoStats {
+			startStatsSnapshotScheduler(ctx, c)
+		}
 
 		httpSrv := httpapi.New(c, secret)
 		if *webRoot != "" {
@@ -152,6 +157,9 @@ func main() {
 
 	// Start the single-writer goroutine.
 	go c.Run(ctx)
+	if *autoStats {
+		startStatsSnapshotScheduler(ctx, c)
+	}
 
 	// HTTP + WebSocket mux.
 	httpSrv := httpapi.New(c, secret)
@@ -201,6 +209,34 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func startStatsSnapshotScheduler(ctx context.Context, c *core.Core) {
+	publish := func() {
+		result, err := c.PublishDailyStatsSnapshot(ctx, time.Now().UTC())
+		if err != nil {
+			if ctx.Err() == nil {
+				slog.Warn("automatic stats snapshot failed", "err", err)
+			}
+			return
+		}
+		if result != nil {
+			slog.Info("automatic stats snapshot ensured", "thread", result.ID)
+		}
+	}
+	go func() {
+		publish()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				publish()
+			}
+		}
+	}()
 }
 
 func hostKeyPath(path string) string {

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
-import type { Board } from '../api/types'
+import type { AttachmentPayload, Board } from '../api/types'
+import { AttachmentComposer } from '../components/AttachmentComposer'
 import { PollComposer } from '../components/PollComposer'
 import { validatePollMarkup } from '../pollValidation'
 
@@ -15,6 +16,8 @@ interface Props {
 export function NewThreadPage({ token, board, currentUsername, onCreated, onBack }: Props) {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
+  const [anonymous, setAnonymous] = useState(false)
+  const [attachments, setAttachments] = useState<AttachmentPayload[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [isTrustLoaded, setIsTrustLoaded] = useState(false)
@@ -54,6 +57,8 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
       board: board.id,
       title,
       body,
+      anonymous,
+      attachments: cleanAttachments(attachments),
     })
     setBusy(false)
     if (res.error) {
@@ -102,7 +107,16 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
             disabled={!isTrustLoaded || !canCreatePoll}
             disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
           />
+          {board.anonymousAllowed && (
+            <label className="inline-toggle">
+              <input type="checkbox" checked={anonymous} onChange={e => setAnonymous(e.target.checked)} />
+              Anonymous
+            </label>
+          )}
         </div>
+        {board.attachmentsAllowed && (
+          <AttachmentComposer attachments={attachments} onChange={setAttachments} disabled={busy} />
+        )}
         {error && <p className="error">{error}</p>}
         <div className="form-actions">
           <button type="submit" disabled={busy || !title.trim() || !body.trim()}>
@@ -113,4 +127,15 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
       </form>
     </div>
   )
+}
+
+function cleanAttachments(items: AttachmentPayload[]) {
+  return items
+    .map(item => ({
+      filename: item.filename.trim(),
+      contentType: item.contentType?.trim() || undefined,
+      sizeBytes: item.sizeBytes ?? 0,
+      url: item.url?.trim() || undefined,
+    }))
+    .filter(item => item.filename)
 }

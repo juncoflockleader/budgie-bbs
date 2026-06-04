@@ -49,6 +49,22 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "user not found", false)
 			return
 		}
+		if user.DeactivatedAt > 0 {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "account deactivated", false)
+			return
+		}
+		switch user.RegistrationStatus {
+		case "", "approved":
+		case "pending":
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "account pending approval", false)
+			return
+		case "rejected":
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "account registration rejected", false)
+			return
+		default:
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "account not approved", false)
+			return
+		}
 		ctx := context.WithValue(r.Context(), ctxUser, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

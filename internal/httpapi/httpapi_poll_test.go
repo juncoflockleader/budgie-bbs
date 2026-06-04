@@ -42,9 +42,59 @@ type registerResponse struct {
 	} `json:"user"`
 }
 
+type userProfileResponse struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	Bio         string `json:"bio"`
+	Avatar      string `json:"avatar"`
+	Signature   string `json:"signature"`
+	Plan        string `json:"plan"`
+	Homepage    string `json:"homepage"`
+}
+
+type userPrivateProfileResponse struct {
+	UserID            string `json:"userId"`
+	RealName          string `json:"realName"`
+	RealEmail         string `json:"realEmail"`
+	RegistrationEmail string `json:"registrationEmail"`
+	Address           string `json:"address"`
+	Phone             string `json:"phone"`
+	Mobile            string `json:"mobile"`
+	Birthday          string `json:"birthday"`
+	School            string `json:"school"`
+	ContactNote       string `json:"contactNote"`
+}
+
+type userPersonalFilePayload struct {
+	UserID string `json:"userId"`
+	Name   string `json:"name"`
+	Body   string `json:"body"`
+	Public bool   `json:"public"`
+}
+
+type userPersonalFilesResponse struct {
+	Files []userPersonalFilePayload `json:"files"`
+}
+
+type userPersonalFileResponse struct {
+	File userPersonalFilePayload `json:"file"`
+}
+
 type postPayload struct {
-	ID   string `json:"id"`
-	Body string `json:"body"`
+	ID          string `json:"id"`
+	Author      string `json:"author"`
+	AuthorID    string `json:"authorId"`
+	Body        string `json:"body"`
+	Signature   string `json:"signature"`
+	Attachments []struct {
+		ID          string `json:"id"`
+		Filename    string `json:"filename"`
+		ContentType string `json:"contentType"`
+		SizeBytes   int64  `json:"sizeBytes"`
+		URL         string `json:"url"`
+		Stored      bool   `json:"stored"`
+	} `json:"attachments"`
 }
 
 type listPostsResponse struct {
@@ -108,6 +158,19 @@ func registerUser(t *testing.T, handler http.Handler, name string) string {
 	}, &out)
 	if status != http.StatusCreated {
 		t.Fatalf("register %s status: %d", name, status)
+	}
+	return out.Token
+}
+
+func loginUser(t *testing.T, handler http.Handler, name string) string {
+	t.Helper()
+	out := registerResponse{}
+	status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     name,
+		"password": "pw",
+	}, &out)
+	if status != http.StatusOK {
+		t.Fatalf("login %s status: %d", name, status)
 	}
 	return out.Token
 }
@@ -1382,6 +1445,161 @@ func TestHTTPPollVoteEndpointIsIdempotent(t *testing.T) {
 
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/posts/"+targetPostID+"/poll", adminToken, nil, &voted); status != http.StatusOK {
 		t.Fatalf("get poll by post after idempotent vote failed: %d", status)
+	}
+}
+
+func TestHTTPPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	bobToken := registerUser(t, handler, "bob")
+
+	createThreadAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Vote result base",
+			"body":  "[poll]\nBest option?\nOption A\nOption B\n[/poll]",
+		},
+	}, &createThreadAck); status != http.StatusCreated || !createThreadAck.OK || createThreadAck.Result == nil {
+		t.Fatalf("create thread for poll result failed: status=%d ok=%v err=%+v", status, createThreadAck.OK, createThreadAck.Error)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createThreadAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	var poll *pollPayload
+	for _, candidate := range threadPolls.Polls {
+		poll = candidate
+		break
+	}
+	if poll == nil || len(poll.Options) != 2 {
+		t.Fatalf("expected poll with options, got %+v", threadPolls.Polls)
+	}
+	vote := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/vote", bobToken, map[string]string{
+		"option": poll.Options[0].ID,
+	}, &vote); status != http.StatusCreated {
+		t.Fatalf("vote poll status: %d error=%+v", status, vote.Error)
+	}
+
+	forbidden := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", bobToken, nil, &forbidden); status != http.StatusForbidden {
+		t.Fatalf("expected non-author poll result publish forbidden, got %d error=%+v", status, forbidden.Error)
+	}
+	result := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", adminToken, nil, &result); status != http.StatusCreated {
+		t.Fatalf("publish poll result status: %d error=%+v", status, result.Error)
+	}
+	if result.Result == nil || result.Result.ID == "" {
+		t.Fatalf("expected generated vote result thread id, got %+v", result)
+	}
+	threads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/vote/threads", bobToken, nil, &threads); status != http.StatusOK {
+		t.Fatalf("list vote threads status: %d", status)
+	}
+	if len(threads.Threads) != 1 || threads.Threads[0].ID != result.Result.ID || !strings.Contains(threads.Threads[0].Title, "Best option?") {
+		t.Fatalf("expected generated vote thread, got %+v", threads.Threads)
+	}
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+result.Result.ID+"/posts", bobToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list vote posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected one generated vote post, got %+v", posts.Posts)
+	}
+	for _, want := range []string{"# Poll result: Best option?", "Source thread: Vote result base", "Total votes: 1", "Option A: 1 vote", "Option B: 0 vote", "Generated public poll result"} {
+		if !strings.Contains(posts.Posts[0].Body, want) {
+			t.Fatalf("expected vote result post to contain %q, got:\n%s", want, posts.Posts[0].Body)
+		}
+	}
+	again := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", adminToken, nil, &again); status != http.StatusCreated {
+		t.Fatalf("repeat poll result publish status: %d error=%+v", status, again.Error)
+	}
+	if again.Result == nil || again.Result.ID != result.Result.ID {
+		t.Fatalf("expected repeated poll result publish to reuse %q, got %+v", result.Result.ID, again)
+	}
+}
+
+func TestHTTPSanctionClearCreatesDenyPostRecords(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	createBoard := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":   "policy",
+		"name": "Policy",
+	}, &createBoard); status != http.StatusCreated || !createBoard.OK {
+		t.Fatalf("create policy board failed: status=%d err=%+v", status, createBoard.Error)
+	}
+	createThread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/policy/threads", adminToken, map[string]string{
+		"title": "Board rules",
+		"body":  "Please keep this board tidy.",
+	}, &createThread); status != http.StatusCreated || !createThread.OK || createThread.Result == nil {
+		t.Fatalf("create policy thread failed: status=%d err=%+v", status, createThread.Error)
+	}
+
+	denied := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/users/alice/sanctions", adminToken, map[string]string{
+		"kind":   "mute",
+		"scope":  "policy",
+		"reason": "cooldown",
+	}, &denied); status != http.StatusCreated || !denied.OK {
+		t.Fatalf("sanction alice failed: status=%d err=%+v", status, denied.Error)
+	}
+	blocked := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+createThread.Result.ID+"/posts", aliceToken, map[string]string{
+		"body": "I should be muted",
+	}, &blocked); status != http.StatusConflict {
+		t.Fatalf("expected muted append conflict, got status=%d err=%+v", status, blocked.Error)
+	}
+
+	denyThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/denypost/threads", bobToken, nil, &denyThreads); status != http.StatusOK {
+		t.Fatalf("list denypost threads status: %d", status)
+	}
+	if len(denyThreads.Threads) != 1 || !strings.Contains(denyThreads.Threads[0].Title, "Board posting denied: alice on policy") {
+		t.Fatalf("expected denypost generated thread, got %+v", denyThreads.Threads)
+	}
+	denyPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+denyThreads.Threads[0].ID+"/posts", bobToken, nil, &denyPosts); status != http.StatusOK {
+		t.Fatalf("list denypost posts status: %d", status)
+	}
+	if len(denyPosts.Posts) != 1 || !strings.Contains(denyPosts.Posts[0].Body, "- Reason: cooldown") {
+		t.Fatalf("expected denypost body with reason, got %+v", denyPosts.Posts)
+	}
+
+	cleared := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/users/alice/sanctions?kind=mute&scope=policy&reason=served", adminToken, nil, &cleared); status != http.StatusCreated || !cleared.OK {
+		t.Fatalf("clear sanction failed: status=%d err=%+v", status, cleared.Error)
+	}
+	appended := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+createThread.Result.ID+"/posts", aliceToken, map[string]string{
+		"body": "I can post again",
+	}, &appended); status != http.StatusCreated || !appended.OK {
+		t.Fatalf("append after clear failed: status=%d err=%+v", status, appended.Error)
+	}
+
+	undenyThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/undenypost/threads", bobToken, nil, &undenyThreads); status != http.StatusOK {
+		t.Fatalf("list undenypost threads status: %d", status)
+	}
+	if len(undenyThreads.Threads) != 1 || !strings.Contains(undenyThreads.Threads[0].Title, "Board posting restored: alice on policy") {
+		t.Fatalf("expected undenypost generated thread, got %+v", undenyThreads.Threads)
+	}
+	undenyPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+undenyThreads.Threads[0].ID+"/posts", bobToken, nil, &undenyPosts); status != http.StatusOK {
+		t.Fatalf("list undenypost posts status: %d", status)
+	}
+	if len(undenyPosts.Posts) != 1 || !strings.Contains(undenyPosts.Posts[0].Body, "- Action: board posting restored") || !strings.Contains(undenyPosts.Posts[0].Body, "- Reason: served") {
+		t.Fatalf("expected undenypost restoration body, got %+v", undenyPosts.Posts)
 	}
 }
 
@@ -2914,5 +3132,731 @@ func TestHTTPPollVoteLifecycleAndErrors(t *testing.T) {
 		"option": poll.Options[0].ID,
 	}, &vote); status != http.StatusCreated || !vote.OK {
 		t.Fatalf("expected success vote after restore: status=%d ok=%v err=%+v", status, vote.OK, vote.Error)
+	}
+}
+
+func TestHTTPProfileSignatureSnapshotsOnPosts(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+	profileUpdate := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me", token, map[string]string{
+		"displayName": "Alice",
+		"bio":         "bio",
+		"avatar":      "A",
+		"signature":   "first signature",
+		"plan":        "KBS campus plan",
+		"homepage":    "example.edu/~alice",
+	}, &profileUpdate); status != http.StatusOK {
+		t.Fatalf("update profile status: %d", status)
+	}
+	profile := userProfileResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice", "", nil, &profile); status != http.StatusOK {
+		t.Fatalf("get profile status: %d", status)
+	}
+	if profile.Signature != "first signature" || profile.Plan != "KBS campus plan" || profile.Homepage != "example.edu/~alice" {
+		t.Fatalf("expected profile signature, got %+v", profile)
+	}
+
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", token, map[string]string{
+		"title": "Signature thread",
+		"body":  "first body",
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("create signed thread status: %d error=%+v", status, thread.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me", token, map[string]string{
+		"displayName": "Alice",
+		"bio":         "bio",
+		"avatar":      "A",
+		"signature":   "second signature",
+		"plan":        "KBS campus plan",
+		"homepage":    "example.edu/~alice",
+	}, &profileUpdate); status != http.StatusOK {
+		t.Fatalf("update second profile status: %d", status)
+	}
+	reply := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+thread.Result.ID+"/posts", token, map[string]string{
+		"body": "second body",
+	}, &reply); status != http.StatusCreated {
+		t.Fatalf("append signed reply status: %d error=%+v", status, reply.Error)
+	}
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list signed posts status: %d", status)
+	}
+	if len(posts.Posts) != 2 {
+		t.Fatalf("expected signed starter and reply, got %+v", posts.Posts)
+	}
+	if posts.Posts[0].Signature != "first signature" {
+		t.Fatalf("expected starter post to keep first signature, got %+v", posts.Posts[0])
+	}
+	if posts.Posts[1].ID != reply.Result.ID || posts.Posts[1].Signature != "second signature" {
+		t.Fatalf("expected reply to snapshot second signature, got %+v", posts.Posts[1])
+	}
+}
+
+func TestHTTPUserPrivateProfileFieldsAndVisibility(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	ack := map[string]any{}
+	payload := map[string]string{
+		"realName":          "Alice Zhang",
+		"realEmail":         "alice@real.example",
+		"registrationEmail": "alice@register.example",
+		"address":           "Dorm 7",
+		"phone":             "010-123456",
+		"mobile":            "13900000000",
+		"birthday":          "1984-05-04",
+		"school":            "Computer Science",
+		"contactNote":       "class of 2006",
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me/private-profile", aliceToken, payload, &ack); status != http.StatusOK {
+		t.Fatalf("update private profile status: %d", status)
+	}
+
+	own := userPrivateProfileResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/me/private-profile", aliceToken, nil, &own); status != http.StatusOK {
+		t.Fatalf("get own private profile status: %d", status)
+	}
+	if own.RealName != "Alice Zhang" ||
+		own.RealEmail != "alice@real.example" ||
+		own.RegistrationEmail != "alice@register.example" ||
+		own.Address != "Dorm 7" ||
+		own.Phone != "010-123456" ||
+		own.Mobile != "13900000000" ||
+		own.Birthday != "1984-05-04" ||
+		own.School != "Computer Science" ||
+		own.ContactNote != "class of 2006" {
+		t.Fatalf("expected private profile fields, got %+v", own)
+	}
+
+	forbidden := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice/private-profile", bobToken, nil, &forbidden); status != http.StatusForbidden {
+		t.Fatalf("expected non-admin private profile lookup forbidden, got %d", status)
+	}
+
+	adminView := userPrivateProfileResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice/private-profile", adminToken, nil, &adminView); status != http.StatusOK {
+		t.Fatalf("expected admin private profile lookup ok, got %d", status)
+	}
+	if adminView.RealName != own.RealName || adminView.RealEmail != own.RealEmail {
+		t.Fatalf("expected admin to see private profile, got %+v", adminView)
+	}
+
+	publicProfile := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice", "", nil, &publicProfile); status != http.StatusOK {
+		t.Fatalf("get public profile status: %d", status)
+	}
+	for _, key := range []string{"realName", "realEmail", "registrationEmail", "address", "phone", "mobile", "birthday", "school", "contactNote"} {
+		if _, ok := publicProfile[key]; ok {
+			t.Fatalf("public profile leaked private key %q in %+v", key, publicProfile)
+		}
+	}
+}
+
+func TestHTTPUserPersonalFilesVisibility(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	_ = registerUser(t, handler, "bob")
+
+	saved := userPersonalFileResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/users/me/files/resume.txt", aliceToken, map[string]any{
+		"body":   "public body",
+		"public": true,
+	}, &saved); status != http.StatusOK {
+		t.Fatalf("save public personal file status: %d", status)
+	}
+	if saved.File.Name != "resume.txt" || saved.File.Body != "public body" || !saved.File.Public {
+		t.Fatalf("expected public personal file response, got %+v", saved)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/users/me/files/secret.txt", aliceToken, map[string]any{
+		"body":   "private body",
+		"public": false,
+	}, &saved); status != http.StatusOK {
+		t.Fatalf("save private personal file status: %d", status)
+	}
+
+	publicList := userPersonalFilesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice/files", "", nil, &publicList); status != http.StatusOK {
+		t.Fatalf("list public personal files status: %d", status)
+	}
+	if len(publicList.Files) != 1 || publicList.Files[0].Name != "resume.txt" {
+		t.Fatalf("expected only public file, got %+v", publicList)
+	}
+	publicFile := userPersonalFilePayload{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice/files/resume.txt", "", nil, &publicFile); status != http.StatusOK {
+		t.Fatalf("get public personal file status: %d", status)
+	}
+	if publicFile.Body != "public body" {
+		t.Fatalf("expected public file body, got %+v", publicFile)
+	}
+	hidden := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice/files/secret.txt", "", nil, &hidden); status != http.StatusNotFound {
+		t.Fatalf("expected private personal file hidden, got %d", status)
+	}
+
+	ownList := userPersonalFilesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/me/files", aliceToken, nil, &ownList); status != http.StatusOK {
+		t.Fatalf("list own personal files status: %d", status)
+	}
+	if len(ownList.Files) != 2 {
+		t.Fatalf("expected owner to see public and private files, got %+v", ownList)
+	}
+	ownPrivate := userPersonalFilePayload{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/me/files/secret.txt", aliceToken, nil, &ownPrivate); status != http.StatusOK {
+		t.Fatalf("get own private personal file status: %d", status)
+	}
+	if ownPrivate.Body != "private body" || ownPrivate.Public {
+		t.Fatalf("expected owner private file body, got %+v", ownPrivate)
+	}
+	if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/users/me/files/resume.txt", aliceToken, nil, &hidden); status != http.StatusOK {
+		t.Fatalf("delete personal file status: %d", status)
+	}
+	publicList = userPersonalFilesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice/files", "", nil, &publicList); status != http.StatusOK {
+		t.Fatalf("list public personal files after delete status: %d", status)
+	}
+	if len(publicList.Files) != 0 {
+		t.Fatalf("expected deleted public file to disappear, got %+v", publicList)
+	}
+}
+
+func TestHTTPUserSignatureBankSelection(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+	type signatureResponse struct {
+		Signature struct {
+			ID     string `json:"id"`
+			Label  string `json:"label"`
+			Body   string `json:"body"`
+			Active bool   `json:"active"`
+		} `json:"signature"`
+	}
+	type signatureBundleResponse struct {
+		Signatures []struct {
+			ID     string `json:"id"`
+			Label  string `json:"label"`
+			Body   string `json:"body"`
+			Active bool   `json:"active"`
+		} `json:"signatures"`
+		Settings struct {
+			SelectedSignatureID string `json:"selectedSignatureId"`
+			RandomEnabled       bool   `json:"randomEnabled"`
+		} `json:"settings"`
+		MaxCount int `json:"maxCount"`
+	}
+	type signatureRecountResponse struct {
+		Recount struct {
+			Count               int    `json:"count"`
+			ActiveCount         int    `json:"activeCount"`
+			SelectedSignatureID string `json:"selectedSignatureId"`
+			RandomEnabled       bool   `json:"randomEnabled"`
+			CurrentSignature    string `json:"currentSignature"`
+		} `json:"recount"`
+	}
+
+	first := signatureResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/users/me/signatures", token, map[string]any{
+		"label": "First",
+		"body":  "http signature one",
+	}, &first); status != http.StatusCreated {
+		t.Fatalf("create first signature status: %d", status)
+	}
+	second := signatureResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/users/me/signatures", token, map[string]any{
+		"label": "Second",
+		"body":  "http signature two",
+	}, &second); status != http.StatusCreated {
+		t.Fatalf("create second signature status: %d", status)
+	}
+	settings := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me/signatures/settings", token, map[string]any{
+		"selectedSignatureId": second.Signature.ID,
+		"randomEnabled":       false,
+	}, &settings); status != http.StatusOK {
+		t.Fatalf("select signature status: %d", status)
+	}
+
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", token, map[string]string{
+		"title": "Signature bank",
+		"body":  "first post",
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("create signed thread status: %d error=%+v", status, thread.Error)
+	}
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list signed posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 || posts.Posts[0].Signature != "http signature two" {
+		t.Fatalf("expected selected signature snapshot, got %+v", posts.Posts)
+	}
+
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me/signatures/settings", token, map[string]any{
+		"selectedSignatureId": first.Signature.ID,
+		"randomEnabled":       true,
+	}, &settings); status != http.StatusOK {
+		t.Fatalf("enable random signatures status: %d", status)
+	}
+	reply := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+thread.Result.ID+"/posts", token, map[string]string{
+		"body": "reply",
+	}, &reply); status != http.StatusCreated {
+		t.Fatalf("create signed reply status: %d error=%+v", status, reply.Error)
+	}
+	posts = listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list signed reply posts status: %d", status)
+	}
+	if len(posts.Posts) != 2 || (posts.Posts[1].Signature != "http signature one" && posts.Posts[1].Signature != "http signature two") {
+		t.Fatalf("expected random active signature snapshot, got %+v", posts.Posts)
+	}
+
+	bundle := signatureBundleResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/me/signatures", token, nil, &bundle); status != http.StatusOK {
+		t.Fatalf("list signatures status: %d", status)
+	}
+	if len(bundle.Signatures) != 2 || !bundle.Settings.RandomEnabled || bundle.Settings.SelectedSignatureID != first.Signature.ID || bundle.MaxCount == 0 {
+		t.Fatalf("expected signature bundle with random settings, got %+v", bundle)
+	}
+	recount := signatureRecountResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/users/me/signatures/recount", token, nil, &recount); status != http.StatusOK {
+		t.Fatalf("recount signatures status: %d", status)
+	}
+	if recount.Recount.Count != 2 || recount.Recount.ActiveCount != 2 || !recount.Recount.RandomEnabled || recount.Recount.SelectedSignatureID != first.Signature.ID || recount.Recount.CurrentSignature != "http signature one" {
+		t.Fatalf("expected signature recount totals and refreshed preview, got %+v", recount)
+	}
+}
+
+func TestHTTPChangePasswordLifecycle(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+	out := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me/password", token, map[string]string{
+		"currentPassword": "bad",
+		"newPassword":     "newpw",
+	}, &out); status != http.StatusUnauthorized {
+		t.Fatalf("expected wrong current password to be unauthorized, got %d", status)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me/password", token, map[string]string{
+		"currentPassword": "pw",
+		"newPassword":     "newpw",
+	}, &out); status != http.StatusOK {
+		t.Fatalf("change password status: %d", status)
+	}
+
+	oldLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "pw",
+	}, &oldLogin); status != http.StatusUnauthorized {
+		t.Fatalf("expected old password login to fail, got %d", status)
+	}
+	newLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "newpw",
+	}, &newLogin); status != http.StatusOK || newLogin.Token == "" {
+		t.Fatalf("expected new password login to succeed, got status=%d response=%+v", status, newLogin)
+	}
+}
+
+func TestHTTPPasswordRecoveryAdminReset(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	registerUser(t, handler, "alice")
+	out := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/password-recovery", "", map[string]string{
+		"name":          "alice",
+		"submittedName": "Alice Zhang",
+		"email":         "alice@example.edu",
+		"note":          "lost password",
+	}, &out); status != http.StatusAccepted {
+		t.Fatalf("password recovery request status: %d", status)
+	}
+	type recoveryListResponse struct {
+		Requests []struct {
+			ID             string `json:"id"`
+			UserName       string `json:"userName"`
+			Status         string `json:"status"`
+			SubmittedName  string `json:"submittedName"`
+			SubmittedEmail string `json:"submittedEmail"`
+		} `json:"requests"`
+	}
+	pending := recoveryListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/admin/password-recovery?status=pending", adminToken, nil, &pending); status != http.StatusOK {
+		t.Fatalf("list password recovery status: %d", status)
+	}
+	if len(pending.Requests) != 1 || pending.Requests[0].UserName != "alice" || pending.Requests[0].SubmittedName != "Alice Zhang" {
+		t.Fatalf("expected alice recovery request, got %+v", pending)
+	}
+	review := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/admin/password-recovery/"+pending.Requests[0].ID+"/review", adminToken, map[string]string{
+		"decision":    "reset",
+		"newPassword": "newpw",
+		"note":        "verified",
+	}, &review); status != http.StatusOK {
+		t.Fatalf("review password recovery status: %d body=%+v", status, review)
+	}
+	oldLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "pw",
+	}, &oldLogin); status != http.StatusUnauthorized {
+		t.Fatalf("expected old password login to fail after recovery, got %d", status)
+	}
+	newLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "newpw",
+	}, &newLogin); status != http.StatusOK || newLogin.Token == "" {
+		t.Fatalf("expected recovery password login to succeed, got status=%d response=%+v", status, newLogin)
+	}
+}
+
+func TestHTTPTransferUserID(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", aliceToken, map[string]string{
+		"title": "Transfer thread",
+		"body":  "before transfer",
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("create transfer thread status: %d error=%+v", status, thread.Error)
+	}
+
+	out := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/admin/users/alice/transfer-id", adminToken, map[string]string{
+		"newName": "alice2",
+	}, &out); status != http.StatusOK {
+		t.Fatalf("transfer user id status: %d body=%+v", status, out)
+	}
+	oldProfile := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice", "", nil, &oldProfile); status != http.StatusNotFound {
+		t.Fatalf("expected old profile not found, got %d", status)
+	}
+	newProfile := userProfileResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice2", "", nil, &newProfile); status != http.StatusOK {
+		t.Fatalf("expected new profile status ok, got %d", status)
+	}
+	if newProfile.Name != "alice2" {
+		t.Fatalf("expected new profile name, got %+v", newProfile)
+	}
+	oldLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "pw",
+	}, &oldLogin); status != http.StatusUnauthorized {
+		t.Fatalf("expected old login name unauthorized, got %d", status)
+	}
+	newLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice2",
+		"password": "pw",
+	}, &newLogin); status != http.StatusOK || newLogin.Token == "" {
+		t.Fatalf("expected new login name ok, got status=%d response=%+v", status, newLogin)
+	}
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list transferred posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 || posts.Posts[0].Author != "alice2" {
+		t.Fatalf("expected transferred post author, got %+v", posts.Posts)
+	}
+}
+
+func TestHTTPDeleteUserHardPurgesAccount(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", aliceToken, map[string]string{
+		"title": "Delete thread",
+		"body":  "before deletion",
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("create delete thread status: %d error=%+v", status, thread.Error)
+	}
+
+	if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/admin/users/admin", adminToken, map[string]string{
+		"reason": "self",
+	}, nil); status != http.StatusForbidden {
+		t.Fatalf("expected self delete forbidden, got %d", status)
+	}
+	if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/admin/users/alice", adminToken, map[string]string{
+		"reason": "operator purge",
+	}, nil); status != http.StatusOK {
+		t.Fatalf("delete user status: %d", status)
+	}
+
+	oldProfile := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/users/alice", "", nil, &oldProfile); status != http.StatusNotFound {
+		t.Fatalf("expected deleted profile not found, got %d", status)
+	}
+	oldLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "pw",
+	}, &oldLogin); status != http.StatusUnauthorized {
+		t.Fatalf("expected deleted login unauthorized, got %d", status)
+	}
+	authRead := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/notifications", aliceToken, nil, &authRead); status != http.StatusUnauthorized {
+		t.Fatalf("expected old token unauthorized, got %d", status)
+	}
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list deleted-user posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 || posts.Posts[0].Author != "[deleted]" || posts.Posts[0].AuthorID == "" {
+		t.Fatalf("expected tombstoned post author, got %+v", posts.Posts)
+	}
+}
+
+func TestHTTPUserLoginACL(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+	type aclBundleResponse struct {
+		Rules []struct {
+			ID      string `json:"id"`
+			Pattern string `json:"pattern"`
+			Active  bool   `json:"active"`
+		} `json:"rules"`
+		Settings struct {
+			Enabled bool `json:"enabled"`
+		} `json:"settings"`
+		Host    string `json:"host"`
+		Allowed bool   `json:"allowed"`
+	}
+	type aclRuleResponse struct {
+		Rule struct {
+			ID      string `json:"id"`
+			Pattern string `json:"pattern"`
+		} `json:"rule"`
+	}
+
+	emptyEnable := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me/login-acl/settings", token, map[string]bool{
+		"enabled": true,
+	}, &emptyEnable); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected enabling empty ACL to fail, got %d", status)
+	}
+	rule := aclRuleResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/users/me/login-acl/rules", token, map[string]any{
+		"pattern": "203.0.113.0/24",
+		"note":    "campus vpn",
+	}, &rule); status != http.StatusCreated {
+		t.Fatalf("create login ACL rule status: %d", status)
+	}
+	if rule.Rule.ID == "" || rule.Rule.Pattern != "203.0.113.0/24" {
+		t.Fatalf("unexpected login ACL rule: %+v", rule)
+	}
+	settings := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/users/me/login-acl/settings", token, map[string]bool{
+		"enabled": true,
+	}, &settings); status != http.StatusOK {
+		t.Fatalf("enable login ACL status: %d", status)
+	}
+
+	deniedLogin := registerResponse{}
+	if status := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "pw",
+	}, &deniedLogin, map[string]string{"X-Forwarded-For": "198.51.100.9"}); status != http.StatusUnauthorized {
+		t.Fatalf("expected disallowed login host to fail, got %d", status)
+	}
+	allowedLogin := registerResponse{}
+	if status := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "pw",
+	}, &allowedLogin, map[string]string{"X-Forwarded-For": "203.0.113.9"}); status != http.StatusOK {
+		t.Fatalf("expected allowed login host to succeed, got %d", status)
+	}
+
+	bundle := aclBundleResponse{}
+	if status := doJSONRequestWithHeaders(t, handler, http.MethodGet, "/api/v1/users/me/login-acl", token, nil, &bundle, map[string]string{"X-Forwarded-For": "203.0.113.9"}); status != http.StatusOK {
+		t.Fatalf("list login ACL status: %d", status)
+	}
+	if !bundle.Settings.Enabled || !bundle.Allowed || bundle.Host != "203.0.113.9" || len(bundle.Rules) != 1 {
+		t.Fatalf("expected enabled allowed login ACL bundle, got %+v", bundle)
+	}
+}
+
+func TestHTTPRegisterUserCreatesNewcomerRecord(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	registerUser(t, handler, "bob")
+
+	newcomerThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/newcomers/threads", aliceToken, nil, &newcomerThreads); status != http.StatusOK {
+		t.Fatalf("list newcomers threads status: %d", status)
+	}
+	if len(newcomerThreads.Threads) != 2 || newcomerThreads.Threads[0].Title != "New user: bob" {
+		t.Fatalf("expected generated newcomer thread, got %+v", newcomerThreads.Threads)
+	}
+
+	newcomerPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+newcomerThreads.Threads[0].ID+"/posts", aliceToken, nil, &newcomerPosts); status != http.StatusOK {
+		t.Fatalf("list newcomer posts status: %d", status)
+	}
+	if len(newcomerPosts.Posts) != 1 || !strings.Contains(newcomerPosts.Posts[0].Body, "Status: registered") || !strings.Contains(newcomerPosts.Posts[0].Body, "Role: user") {
+		t.Fatalf("expected generated newcomer post, got %+v", newcomerPosts.Posts)
+	}
+	if strings.Contains(newcomerPosts.Posts[0].Body, "pw") {
+		t.Fatalf("newcomer post leaked private password data: %q", newcomerPosts.Posts[0].Body)
+	}
+}
+
+func TestHTTPAccountRegistrationApprovalQueue(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	settings := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/admin/registration-settings", adminToken, map[string]bool{
+		"requireApproval": true,
+	}, &settings); status != http.StatusOK {
+		t.Fatalf("enable registration approval status: %d", status)
+	}
+
+	pendingRegister := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/register", "", map[string]string{
+		"name":     "bob",
+		"password": "pw",
+	}, &pendingRegister); status != http.StatusAccepted {
+		t.Fatalf("expected pending registration status 202, got %d body=%+v", status, pendingRegister)
+	}
+	if pendingRegister["token"] != nil || pendingRegister["status"] != "pending" {
+		t.Fatalf("pending registration should not return token, got %+v", pendingRegister)
+	}
+	login := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "bob",
+		"password": "pw",
+	}, &login); status != http.StatusUnauthorized {
+		t.Fatalf("expected pending login unauthorized, got %d", status)
+	}
+
+	type registrationListResponse struct {
+		Registrations []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"registrations"`
+	}
+	pending := registrationListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/admin/registrations?status=pending", adminToken, nil, &pending); status != http.StatusOK {
+		t.Fatalf("list pending registrations status: %d", status)
+	}
+	if len(pending.Registrations) != 1 || pending.Registrations[0].Name != "bob" || pending.Registrations[0].Status != "pending" {
+		t.Fatalf("expected bob pending registration, got %+v", pending)
+	}
+
+	review := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/admin/registrations/bob/review", adminToken, map[string]string{
+		"decision": "approved",
+		"reason":   "welcome",
+	}, &review); status != http.StatusOK {
+		t.Fatalf("approve registration status: %d body=%+v", status, review)
+	}
+	bobLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "bob",
+		"password": "pw",
+	}, &bobLogin); status != http.StatusOK {
+		t.Fatalf("expected approved login ok, got %d", status)
+	}
+	if bobLogin.Token == "" {
+		t.Fatalf("expected approved login token, got %+v", bobLogin)
+	}
+
+	newcomerThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/newcomers/threads", adminToken, nil, &newcomerThreads); status != http.StatusOK {
+		t.Fatalf("list newcomers after approval status: %d", status)
+	}
+	if len(newcomerThreads.Threads) != 2 || newcomerThreads.Threads[0].Title != "New user: bob" {
+		t.Fatalf("expected bob newcomer on approval, got %+v", newcomerThreads.Threads)
+	}
+
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/register", "", map[string]string{
+		"name":     "carol",
+		"password": "pw",
+	}, &pendingRegister); status != http.StatusAccepted {
+		t.Fatalf("expected carol pending registration, got %d", status)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/admin/registrations/carol/review", adminToken, map[string]string{
+		"decision": "rejected",
+		"reason":   "not this time",
+	}, &review); status != http.StatusOK {
+		t.Fatalf("reject registration status: %d", status)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "carol",
+		"password": "pw",
+	}, &login); status != http.StatusUnauthorized {
+		t.Fatalf("expected rejected login unauthorized, got %d", status)
+	}
+}
+
+func TestHTTPDeactivateAccountCreatesGoodbyeRecord(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	out := map[string]any{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/users/me/deactivate", aliceToken, map[string]string{
+		"password": "bad",
+		"reason":   "private farewell note",
+	}, &out); status != http.StatusUnauthorized {
+		t.Fatalf("expected wrong password deactivation to be unauthorized, got %d", status)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/users/me/deactivate", aliceToken, map[string]string{
+		"password": "pw",
+		"reason":   "private farewell note",
+	}, &out); status != http.StatusOK {
+		t.Fatalf("deactivate account status: %d", status)
+	}
+
+	oldLogin := registerResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/auth/login", "", map[string]string{
+		"name":     "alice",
+		"password": "pw",
+	}, &oldLogin); status != http.StatusUnauthorized {
+		t.Fatalf("expected deactivated login to fail, got %d", status)
+	}
+	boards := boardsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards", aliceToken, nil, &boards); status != http.StatusUnauthorized {
+		t.Fatalf("expected old token to be rejected after deactivation, got %d", status)
+	}
+
+	goodbyeThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/Goodbye/threads", bobToken, nil, &goodbyeThreads); status != http.StatusOK {
+		t.Fatalf("list Goodbye threads status: %d", status)
+	}
+	if len(goodbyeThreads.Threads) != 1 || goodbyeThreads.Threads[0].Title != "Goodbye: alice" {
+		t.Fatalf("expected generated Goodbye thread, got %+v", goodbyeThreads.Threads)
+	}
+	goodbyePosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+goodbyeThreads.Threads[0].ID+"/posts", bobToken, nil, &goodbyePosts); status != http.StatusOK {
+		t.Fatalf("list Goodbye posts status: %d", status)
+	}
+	if len(goodbyePosts.Posts) != 1 || !strings.Contains(goodbyePosts.Posts[0].Body, "Status: deactivated") {
+		t.Fatalf("expected generated Goodbye post, got %+v", goodbyePosts.Posts)
+	}
+	if strings.Contains(goodbyePosts.Posts[0].Body, "private farewell note") {
+		t.Fatalf("Goodbye post leaked private deactivation note: %q", goodbyePosts.Posts[0].Body)
 	}
 }

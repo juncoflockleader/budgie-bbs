@@ -28,15 +28,194 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"threads", "created_at", "created_at INTEGER NOT NULL DEFAULT 0"},
 		{"threads", "updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"},
 		{"posts", "author_id", "author_id TEXT NOT NULL DEFAULT ''"},
+		{"posts", "signature", "signature TEXT NOT NULL DEFAULT ''"},
 		{"posts", "created_at", "created_at INTEGER NOT NULL DEFAULT 0"},
 		{"posts", "updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"},
+		{"user_profiles", "signature", "signature TEXT NOT NULL DEFAULT ''"},
+		{"user_profiles", "plan", "plan TEXT NOT NULL DEFAULT ''"},
+		{"user_profiles", "homepage", "homepage TEXT NOT NULL DEFAULT ''"},
 		{"processed_commands", "actor_id", "actor_id TEXT NOT NULL DEFAULT ''"},
 		{"processed_commands", "command_hash", "command_hash TEXT NOT NULL DEFAULT ''"},
+		{"users", "deactivated_at", "deactivated_at INTEGER NOT NULL DEFAULT 0"},
+		{"users", "deactivated_by", "deactivated_by TEXT NOT NULL DEFAULT ''"},
+		{"users", "deactivated_reason", "deactivated_reason TEXT NOT NULL DEFAULT ''"},
+		{"users", "registration_status", "registration_status TEXT NOT NULL DEFAULT 'approved'"},
+		{"users", "reviewed_at", "reviewed_at INTEGER NOT NULL DEFAULT 0"},
+		{"users", "reviewed_by", "reviewed_by TEXT NOT NULL DEFAULT ''"},
+		{"users", "review_reason", "review_reason TEXT NOT NULL DEFAULT ''"},
+		{"board_favorites", "folder_id", "folder_id TEXT NOT NULL DEFAULT ''"},
+		{"user_activity", "login_count", "login_count INTEGER NOT NULL DEFAULT 0"},
+		{"board_member_requirements", "min_score", "min_score INTEGER NOT NULL DEFAULT 0"},
+		{"board_member_requirements", "min_board_post_count", "min_board_post_count INTEGER NOT NULL DEFAULT 0"},
+		{"board_member_requirements", "min_board_original_post_count", "min_board_original_post_count INTEGER NOT NULL DEFAULT 0"},
+		{"board_member_requirements", "min_board_digest_count", "min_board_digest_count INTEGER NOT NULL DEFAULT 0"},
+		{"board_member_requirements", "min_board_mark_count", "min_board_mark_count INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "can_manage_members", "can_manage_members INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "can_curate", "can_curate INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "can_moderate_posts", "can_moderate_posts INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "can_moderate_threads", "can_moderate_threads INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "can_announce", "can_announce INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "can_set_board_settings", "can_set_board_settings INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "position", "position INTEGER NOT NULL DEFAULT 0"},
+		{"digest_entries", "body", "body TEXT NOT NULL DEFAULT ''"},
+		{"digest_entries", "body_edited", "body_edited INTEGER NOT NULL DEFAULT 0"},
+		{"user_presence", "mode", "mode TEXT NOT NULL DEFAULT ''"},
+		{"user_presence", "board_id", "board_id TEXT NOT NULL DEFAULT ''"},
+		{"user_presence", "thread_id", "thread_id TEXT NOT NULL DEFAULT ''"},
+		{"user_presence", "location_label", "location_label TEXT NOT NULL DEFAULT ''"},
+		{"user_presence", "from_host", "from_host TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, c := range columns {
 		if err := ensureColumn(db, c.table, c.name, c.ddl); err != nil {
 			return err
 		}
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_presence_board_last_seen ON user_presence(board_id, last_seen DESC)`); err != nil {
+		return fmt.Errorf("ensure user presence board index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_members_board_position ON board_members(board_id, position, user_id)`); err != nil {
+		return fmt.Errorf("ensure board member position index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_presence_sessions (
+		    user_id        TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    session_id     TEXT    NOT NULL DEFAULT 'default',
+		    status         TEXT    NOT NULL DEFAULT 'active',
+		    mode           TEXT    NOT NULL DEFAULT '',
+		    board_id       TEXT    NOT NULL DEFAULT '',
+		    thread_id      TEXT    NOT NULL DEFAULT '',
+		    location_label TEXT    NOT NULL DEFAULT '',
+		    from_host      TEXT    NOT NULL DEFAULT '',
+		    last_seen      INTEGER NOT NULL DEFAULT 0,
+		    updated_at     INTEGER NOT NULL DEFAULT 0,
+		    PRIMARY KEY (user_id, session_id)
+		)`); err != nil {
+		return fmt.Errorf("ensure user presence sessions table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_last_seen ON user_presence_sessions(last_seen DESC)`); err != nil {
+		return fmt.Errorf("ensure user presence sessions last_seen index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen ON user_presence_sessions(board_id, last_seen DESC)`); err != nil {
+		return fmt.Errorf("ensure user presence sessions board index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS content_filters (
+		    id         TEXT PRIMARY KEY,
+		    pattern    TEXT NOT NULL DEFAULT '',
+		    scope      TEXT NOT NULL DEFAULT 'global',
+		    active     INTEGER NOT NULL DEFAULT 1,
+		    created_by TEXT NOT NULL REFERENCES users(id),
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure content filters table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_content_filters_active_scope ON content_filters(active, scope, updated_at DESC)`); err != nil {
+		return fmt.Errorf("ensure content filters index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS account_registration_settings (
+		    id               TEXT PRIMARY KEY DEFAULT 'default',
+		    require_approval INTEGER NOT NULL DEFAULT 0,
+		    updated_at       INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure account registration settings table: %w", err)
+	}
+	if _, err := qExec(db,
+		`INSERT OR IGNORE INTO account_registration_settings (id, require_approval, updated_at)
+		 VALUES ('default', 0, 0)`,
+	); err != nil {
+		return fmt.Errorf("ensure account registration settings row: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS password_recovery_requests (
+		    id              TEXT PRIMARY KEY,
+		    user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    status          TEXT NOT NULL DEFAULT 'pending',
+		    submitted_name  TEXT NOT NULL DEFAULT '',
+		    submitted_email TEXT NOT NULL DEFAULT '',
+		    note            TEXT NOT NULL DEFAULT '',
+		    reviewer_id     TEXT NOT NULL DEFAULT '',
+		    review_note     TEXT NOT NULL DEFAULT '',
+		    created_at      INTEGER NOT NULL DEFAULT 0,
+		    updated_at      INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure password recovery requests table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_password_recovery_status_updated ON password_recovery_requests(status, updated_at DESC, created_at DESC)`); err != nil {
+		return fmt.Errorf("ensure password recovery index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS digest_directories (
+		    id         TEXT    PRIMARY KEY,
+		    board_id   TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+		    kind       TEXT    NOT NULL DEFAULT 'archive',
+		    path       TEXT    NOT NULL DEFAULT '',
+		    created_by TEXT    NOT NULL REFERENCES users(id),
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0,
+		    UNIQUE(board_id, kind, path)
+		)`); err != nil {
+		return fmt.Errorf("ensure digest directories table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_digest_directories_board_kind_path ON digest_directories(board_id, kind, path)`); err != nil {
+		return fmt.Errorf("ensure digest directories index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_signatures (
+		    id         TEXT    PRIMARY KEY,
+		    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    label      TEXT    NOT NULL DEFAULT '',
+		    body       TEXT    NOT NULL DEFAULT '',
+		    position   INTEGER NOT NULL DEFAULT 0,
+		    active     INTEGER NOT NULL DEFAULT 1,
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure user signatures table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_signatures_user_position ON user_signatures(user_id, position, updated_at, id)`); err != nil {
+		return fmt.Errorf("ensure user signatures index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_signature_settings (
+		    user_id               TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		    selected_signature_id TEXT    NOT NULL DEFAULT '',
+		    random_enabled        INTEGER NOT NULL DEFAULT 0,
+		    updated_at            INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure user signature settings table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_login_acl_settings (
+		    user_id    TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		    enabled    INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure user login acl settings table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_login_acl_rules (
+		    id         TEXT    PRIMARY KEY,
+		    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    pattern    TEXT    NOT NULL DEFAULT '',
+		    note       TEXT    NOT NULL DEFAULT '',
+		    position   INTEGER NOT NULL DEFAULT 0,
+		    active     INTEGER NOT NULL DEFAULT 1,
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure user login acl rules table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_login_acl_rules_user_position ON user_login_acl_rules(user_id, position, updated_at, id)`); err != nil {
+		return fmt.Errorf("ensure user login acl rules index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS blessings (
+		    id           TEXT    PRIMARY KEY,
+		    from_user_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    to_user_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    message      TEXT    NOT NULL DEFAULT '',
+		    created_at   INTEGER NOT NULL DEFAULT 0,
+		    seq          INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure blessings table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_blessings_to_created ON blessings(to_user_id, created_at DESC, seq DESC)`); err != nil {
+		return fmt.Errorf("ensure blessings target index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_blessings_from_created ON blessings(from_user_id, created_at DESC, seq DESC)`); err != nil {
+		return fmt.Errorf("ensure blessings sender index: %w", err)
 	}
 
 	ts := nowMS()
@@ -51,6 +230,23 @@ func applySQLiteMigrations(db *sql.DB) error {
 		 SELECT id, name, description, 0, ?, ? FROM boards`,
 		`INSERT OR IGNORE INTO user_profiles (user_id, display_name, updated_at)
 		 SELECT id, name, ? FROM users`,
+		`INSERT OR IGNORE INTO user_signatures (id, user_id, label, body, position, active, created_at, updated_at)
+		 SELECT 'sig_profile_' || u.id, u.id, 'Profile signature', up.signature, 0, 1, ?, ?
+		   FROM users u
+		   JOIN user_profiles up ON up.user_id=u.id
+		  WHERE TRIM(COALESCE(up.signature,'')) <> ''`,
+		`INSERT OR IGNORE INTO user_signature_settings (user_id, selected_signature_id, random_enabled, updated_at)
+		 SELECT u.id, 'sig_profile_' || u.id, 0, ?
+		   FROM users u
+		   JOIN user_profiles up ON up.user_id=u.id
+		  WHERE TRIM(COALESCE(up.signature,'')) <> ''`,
+		`INSERT OR IGNORE INTO user_presence_sessions (
+		    user_id, session_id, status, mode, board_id, thread_id,
+		    location_label, from_host, last_seen, updated_at
+		 )
+		 SELECT user_id, 'default', status, mode, board_id, thread_id,
+		        location_label, from_host, last_seen, updated_at
+		   FROM user_presence`,
 		`INSERT OR IGNORE INTO schema_migrations (version, name, applied_at)
 		 VALUES (1, 'sqlite-foundation', ?)`,
 	}
@@ -63,6 +259,9 @@ func applySQLiteMigrations(db *sql.DB) error {
 		nil,
 		{ts, ts},
 		{ts},
+		{ts, ts},
+		{ts},
+		{},
 		{ts},
 	}
 	for i, stmt := range updates {

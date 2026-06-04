@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 
 export interface AuthState {
   token: string | null
-  user: { id: string; name: string; role: string } | null
+  user: { id: string; name: string; role: string; registrationStatus?: string } | null
 }
 
 const STORAGE_KEY = 'budgie_token'

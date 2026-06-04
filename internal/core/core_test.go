@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -66,6 +67,12 @@ func execExpectErr(t *testing.T, c *core.Core, actor *core.User, cmd proto.Comma
 	if reply.Err.Code != expectCode {
 		t.Fatalf("expected error %s, got %s: %s", expectCode, reply.Err.Code, reply.Err.Message)
 	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+func intPtr(v int) *int    { return &v }
+func stringPtr(v string) *string {
+	return &v
 }
 
 // --- M1 spine assertions ---
@@ -226,6 +233,756 @@ func TestPermissions(t *testing.T) {
 	})
 }
 
+func TestSyssecuritySystemBoardLogs(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	exec(t, c, admin, proto.CmdGrantRole, proto.GrantRolePayload{
+		User: alice.ID,
+		Role: "mod",
+	})
+	systemBoard, err := c.GetBoard("syssecurity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemBoard == nil || systemBoard.Name != "syssecurity" {
+		t.Fatalf("expected generated syssecurity board, got %+v", systemBoard)
+	}
+	threads, err := c.ListThreads("syssecurity", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].Title != "Role granted: alice" {
+		t.Fatalf("expected role-grant syssecurity thread, got %+v", threads)
+	}
+	posts, err := c.ListPosts(threads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected one role-grant syssecurity post, got %+v", posts)
+	}
+	for _, want := range []string{"Action: role granted", "User: alice", "Role: mod", "Actor: admin"} {
+		if !strings.Contains(posts[0].Body, want) {
+			t.Fatalf("expected syssecurity role-grant post to contain %q, got %q", want, posts[0].Body)
+		}
+	}
+
+	exec(t, c, admin, proto.CmdRevokeRole, proto.RevokeRolePayload{
+		User: alice.ID,
+		Role: "mod",
+	})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "policy", Name: "Policy"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:    "policy",
+		ReadOnly: boolPtr(true),
+	})
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{
+		Board:     "policy",
+		User:      "alice",
+		Moderator: true,
+	})
+	threads, err = c.ListThreads("syssecurity", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 4 {
+		t.Fatalf("expected role grant, role revoke, settings, and moderator syssecurity threads, got %+v", threads)
+	}
+	moderatorPosts, err := c.ListPosts(threads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moderatorPosts) != 1 || !strings.Contains(moderatorPosts[0].Body, "Action: board moderator appointed") || !strings.Contains(moderatorPosts[0].Body, "Board: policy") {
+		t.Fatalf("expected moderator appointment syssecurity post, got %+v", moderatorPosts)
+	}
+	settingsPosts, err := c.ListPosts(threads[1].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settingsPosts) != 1 || !strings.Contains(settingsPosts[0].Body, "Action: board settings changed") || !strings.Contains(settingsPosts[0].Body, "readOnly: true") {
+		t.Fatalf("expected board settings syssecurity post, got %+v", settingsPosts)
+	}
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secretpolicy", Name: "Secret Policy"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secretpolicy",
+		MemberReadMode: boolPtr(true),
+	})
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{
+		Board:     "secretpolicy",
+		User:      "alice",
+		Moderator: true,
+	})
+	threads, err = c.ListThreads("syssecurity", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 4 {
+		t.Fatalf("member-read board moderator appointment should not generate public syssecurity post, got %+v", threads)
+	}
+}
+
+func TestUserSignatureSnapshotsOnPosts(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "bio", "A", "first signature", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Signature thread",
+		Body:  "first body",
+	})
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "bio", "A", "second signature", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	reply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "second body",
+	})
+
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected starter and reply posts, got %+v", posts)
+	}
+	if posts[0].Signature != "first signature" {
+		t.Fatalf("expected starter post to keep first signature, got %+v", posts[0])
+	}
+	if posts[1].ID != reply.ID || posts[1].Signature != "second signature" {
+		t.Fatalf("expected reply post to snapshot second signature, got %+v", posts[1])
+	}
+
+	exec(t, c, alice, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:            "general",
+		AnonymousAllowed: boolPtr(true),
+	})
+	anonymousThread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board:     "general",
+		Title:     "Anonymous signature",
+		Body:      "anonymous body",
+		Anonymous: true,
+	})
+	anonymousPosts, err := c.ListPosts(anonymousThread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anonymousPosts) != 1 || anonymousPosts[0].Signature != "" {
+		t.Fatalf("anonymous post should not expose a signature, got %+v", anonymousPosts)
+	}
+
+	profile, err := c.UserProfileByName("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile == nil || profile.Signature != "second signature" {
+		t.Fatalf("expected profile to expose current signature, got %+v", profile)
+	}
+}
+
+func TestUserPlanAndHomepageProfileFields(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "bio", "A", "signature", "Learning Go on KBS", "example.edu/~alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	profile, err := c.UserProfileByName("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile == nil {
+		t.Fatal("expected profile")
+	}
+	if profile.Plan != "Learning Go on KBS" || profile.Homepage != "example.edu/~alice" {
+		t.Fatalf("expected plan and homepage to round trip, got %+v", profile)
+	}
+}
+
+func TestUserPrivateProfileFields(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	if err := c.UpdateUserPrivateProfile(&core.UserPrivateProfile{
+		UserID:            alice.ID,
+		RealName:          "Alice Zhang",
+		RealEmail:         "alice@real.example",
+		RegistrationEmail: "alice@register.example",
+		Address:           "Dorm 7",
+		Phone:             "010-123456",
+		Mobile:            "13900000000",
+		Birthday:          "1984-05-04",
+		School:            "Computer Science",
+		ContactNote:       "class of 2006",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	privateProfile, err := c.UserPrivateProfile(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privateProfile.RealName != "Alice Zhang" ||
+		privateProfile.RealEmail != "alice@real.example" ||
+		privateProfile.RegistrationEmail != "alice@register.example" ||
+		privateProfile.Address != "Dorm 7" ||
+		privateProfile.Phone != "010-123456" ||
+		privateProfile.Mobile != "13900000000" ||
+		privateProfile.Birthday != "1984-05-04" ||
+		privateProfile.School != "Computer Science" ||
+		privateProfile.ContactNote != "class of 2006" {
+		t.Fatalf("expected private profile to round trip, got %+v", privateProfile)
+	}
+
+	publicProfile, err := c.UserProfileByName("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publicProfile == nil {
+		t.Fatal("expected public profile")
+	}
+	if publicProfile.DisplayName != "alice" {
+		t.Fatalf("private profile update should not affect public profile, got %+v", publicProfile)
+	}
+}
+
+func TestUserPersonalFiles(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	publicFile, err := c.SaveUserPersonalFile(alice.ID, "resume.txt", "public body", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publicFile.Name != "resume.txt" || publicFile.Body != "public body" || !publicFile.Public {
+		t.Fatalf("expected public personal file, got %+v", publicFile)
+	}
+	privateFile, err := c.SaveUserPersonalFile(alice.ID, "secret.txt", "private body", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privateFile.Public {
+		t.Fatalf("expected private personal file, got %+v", privateFile)
+	}
+	publicFiles, err := c.ListUserPersonalFiles(alice.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(publicFiles) != 1 || publicFiles[0].Name != "resume.txt" {
+		t.Fatalf("expected only public file in public list, got %+v", publicFiles)
+	}
+	ownFiles, err := c.ListUserPersonalFiles(alice.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ownFiles) != 2 {
+		t.Fatalf("expected owner to see public and private files, got %+v", ownFiles)
+	}
+	if hidden, err := c.GetUserPersonalFile(alice.ID, "secret.txt", false); err != nil || hidden != nil {
+		t.Fatalf("expected private file hidden from public reads, file=%+v err=%v", hidden, err)
+	}
+	if err := c.DeleteUserPersonalFile(alice.ID, "resume.txt"); err != nil {
+		t.Fatal(err)
+	}
+	publicFiles, err = c.ListUserPersonalFiles(alice.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(publicFiles) != 0 {
+		t.Fatalf("expected deleted public file to disappear, got %+v", publicFiles)
+	}
+}
+
+func TestUserSignatureBankSelection(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	first, err := c.SaveUserSignature(alice.ID, "", "First", "signature one", -1, true)
+	if err != nil {
+		t.Fatalf("save first signature: %v", err)
+	}
+	second, err := c.SaveUserSignature(alice.ID, "", "Second", "signature two", -1, true)
+	if err != nil {
+		t.Fatalf("save second signature: %v", err)
+	}
+	if err := c.SetUserSignatureSettings(alice.ID, second.ID, false); err != nil {
+		t.Fatalf("select second signature: %v", err)
+	}
+
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Signature bank",
+		Body:  "first post",
+	})
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Signature != "signature two" {
+		t.Fatalf("expected selected signature snapshot, got %+v", posts)
+	}
+
+	if err := c.SetUserSignatureSettings(alice.ID, first.ID, true); err != nil {
+		t.Fatalf("enable random signatures: %v", err)
+	}
+	reply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "reply",
+	})
+	posts, err = c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 || posts[1].ID != reply.ID {
+		t.Fatalf("expected reply post, got %+v", posts)
+	}
+	if posts[1].Signature != "signature one" && posts[1].Signature != "signature two" {
+		t.Fatalf("expected random signature from active bank, got %+v", posts[1])
+	}
+
+	bundle, err := c.ListUserSignatures(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Signatures) != 2 || !bundle.Settings.RandomEnabled || bundle.Settings.SelectedSignatureID != first.ID || bundle.MaxCount == 0 {
+		t.Fatalf("expected signature bundle with random settings, got %+v", bundle)
+	}
+	profile, err := c.UserProfileByName("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile == nil || profile.Signature != "signature one" {
+		t.Fatalf("expected public profile signature to follow selected fallback, got %+v", profile)
+	}
+}
+
+func TestUserSignatureRecountRepairsSelection(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	first, err := c.SaveUserSignature(alice.ID, "", "First", "signature one", -1, true)
+	if err != nil {
+		t.Fatalf("save first signature: %v", err)
+	}
+	second, err := c.SaveUserSignature(alice.ID, "", "Second", "signature two", -1, true)
+	if err != nil {
+		t.Fatalf("save second signature: %v", err)
+	}
+	if err := c.SetUserSignatureSettings(alice.ID, second.ID, false); err != nil {
+		t.Fatalf("select second signature: %v", err)
+	}
+	if _, err := c.DB.Exec(`UPDATE user_signatures SET active=0 WHERE user_id=? AND id=?`, alice.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	recount, err := c.RecountUserSignatures(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recount.Count != 2 || recount.ActiveCount != 1 || recount.SelectedSignatureID != "" || recount.CurrentSignature != "signature one" {
+		t.Fatalf("expected recount to repair stale selection, got %+v", recount)
+	}
+	bundle, err := c.ListUserSignatures(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Settings.SelectedSignatureID != "" {
+		t.Fatalf("expected stale selected signature to be cleared, got %+v", bundle.Settings)
+	}
+	if first.ID == "" {
+		t.Fatal("expected first signature id")
+	}
+}
+
+func TestChangePasswordLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	if err := c.ChangePassword(alice.ID, "bad", "newpw"); err == nil {
+		t.Fatalf("expected wrong current password to fail")
+	}
+	if err := c.ChangePassword(alice.ID, "pw", "newpw"); err != nil {
+		t.Fatalf("change password failed: %v", err)
+	}
+	if _, err := c.AuthenticateUser("alice", "pw"); err == nil {
+		t.Fatalf("old password should no longer authenticate")
+	}
+	if _, err := c.AuthenticateUser("alice", "newpw"); err != nil {
+		t.Fatalf("new password should authenticate: %v", err)
+	}
+}
+
+func TestPasswordRecoveryAdminReset(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "oldpw")
+	req, err := c.RequestPasswordRecovery("alice", "Alice Zhang", "alice@example.edu", "lost password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req == nil || req.UserID != alice.ID || req.Status != "pending" {
+		t.Fatalf("expected pending recovery request, got %+v", req)
+	}
+	pending, err := c.ListPasswordRecoveryRequests("pending", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].UserName != "alice" || pending[0].SubmittedName != "Alice Zhang" {
+		t.Fatalf("expected alice pending recovery request, got %+v", pending)
+	}
+	review, err := c.ReviewPasswordRecoveryRequest(req.ID, admin.ID, "reset", "newpw", "verified")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Status != "resolved" || review.ReviewerID != admin.ID {
+		t.Fatalf("expected resolved recovery request, got %+v", review)
+	}
+	if _, err := c.AuthenticateUser("alice", "oldpw"); !errors.Is(err, core.ErrInvalidCredentials) {
+		t.Fatalf("expected old password rejected, got %v", err)
+	}
+	if _, err := c.AuthenticateUser("alice", "newpw"); err != nil {
+		t.Fatalf("expected recovery password to authenticate: %v", err)
+	}
+}
+
+func TestTransferUserID(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Transfer thread",
+		Body:  "before transfer",
+	})
+
+	renamed, err := c.TransferUserID(alice.ID, "alice2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.ID != alice.ID || renamed.Name != "alice2" {
+		t.Fatalf("expected same user id with new name, got %+v", renamed)
+	}
+	if old, err := c.UserByName("alice"); err != nil || old != nil {
+		t.Fatalf("expected old name lookup empty, user=%+v err=%v", old, err)
+	}
+	if _, err := c.AuthenticateUser("alice", "pw"); !errors.Is(err, core.ErrInvalidCredentials) {
+		t.Fatalf("expected old login name to fail, got %v", err)
+	}
+	if _, err := c.AuthenticateUser("alice2", "pw"); err != nil {
+		t.Fatalf("expected new login name to authenticate: %v", err)
+	}
+
+	gotThread, err := c.GetThread(thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotThread.Author != "alice2" || gotThread.AuthorID != alice.ID {
+		t.Fatalf("expected thread author display to transfer, got %+v", gotThread)
+	}
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Author != "alice2" || posts[0].AuthorID != alice.ID {
+		t.Fatalf("expected post author display to transfer, got %+v", posts)
+	}
+	if _, err := c.TransferUserID(alice.ID, admin.Name); err == nil {
+		t.Fatalf("expected duplicate transfer target to fail")
+	}
+}
+
+func TestDeleteUserHardPurgesAccount(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	if err := c.UpdateUserProfile(alice.ID, "Alice", "", "", "secret sig", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UpdateUserPrivateProfile(&core.UserPrivateProfile{
+		UserID:            alice.ID,
+		RealName:          "Alice Real",
+		RegistrationEmail: "alice@register.example",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SaveUserPersonalFile(alice.ID, "plan.txt", "private text", false); err != nil {
+		t.Fatal(err)
+	}
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Delete thread",
+		Body:  "before deletion",
+	})
+
+	if err := c.DeleteUser(admin.ID, alice.ID, "operator purge"); err != nil {
+		t.Fatal(err)
+	}
+	if old, err := c.UserByName("alice"); err != nil || old != nil {
+		t.Fatalf("expected deleted name lookup empty, user=%+v err=%v", old, err)
+	}
+	if old, err := c.UserByID(alice.ID); err != nil || old != nil {
+		t.Fatalf("expected deleted id lookup empty, user=%+v err=%v", old, err)
+	}
+	if _, err := c.AuthenticateUser("alice", "pw"); !errors.Is(err, core.ErrInvalidCredentials) {
+		t.Fatalf("expected deleted login name to fail, got %v", err)
+	}
+
+	gotThread, err := c.GetThread(thread.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotThread.Author != "[deleted]" || gotThread.AuthorID == alice.ID {
+		t.Fatalf("expected thread author tombstoned, got %+v", gotThread)
+	}
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Author != "[deleted]" || posts[0].AuthorID == alice.ID || posts[0].Signature != "" {
+		t.Fatalf("expected post author/signature tombstoned, got %+v", posts)
+	}
+	files, err := c.ListUserPersonalFiles(alice.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected personal files purged, got %+v", files)
+	}
+	privateProfile, err := c.UserPrivateProfile(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if privateProfile.RealName != "" || privateProfile.RegistrationEmail != "" {
+		t.Fatalf("expected private profile purged, got %+v", privateProfile)
+	}
+	if err := c.DeleteUser(admin.ID, admin.ID, "self"); !errors.Is(err, core.ErrAccountDeleteForbidden) {
+		t.Fatalf("expected self deletion forbidden, got %v", err)
+	}
+}
+
+func TestUserLoginACL(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	if allowed, err := c.UserLoginAllowed(alice.ID, "198.51.100.10"); err != nil || !allowed {
+		t.Fatalf("disabled login ACL should allow by default, allowed=%v err=%v", allowed, err)
+	}
+	if err := c.SetUserLoginACLSettings(alice.ID, true); err == nil {
+		t.Fatalf("expected enabling empty login ACL to fail")
+	}
+	rule, err := c.SaveUserLoginACLRule(alice.ID, "", "198.51.100.0/24", "campus vpn", -1, true)
+	if err != nil {
+		t.Fatalf("save login ACL rule: %v", err)
+	}
+	if err := c.SetUserLoginACLSettings(alice.ID, true); err != nil {
+		t.Fatalf("enable login ACL: %v", err)
+	}
+	if _, err := c.AuthenticateUserFromHost("alice", "pw", "203.0.113.9"); err == nil {
+		t.Fatalf("expected disallowed host to fail login")
+	}
+	if _, err := c.AuthenticateUserFromHost("alice", "pw", "198.51.100.10"); err != nil {
+		t.Fatalf("expected CIDR-allowed host to login: %v", err)
+	}
+	if _, err := c.SaveUserLoginACLRule(alice.ID, rule.ID, "203.0.113.*", "lab", -1, true); err != nil {
+		t.Fatalf("update login ACL rule: %v", err)
+	}
+	if _, err := c.AuthenticateUserFromHost("alice", "pw", "203.0.113.9"); err != nil {
+		t.Fatalf("expected wildcard-allowed host to login: %v", err)
+	}
+	bundle, err := c.ListUserLoginACL(alice.ID, "203.0.113.9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bundle.Settings.Enabled || !bundle.Allowed || len(bundle.Rules) != 1 || bundle.Rules[0].Pattern != "203.0.113.*" {
+		t.Fatalf("expected enabled matching ACL bundle, got %+v", bundle)
+	}
+	if err := c.DeleteUserLoginACLRule(alice.ID, rule.ID); err != nil {
+		t.Fatalf("delete login ACL rule: %v", err)
+	}
+	if allowed, err := c.UserLoginAllowed(alice.ID, "203.0.113.9"); err != nil || allowed {
+		t.Fatalf("enabled empty ACL should deny, allowed=%v err=%v", allowed, err)
+	}
+	if err := c.SetUserLoginACLSettings(alice.ID, false); err != nil {
+		t.Fatalf("disable login ACL: %v", err)
+	}
+	if _, err := c.AuthenticateUserFromHost("alice", "pw", "203.0.113.9"); err != nil {
+		t.Fatalf("disabled ACL should allow login: %v", err)
+	}
+}
+
+func TestDeactivateAccountCreatesGoodbyeRecord(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	if err := c.DeactivateAccount(alice.ID, "bad", "private farewell note"); err == nil {
+		t.Fatalf("expected wrong password to block account deactivation")
+	}
+	if err := c.DeactivateAccount(alice.ID, "pw", "private farewell note"); err != nil {
+		t.Fatalf("deactivate account failed: %v", err)
+	}
+	if _, err := c.AuthenticateUser("alice", "pw"); err == nil {
+		t.Fatalf("deactivated account should not authenticate")
+	}
+	closed, err := c.UserByID(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed == nil || closed.DeactivatedAt == 0 || closed.DeactivatedBy != alice.ID || closed.DeactivatedReason != "private farewell note" {
+		t.Fatalf("expected deactivated account metadata, got %+v", closed)
+	}
+
+	systemBoard, err := c.GetBoard("Goodbye")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemBoard == nil || systemBoard.Name != "Goodbye" {
+		t.Fatalf("expected generated Goodbye board, got %+v", systemBoard)
+	}
+	threads, err := c.ListThreads("Goodbye", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].Title != "Goodbye: alice" {
+		t.Fatalf("expected generated Goodbye thread, got %+v", threads)
+	}
+	posts, err := c.ListPosts(threads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || !strings.Contains(posts[0].Body, "Status: deactivated") {
+		t.Fatalf("expected generated Goodbye post, got %+v", posts)
+	}
+	if strings.Contains(posts[0].Body, "private farewell note") {
+		t.Fatalf("Goodbye post leaked private deactivation note: %q", posts[0].Body)
+	}
+}
+
+func TestRegisterUserCreatesNewcomerRecord(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	systemBoard, err := c.GetBoard("newcomers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemBoard == nil || systemBoard.Name != "newcomers" {
+		t.Fatalf("expected generated newcomers board, got %+v", systemBoard)
+	}
+	threads, err := c.ListThreads("newcomers", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 2 || threads[0].Title != "New user: alice" {
+		t.Fatalf("expected generated newcomer threads, got %+v", threads)
+	}
+	if threads[0].AuthorID != alice.ID {
+		t.Fatalf("expected newcomer thread to snapshot account author id, got %+v", threads[0])
+	}
+	posts, err := c.ListPosts(threads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || !strings.Contains(posts[0].Body, "Status: registered") || !strings.Contains(posts[0].Body, "Role: user") {
+		t.Fatalf("expected generated newcomer post, got %+v", posts)
+	}
+	if strings.Contains(posts[0].Body, "pw") {
+		t.Fatalf("newcomer post leaked private password data: %q", posts[0].Body)
+	}
+}
+
+func TestAccountRegistrationApprovalQueue(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	settings, err := c.SetAccountRegistrationSettings(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings == nil || !settings.RequireApproval {
+		t.Fatalf("expected registration approval enabled, got %+v", settings)
+	}
+
+	bob, err := c.RegisterUser("bob", "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bob.RegistrationStatus != "pending" {
+		t.Fatalf("expected bob to be pending, got %+v", bob)
+	}
+	if _, err := c.AuthenticateUser("bob", "pw"); !errors.Is(err, core.ErrAccountPending) {
+		t.Fatalf("expected pending login rejection, got %v", err)
+	}
+	pending, err := c.ListAccountRegistrations("pending", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Name != "bob" {
+		t.Fatalf("expected bob pending registration, got %+v", pending)
+	}
+
+	review, err := c.ReviewAccountRegistration(bob.ID, admin.ID, "approved", "welcome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Status != "approved" || review.ReviewedBy != admin.ID {
+		t.Fatalf("expected approved review, got %+v", review)
+	}
+	if _, err := c.AuthenticateUser("bob", "pw"); err != nil {
+		t.Fatalf("expected approved bob to authenticate: %v", err)
+	}
+	threads, err := c.ListThreads("newcomers", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundBob := false
+	for _, thread := range threads {
+		if strings.Contains(thread.Title, "bob") {
+			foundBob = true
+		}
+	}
+	if !foundBob {
+		t.Fatalf("expected approved bob to create newcomer record, got %+v", threads)
+	}
+
+	carol, err := c.RegisterUser("carol", "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ReviewAccountRegistration(carol.ID, admin.ID, "rejected", "not this time"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.AuthenticateUser("carol", "pw"); !errors.Is(err, core.ErrAccountRejected) {
+		t.Fatalf("expected rejected login rejection, got %v", err)
+	}
+}
+
 // TestIdempotency verifies that replaying a command with the same cid
 // returns the same result without duplicating events.
 func TestIdempotency(t *testing.T) {
@@ -260,6 +1017,3332 @@ func TestIdempotency(t *testing.T) {
 	if len(threads) != 1 {
 		t.Errorf("expected 1 thread after idempotent create, got %d", len(threads))
 	}
+}
+
+func TestBoardFavoritesLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	if favorites, err := c.ListFavoriteBoards(alice.ID); err != nil {
+		t.Fatal(err)
+	} else if len(favorites) != 1 || favorites[0].ID != "general" {
+		t.Fatalf("expected general default favorite for new user, got %+v", favorites)
+	}
+
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{
+		Board:    "general",
+		Favorite: true,
+	})
+
+	favorites, err := c.ListFavoriteBoards(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(favorites) != 1 || favorites[0].ID != "general" {
+		t.Fatalf("expected alice to favorite general, got %+v", favorites)
+	}
+
+	bobFavorites, err := c.ListFavoriteBoards(bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobFavorites) != 1 || bobFavorites[0].ID != "general" {
+		t.Fatalf("expected bob to get independent general default favorite, got %+v", bobFavorites)
+	}
+
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{
+		Board:    "general",
+		Favorite: false,
+	})
+
+	favorites, err = c.ListFavoriteBoards(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(favorites) != 0 {
+		t.Fatalf("expected favorite removal, got %+v", favorites)
+	}
+
+	execExpectErr(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{
+		Board:    "missing",
+		Favorite: true,
+	}, proto.ErrNotFound)
+}
+
+func TestFavoriteFoldersLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, alice, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "tech",
+		Name:        "Tech",
+		Description: "Technology",
+	})
+	exec(t, c, alice, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "life",
+		Name:        "Life",
+		Description: "Life",
+	})
+
+	work := exec(t, c, alice, proto.CmdCreateFavoriteFolder, proto.CreateFavoriteFolderPayload{
+		Name: "Work",
+	})
+	project := exec(t, c, alice, proto.CmdCreateFavoriteFolder, proto.CreateFavoriteFolderPayload{
+		Name:     "Projects",
+		ParentID: work.ID,
+	})
+
+	parentID := project.ID
+	execExpectErr(t, c, alice, proto.CmdUpdateFavoriteFolder, proto.UpdateFavoriteFolderPayload{
+		Folder:   work.ID,
+		ParentID: &parentID,
+	}, proto.ErrValidationFailed)
+
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{
+		Board:    "general",
+		Favorite: true,
+	})
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{
+		Board:    "tech",
+		Favorite: true,
+		FolderID: work.ID,
+	})
+	zero := 0
+	exec(t, c, alice, proto.CmdMoveBoardFavorite, proto.MoveBoardFavoritePayload{
+		Board:    "life",
+		FolderID: work.ID,
+		Position: &zero,
+	})
+
+	tree, err := c.ListFavoriteTree(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Folders) != 2 {
+		t.Fatalf("expected two favorite folders, got %+v", tree.Folders)
+	}
+	if len(tree.Boards) != 3 {
+		t.Fatalf("expected three favorite boards, got %+v", tree.Boards)
+	}
+	if tree.Boards[0].ID != "general" || tree.Boards[0].FolderID != "" {
+		t.Fatalf("expected general in root favorites, got %+v", tree.Boards)
+	}
+	if tree.Boards[1].ID != "life" || tree.Boards[1].FolderID != work.ID {
+		t.Fatalf("expected life to move ahead inside work folder, got %+v", tree.Boards)
+	}
+	if tree.Boards[2].ID != "tech" || tree.Boards[2].FolderID != work.ID {
+		t.Fatalf("expected tech to remain inside work folder, got %+v", tree.Boards)
+	}
+
+	root := ""
+	exec(t, c, alice, proto.CmdUpdateFavoriteFolder, proto.UpdateFavoriteFolderPayload{
+		Folder:   project.ID,
+		Name:     "Projects Renamed",
+		ParentID: &root,
+		Position: &zero,
+	})
+
+	tree, err = c.ListFavoriteTree(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Folders[0].ID != project.ID || tree.Folders[0].ParentID != "" || tree.Folders[0].Name != "Projects Renamed" {
+		t.Fatalf("expected project folder renamed and moved to root, got %+v", tree.Folders)
+	}
+
+	execExpectErr(t, c, bob, proto.CmdMoveBoardFavorite, proto.MoveBoardFavoritePayload{
+		Board:    "general",
+		FolderID: work.ID,
+	}, proto.ErrNotFound)
+
+	exec(t, c, alice, proto.CmdDeleteFavoriteFolder, proto.DeleteFavoriteFolderPayload{Folder: work.ID})
+
+	tree, err = c.ListFavoriteTree(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, board := range tree.Boards {
+		if board.ID == "life" && board.FolderID != "" {
+			t.Fatalf("expected deleting work to move life to root, got %+v", board)
+		}
+		if board.ID == "tech" && board.FolderID != "" {
+			t.Fatalf("expected deleting work to move tech to root, got %+v", board)
+		}
+	}
+}
+
+func TestFavoriteFolderReadMarkersAndImport(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
+
+	exec(t, c, alice, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "tech", Name: "Tech"})
+	exec(t, c, alice, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "life", Name: "Life"})
+
+	work := exec(t, c, alice, proto.CmdCreateFavoriteFolder, proto.CreateFavoriteFolderPayload{Name: "Work"})
+	child := exec(t, c, alice, proto.CmdCreateFavoriteFolder, proto.CreateFavoriteFolderPayload{Name: "Child", ParentID: work.ID})
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{Board: "tech", Favorite: true, FolderID: work.ID})
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{Board: "life", Favorite: true, FolderID: child.ID})
+
+	tech := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "tech", Title: "Tech unread", Body: "first"})
+	life := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "life", Title: "Life unread", Body: "first"})
+
+	unread, err := c.ListUnreadThreadSummaries(alice, false, work.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasThread(unread, tech.ID) || !hasThread(unread, life.ID) {
+		t.Fatalf("expected favorite folder unread to include descendant boards, got %+v", unread)
+	}
+
+	exec(t, c, alice, proto.CmdMarkFavoriteFolderRead, proto.MarkFavoriteFolderReadPayload{Folder: work.ID})
+	unread, err = c.ListUnreadThreadSummaries(alice, false, work.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasThread(unread, tech.ID) || hasThread(unread, life.ID) {
+		t.Fatalf("expected favorite folder mark-read to clear scoped unread threads, got %+v", unread)
+	}
+
+	exec(t, c, alice, proto.CmdRestoreFavoriteFolderRead, proto.RestoreFavoriteFolderReadPayload{Folder: work.ID})
+	unread, err = c.ListUnreadThreadSummaries(alice, false, work.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasThread(unread, tech.ID) || !hasThread(unread, life.ID) {
+		t.Fatalf("expected favorite folder restore to restore scoped unread threads, got %+v", unread)
+	}
+
+	exported, err := c.ListFavoriteTree(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := c.ImportFavoriteTree(carol.ID, exported, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importedWork := favoriteFolderByName(imported, "Work")
+	importedChild := favoriteFolderByName(imported, "Child")
+	if importedWork == nil || importedChild == nil {
+		t.Fatalf("expected imported nested folders, got %+v", imported.Folders)
+	}
+	if importedChild.ParentID != importedWork.ID {
+		t.Fatalf("expected imported child folder parent remapped to imported work folder, got %+v", imported.Folders)
+	}
+	if got := favoriteFolderForBoard(imported, "tech"); got != importedWork.ID {
+		t.Fatalf("expected imported tech favorite in work folder %q, got %q in %+v", importedWork.ID, got, imported.Boards)
+	}
+	if got := favoriteFolderForBoard(imported, "life"); got != importedChild.ID {
+		t.Fatalf("expected imported life favorite in child folder %q, got %q in %+v", importedChild.ID, got, imported.Boards)
+	}
+}
+
+func TestBoardDirectoryHierarchy(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+
+	execExpectErr(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:       "orphan",
+		Name:     "Orphan",
+		ParentID: "missing",
+	}, proto.ErrNotFound)
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "clubs",
+		Name:        "Clubs",
+		Description: "Campus clubs",
+		ParentID:    "general",
+	})
+	zero := 0
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "music",
+		Name:        "Music",
+		Description: "Music club",
+		ParentID:    "clubs",
+		Position:    &zero,
+	})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:       "sports",
+		Name:     "Sports",
+		ParentID: "general",
+	})
+
+	categories, err := c.ListCategories()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]core.Category{}
+	for _, category := range categories {
+		byID[category.ID] = category
+	}
+
+	if byID["general"].ParentID != "" {
+		t.Fatalf("expected general to be a root category, got %+v", byID["general"])
+	}
+	if byID["clubs"].ParentID != "general" || byID["clubs"].Position != 0 {
+		t.Fatalf("expected clubs under general at position 0, got %+v", byID["clubs"])
+	}
+	if byID["music"].ParentID != "clubs" || byID["music"].Position != 0 {
+		t.Fatalf("expected music under clubs at position 0, got %+v", byID["music"])
+	}
+	if byID["sports"].ParentID != "general" || byID["sports"].Position != 1 {
+		t.Fatalf("expected sports under general at appended position, got %+v", byID["sports"])
+	}
+	if _, ok := byID["orphan"]; ok {
+		t.Fatalf("rejected board should not create a category, got %+v", byID["orphan"])
+	}
+
+	updated, err := c.UpdateCategory(admin.ID, "sports", core.CategoryUpdate{
+		Name:        stringPtr("Athletics"),
+		Description: stringPtr("Sports desk"),
+		ParentID:    stringPtr("clubs"),
+		Visibility:  stringPtr("staff"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "Athletics" || updated.Description != "Sports desk" || updated.ParentID != "clubs" || updated.Visibility != "staff" {
+		t.Fatalf("expected updated sports category, got %+v", updated)
+	}
+	board, err := c.GetBoard("sports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board.Name != "Athletics" || board.Description != "Sports desk" {
+		t.Fatalf("expected board metadata to follow category update, got %+v", board)
+	}
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	visible, err := c.ListCategoriesForUser(alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, category := range visible {
+		if category.ID == "sports" {
+			t.Fatalf("staff category should be hidden from normal users, got %+v", visible)
+		}
+	}
+	if _, err := c.UpdateCategory(admin.ID, "clubs", core.CategoryUpdate{ParentID: stringPtr("music")}); err == nil {
+		t.Fatalf("expected category cycle to be rejected")
+	}
+}
+
+func TestCommunityRankingsAndStats(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "tech", Name: "Tech"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "life", Name: "Life"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secret", Name: "Secret"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secret",
+		MemberReadMode: boolPtr(true),
+	})
+
+	hot := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "tech",
+		Title: "Hot topic",
+		Body:  "first",
+	})
+	exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: hot.ID,
+		Body:   "second",
+	})
+	life := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "life",
+		Title: "Quiet topic",
+		Body:  "first",
+	})
+	secret := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "secret",
+		Title: "Private topic",
+		Body:  "hidden",
+	})
+
+	posts, err := c.ListPosts(hot.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) == 0 {
+		t.Fatal("expected hot topic posts")
+	}
+	exec(t, c, alice, proto.CmdReactPost, proto.ReactPostPayload{
+		Post:  posts[0].ID,
+		Emoji: "+1",
+	})
+	archivePost := exec(t, c, admin, proto.CmdCuratePost, proto.CuratePostPayload{
+		Post:  posts[0].ID,
+		Kind:  "archive",
+		Title: "Hot archive post",
+		Path:  "guide",
+	})
+	exec(t, c, admin, proto.CmdSetDigestEntryBody, proto.SetDigestEntryBodyPayload{
+		Entry: archivePost.ID,
+		Body:  "Edited archive ranking copy",
+	})
+	exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: hot.ID,
+		Kind:   "archive",
+		Title:  "Hot archive thread",
+		Path:   "guide",
+	})
+	exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: secret.ID,
+		Kind:   "archive",
+		Title:  "Private archive thread",
+		Path:   "private",
+	})
+	exec(t, c, alice, proto.CmdSetPresence, proto.SetPresencePayload{Status: "active"})
+	if err := c.RecordLogin(bob.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 4 || stats.TotalReactions != 1 || stats.OnlineUsers != 1 {
+		t.Fatalf("unexpected community stats: %+v", stats)
+	}
+	if stats.HeadSeq == 0 {
+		t.Fatalf("expected head seq in community stats, got %+v", stats)
+	}
+
+	boards, err := c.ListBoardRankings(alice, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boards) == 0 || boards[0].ID != "tech" || boards[0].PostCount != 2 {
+		t.Fatalf("expected tech to lead board rankings, got %+v", boards)
+	}
+	for _, board := range boards {
+		if board.ID == "secret" {
+			t.Fatalf("ordinary user should not see member-read board ranking, got %+v", boards)
+		}
+	}
+	adminBoards, err := c.ListBoardRankings(admin, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretVisible := false
+	for _, board := range adminBoards {
+		if board.ID == "secret" {
+			secretVisible = true
+		}
+	}
+	if !secretVisible {
+		t.Fatalf("admin should see member-read board ranking, got %+v", adminBoards)
+	}
+
+	archives, err := c.ListArchiveRankings(alice, "archive", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archives) == 0 || archives[0].BoardID != "tech" || archives[0].Path != "guide" || archives[0].EntryCount != 2 || archives[0].EditedCount != 1 {
+		t.Fatalf("expected tech guide to lead archive rankings, got %+v", archives)
+	}
+	for _, archive := range archives {
+		if archive.BoardID == "secret" {
+			t.Fatalf("ordinary user should not see member-read archive ranking, got %+v", archives)
+		}
+	}
+	adminArchives, err := c.ListArchiveRankings(admin, "archive", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretArchiveVisible := false
+	for _, archive := range adminArchives {
+		if archive.BoardID == "secret" && archive.Path == "private" {
+			secretArchiveVisible = true
+		}
+	}
+	if !secretArchiveVisible {
+		t.Fatalf("admin should see member-read archive ranking, got %+v", adminArchives)
+	}
+
+	threads, err := c.ListThreadRankings(alice, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) == 0 || threads[0].ID != hot.ID || threads[0].Score <= threads[0].PostCount {
+		t.Fatalf("expected hot topic to lead thread rankings with reaction-weighted score, got %+v", threads)
+	}
+	for _, thread := range threads {
+		if thread.ID == secret.ID {
+			t.Fatalf("ordinary user should not see member-read thread ranking, got %+v", threads)
+		}
+	}
+	boardThreads, err := c.ListThreadRankings(alice, "life", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boardThreads) != 1 || boardThreads[0].ID != life.ID {
+		t.Fatalf("expected board-scoped life ranking, got %+v", boardThreads)
+	}
+
+	users, err := c.ListUserRankings(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) == 0 || users[0].Name != "bob" || users[0].PostsCreated != 2 || users[0].ReactionsReceived != 1 || users[0].LoginCount != 1 {
+		t.Fatalf("expected bob to lead user rankings, got %+v", users)
+	}
+
+	execExpectErr(t, c, alice, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
+		Date: "2026-06-04",
+	}, proto.ErrForbidden)
+	snapshot := exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
+		Date: "2026-06-04",
+	})
+	if snapshot.ID == "" {
+		t.Fatalf("expected generated stats snapshot thread id, got %+v", snapshot)
+	}
+	systemBoard, err := c.GetBoard("BBSLists")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemBoard == nil || systemBoard.Name != "BBSLists" {
+		t.Fatalf("expected generated BBSLists board, got %+v", systemBoard)
+	}
+	systemThreads, err := c.ListThreads("BBSLists", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 1 || systemThreads[0].ID != snapshot.ID || !strings.Contains(systemThreads[0].Title, "2026-06-04") {
+		t.Fatalf("expected one generated stats thread, got %+v", systemThreads)
+	}
+	systemPosts, err := c.ListPosts(snapshot.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemPosts) != 1 {
+		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
+	}
+	body := systemPosts[0].Body
+	for _, want := range []string{"Total users: 3", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Top users", "bob", "Archive paths", "guide"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"Secret", "Private topic", "private"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("expected stats snapshot body to hide private %q, got:\n%s", forbidden, body)
+		}
+	}
+	again := exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
+		Date: "2026-06-04",
+	})
+	if again.ID != snapshot.ID {
+		t.Fatalf("expected repeated snapshot publish to reuse thread %q, got %+v", snapshot.ID, again)
+	}
+	systemThreads, err = c.ListThreads("BBSLists", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 1 {
+		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads)
+	}
+}
+
+func TestAutomaticDailyStatsSnapshot(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Daily stats source",
+		Body:  "activity",
+	})
+
+	day := time.Date(2026, 6, 5, 18, 30, 0, 0, time.FixedZone("campus", 8*60*60))
+	snapshot, err := c.PublishDailyStatsSnapshot(context.Background(), day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot == nil || snapshot.ID != "bbslists_stats_20260605" {
+		t.Fatalf("expected deterministic automatic snapshot id, got %+v", snapshot)
+	}
+	again, err := c.PublishDailyStatsSnapshot(context.Background(), day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again == nil || again.ID != snapshot.ID {
+		t.Fatalf("expected repeated automatic snapshot to reuse %q, got %+v", snapshot.ID, again)
+	}
+	next, err := c.PublishDailyStatsSnapshot(context.Background(), day.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next == nil || next.ID != "bbslists_stats_20260606" {
+		t.Fatalf("expected next-day automatic snapshot, got %+v", next)
+	}
+	systemThreads, err := c.ListThreads("BBSLists", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 2 {
+		t.Fatalf("expected two daily stat-log threads, got %+v", systemThreads)
+	}
+	posts, err := c.ListPosts(snapshot.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Author != "system" || !strings.Contains(posts[0].Body, "Community stats 2026-06-05") {
+		t.Fatalf("expected system-authored automatic stats post, got %+v", posts)
+	}
+}
+
+func TestPublishSystemNoticeCreatesPublicNoticeBoard(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	execExpectErr(t, c, alice, proto.CmdPublishSystemNotice, proto.PublishSystemNoticePayload{
+		Title: "Campus notice",
+		Body:  "Maintenance tonight",
+	}, proto.ErrForbidden)
+	execExpectErr(t, c, admin, proto.CmdPublishSystemNotice, proto.PublishSystemNoticePayload{
+		Board: "Filter",
+		Title: "Filtered",
+		Body:  "not a public notice board",
+	}, proto.ErrValidationFailed)
+
+	notice := exec(t, c, admin, proto.CmdPublishSystemNotice, proto.PublishSystemNoticePayload{
+		Title:  "Campus notice",
+		Body:   "Maintenance tonight at 23:00.",
+		Source: "operator broadcast",
+	})
+	if notice.ID == "" || notice.Seq == 0 {
+		t.Fatalf("expected generated notice thread ack, got %+v", notice)
+	}
+	board, err := c.GetBoard("notepad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board == nil || board.Name != "notepad" {
+		t.Fatalf("expected generated notepad board, got %+v", board)
+	}
+	threads, err := c.ListThreads("notepad", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].ID != notice.ID || threads[0].Title != "Campus notice" {
+		t.Fatalf("expected one generated notepad thread, got %+v", threads)
+	}
+	posts, err := c.ListPosts(notice.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Author != "admin" {
+		t.Fatalf("expected one admin-authored notice post, got %+v", posts)
+	}
+	for _, want := range []string{"# Campus notice", "Notice board: notepad", "Actor: admin", "Source: operator broadcast", "Maintenance tonight at 23:00.", "Generated public system notice"} {
+		if !strings.Contains(posts[0].Body, want) {
+			t.Fatalf("expected notice body to contain %q, got:\n%s", want, posts[0].Body)
+		}
+	}
+
+	giveup := exec(t, c, admin, proto.CmdPublishSystemNotice, proto.PublishSystemNoticePayload{
+		Board: "GiveupNotice",
+		Title: "Network withdrawal notice",
+		Body:  "Legacy peering endpoint retired.",
+	})
+	if giveup.ID == notice.ID {
+		t.Fatalf("expected a separate GiveupNotice thread, got %+v", giveup)
+	}
+	giveupBoard, err := c.GetBoard("GiveupNotice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if giveupBoard == nil || giveupBoard.Name != "GiveupNotice" {
+		t.Fatalf("expected generated GiveupNotice board, got %+v", giveupBoard)
+	}
+	rankings, err := c.ListBoardRankings(alice, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ranking := range rankings {
+		if ranking.ID == "notepad" || ranking.ID == "GiveupNotice" {
+			t.Fatalf("generated notice board should not appear in organic rankings, got %+v", rankings)
+		}
+	}
+}
+
+func TestBlessUserCreatesBlessingBoardAndRankings(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
+
+	execExpectErr(t, c, alice, proto.CmdBlessUser, proto.BlessUserPayload{
+		User: "alice",
+	}, proto.ErrValidationFailed)
+
+	blessing := exec(t, c, alice, proto.CmdBlessUser, proto.BlessUserPayload{
+		User:    "bob",
+		Message: "Good luck on finals.",
+	})
+	if blessing.ID == "" || blessing.Seq == 0 {
+		t.Fatalf("expected blessing ack, got %+v", blessing)
+	}
+	board, err := c.GetBoard("Blessing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board == nil || board.Name != "Blessing" {
+		t.Fatalf("expected generated Blessing board, got %+v", board)
+	}
+	threads, err := c.ListThreads("Blessing", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || !strings.Contains(threads[0].Title, "alice -> bob") {
+		t.Fatalf("expected generated blessing thread, got %+v", threads)
+	}
+	posts, err := c.ListPosts(threads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 || posts[0].Author != "alice" {
+		t.Fatalf("expected one alice-authored blessing post, got %+v", posts)
+	}
+	for _, want := range []string{"# Blessing for bob", "From: alice", "To: bob", "Good luck on finals.", "Generated public blessing record"} {
+		if !strings.Contains(posts[0].Body, want) {
+			t.Fatalf("expected blessing post to contain %q, got:\n%s", want, posts[0].Body)
+		}
+	}
+
+	exec(t, c, carol, proto.CmdBlessUser, proto.BlessUserPayload{User: "bob"})
+	rankings, err := c.ListBlessingRankings(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rankings) == 0 || rankings[0].Name != "bob" || rankings[0].BlessingCount != 2 {
+		t.Fatalf("expected bob to lead blessing rankings, got %+v", rankings)
+	}
+	recent, err := c.ListBlessings(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 2 || recent[0].ToName != "bob" || recent[0].FromName != "carol" {
+		t.Fatalf("expected recent blessings newest first, got %+v", recent)
+	}
+
+	exec(t, c, bob, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "alice",
+		Kind:   "ignore",
+		Active: true,
+	})
+	execExpectErr(t, c, alice, proto.CmdBlessUser, proto.BlessUserPayload{
+		User: "bob",
+	}, proto.ErrForbidden)
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatal(err)
+	}
+	rankings, err = c.ListBlessingRankings(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rankings) == 0 || rankings[0].Name != "bob" || rankings[0].BlessingCount != 2 {
+		t.Fatalf("expected blessing rankings to rebuild from events, got %+v", rankings)
+	}
+}
+
+func TestBoardSettingsAndModeratorsEnforcePostingPolicy(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "policy",
+		Name:        "Policy",
+		Description: "Policy board",
+	})
+
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:    "policy",
+		ReadOnly: boolPtr(true),
+	})
+	execExpectErr(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "policy",
+		Title: "blocked",
+		Body:  "blocked",
+	}, proto.ErrForbidden)
+	execExpectErr(t, c, alice, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:    "policy",
+		ReadOnly: boolPtr(false),
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{
+		Board:     "policy",
+		User:      "alice",
+		Moderator: true,
+	})
+	exec(t, c, alice, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:            "policy",
+		ReadOnly:         boolPtr(false),
+		NoReply:          boolPtr(true),
+		AnonymousAllowed: boolPtr(true),
+	})
+
+	thread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board:     "policy",
+		Title:     "anonymous topic",
+		Body:      "hello",
+		Anonymous: true,
+	})
+	threads, err := c.ListThreadSummaries(bob.ID, "policy", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].Author != "Anonymous" || threads[0].AuthorID != "" {
+		t.Fatalf("expected anonymous public thread identity, got %+v", threads)
+	}
+
+	execExpectErr(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "blocked reply",
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "moderator reply",
+	})
+
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{
+		Board:     "policy",
+		User:      "alice",
+		Moderator: false,
+	})
+	execExpectErr(t, c, alice, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:   "policy",
+		NoReply: boolPtr(false),
+	}, proto.ErrForbidden)
+}
+
+func TestBoardMailInPosting(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:   "mailbox",
+		Name: "Mailbox",
+	})
+	execExpectErr(t, c, bob, proto.CmdPostBoardMail, proto.PostBoardMailPayload{
+		Board:   "mailbox",
+		Subject: "Mail thread",
+		Body:    "posted from mail",
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:         "mailbox",
+		MailInAllowed: boolPtr(true),
+	})
+	thread := exec(t, c, bob, proto.CmdPostBoardMail, proto.PostBoardMailPayload{
+		Board:   "mailbox",
+		Subject: "Mail thread",
+		Body:    "posted from mail",
+	})
+	threads, err := c.ListThreads("mailbox", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].ID != thread.ID || threads[0].Title != "Mail thread" {
+		t.Fatalf("expected mail-in thread, got %+v", threads)
+	}
+
+	reply := exec(t, c, bob, proto.CmdPostBoardMail, proto.PostBoardMailPayload{
+		Board:  "mailbox",
+		Thread: thread.ID,
+		Body:   "mail reply",
+	})
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 || posts[1].ID != reply.ID || posts[1].Body != "mail reply" {
+		t.Fatalf("expected mail-in reply, got %+v", posts)
+	}
+}
+
+func TestBoardRelayDeliveries(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:   "relay",
+		Name: "Relay",
+	})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:        "relay",
+		RelayEnabled: boolPtr(true),
+	})
+	thread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "relay",
+		Title: "Relay topic",
+		Body:  "first relay body",
+	})
+	reply := exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "second relay body",
+	})
+
+	deliveries, err := c.ListRelayDeliveries("pending", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 2 {
+		t.Fatalf("expected two relay deliveries, got %+v", deliveries)
+	}
+	if deliveries[0].BoardID != "relay" || deliveries[0].ThreadID != thread.ID || deliveries[0].Title != "Relay topic" || deliveries[0].Body != "first relay body" {
+		t.Fatalf("unexpected first relay delivery: %+v", deliveries[0])
+	}
+	if deliveries[1].PostID != reply.ID || deliveries[1].Body != "second relay body" || deliveries[1].Status != "pending" {
+		t.Fatalf("unexpected reply relay delivery: %+v", deliveries[1])
+	}
+}
+
+func TestBoardMembersEnforceMemberModes(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "members",
+		Name:        "Members",
+		Description: "Members only",
+	})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "members",
+		MemberReadMode: boolPtr(true),
+		MemberPostMode: boolPtr(true),
+	})
+
+	execExpectErr(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "members",
+		Title: "blocked",
+		Body:  "blocked",
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "members",
+		User:   "alice",
+		Member: true,
+		Title:  "alumna",
+	})
+	members, err := c.ListBoardMembers("members")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].Name != "alice" || members[0].Title != "alumna" {
+		t.Fatalf("expected alice member with title, got %+v", members)
+	}
+
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "members",
+		Title: "member topic",
+		Body:  "hello",
+	})
+	execExpectErr(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "blocked reply",
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "members",
+		User:   bob.Name,
+		Member: true,
+	})
+	exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "member reply",
+	})
+
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "members",
+		User:   bob.Name,
+		Member: false,
+	})
+	isMember, err := c.UserIsBoardMember("members", bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isMember {
+		t.Fatal("expected bob to be removed from board members")
+	}
+	execExpectErr(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "blocked again",
+	}, proto.ErrForbidden)
+}
+
+func TestBoardMemberApplicationsLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "club",
+		Name:        "Club",
+		Description: "Resident board",
+	})
+
+	application := exec(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "club",
+		Note:  "I read this board daily.",
+	})
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "club",
+	}, proto.ErrConflict)
+
+	apps, err := c.ListBoardMemberApplications("club", "pending", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apps) != 1 || apps[0].ID != application.ID || apps[0].Name != "bob" || apps[0].Note == "" {
+		t.Fatalf("expected bob pending application, got %+v", apps)
+	}
+
+	execExpectErr(t, c, alice, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: application.ID,
+		Status:      "approved",
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: application.ID,
+		Status:      "approved",
+		Title:       "resident",
+	})
+	registryBoard, err := c.GetBoard("Registry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registryBoard == nil || registryBoard.Name != "Registry" {
+		t.Fatalf("expected generated Registry board, got %+v", registryBoard)
+	}
+	registryThreads, err := c.ListThreads("Registry", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registryThreads) != 1 || registryThreads[0].ID != "registry_approved_thr_"+application.ID {
+		t.Fatalf("expected approved registration system thread, got %+v", registryThreads)
+	}
+	registryPosts, err := c.ListPosts(registryThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registryPosts) != 1 {
+		t.Fatalf("expected one approved registration post, got %+v", registryPosts)
+	}
+	for _, want := range []string{"Status: approved", "Board: Club (club)", "Applicant: bob", "Reviewer: admin"} {
+		if !strings.Contains(registryPosts[0].Body, want) {
+			t.Fatalf("expected approved registration log to contain %q, got %q", want, registryPosts[0].Body)
+		}
+	}
+	if strings.Contains(registryPosts[0].Body, "I read this board daily.") || strings.Contains(registryPosts[0].Body, "resident") {
+		t.Fatalf("approved registration log leaked private note/title: %q", registryPosts[0].Body)
+	}
+	isMember, err := c.UserIsBoardMember("club", bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isMember {
+		t.Fatal("expected approved applicant to become a board member")
+	}
+	zero := 0
+	one := 1
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:    "club",
+		User:     alice.Name,
+		Member:   true,
+		Title:    "lead",
+		Position: &zero,
+	})
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:    "club",
+		User:     bob.Name,
+		Member:   true,
+		Title:    "resident",
+		Position: &one,
+	})
+	members, err := c.ListBoardMembers("club")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) < 2 || members[0].Name != "alice" || members[0].Position != 0 || members[1].Name != "bob" || members[1].Position != 1 {
+		t.Fatalf("expected board members ordered by explicit position, got %+v", members)
+	}
+
+	exec(t, c, bob, proto.CmdLeaveBoardMembership, proto.LeaveBoardMembershipPayload{Board: "club"})
+	isMember, err = c.UserIsBoardMember("club", bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isMember {
+		t.Fatal("expected member leave to remove membership")
+	}
+
+	rejected := exec(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{Board: "club"})
+	exec(t, c, admin, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: rejected.ID,
+		Status:      "rejected",
+		Note:        "try later",
+	})
+	rejectThreads, err := c.ListThreads("reject_registry", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejectThreads) != 1 || rejectThreads[0].ID != "registry_rejected_thr_"+rejected.ID {
+		t.Fatalf("expected rejected registration system thread, got %+v", rejectThreads)
+	}
+	rejectPosts, err := c.ListPosts(rejectThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejectPosts) != 1 || !strings.Contains(rejectPosts[0].Body, "Status: rejected") || strings.Contains(rejectPosts[0].Body, "try later") {
+		t.Fatalf("expected sanitized rejected registration log, got %+v", rejectPosts)
+	}
+	blacklisted := exec(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{Board: "club"})
+	exec(t, c, admin, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: blacklisted.ID,
+		Status:      "blacklisted",
+		Note:        "not eligible",
+	})
+	rejectThreads, err = c.ListThreads("reject_registry", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejectThreads) != 2 {
+		t.Fatalf("expected rejected and blacklisted registration system threads, got %+v", rejectThreads)
+	}
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "club",
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secretclub", Name: "Secret Club"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secretclub",
+		MemberReadMode: boolPtr(true),
+	})
+	privateApplication := exec(t, c, alice, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "secretclub",
+		Note:  "private application note",
+	})
+	exec(t, c, admin, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: privateApplication.ID,
+		Status:      "approved",
+		Note:        "private approval note",
+	})
+	registryThreads, err = c.ListThreads("Registry", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(registryThreads) != 1 {
+		t.Fatalf("member-read board application should not generate public Registry records, got %+v", registryThreads)
+	}
+}
+
+func TestDelegatedBoardMemberPermissions(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "club",
+		Name:        "Club",
+		Description: "Resident board",
+	})
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:               "club",
+		User:                "alice",
+		Member:              true,
+		Title:               "steward",
+		CanManageMembers:    boolPtr(true),
+		CanCurate:           boolPtr(true),
+		CanModeratePosts:    boolPtr(true),
+		CanModerateThreads:  boolPtr(true),
+		CanSetBoardSettings: boolPtr(true),
+	})
+
+	members, err := c.ListBoardMembers("club")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 ||
+		!members[0].CanManageMembers ||
+		!members[0].CanCurate ||
+		!members[0].CanModeratePosts ||
+		!members[0].CanModerateThreads ||
+		!members[0].CanSetBoardSettings {
+		t.Fatalf("expected alice delegated permissions, got %+v", members)
+	}
+
+	application := exec(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{Board: "club"})
+	exec(t, c, alice, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: application.ID,
+		Status:      "approved",
+		Title:       "resident",
+	})
+	execExpectErr(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:               "club",
+		User:                "bob",
+		Member:              true,
+		CanCurate:           boolPtr(true),
+		CanSetBoardSettings: boolPtr(true),
+	}, proto.ErrForbidden)
+
+	thread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "club",
+		Title: "local notes",
+		Body:  "first post",
+	})
+	execExpectErr(t, c, bob, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: thread.ID,
+		Kind:   "digest",
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: thread.ID,
+		Kind:   "digest",
+		Title:  "local notes",
+	})
+
+	entries, err := c.ListDigestEntries("club", "", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].CreatedByName != "alice" {
+		t.Fatalf("expected alice-curated digest entry, got %+v", entries)
+	}
+
+	execExpectErr(t, c, bob, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:   "club",
+		NoReply: boolPtr(true),
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:   "club",
+		NoReply: boolPtr(true),
+	})
+	execExpectErr(t, c, bob, proto.CmdLockThread, proto.LockThreadPayload{
+		Thread: thread.ID,
+		Locked: true,
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdLockThread, proto.LockThreadPayload{
+		Thread: thread.ID,
+		Locked: true,
+	})
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) == 0 {
+		t.Fatal("expected thread to have a post")
+	}
+	exec(t, c, alice, proto.CmdRedactPost, proto.RedactPostPayload{
+		Post:   posts[0].ID,
+		Reason: "duplicate",
+	})
+	execExpectErr(t, c, bob, proto.CmdRestorePost, proto.RestorePostPayload{
+		Post: posts[0].ID,
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdRestorePost, proto.RestorePostPayload{
+		Post: posts[0].ID,
+	})
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:       "club",
+		User:        "bob",
+		Member:      true,
+		Title:       "resident",
+		CanAnnounce: boolPtr(true),
+	})
+	execExpectErr(t, c, bob, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: thread.ID,
+		Kind:   "archive",
+	}, proto.ErrForbidden)
+	exec(t, c, bob, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: thread.ID,
+		Kind:   "announcement",
+		Title:  "club notice",
+	})
+
+	exec(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "club",
+		User:   "bob",
+		Member: false,
+	})
+	isMember, err := c.UserIsBoardMember("club", bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isMember {
+		t.Fatal("expected delegated manager to remove ordinary member")
+	}
+}
+
+func TestBoardMemberRequirementsAdmission(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "selective",
+		Name:        "Selective",
+		Description: "Members by rule",
+	})
+	exec(t, c, admin, proto.CmdSetBoardMemberRequirements, proto.SetBoardMemberRequirementsPayload{
+		Board:                     "selective",
+		MinLoginCount:             intPtr(1),
+		MinPostCount:              intPtr(1),
+		MinScore:                  intPtr(1),
+		MinBoardPostCount:         intPtr(2),
+		MinBoardOriginalPostCount: intPtr(1),
+		MinBoardDigestCount:       intPtr(1),
+		MinBoardMarkCount:         intPtr(1),
+		MaxMembers:                intPtr(1),
+		ApprovalMode:              stringPtr("auto"),
+	})
+
+	info, err := c.GetBoardInfo("selective")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Requirements.MinLoginCount != 1 ||
+		info.Requirements.MinPostCount != 1 ||
+		info.Requirements.MinScore != 1 ||
+		info.Requirements.MinBoardPostCount != 2 ||
+		info.Requirements.MinBoardOriginalPostCount != 1 ||
+		info.Requirements.MinBoardDigestCount != 1 ||
+		info.Requirements.MinBoardMarkCount != 1 ||
+		info.Requirements.MaxMembers != 1 ||
+		info.Requirements.ApprovalMode != "auto" {
+		t.Fatalf("expected stored member requirements, got %+v", info.Requirements)
+	}
+
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	}, proto.ErrForbidden)
+
+	exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "activity",
+		Body:  "first post",
+	})
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	}, proto.ErrForbidden)
+	if err := c.RecordLogin(bob.ID); err != nil {
+		t.Fatalf("record login: %v", err)
+	}
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	}, proto.ErrForbidden)
+
+	boardThread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "selective",
+		Title: "board activity",
+		Body:  "first local post",
+	})
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	}, proto.ErrForbidden)
+
+	exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: boardThread.ID,
+		Body:   "second local post",
+	})
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	}, proto.ErrForbidden)
+
+	boardPosts, err := c.ListPosts(boardThread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boardPosts) == 0 {
+		t.Fatal("expected local thread post")
+	}
+	exec(t, c, admin, proto.CmdCuratePost, proto.CuratePostPayload{
+		Post:  boardPosts[0].ID,
+		Kind:  "digest",
+		Title: "Local digest credit",
+	})
+	execExpectErr(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	}, proto.ErrForbidden)
+
+	exec(t, c, alice, proto.CmdReactPost, proto.ReactPostPayload{
+		Post:  boardPosts[0].ID,
+		Emoji: "heart",
+	})
+
+	application := exec(t, c, bob, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	})
+	app, err := c.GetBoardMemberApplication(application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app == nil || app.Status != "approved" || app.ReviewerID != bob.ID {
+		t.Fatalf("expected auto-approved application, got %+v", app)
+	}
+	isMember, err := c.UserIsBoardMember("selective", bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isMember {
+		t.Fatal("expected auto-approved applicant to become a member")
+	}
+
+	exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "activity 2",
+		Body:  "first post",
+	})
+	execExpectErr(t, c, alice, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{
+		Board: "selective",
+	}, proto.ErrConflict)
+}
+
+func TestPostAttachmentsRoundTrip(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	execExpectErr(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "blocked file",
+		Body:  "hello",
+		Attachments: []proto.AttachmentPayload{{
+			Filename: "blocked.zip",
+		}},
+	}, proto.ErrForbidden)
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "files",
+		Name:        "Files",
+		Description: "File board",
+	})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:              "files",
+		AttachmentsAllowed: boolPtr(true),
+	})
+
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "files",
+		Title: "manual",
+		Body:  "read this",
+		Attachments: []proto.AttachmentPayload{{
+			Filename:    "manual.pdf",
+			ContentType: "application/pdf",
+			SizeBytes:   4096,
+			URL:         "https://example.test/manual.pdf",
+		}},
+	})
+	reply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "and source",
+		Attachments: []proto.AttachmentPayload{{
+			Filename:  "source.tar.gz",
+			SizeBytes: 2048,
+		}},
+	})
+
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts, got %d", len(posts))
+	}
+	if len(posts[0].Attachments) != 1 || posts[0].Attachments[0].Filename != "manual.pdf" || posts[0].Attachments[0].ContentType != "application/pdf" {
+		t.Fatalf("expected manual attachment on first post, got %+v", posts[0].Attachments)
+	}
+	if posts[0].Attachments[0].ID == "" || posts[0].Attachments[0].PostID != posts[0].ID {
+		t.Fatalf("expected generated attachment identity, got %+v", posts[0].Attachments[0])
+	}
+	if len(posts[1].Attachments) != 1 || posts[1].ID != reply.ID || posts[1].Attachments[0].Filename != "source.tar.gz" {
+		t.Fatalf("expected source attachment on reply, got post=%+v attachments=%+v", posts[1], posts[1].Attachments)
+	}
+}
+
+func TestDigestCurationLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	thread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Curatable topic",
+		Body:  "First post",
+	})
+	reply := exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "Useful reply",
+	})
+
+	execExpectErr(t, c, bob, proto.CmdCuratePost, proto.CuratePostPayload{
+		Post: reply.ID,
+		Kind: "digest",
+	}, proto.ErrForbidden)
+
+	postDigest := exec(t, c, admin, proto.CmdCuratePost, proto.CuratePostPayload{
+		Post:  reply.ID,
+		Kind:  "digest",
+		Title: "Useful reply",
+		Path:  "faq",
+		Note:  "Worth saving",
+	})
+	threadDigest := exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: thread.ID,
+		Kind:   "recommended",
+		Title:  "Curatable topic",
+	})
+
+	entries, err := c.ListDigestEntries("general", "", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected two digest entries, got %+v", entries)
+	}
+	if entries[0].ID != threadDigest.ID || entries[0].Kind != "recommended" {
+		t.Fatalf("expected recommended thread first, got %+v", entries)
+	}
+	if entries[1].ID != postDigest.ID || entries[1].PostID != reply.ID || entries[1].Path != "faq" {
+		t.Fatalf("expected saved post digest entry, got %+v", entries)
+	}
+
+	updated := exec(t, c, admin, proto.CmdCuratePost, proto.CuratePostPayload{
+		Post:  reply.ID,
+		Kind:  "digest",
+		Title: "Useful reply updated",
+		Path:  "faq",
+	})
+	if updated.ID != postDigest.ID {
+		t.Fatalf("expected duplicate curation to update same entry, got %s vs %s", updated.ID, postDigest.ID)
+	}
+
+	filtered, err := c.ListDigestEntries("general", "digest", "faq", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Title != "Useful reply updated" {
+		t.Fatalf("expected updated filtered digest entry, got %+v", filtered)
+	}
+
+	exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: thread.ID,
+		Kind:   "archive",
+		Title:  "Archive root",
+		Path:   "faq",
+	})
+	archivePost := exec(t, c, admin, proto.CmdCuratePost, proto.CuratePostPayload{
+		Post:  reply.ID,
+		Kind:  "archive",
+		Title: "Archive child",
+		Path:  "faq/howto",
+	})
+	execExpectErr(t, c, bob, proto.CmdCreateDigestDirectory, proto.CreateDigestDirectoryPayload{
+		Board: "general",
+		Kind:  "archive",
+		Path:  "faq/empty",
+	}, proto.ErrForbidden)
+	emptyDir := exec(t, c, admin, proto.CmdCreateDigestDirectory, proto.CreateDigestDirectoryPayload{
+		Board: "general",
+		Kind:  "archive",
+		Path:  "faq/empty",
+	})
+	if emptyDir.ID == "" {
+		t.Fatal("expected empty archive directory id")
+	}
+	tree, err := c.ListDigestPathTree("general", "archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := map[string]core.DigestPathNode{}
+	for _, node := range tree {
+		nodes[node.Path] = node
+	}
+	if nodes[""].ChildCount != 1 ||
+		nodes["faq"].EntryCount != 1 ||
+		nodes["faq"].ChildCount != 2 ||
+		nodes["faq/howto"].EntryCount != 1 ||
+		nodes["faq/howto"].ParentPath != "faq" ||
+		!nodes["faq/empty"].Explicit ||
+		nodes["faq/empty"].EntryCount != 0 {
+		t.Fatalf("expected derived archive path tree, got %+v", tree)
+	}
+	archiveSearch, err := c.SearchDigestEntries(bob, "", "archive", "", "howto", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archiveSearch) != 1 || archiveSearch[0].ID != archivePost.ID || archiveSearch[0].Path != "faq/howto" {
+		t.Fatalf("expected archive search to find nested archive entry, got %+v", archiveSearch)
+	}
+	exported, err := c.GetDigestExport(archivePost.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportText := core.FormatDigestExportText(exported)
+	if exported == nil || !strings.Contains(exportText, "Archive child") || !strings.Contains(exportText, "Useful reply") {
+		t.Fatalf("expected exported archive text, got export=%+v text=%q", exported, exportText)
+	}
+	execExpectErr(t, c, bob, proto.CmdUpdateDigestEntry, proto.UpdateDigestEntryPayload{
+		Entry: archivePost.ID,
+		Title: stringPtr("Not yours"),
+	}, proto.ErrForbidden)
+	exec(t, c, admin, proto.CmdUpdateDigestEntry, proto.UpdateDigestEntryPayload{
+		Entry: archivePost.ID,
+		Title: stringPtr("Archive child edited"),
+		Path:  stringPtr("faq/howto/edited"),
+		Note:  stringPtr("Cleaned up for the archive"),
+	})
+	moved, err := c.ListDigestEntries("general", "archive", "faq/howto/edited", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moved) != 1 || moved[0].ID != archivePost.ID || moved[0].Title != "Archive child edited" || moved[0].Note != "Cleaned up for the archive" {
+		t.Fatalf("expected moved archive entry with edited metadata, got %+v", moved)
+	}
+	oldPath, err := c.ListDigestEntries("general", "archive", "faq/howto", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(oldPath) != 0 {
+		t.Fatalf("expected archive entry moved out of old path, got %+v", oldPath)
+	}
+	exec(t, c, admin, proto.CmdSetDigestEntryBody, proto.SetDigestEntryBodyPayload{
+		Entry: archivePost.ID,
+		Body:  "Edited archive body\nWith curator notes.",
+	})
+	editedExport, err := c.GetDigestExport(archivePost.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editedText := core.FormatDigestExportText(editedExport)
+	if editedExport == nil || !editedExport.Entry.BodyEdited || !strings.Contains(editedText, "Edited archive body") || strings.Contains(editedText, "Useful reply") {
+		t.Fatalf("expected edited archive export body, got export=%+v text=%q", editedExport, editedText)
+	}
+	editedSearch, err := c.SearchDigestEntries(bob, "", "archive", "", "curator notes", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(editedSearch) != 1 || editedSearch[0].ID != archivePost.ID || !editedSearch[0].BodyEdited {
+		t.Fatalf("expected search to find edited archive body, got %+v", editedSearch)
+	}
+	archiveMail := exec(t, c, bob, proto.CmdSendDigestEntryMail, proto.SendDigestEntryMailPayload{
+		Entry: archivePost.ID,
+		To:    []string{"alice"},
+		Note:  "Please keep this one.",
+	})
+	aliceMail, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundArchiveMail := false
+	for _, item := range aliceMail {
+		if item.ID == archiveMail.ID {
+			foundArchiveMail = strings.Contains(item.Subject, "Archive child edited") && strings.Contains(item.Body, "Please keep this one.") && strings.Contains(item.Body, "Edited archive body")
+		}
+	}
+	if !foundArchiveMail {
+		t.Fatalf("expected mailed archive entry in alice inbox, got %+v", aliceMail)
+	}
+	exec(t, c, admin, proto.CmdSetDigestEntryBody, proto.SetDigestEntryBodyPayload{
+		Entry: archivePost.ID,
+		Reset: true,
+	})
+	resetExport, err := c.GetDigestExport(archivePost.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetText := core.FormatDigestExportText(resetExport)
+	if resetExport == nil || resetExport.Entry.BodyEdited || !strings.Contains(resetText, "Useful reply") || strings.Contains(resetText, "Edited archive body") {
+		t.Fatalf("expected reset archive export to use source body, got export=%+v text=%q", resetExport, resetText)
+	}
+	execExpectErr(t, c, bob, proto.CmdCopyDigestPath, proto.CopyDigestPathPayload{
+		Board:    "general",
+		Kind:     "archive",
+		FromPath: "faq",
+		ToPath:   "faq-copy",
+	}, proto.ErrForbidden)
+	exec(t, c, admin, proto.CmdCopyDigestPath, proto.CopyDigestPathPayload{
+		Board:    "general",
+		Kind:     "archive",
+		FromPath: "faq",
+		ToPath:   "faq-copy",
+	})
+	copied, err := c.ListDigestEntries("general", "archive", "faq-copy/howto/edited", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(copied) != 1 || copied[0].ID == archivePost.ID || copied[0].TargetID != reply.ID || copied[0].Title != "Archive child edited" {
+		t.Fatalf("expected copied archive subtree entry, got %+v", copied)
+	}
+	copiedTree, err := c.ListDigestPathTree("general", "archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copiedNodes := map[string]core.DigestPathNode{}
+	for _, node := range copiedTree {
+		copiedNodes[node.Path] = node
+	}
+	if !copiedNodes["faq-copy/empty"].Explicit || copiedNodes["faq-copy/empty"].EntryCount != 0 {
+		t.Fatalf("expected copied empty archive directory, got %+v", copiedTree)
+	}
+	exec(t, c, admin, proto.CmdMoveDigestPath, proto.MoveDigestPathPayload{
+		Board:    "general",
+		Kind:     "archive",
+		FromPath: "faq-copy",
+		ToPath:   "faq-moved",
+	})
+	movedCopy, err := c.ListDigestEntries("general", "archive", "faq-moved/howto/edited", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(movedCopy) != 1 || movedCopy[0].TargetID != reply.ID {
+		t.Fatalf("expected moved copied archive subtree, got %+v", movedCopy)
+	}
+	movedTree, err := c.ListDigestPathTree("general", "archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedNodes := map[string]core.DigestPathNode{}
+	for _, node := range movedTree {
+		movedNodes[node.Path] = node
+	}
+	if !movedNodes["faq-moved/empty"].Explicit {
+		t.Fatalf("expected moved empty archive directory, got %+v", movedTree)
+	}
+	exec(t, c, admin, proto.CmdDeleteDigestPath, proto.DeleteDigestPathPayload{
+		Board: "general",
+		Kind:  "archive",
+		Path:  "faq-moved",
+	})
+	deletedCopy, err := c.ListDigestEntries("general", "archive", "faq-moved/howto/edited", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deletedCopy) != 0 {
+		t.Fatalf("expected copied archive subtree deletion, got %+v", deletedCopy)
+	}
+	deletedTree, err := c.ListDigestPathTree("general", "archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range deletedTree {
+		if strings.HasPrefix(node.Path, "faq-moved") {
+			t.Fatalf("expected copied archive subtree directory deletion, got %+v", deletedTree)
+		}
+	}
+
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{
+		Board:     "general",
+		User:      "alice",
+		Moderator: true,
+	})
+	exec(t, c, alice, proto.CmdRemoveDigestEntry, proto.RemoveDigestEntryPayload{Entry: postDigest.ID})
+
+	filtered, err = c.ListDigestEntries("general", "digest", "faq", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("expected digest entry removal, got %+v", filtered)
+	}
+}
+
+func TestSiteDigestEntriesRespectMemberReadBoards(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	publicThread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Campus notice",
+		Body:  "Public",
+	})
+	publicDigest := exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: publicThread.ID,
+		Kind:   "announcement",
+		Title:  "Public announcement",
+	})
+	systemBoard, err := c.GetBoard("0announce")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemBoard == nil || systemBoard.Name != "0Announce" {
+		t.Fatalf("expected generated 0Announce board, got %+v", systemBoard)
+	}
+	systemThreads, err := c.ListThreads("0announce", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 1 || systemThreads[0].Title != "Public announcement" || systemThreads[0].ID != "ann_thr_"+publicDigest.ID {
+		t.Fatalf("expected generated public announcement thread, got %+v", systemThreads)
+	}
+	systemPosts, err := c.ListPosts(systemThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemPosts) != 1 || !strings.Contains(systemPosts[0].Body, "Public announcement") || !strings.Contains(systemPosts[0].Body, "Public") {
+		t.Fatalf("expected generated public announcement post body, got %+v", systemPosts)
+	}
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secret", Name: "Secret"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secret",
+		MemberReadMode: boolPtr(true),
+	})
+	secretThread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "secret",
+		Title: "Private notice",
+		Body:  "Members only",
+	})
+	secretDigest := exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: secretThread.ID,
+		Kind:   "announcement",
+		Title:  "Private announcement",
+	})
+	systemThreads, err = c.ListThreads("0announce", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 1 {
+		t.Fatalf("private member-read announcement should not generate public 0Announce post, got %+v", systemThreads)
+	}
+
+	bobEntries, err := c.ListSiteDigestEntries(bob, "announcement", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobEntries) != 1 || bobEntries[0].BoardID != "general" || bobEntries[0].BoardName == "" {
+		t.Fatalf("expected non-member to see only public announcement, got %+v", bobEntries)
+	}
+
+	adminEntries, err := c.ListSiteDigestEntries(admin, "announcement", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, entry := range adminEntries {
+		seen[entry.BoardID] = true
+	}
+	if !seen["general"] || !seen["secret"] {
+		t.Fatalf("expected admin to see public and private announcements, got %+v", adminEntries)
+	}
+
+	bobSearch, err := c.SearchDigestEntries(bob, "", "announcement", "", "announcement", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobSearch) != 1 || bobSearch[0].BoardID != "general" {
+		t.Fatalf("expected non-member search to hide private announcement, got %+v", bobSearch)
+	}
+	adminSearch, err := c.SearchDigestEntries(admin, "", "announcement", "", "announcement", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen = map[string]bool{}
+	for _, entry := range adminSearch {
+		seen[entry.BoardID] = true
+	}
+	if !seen["general"] || !seen["secret"] {
+		t.Fatalf("expected admin search to include public and private announcements, got %+v", adminSearch)
+	}
+	execExpectErr(t, c, bob, proto.CmdSendDigestEntryMail, proto.SendDigestEntryMailPayload{
+		Entry: secretDigest.ID,
+		To:    []string{"bob"},
+	}, proto.ErrForbidden)
+}
+
+func TestModerationSystemBoardLogsRespectMemberReadBoards(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	publicThread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Public review target",
+		Body:  "public body should stay out of logs",
+	})
+	publicPosts, err := c.ListPosts(publicThread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(publicPosts) == 0 {
+		t.Fatalf("expected public thread starter post")
+	}
+	review := exec(t, c, bob, proto.CmdFlagPost, proto.FlagPostPayload{
+		Post:   publicPosts[0].ID,
+		Reason: "sensitive report reason",
+	})
+
+	systemBoard, err := c.GetBoard("0moderation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if systemBoard == nil || systemBoard.Name != "0Moderation" {
+		t.Fatalf("expected generated 0Moderation board, got %+v", systemBoard)
+	}
+	systemThreads, err := c.ListThreads("0moderation", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 1 || systemThreads[0].ID != "mod_flag_thr_"+review.ID {
+		t.Fatalf("expected generated public moderation flag thread, got %+v", systemThreads)
+	}
+	flagPosts, err := c.ListPosts(systemThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flagPosts) != 1 {
+		t.Fatalf("expected one generated flag post, got %+v", flagPosts)
+	}
+	flagBody := flagPosts[0].Body
+	for _, want := range []string{
+		"Status: opened",
+		"Board: general",
+		"Thread: " + publicThread.ID,
+		"Post: " + publicPosts[0].ID,
+		"Actor: bob",
+	} {
+		if !strings.Contains(flagBody, want) {
+			t.Fatalf("expected generated flag log to contain %q, got %q", want, flagBody)
+		}
+	}
+	for _, secret := range []string{"sensitive report reason", "public body should stay out of logs"} {
+		if strings.Contains(flagBody, secret) {
+			t.Fatalf("generated flag log leaked %q: %q", secret, flagBody)
+		}
+	}
+
+	exec(t, c, admin, proto.CmdResolveReview, proto.ResolveReviewPayload{
+		Review:     review.ID,
+		Resolution: "private moderator note",
+	})
+	systemThreads, err = c.ListThreads("0moderation", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 2 {
+		t.Fatalf("expected flag and resolution log threads, got %+v", systemThreads)
+	}
+	resolvePosts, err := c.ListPosts("mod_resolve_thr_"+review.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolvePosts) != 1 || !strings.Contains(resolvePosts[0].Body, "Status: resolved") {
+		t.Fatalf("expected generated resolution log post, got %+v", resolvePosts)
+	}
+	if strings.Contains(resolvePosts[0].Body, "private moderator note") {
+		t.Fatalf("generated resolution log leaked moderator note: %q", resolvePosts[0].Body)
+	}
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secret", Name: "Secret"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secret",
+		MemberReadMode: boolPtr(true),
+	})
+	privateThread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "secret",
+		Title: "Private review target",
+		Body:  "members-only body",
+	})
+	privatePosts, err := c.ListPosts(privateThread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateReview := exec(t, c, admin, proto.CmdFlagPost, proto.FlagPostPayload{
+		Post:   privatePosts[0].ID,
+		Reason: "private report reason",
+	})
+	exec(t, c, admin, proto.CmdResolveReview, proto.ResolveReviewPayload{
+		Review:     privateReview.ID,
+		Resolution: "private resolution",
+	})
+	systemThreads, err = c.ListThreads("0moderation", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(systemThreads) != 2 {
+		t.Fatalf("private member-read review should not generate public moderation logs, got %+v", systemThreads)
+	}
+}
+
+func TestContentFilterCreatesReviewAndFilterBoardRecord(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	filter := exec(t, c, admin, proto.CmdSetContentFilter, proto.SetContentFilterPayload{
+		ID:      "filter_policy",
+		Pattern: "classified",
+		Scope:   "global",
+	})
+	if filter.ID != "filter_policy" || filter.Seq == 0 {
+		t.Fatalf("expected filter ack, got %+v", filter)
+	}
+	filters, err := c.ListContentFilters("", true, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filters) != 1 || filters[0].ID != "filter_policy" || !filters[0].Active {
+		t.Fatalf("expected active content filter, got %+v", filters)
+	}
+
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Campus note",
+		Body:  "this mentions a classified thing that should enter review",
+	})
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected starter post, got %+v", posts)
+	}
+	reviews, err := c.ListModerationReviews("open", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reviews) != 1 || reviews[0].Kind != "content_filter" || reviews[0].TargetID != posts[0].ID {
+		t.Fatalf("expected content-filter review, got %+v", reviews)
+	}
+
+	filterBoard, err := c.GetBoard("Filter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filterBoard == nil || filterBoard.Name != "Filter" {
+		t.Fatalf("expected generated Filter board, got %+v", filterBoard)
+	}
+	filterThreads, err := c.ListThreads("Filter", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filterThreads) != 1 || filterThreads[0].ID != "filter_thr_"+reviews[0].ID {
+		t.Fatalf("expected generated Filter thread, got %+v", filterThreads)
+	}
+	filterPosts, err := c.ListPosts(filterThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filterPosts) != 1 {
+		t.Fatalf("expected generated Filter post, got %+v", filterPosts)
+	}
+	filterBody := filterPosts[0].Body
+	for _, want := range []string{"Status: opened", "Filter: filter_policy", "Board: general", "Public author: alice"} {
+		if !strings.Contains(filterBody, want) {
+			t.Fatalf("expected generated Filter body to contain %q, got:\n%s", want, filterBody)
+		}
+	}
+	for _, secret := range []string{"classified", "this mentions"} {
+		if strings.Contains(filterBody, secret) {
+			t.Fatalf("generated Filter body leaked %q:\n%s", secret, filterBody)
+		}
+	}
+
+	inactive := false
+	exec(t, c, admin, proto.CmdSetContentFilter, proto.SetContentFilterPayload{
+		ID:      "filter_policy",
+		Pattern: "classified",
+		Scope:   "global",
+		Active:  &inactive,
+	})
+	exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "classified appears again but the rule is off",
+	})
+	reviews, err = c.ListModerationReviews("open", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("expected inactive filter not to create more reviews, got %+v", reviews)
+	}
+
+	clearProjectionTablesForTest(t, c)
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatalf("rebuild failed: %v", err)
+	}
+	rebuiltFilters, err := c.ListContentFilters("", true, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rebuiltFilters) != 1 || rebuiltFilters[0].Active {
+		t.Fatalf("expected inactive rebuilt filter, got %+v", rebuiltFilters)
+	}
+	rebuiltReviews, err := c.ListModerationReviews("open", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rebuiltReviews) != 1 || rebuiltReviews[0].Kind != "content_filter" {
+		t.Fatalf("expected rebuilt content-filter review, got %+v", rebuiltReviews)
+	}
+}
+
+func TestPrivateMailAndDirectMessagesLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
+
+	mail := exec(t, c, bob, proto.CmdSendMail, proto.SendMailPayload{
+		To:      []string{"alice", "carol"},
+		Subject: "Campus plans",
+		Body:    "Meet in the lab at six.",
+		Attachments: []proto.AttachmentPayload{{
+			Filename:    "plan.txt",
+			ContentType: "text/plain",
+			SizeBytes:   12,
+			URL:         "https://example.edu/plan.txt",
+		}},
+	})
+
+	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceInbox) != 1 || aliceInbox[0].ID != mail.ID || aliceInbox[0].FromName != "bob" || aliceInbox[0].Read {
+		t.Fatalf("expected unread mail from bob, got %+v", aliceInbox)
+	}
+	if len(aliceInbox[0].ToNames) != 2 {
+		t.Fatalf("expected multi-recipient mail, got %+v", aliceInbox[0].ToNames)
+	}
+	if len(aliceInbox[0].Attachments) != 1 || aliceInbox[0].Attachments[0].Filename != "plan.txt" || aliceInbox[0].Attachments[0].Stored {
+		t.Fatalf("expected mail attachment metadata, got %+v", aliceInbox[0].Attachments)
+	}
+	aliceUsage, err := c.GetMailUsage(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliceUsage.UsedBytes <= 0 || aliceUsage.QuotaBytes <= aliceUsage.UsedBytes || aliceUsage.RemainingBytes != aliceUsage.QuotaBytes-aliceUsage.UsedBytes {
+		t.Fatalf("expected mail usage with remaining quota, got %+v", aliceUsage)
+	}
+	execExpectErr(t, c, bob, proto.CmdSendMail, proto.SendMailPayload{
+		To:      []string{"alice"},
+		Subject: "Too large",
+		Body:    strings.Repeat("x", 11<<20),
+	}, proto.ErrValidationFailed)
+	unreadMail, err := c.CountUnreadMail(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unreadMail != 1 {
+		t.Fatalf("expected one unread mail, got %d", unreadMail)
+	}
+
+	bobSent, err := c.ListMail(bob.ID, "sent", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobSent) != 1 || bobSent[0].ID != mail.ID || !bobSent[0].Read {
+		t.Fatalf("expected sent copy for sender, got %+v", bobSent)
+	}
+
+	read := true
+	kept := true
+	box := "keep"
+	exec(t, c, alice, proto.CmdUpdateMail, proto.UpdateMailPayload{
+		Mail:    mail.ID,
+		Read:    &read,
+		Kept:    &kept,
+		Mailbox: &box,
+	})
+	aliceKeep, err := c.ListMail(alice.ID, "keep", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceKeep) != 1 || !aliceKeep[0].Read || !aliceKeep[0].Kept {
+		t.Fatalf("expected kept read mail, got %+v", aliceKeep)
+	}
+	unreadMail, err = c.CountUnreadMail(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unreadMail != 0 {
+		t.Fatalf("expected no unread mail after mark-read, got %d", unreadMail)
+	}
+
+	exec(t, c, carol, proto.CmdDeleteMail, proto.DeleteMailPayload{Mail: mail.ID})
+	carolTrash, err := c.ListMail(carol.ID, "trash", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(carolTrash) != 1 || carolTrash[0].ID != mail.ID {
+		t.Fatalf("expected deleted mail in trash, got %+v", carolTrash)
+	}
+
+	reply := exec(t, c, alice, proto.CmdSendMail, proto.SendMailPayload{
+		To:      []string{"bob"},
+		Subject: "Re: Campus plans",
+		Body:    "See you there.",
+		ReplyTo: mail.ID,
+	})
+	bobInbox, err := c.ListMail(bob.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobInbox) != 1 || bobInbox[0].ID != reply.ID || bobInbox[0].ParentID != mail.ID {
+		t.Fatalf("expected reply in bob inbox, got %+v", bobInbox)
+	}
+	execExpectErr(t, c, carol, proto.CmdUpdateMail, proto.UpdateMailPayload{Mail: reply.ID, Read: &read}, proto.ErrNotFound)
+	uploaded := exec(t, c, bob, proto.CmdAttachMail, proto.AttachMailPayload{
+		Mail:        mail.ID,
+		Filename:    "lab.zip",
+		ContentType: "application/zip",
+		SizeBytes:   2048,
+	})
+	execExpectErr(t, c, bob, proto.CmdAttachMail, proto.AttachMailPayload{
+		Mail:        mail.ID,
+		Filename:    "too-large.zip",
+		ContentType: "application/zip",
+		SizeBytes:   11 << 20,
+	}, proto.ErrValidationFailed)
+	execExpectErr(t, c, carol, proto.CmdAttachMail, proto.AttachMailPayload{
+		Mail:        mail.ID,
+		Filename:    "not-mine.txt",
+		ContentType: "text/plain",
+		SizeBytes:   1,
+	}, proto.ErrForbidden)
+	aliceMail, err := c.GetMail(alice.ID, mail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aliceMail == nil || len(aliceMail.Attachments) != 2 || aliceMail.Attachments[1].ID != uploaded.ID || aliceMail.Attachments[1].Filename != "lab.zip" {
+		t.Fatalf("expected uploaded mail attachment visible to alice, got %+v", aliceMail)
+	}
+
+	exec(t, c, bob, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "alice",
+		Kind:   "friend",
+		Active: true,
+	})
+	exec(t, c, bob, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "carol",
+		Kind:   "friend",
+		Active: true,
+	})
+	group := exec(t, c, bob, proto.CmdSetMailGroup, proto.SetMailGroupPayload{
+		Name:    "lab",
+		Members: []string{"alice", "carol"},
+	})
+	groups, err := c.ListMailGroups(bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 || groups[0].ID != "friends" || !groups[0].BuiltIn || len(groups[0].Members) != 2 || groups[1].ID != group.ID || groups[1].Name != "lab" || len(groups[1].Members) != 2 {
+		t.Fatalf("expected built-in friends group and bob mail group, got %+v", groups)
+	}
+	groupMail := exec(t, c, bob, proto.CmdSendMail, proto.SendMailPayload{
+		ToGroups: []string{"lab", "friends"},
+		Subject:  "Lab broadcast",
+		Body:     "Bring your notebook.",
+	})
+	aliceInbox, err = c.ListMail(alice.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundGroupMail := false
+	for _, item := range aliceInbox {
+		if item.ID == groupMail.ID {
+			foundGroupMail = len(item.ToNames) == 2
+		}
+	}
+	if !foundGroupMail {
+		t.Fatalf("expected deduplicated group/friends mail in alice inbox, got %+v", aliceInbox)
+	}
+
+	exec(t, c, alice, proto.CmdSetDirectMessageSettings, proto.SetDirectMessageSettingsPayload{Policy: "friends"})
+	settings, err := c.GetDirectMessageSettings(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Policy != "friends" {
+		t.Fatalf("expected friends-only direct-message policy, got %+v", settings)
+	}
+	execExpectErr(t, c, bob, proto.CmdSendDirectMessage, proto.SendDirectMessagePayload{
+		To:   "alice",
+		Body: "Blocked short ping",
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "bob",
+		Kind:   "friend",
+		Active: true,
+	})
+
+	dm := exec(t, c, bob, proto.CmdSendDirectMessage, proto.SendDirectMessagePayload{
+		To:   "alice",
+		Body: "Short ping",
+	})
+	aliceConvos, err := c.ListDirectMessageConversations(alice.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceConvos) != 1 || aliceConvos[0].Name != "bob" || aliceConvos[0].UnreadCount != 1 {
+		t.Fatalf("expected unread conversation with bob, got %+v", aliceConvos)
+	}
+	aliceMessages, err := c.ListDirectMessages(alice.ID, bob.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceMessages) != 1 || aliceMessages[0].ID != dm.ID || aliceMessages[0].Mine || aliceMessages[0].Read {
+		t.Fatalf("expected unread incoming direct message, got %+v", aliceMessages)
+	}
+	exec(t, c, alice, proto.CmdMarkDirectMessageRead, proto.MarkDirectMessageReadPayload{Message: dm.ID})
+	unreadDM, err := c.CountUnreadDirectMessages(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unreadDM != 0 {
+		t.Fatalf("expected no unread direct messages, got %d", unreadDM)
+	}
+
+	replyDM := exec(t, c, alice, proto.CmdSendDirectMessage, proto.SendDirectMessagePayload{
+		To:   "bob",
+		Body: "Short pong",
+	})
+	exec(t, c, bob, proto.CmdDeleteDirectMessage, proto.DeleteDirectMessagePayload{Message: replyDM.ID})
+	bobMessages, err := c.ListDirectMessages(bob.ID, alice.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobMessages) != 1 || bobMessages[0].ID != dm.ID {
+		t.Fatalf("expected bob deletion to hide only reply message, got %+v", bobMessages)
+	}
+	aliceMessages, err = c.ListDirectMessages(alice.ID, bob.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceMessages) != 2 {
+		t.Fatalf("expected sender to retain deleted recipient copy, got %+v", aliceMessages)
+	}
+	exec(t, c, alice, proto.CmdSetDirectMessageSettings, proto.SetDirectMessageSettingsPayload{Policy: "none"})
+	execExpectErr(t, c, bob, proto.CmdSendDirectMessage, proto.SendDirectMessagePayload{
+		To:   "alice",
+		Body: "Blocked again",
+	}, proto.ErrForbidden)
+}
+
+func TestSysopMailAll(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
+
+	execExpectErr(t, c, bob, proto.CmdSendMail, proto.SendMailPayload{
+		ToAll:   true,
+		Subject: "Not sysop",
+		Body:    "hello everyone",
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "admin",
+		Kind:   "ignore",
+		Active: true,
+	})
+
+	broadcast := exec(t, c, admin, proto.CmdSendMail, proto.SendMailPayload{
+		ToAll:   true,
+		Subject: "Campus bulletin",
+		Body:    "Maintenance at midnight.",
+	})
+	for _, user := range []*core.User{alice, bob, carol} {
+		inbox, err := c.ListMail(user.ID, "inbox", 10, 0, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(inbox) != 1 || inbox[0].ID != broadcast.ID || inbox[0].FromName != "admin" || inbox[0].Read {
+			t.Fatalf("expected sysop broadcast in %s inbox, got %+v", user.Name, inbox)
+		}
+		if len(inbox[0].ToNames) != 3 {
+			t.Fatalf("expected mail-all to address three users, got %+v", inbox[0].ToNames)
+		}
+	}
+
+	adminInbox, err := c.ListMail(admin.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adminInbox) != 0 {
+		t.Fatalf("expected mail-all not to create admin inbox copy, got %+v", adminInbox)
+	}
+	adminSent, err := c.ListMail(admin.ID, "sent", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adminSent) != 1 || adminSent[0].ID != broadcast.ID || !adminSent[0].Read {
+		t.Fatalf("expected sysop sent copy, got %+v", adminSent)
+	}
+}
+
+func TestSocialGraphAndIgnoreLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
+
+	exec(t, c, alice, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "bob",
+		Kind:   "friend",
+		Active: true,
+		Note:   "lab partner",
+	})
+	exec(t, c, bob, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "alice",
+		Kind:   "friend",
+		Active: true,
+	})
+	exec(t, c, alice, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "carol",
+		Kind:   "ignore",
+		Active: true,
+		Note:   "too noisy",
+	})
+
+	friends, err := c.ListSocialUsers(alice.ID, "friends", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(friends) != 1 || friends[0].Name != "bob" || friends[0].Note != "lab partner" || !friends[0].Mutual {
+		t.Fatalf("expected mutual friend bob with note, got %+v", friends)
+	}
+	fans, err := c.ListSocialUsers(alice.ID, "fans", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fans) != 1 || fans[0].Name != "bob" || !fans[0].Mutual {
+		t.Fatalf("expected bob fan/mutual, got %+v", fans)
+	}
+	ignores, err := c.ListSocialUsers(alice.ID, "ignores", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ignores) != 1 || ignores[0].Name != "carol" || !ignores[0].Ignored {
+		t.Fatalf("expected ignored carol, got %+v", ignores)
+	}
+
+	online, err := c.ListSocialUsers(alice.ID, "friends", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(online) != 0 {
+		t.Fatalf("expected no online friends before presence, got %+v", online)
+	}
+	execExpectErr(t, c, carol, proto.CmdSetLoginWatch, proto.SetLoginWatchPayload{
+		User:   "bob",
+		Active: true,
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdSetLoginWatch, proto.SetLoginWatchPayload{
+		User:   "bob",
+		Active: true,
+	})
+	notifs, err := c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 0 {
+		t.Fatalf("expected login watch to wait while bob is offline, got %+v", notifs)
+	}
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{Status: "reading:general"})
+	notifs, err = c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 1 || notifs[0].Kind != "login" || notifs[0].Actor != "bob" || notifs[0].ThreadID != "" {
+		t.Fatalf("expected one login notification for bob, got %+v", notifs)
+	}
+	online, err = c.ListSocialUsers(alice.ID, "friends", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(online) != 1 || online[0].Name != "bob" || !online[0].Online || online[0].Status != "reading:general" {
+		t.Fatalf("expected bob online friend, got %+v", online)
+	}
+	if online[0].Mode != "reading" || online[0].BoardID != "general" {
+		t.Fatalf("expected legacy presence to derive board/mode, got %+v", online[0])
+	}
+	globalOnline, err := c.ListOnlineUsers(alice.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(globalOnline) != 1 || globalOnline[0].Name != "bob" || globalOnline[0].BoardID != "general" {
+		t.Fatalf("expected bob in global online list, got %+v", globalOnline)
+	}
+	boardOnline, err := c.ListOnlineUsers(alice.ID, "general", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boardOnline) != 1 || boardOnline[0].Name != "bob" || boardOnline[0].Mode != "reading" {
+		t.Fatalf("expected bob in board online list, got %+v", boardOnline)
+	}
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{Status: "active"})
+	notifs, err = c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 1 {
+		t.Fatalf("expected login watch to clear after one notification, got %+v", notifs)
+	}
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{Status: "invisible", Board: "general", Location: "Hidden"})
+	online, err = c.ListSocialUsers(alice.ID, "friends", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(online) != 0 {
+		t.Fatalf("expected invisible bob to be hidden from online friends, got %+v", online)
+	}
+	globalOnline, err = c.ListOnlineUsers(alice.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(globalOnline) != 0 {
+		t.Fatalf("expected invisible bob to be hidden from global online list, got %+v", globalOnline)
+	}
+	exec(t, c, alice, proto.CmdSetLoginWatch, proto.SetLoginWatchPayload{
+		User:   "bob",
+		Active: true,
+	})
+	notifs, err = c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 1 {
+		t.Fatalf("expected invisible bob not to satisfy login watch immediately, got %+v", notifs)
+	}
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{Status: "active"})
+	notifs, err = c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 2 || notifs[0].Kind != "login" || notifs[0].Actor != "bob" {
+		t.Fatalf("expected visible bob to satisfy pending login watch, got %+v", notifs)
+	}
+
+	exec(t, c, carol, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "bob",
+		Kind:   "ignore",
+		Active: true,
+	})
+	execExpectErr(t, c, bob, proto.CmdSendMail, proto.SendMailPayload{
+		To:      []string{"carol"},
+		Subject: "blocked",
+		Body:    "hello",
+	}, proto.ErrForbidden)
+	execExpectErr(t, c, bob, proto.CmdSendDirectMessage, proto.SendDirectMessagePayload{
+		To:   "carol",
+		Body: "hello",
+	}, proto.ErrForbidden)
+
+	exec(t, c, alice, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "bob",
+		Kind:   "friend",
+		Active: false,
+	})
+	friends, err = c.ListSocialUsers(alice.ID, "friends", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(friends) != 0 {
+		t.Fatalf("expected friend removal, got %+v", friends)
+	}
+}
+
+func TestPrivilegedCloakPresence(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	execExpectErr(t, c, alice, proto.CmdSetPresence, proto.SetPresencePayload{
+		Status: "cloak",
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "admin",
+		Kind:   "friend",
+		Active: true,
+	})
+	exec(t, c, admin, proto.CmdSetPresence, proto.SetPresencePayload{
+		Status:   "cloaked",
+		Mode:     "reading",
+		Board:    "general",
+		Location: "Control room",
+		FromHost: "ops.test",
+	})
+
+	find := func(users []core.SocialUser, name string) *core.SocialUser {
+		for i := range users {
+			if users[i].Name == name {
+				return &users[i]
+			}
+		}
+		return nil
+	}
+
+	aliceOnline, err := c.ListOnlineUsers(alice.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found := find(aliceOnline, "admin"); found != nil {
+		t.Fatalf("expected ordinary user not to see cloaked admin globally, got %+v", found)
+	}
+	adminOnline, err := c.ListOnlineUsers(admin.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloaked := find(adminOnline, "admin")
+	if cloaked == nil || cloaked.Status != "cloak" || cloaked.BoardID != "general" || cloaked.LocationLabel != "Control room" || cloaked.FromHost != "ops.test" {
+		t.Fatalf("expected admin to see own cloaked presence, got %+v", adminOnline)
+	}
+	aliceBoardOnline, err := c.ListOnlineUsers(alice.ID, "general", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found := find(aliceBoardOnline, "admin"); found != nil {
+		t.Fatalf("expected ordinary user not to see cloaked admin on board, got %+v", found)
+	}
+	adminBoardOnline, err := c.ListOnlineUsers(admin.ID, "general", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloaked := find(adminBoardOnline, "admin"); cloaked == nil || cloaked.Status != "cloak" || cloaked.Mode != "reading" {
+		t.Fatalf("expected privileged board online list to include cloaked admin, got %+v", adminBoardOnline)
+	}
+	stats, err := c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.OnlineUsers != 0 {
+		t.Fatalf("expected cloaked presence excluded from public online count, got %+v", stats)
+	}
+
+	exec(t, c, alice, proto.CmdSetLoginWatch, proto.SetLoginWatchPayload{
+		User:   "admin",
+		Active: true,
+	})
+	notifs, err := c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 0 {
+		t.Fatalf("expected cloak not to satisfy login watch immediately, got %+v", notifs)
+	}
+	exec(t, c, admin, proto.CmdSetPresence, proto.SetPresencePayload{Status: "active"})
+	notifs, err = c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 1 || notifs[0].Kind != "login" || notifs[0].Actor != "admin" {
+		t.Fatalf("expected visible admin presence to satisfy login watch, got %+v", notifs)
+	}
+}
+
+func TestMultiSessionPresenceLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, alice, proto.CmdSetUserRelationship, proto.SetUserRelationshipPayload{
+		User:   "bob",
+		Kind:   "friend",
+		Active: true,
+	})
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{
+		SessionID: "web",
+		Status:    "reading:general",
+		Mode:      "reading",
+		Board:     "general",
+		Location:  "General",
+	})
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{
+		SessionID: "ssh",
+		Status:    "active",
+		Mode:      "mail",
+		Location:  "Mailbox",
+		FromHost:  "ssh.test",
+	})
+
+	sessionNames := func(users []core.SocialUser, name string) map[string]core.SocialUser {
+		out := map[string]core.SocialUser{}
+		for _, user := range users {
+			if user.Name == name {
+				out[user.SessionID] = user
+			}
+		}
+		return out
+	}
+
+	globalOnline, err := c.ListOnlineUsers(alice.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobSessions := sessionNames(globalOnline, "bob")
+	if len(bobSessions) != 2 || bobSessions["web"].BoardID != "general" || bobSessions["ssh"].Mode != "mail" || bobSessions["ssh"].FromHost != "ssh.test" {
+		t.Fatalf("expected two bob sessions in global online list, got %+v", globalOnline)
+	}
+	boardOnline, err := c.ListOnlineUsers(alice.ID, "general", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobSessions = sessionNames(boardOnline, "bob")
+	if len(bobSessions) != 1 || bobSessions["web"].SessionID != "web" {
+		t.Fatalf("expected only bob web session on general board, got %+v", boardOnline)
+	}
+	stats, err := c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.OnlineUsers != 1 {
+		t.Fatalf("expected public online count to count distinct users, got %+v", stats)
+	}
+
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{SessionID: "web", Status: "offline"})
+	globalOnline, err = c.ListOnlineUsers(alice.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobSessions = sessionNames(globalOnline, "bob")
+	if len(bobSessions) != 1 || bobSessions["ssh"].SessionID != "ssh" {
+		t.Fatalf("expected bob to remain online via ssh session, got %+v", globalOnline)
+	}
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{SessionID: "ssh", Status: "invisible"})
+	globalOnline, err = c.ListOnlineUsers(alice.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bobSessions = sessionNames(globalOnline, "bob"); len(bobSessions) != 0 {
+		t.Fatalf("expected bob hidden after all sessions hidden, got %+v", globalOnline)
+	}
+
+	exec(t, c, alice, proto.CmdSetLoginWatch, proto.SetLoginWatchPayload{
+		User:   "bob",
+		Active: true,
+	})
+	notifs, err := c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 0 {
+		t.Fatalf("expected hidden sessions not to satisfy login watch immediately, got %+v", notifs)
+	}
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{SessionID: "web", Status: "active"})
+	notifs, err = c.ListNotifications(alice.ID, 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifs) != 1 || notifs[0].Kind != "login" || notifs[0].Actor != "bob" {
+		t.Fatalf("expected visible session to satisfy login watch, got %+v", notifs)
+	}
+}
+
+func TestBoardReadMarkersLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	thread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Unread thread",
+		Body:  "First post",
+	})
+
+	summaries, err := c.ListBoardSummaries(alice.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var general *core.BoardSummary
+	for i := range summaries {
+		if summaries[i].ID == "general" {
+			general = &summaries[i]
+			break
+		}
+	}
+	if general == nil {
+		t.Fatalf("expected general board summary, got %+v", summaries)
+	}
+	if general.UnreadPosts != 1 || general.UnreadThreads != 1 {
+		t.Fatalf("expected one unread post/thread before marker, got %+v", general)
+	}
+
+	exec(t, c, alice, proto.CmdMarkBoardRead, proto.MarkBoardReadPayload{Board: "general"})
+
+	summaries, err = c.ListBoardSummaries(alice.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	general = nil
+	for i := range summaries {
+		if summaries[i].ID == "general" {
+			general = &summaries[i]
+			break
+		}
+	}
+	if general == nil || general.UnreadPosts != 0 || general.UnreadThreads != 0 {
+		t.Fatalf("expected mark-read to clear unread state, got %+v", summaries)
+	}
+	if general.ReadSeq != general.LastSeq {
+		t.Fatalf("expected read seq to match board head, got read=%d last=%d", general.ReadSeq, general.LastSeq)
+	}
+
+	exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "Second post",
+	})
+
+	unread, err := c.ListBoardSummaries(alice.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 || unread[0].UnreadPosts != 1 || unread[0].UnreadThreads != 1 {
+		t.Fatalf("expected new post to make board unread again, got %+v", unread)
+	}
+
+	exec(t, c, alice, proto.CmdRestoreBoardRead, proto.RestoreBoardReadPayload{Board: "general"})
+
+	summaries, err = c.ListBoardSummaries(alice.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaries[0].UnreadPosts != 2 {
+		t.Fatalf("expected restore to bring previous unread posts back, got %+v", summaries[0])
+	}
+
+	execExpectErr(t, c, alice, proto.CmdMarkBoardRead, proto.MarkBoardReadPayload{
+		Board: "missing",
+	}, proto.ErrNotFound)
+	execExpectErr(t, c, alice, proto.CmdRestoreBoardRead, proto.RestoreBoardReadPayload{
+		Board: "missing",
+	}, proto.ErrNotFound)
+}
+
+func TestThreadReadMarkersLifecycle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	thread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Thread unread",
+		Body:  "First post",
+	})
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected first post")
+	}
+
+	summaries, err := c.ListThreadSummaries(alice.ID, "general", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected one thread summary, got %+v", summaries)
+	}
+	if summaries[0].UnreadPosts != 1 || summaries[0].FirstUnreadPostID != posts[0].ID {
+		t.Fatalf("expected first post unread, got %+v", summaries[0])
+	}
+
+	exec(t, c, alice, proto.CmdMarkThreadRead, proto.MarkThreadReadPayload{Thread: thread.ID})
+
+	summaries, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaries[0].UnreadPosts != 0 || summaries[0].FirstUnreadPostID != "" {
+		t.Fatalf("expected thread mark-read to clear unread posts, got %+v", summaries[0])
+	}
+
+	reply := exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "Second post",
+	})
+
+	summaries, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaries[0].UnreadPosts != 1 || summaries[0].FirstUnreadPostID != reply.ID {
+		t.Fatalf("expected reply to be first unread, got %+v", summaries[0])
+	}
+
+	exec(t, c, alice, proto.CmdRestoreThreadRead, proto.RestoreThreadReadPayload{Thread: thread.ID})
+
+	summaries, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaries[0].UnreadPosts != 2 || summaries[0].FirstUnreadPostID != posts[0].ID {
+		t.Fatalf("expected restore to expose both posts again, got %+v", summaries[0])
+	}
+
+	exec(t, c, alice, proto.CmdMarkBoardRead, proto.MarkBoardReadPayload{Board: "general"})
+
+	summaries, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaries[0].UnreadPosts != 0 {
+		t.Fatalf("expected board mark-read to clear thread summary unread state, got %+v", summaries[0])
+	}
+
+	execExpectErr(t, c, alice, proto.CmdMarkThreadRead, proto.MarkThreadReadPayload{
+		Thread: "missing",
+	}, proto.ErrNotFound)
+	execExpectErr(t, c, alice, proto.CmdRestoreThreadRead, proto.RestoreThreadReadPayload{
+		Thread: "missing",
+	}, proto.ErrNotFound)
+}
+
+func TestUnreadOnlyThreadSummaries(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	first := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "First unread topic",
+		Body:  "First post",
+	})
+	second := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Second unread topic",
+		Body:  "Second post",
+	})
+
+	unread, err := c.ListThreadSummaries(alice.ID, "general", 10, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 2 {
+		t.Fatalf("expected both threads unread, got %+v", unread)
+	}
+
+	exec(t, c, alice, proto.CmdMarkThreadRead, proto.MarkThreadReadPayload{Thread: second.ID})
+
+	unread, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 || unread[0].ID != first.ID {
+		t.Fatalf("expected only first thread unread after marking second, got %+v", unread)
+	}
+
+	exec(t, c, alice, proto.CmdMarkBoardRead, proto.MarkBoardReadPayload{Board: "general"})
+
+	unread, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 0 {
+		t.Fatalf("expected no unread threads after board marker, got %+v", unread)
+	}
+
+	reply := exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: first.ID,
+		Body:   "Fresh reply",
+	})
+
+	unread, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 || unread[0].ID != first.ID || unread[0].FirstUnreadPostID != reply.ID {
+		t.Fatalf("expected fresh reply to restore first thread unread state, got %+v", unread)
+	}
+}
+
+func TestSiteWideAndFavoriteFolderUnreadThreadSummaries(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "tech", Name: "Tech"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "life", Name: "Life"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secret", Name: "Secret"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secret",
+		MemberReadMode: boolPtr(true),
+	})
+
+	work := exec(t, c, alice, proto.CmdCreateFavoriteFolder, proto.CreateFavoriteFolderPayload{Name: "Work"})
+	child := exec(t, c, alice, proto.CmdCreateFavoriteFolder, proto.CreateFavoriteFolderPayload{Name: "Child", ParentID: work.ID})
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{Board: "tech", Favorite: true, FolderID: work.ID})
+	exec(t, c, alice, proto.CmdSetBoardFavorite, proto.SetBoardFavoritePayload{Board: "life", Favorite: true, FolderID: child.ID})
+
+	tech := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "tech", Title: "Tech unread", Body: "first"})
+	life := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "life", Title: "Life unread", Body: "first"})
+	secret := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "secret", Title: "Secret unread", Body: "hidden"})
+
+	siteWide, err := c.ListUnreadThreadSummaries(alice, false, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasThread(siteWide, tech.ID) || !hasThread(siteWide, life.ID) || hasThread(siteWide, secret.ID) {
+		t.Fatalf("expected site-wide visible unread threads only, got %+v", siteWide)
+	}
+	if got := boardNameForThread(siteWide, tech.ID); got != "Tech" {
+		t.Fatalf("expected board name on cross-board unread summary, got %q in %+v", got, siteWide)
+	}
+
+	favorites, err := c.ListUnreadThreadSummaries(alice, true, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasThread(favorites, tech.ID) || !hasThread(favorites, life.ID) || hasThread(favorites, secret.ID) {
+		t.Fatalf("expected favorite unread threads, got %+v", favorites)
+	}
+
+	workUnread, err := c.ListUnreadThreadSummaries(alice, false, work.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasThread(workUnread, tech.ID) || !hasThread(workUnread, life.ID) {
+		t.Fatalf("expected favorite folder unread traversal to include descendant folder boards, got %+v", workUnread)
+	}
+
+	exec(t, c, alice, proto.CmdMarkThreadRead, proto.MarkThreadReadPayload{Thread: tech.ID})
+	workUnread, err = c.ListUnreadThreadSummaries(alice, false, work.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasThread(workUnread, tech.ID) || !hasThread(workUnread, life.ID) {
+		t.Fatalf("expected marking tech read to leave only life unread in folder traversal, got %+v", workUnread)
+	}
+
+	adminUnread, err := c.ListUnreadThreadSummaries(admin, false, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasThread(adminUnread, secret.ID) {
+		t.Fatalf("expected admin to see member-read unread thread, got %+v", adminUnread)
+	}
+}
+
+func TestReadablePostsByAuthorRespectBoardReadPolicy(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "tech", Name: "Tech"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "life", Name: "Life"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secret", Name: "Secret"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secret",
+		MemberReadMode: boolPtr(true),
+	})
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "secret",
+		User:   "bob",
+		Member: true,
+	})
+
+	tech := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "tech", Title: "Tech notes", Body: "tech first"})
+	life := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "life", Title: "Life notes", Body: "life first"})
+	secret := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "secret", Title: "Secret notes", Body: "secret first"})
+
+	publicPosts, err := c.ListPostsByAuthor("bob", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasPostInThread(publicPosts, tech.ID) || !hasPostInThread(publicPosts, life.ID) || hasPostInThread(publicPosts, secret.ID) {
+		t.Fatalf("expected public author posts to hide member-read board posts, got %+v", publicPosts)
+	}
+	if got := postBoardNameForThread(publicPosts, tech.ID); got != "Tech" {
+		t.Fatalf("expected board name on public author post, got %q in %+v", got, publicPosts)
+	}
+	if got := postThreadTitleForThread(publicPosts, tech.ID); got != "Tech notes" {
+		t.Fatalf("expected thread title on public author post, got %q in %+v", got, publicPosts)
+	}
+
+	alicePosts, err := c.ListReadablePostsByAuthor(alice, "bob", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasPostInThread(alicePosts, tech.ID) || !hasPostInThread(alicePosts, life.ID) || hasPostInThread(alicePosts, secret.ID) {
+		t.Fatalf("expected alice author stream to hide member-read board posts, got %+v", alicePosts)
+	}
+
+	adminPosts, err := c.ListReadablePostsByAuthor(admin, "bob", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasPostInThread(adminPosts, secret.ID) {
+		t.Fatalf("expected admin author stream to include member-read board posts, got %+v", adminPosts)
+	}
+
+	bobPosts, err := c.ListReadablePostsByAuthor(bob, "bob", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasPostInThread(bobPosts, secret.ID) {
+		t.Fatalf("expected board member author stream to include member-read board posts, got %+v", bobPosts)
+	}
+}
+
+func TestReplyTreePostsReturnRootAndDescendants(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Reply tree",
+		Body:  "root",
+	})
+	rootPosts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rootPosts) != 1 {
+		t.Fatalf("expected root post, got %+v", rootPosts)
+	}
+	root := rootPosts[0]
+	firstReply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread:  thread.ID,
+		ReplyTo: root.ID,
+		Body:    "first reply",
+	})
+	secondReply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread:  thread.ID,
+		ReplyTo: root.ID,
+		Body:    "second reply",
+	})
+	unrelated := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "not in reply tree",
+	})
+
+	tree, err := c.ListReplyTreePosts(root.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasPostID(tree, root.ID) || !hasPostID(tree, firstReply.ID) || !hasPostID(tree, secondReply.ID) || hasPostID(tree, unrelated.ID) {
+		t.Fatalf("expected reply tree to include root and direct descendants only, got %+v", tree)
+	}
+	if got := postReplyDepth(tree, root.ID); got != 0 {
+		t.Fatalf("expected root depth 0, got %d in %+v", got, tree)
+	}
+	if got := postReplyDepth(tree, firstReply.ID); got != 1 {
+		t.Fatalf("expected reply depth 1, got %d in %+v", got, tree)
+	}
+	if got := postThreadTitleForPost(tree, root.ID); got != "Reply tree" {
+		t.Fatalf("expected thread title on reply-tree posts, got %q in %+v", got, tree)
+	}
+}
+
+func hasThread(threads []core.ThreadSummary, threadID string) bool {
+	for _, thread := range threads {
+		if thread.ID == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+func boardNameForThread(threads []core.ThreadSummary, threadID string) string {
+	for _, thread := range threads {
+		if thread.ID == threadID {
+			return thread.BoardName
+		}
+	}
+	return ""
+}
+
+func hasPostID(posts []core.Post, postID string) bool {
+	for _, post := range posts {
+		if post.ID == postID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPostInThread(posts []core.Post, threadID string) bool {
+	for _, post := range posts {
+		if post.Thread == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+func postBoardNameForThread(posts []core.Post, threadID string) string {
+	for _, post := range posts {
+		if post.Thread == threadID {
+			return post.BoardName
+		}
+	}
+	return ""
+}
+
+func postThreadTitleForThread(posts []core.Post, threadID string) string {
+	for _, post := range posts {
+		if post.Thread == threadID {
+			return post.ThreadTitle
+		}
+	}
+	return ""
+}
+
+func postThreadTitleForPost(posts []core.Post, postID string) string {
+	for _, post := range posts {
+		if post.ID == postID {
+			return post.ThreadTitle
+		}
+	}
+	return ""
+}
+
+func postReplyDepth(posts []core.Post, postID string) int {
+	for _, post := range posts {
+		if post.ID == postID {
+			return post.ReplyDepth
+		}
+	}
+	return -1
+}
+
+func favoriteFolderByName(tree *core.FavoriteTree, name string) *core.FavoriteFolder {
+	for i := range tree.Folders {
+		if tree.Folders[i].Name == name {
+			return &tree.Folders[i]
+		}
+	}
+	return nil
+}
+
+func favoriteFolderForBoard(tree *core.FavoriteTree, boardID string) string {
+	for _, board := range tree.Boards {
+		if board.ID == boardID {
+			return board.FolderID
+		}
+	}
+	return ""
+}
+
+func TestMarkPostReadAdvancesThreadMarkerThroughPost(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	thread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Article markers",
+		Body:  "First post",
+	})
+	second := exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "Second post",
+	})
+	third := exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: thread.ID,
+		Body:   "Third post",
+	})
+
+	exec(t, c, alice, proto.CmdMarkPostRead, proto.MarkPostReadPayload{Post: second.ID})
+
+	summaries, err := c.ListThreadSummaries(alice.ID, "general", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected thread summary")
+	}
+	if summaries[0].UnreadPosts != 1 || summaries[0].FirstUnreadPostID != third.ID {
+		t.Fatalf("expected third post to be first unread after marking second read, got %+v", summaries[0])
+	}
+
+	exec(t, c, alice, proto.CmdRestoreThreadRead, proto.RestoreThreadReadPayload{Thread: thread.ID})
+
+	summaries, err = c.ListThreadSummaries(alice.ID, "general", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaries[0].UnreadPosts != 3 {
+		t.Fatalf("expected restore to return all posts to unread, got %+v", summaries[0])
+	}
+
+	execExpectErr(t, c, alice, proto.CmdMarkPostRead, proto.MarkPostReadPayload{
+		Post: "missing",
+	}, proto.ErrNotFound)
 }
 
 // --- M11 trust / poll feature checks ---
@@ -974,6 +5057,220 @@ func TestPollVoteReplacesPriorVote(t *testing.T) {
 	}
 	if votesA != 0 || votesB != 1 {
 		t.Fatalf("expected Option A=0 and Option B=1 after replacement vote, got %d/%d", votesA, votesB)
+	}
+}
+
+func TestPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Vote result poll", Body: "[poll]\nBest option?\nOption A\nOption B\n[/poll]",
+	})
+	threadPosts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poll, err := c.GetPollByPostID(threadPosts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pollState, err := c.GetPoll(poll.ID, bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pollState.Options) != 2 {
+		t.Fatalf("expected poll options, got %+v", pollState.Options)
+	}
+	exec(t, c, bob, proto.CmdVotePoll, proto.VotePollPayload{Poll: poll.ID, Option: pollState.Options[0].ID})
+
+	execExpectErr(t, c, bob, proto.CmdPublishPollResult, proto.PublishPollResultPayload{
+		Poll: poll.ID,
+	}, proto.ErrForbidden)
+	result := exec(t, c, alice, proto.CmdPublishPollResult, proto.PublishPollResultPayload{
+		Poll: poll.ID,
+	})
+	if result.ID == "" {
+		t.Fatalf("expected generated vote result thread, got %+v", result)
+	}
+	board, err := c.GetBoard("vote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board == nil || board.Name != "vote" {
+		t.Fatalf("expected generated vote board, got %+v", board)
+	}
+	threads, err := c.ListThreads("vote", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].ID != result.ID || !strings.Contains(threads[0].Title, "Best option?") {
+		t.Fatalf("expected generated vote result thread, got %+v", threads)
+	}
+	posts, err := c.ListPosts(result.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected one vote result post, got %+v", posts)
+	}
+	for _, want := range []string{"# Poll result: Best option?", "Source thread: Vote result poll", "Total votes: 1", "Option A: 1 vote", "Option B: 0 vote", "Generated public poll result"} {
+		if !strings.Contains(posts[0].Body, want) {
+			t.Fatalf("expected vote result body to contain %q, got:\n%s", want, posts[0].Body)
+		}
+	}
+	again := exec(t, c, alice, proto.CmdPublishPollResult, proto.PublishPollResultPayload{Poll: poll.ID})
+	if again.ID != result.ID {
+		t.Fatalf("expected repeated result publish to reuse %q, got %+v", result.ID, again)
+	}
+	threads, err = c.ListThreads("vote", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("expected repeated publish not to duplicate vote result, got %+v", threads)
+	}
+}
+
+func TestBoardPostingSanctionsCreateDenyPostRecords(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:   "policy",
+		Name: "Policy",
+	})
+	base := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "policy",
+		Title: "Board rules",
+		Body:  "Please keep this board tidy.",
+	})
+	exec(t, c, admin, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User:   alice.ID,
+		Kind:   "mute",
+		Scope:  "policy",
+		Reason: "cooldown",
+	})
+	execExpectErr(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID,
+		Body:   "I should be muted",
+	}, proto.ErrMuted)
+
+	denyThreads, err := c.ListThreads("denypost", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(denyThreads) != 1 || !strings.Contains(denyThreads[0].Title, "Board posting denied: alice on policy") {
+		t.Fatalf("expected denypost generated thread, got %+v", denyThreads)
+	}
+	denyPosts, err := c.ListPosts(denyThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(denyPosts) != 1 {
+		t.Fatalf("expected one denypost generated post, got %+v", denyPosts)
+	}
+	for _, want := range []string{"# Board posting denied", "- Action: board posting denied", "- User: alice", "- Board: Policy (policy)", "- Kind: mute", "- Actor: admin", "- Reason: cooldown"} {
+		if !strings.Contains(denyPosts[0].Body, want) {
+			t.Fatalf("expected denypost body to contain %q, got:\n%s", want, denyPosts[0].Body)
+		}
+	}
+
+	exec(t, c, admin, proto.CmdClearUserSanction, proto.ClearUserSanctionPayload{
+		User:   alice.ID,
+		Kind:   "mute",
+		Scope:  "policy",
+		Reason: "served",
+	})
+	exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID,
+		Body:   "I can post again",
+	})
+
+	undenyThreads, err := c.ListThreads("undenypost", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(undenyThreads) != 1 || !strings.Contains(undenyThreads[0].Title, "Board posting restored: alice on policy") {
+		t.Fatalf("expected undenypost generated thread, got %+v", undenyThreads)
+	}
+	undenyPosts, err := c.ListPosts(undenyThreads[0].ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(undenyPosts) != 1 {
+		t.Fatalf("expected one undenypost generated post, got %+v", undenyPosts)
+	}
+	for _, want := range []string{"# Board posting restored", "- Action: board posting restored", "- User: alice", "- Board: Policy (policy)", "- Kind: mute", "- Actor: admin", "- Reason: served"} {
+		if !strings.Contains(undenyPosts[0].Body, want) {
+			t.Fatalf("expected undenypost body to contain %q, got:\n%s", want, undenyPosts[0].Body)
+		}
+	}
+	if sanctions := loadSanctionsForTest(t, c); len(sanctions) != 0 {
+		t.Fatalf("expected sanction clear to remove active sanctions, got %+v", sanctions)
+	}
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:   "secret",
+		Name: "Secret",
+	})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:          "secret",
+		MemberReadMode: boolPtr(true),
+	})
+	exec(t, c, admin, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User:   alice.ID,
+		Kind:   "mute",
+		Scope:  "secret",
+		Reason: "private board",
+	})
+	exec(t, c, admin, proto.CmdClearUserSanction, proto.ClearUserSanctionPayload{
+		User:  alice.ID,
+		Kind:  "mute",
+		Scope: "secret",
+	})
+	denyThreads, err = c.ListThreads("denypost", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(denyThreads) != 1 {
+		t.Fatalf("expected member-read sanction not to create extra denypost records, got %+v", denyThreads)
+	}
+	undenyThreads, err = c.ListThreads("undenypost", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(undenyThreads) != 1 {
+		t.Fatalf("expected member-read clear not to create extra undenypost records, got %+v", undenyThreads)
+	}
+
+	clearProjectionTablesForTest(t, c)
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatalf("rebuild failed: %v", err)
+	}
+	if sanctions := loadSanctionsForTest(t, c); len(sanctions) != 0 {
+		t.Fatalf("expected sanction clear to replay, got %+v", sanctions)
+	}
+	rebuiltDenyThreads, err := c.ListThreads("denypost", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rebuiltDenyThreads) != 1 {
+		t.Fatalf("expected denypost generated record after rebuild, got %+v", rebuiltDenyThreads)
+	}
+	rebuiltUndenyThreads, err := c.ListThreads("undenypost", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rebuiltUndenyThreads) != 1 {
+		t.Fatalf("expected undenypost generated record after rebuild, got %+v", rebuiltUndenyThreads)
 	}
 }
 
@@ -1816,6 +6113,9 @@ func clearProjectionTablesForTest(t *testing.T, c *core.Core) {
 	t.Helper()
 	tables := []string{
 		"posts_fts",
+		"direct_messages",
+		"mail_copies",
+		"mail_messages",
 		"posts",
 		"threads",
 		"poll_votes",
@@ -1823,6 +6123,7 @@ func clearProjectionTablesForTest(t *testing.T, c *core.Core) {
 		"polls",
 		"post_reactions",
 		"moderation_reviews",
+		"content_filters",
 		"user_sanctions",
 		"user_activity",
 	}

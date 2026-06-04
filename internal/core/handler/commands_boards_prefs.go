@@ -1,0 +1,2115 @@
+package handler
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+)
+
+func (h *Handler) setBoardFavorite(actor *User, p proto.SetBoardFavoritePayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if p.Favorite {
+		if errReply := h.requireFavoriteFolder(actor.ID, p.FolderID); errReply.Err != nil {
+			return errReply
+		}
+	}
+	if err := setBoardFavorite(h.db, actor.ID, p.Board, p.FolderID, p.Position, p.Favorite); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) createFavoriteFolder(actor *User, p proto.CreateFavoriteFolderPayload) Reply {
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "name is required", false)}
+	}
+	if len(name) > 80 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder name must be 80 characters or less", false)}
+	}
+	if errReply := h.requireFavoriteFolder(actor.ID, p.ParentID); errReply.Err != nil {
+		return errReply
+	}
+	folderID := newID("favfld_")
+	if err := createFavoriteFolder(h.db, actor.ID, folderID, p.ParentID, name, p.Position); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: folderID}}
+}
+
+func (h *Handler) updateFavoriteFolder(actor *User, p proto.UpdateFavoriteFolderPayload) Reply {
+	if p.Folder == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder is required", false)}
+	}
+	name := strings.TrimSpace(p.Name)
+	if len(name) > 80 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder name must be 80 characters or less", false)}
+	}
+	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
+		return errReply
+	}
+	if p.ParentID != nil {
+		if *p.ParentID == p.Folder {
+			return Reply{Err: errDetail(proto.ErrValidationFailed, "folder cannot be its own parent", false)}
+		}
+		if errReply := h.requireFavoriteFolder(actor.ID, *p.ParentID); errReply.Err != nil {
+			return errReply
+		}
+		if h.favoriteFolderContains(actor.ID, p.Folder, *p.ParentID) {
+			return Reply{Err: errDetail(proto.ErrValidationFailed, "folder cannot move under its descendant", false)}
+		}
+	}
+	if err := updateFavoriteFolder(h.db, actor.ID, p.Folder, name, p.ParentID, p.Position); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Folder}}
+}
+
+func (h *Handler) deleteFavoriteFolder(actor *User, p proto.DeleteFavoriteFolderPayload) Reply {
+	if p.Folder == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder is required", false)}
+	}
+	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
+		return errReply
+	}
+	if err := deleteFavoriteFolder(h.db, actor.ID, p.Folder); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Folder}}
+}
+
+func (h *Handler) moveBoardFavorite(actor *User, p proto.MoveBoardFavoritePayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if errReply := h.requireFavoriteFolder(actor.ID, p.FolderID); errReply.Err != nil {
+		return errReply
+	}
+	if err := moveBoardFavorite(h.db, actor.ID, p.Board, p.FolderID, p.Position); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) importFavoriteTree(actor *User, p proto.ImportFavoriteTreePayload) Reply {
+	replace := true
+	if p.Replace != nil {
+		replace = *p.Replace
+	}
+	tree := &projections.FavoriteTree{
+		Folders: make([]projections.FavoriteFolder, 0, len(p.Folders)),
+		Boards:  make([]projections.FavoriteBoardEntry, 0, len(p.Boards)),
+	}
+	for _, folder := range p.Folders {
+		tree.Folders = append(tree.Folders, projections.FavoriteFolder{
+			ID:       folder.ID,
+			ParentID: folder.ParentID,
+			Name:     folder.Name,
+			Position: folder.Position,
+		})
+	}
+	for _, board := range p.Boards {
+		tree.Boards = append(tree.Boards, projections.FavoriteBoardEntry{
+			ID:       board.ID,
+			FolderID: board.FolderID,
+			Position: board.Position,
+		})
+	}
+	if err := importFavoriteTree(h.db, actor.ID, tree, replace); err != nil {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, err.Error(), false)}
+	}
+	return Reply{Result: &proto.AckResult{}}
+}
+
+func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if !h.actorCanSetBoardSettings(actor, p.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
+	}
+	patch := BoardSettingsPatch{
+		AnonymousAllowed:   p.AnonymousAllowed,
+		ReadOnly:           p.ReadOnly,
+		NoReply:            p.NoReply,
+		AttachmentsAllowed: p.AttachmentsAllowed,
+		MailInAllowed:      p.MailInAllowed,
+		RelayEnabled:       p.RelayEnabled,
+		MemberReadMode:     p.MemberReadMode,
+		MemberPostMode:     p.MemberPostMode,
+	}
+	if err := setBoardSettings(h.db, p.Board, patch); err != nil {
+		return internalErr(err)
+	}
+	settingLines := boardSettingsAuditLines(p)
+	if len(settingLines) > 0 {
+		lines := []string{
+			"Action: board settings changed",
+			"Board: " + p.Board,
+			"Actor: " + actor.Name,
+		}
+		lines = append(lines, settingLines...)
+		if err := h.ensureSyssecuritySystemPost(actor, "Board settings changed: "+p.Board, lines, p.Board); err != nil {
+			return internalErr(err)
+		}
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayload) Reply {
+	if !actor.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	}
+	if p.Board == "" || p.User == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board and user are required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	userID, userName, errReply := h.resolveUserRef(p.User)
+	if errReply.Err != nil {
+		return errReply
+	}
+	if err := setBoardModerator(h.db, p.Board, userID, p.Moderator, p.Position); err != nil {
+		return internalErr(err)
+	}
+	action := "moderator removed"
+	if p.Moderator {
+		action = "moderator appointed"
+	}
+	if err := h.ensureSyssecuritySystemPost(actor, "Board "+action+": "+p.Board, []string{
+		"Action: board " + action,
+		"Board: " + p.Board,
+		"User: " + userName,
+		"Actor: " + actor.Name,
+	}, p.Board); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Reply {
+	if p.Board == "" || p.User == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board and user are required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	canModerateBoard := h.actorCanModerateBoard(actor, p.Board)
+	if !canModerateBoard && !h.actorCanManageBoardMembers(actor, p.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board member manager permission required", false)}
+	}
+	if !canModerateBoard && boardMemberPermissionsChanged(p) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to change member permissions", false)}
+	}
+	userID, _, errReply := h.resolveUserRef(p.User)
+	if errReply.Err != nil {
+		return errReply
+	}
+	title := strings.TrimSpace(p.Title)
+	if len(title) > 80 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "member title must be 80 characters or less", false)}
+	}
+	if p.Position != nil && *p.Position < 0 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "member position cannot be negative", false)}
+	}
+	patch := BoardMemberPatch{
+		Title:               title,
+		Position:            p.Position,
+		CanManageMembers:    p.CanManageMembers,
+		CanCurate:           p.CanCurate,
+		CanModeratePosts:    p.CanModeratePosts,
+		CanModerateThreads:  p.CanModerateThreads,
+		CanAnnounce:         p.CanAnnounce,
+		CanSetBoardSettings: p.CanSetBoardSettings,
+	}
+	if err := setBoardMember(h.db, p.Board, userID, p.Member, patch); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) setBoardMemberRequirements(actor *User, p proto.SetBoardMemberRequirementsPayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if !h.actorCanSetBoardSettings(actor, p.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
+	}
+	for _, field := range []struct {
+		name  string
+		value *int
+	}{
+		{"minLoginCount", p.MinLoginCount},
+		{"minPostCount", p.MinPostCount},
+		{"minTrustLevel", p.MinTrustLevel},
+		{"minScore", p.MinScore},
+		{"minBoardPostCount", p.MinBoardPostCount},
+		{"minBoardOriginalPostCount", p.MinBoardOriginalPostCount},
+		{"minBoardDigestCount", p.MinBoardDigestCount},
+		{"minBoardMarkCount", p.MinBoardMarkCount},
+		{"maxMembers", p.MaxMembers},
+	} {
+		if field.value != nil && *field.value < 0 {
+			return Reply{Err: errDetail(proto.ErrValidationFailed, field.name+" must be non-negative", false)}
+		}
+	}
+	patch := BoardMemberRequirementsPatch{
+		MinLoginCount:             p.MinLoginCount,
+		MinPostCount:              p.MinPostCount,
+		MinTrustLevel:             p.MinTrustLevel,
+		MinScore:                  p.MinScore,
+		MinBoardPostCount:         p.MinBoardPostCount,
+		MinBoardOriginalPostCount: p.MinBoardOriginalPostCount,
+		MinBoardDigestCount:       p.MinBoardDigestCount,
+		MinBoardMarkCount:         p.MinBoardMarkCount,
+		MaxMembers:                p.MaxMembers,
+	}
+	if p.ApprovalMode != nil {
+		mode, errReply := normalizeBoardMemberApprovalMode(*p.ApprovalMode)
+		if errReply.Err != nil {
+			return errReply
+		}
+		patch.ApprovalMode = &mode
+	}
+	if err := setBoardMemberRequirements(h.db, p.Board, patch); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembershipPayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if h.isBoardMember(actor.ID, p.Board) {
+		return Reply{Err: errDetail(proto.ErrConflict, "already a board member", false)}
+	}
+	status, err := h.latestBoardMembershipApplicationStatus(p.Board, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	switch status {
+	case "pending":
+		return Reply{Err: errDetail(proto.ErrConflict, "membership application already pending", false)}
+	case "blacklisted":
+		return Reply{Err: errDetail(proto.ErrForbidden, "membership application is blocked", false)}
+	}
+	note := strings.TrimSpace(p.Note)
+	if len(note) > 500 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "application note must be 500 characters or less", false)}
+	}
+	requirements, err := getBoardMemberRequirements(h.db, p.Board)
+	if err != nil {
+		return internalErr(err)
+	}
+	if errReply := h.requireBoardMembershipAdmission(p.Board, actor.ID, requirements); errReply.Err != nil {
+		return errReply
+	}
+	appID := newID("bmap_")
+	if err := insertBoardMemberApplication(h.db, appID, p.Board, actor.ID, note); err != nil {
+		return internalErr(err)
+	}
+	if requirements != nil && requirements.ApprovalMode == "auto" {
+		if err := reviewBoardMemberApplication(h.db, appID, actor.ID, "approved", "", "auto-approved by board membership rules"); err != nil {
+			return internalErr(err)
+		}
+		if err := h.ensureBoardRegistrationSystemPost(actor, appID, "approved", p.Board, actor.ID); err != nil {
+			return internalErr(err)
+		}
+	}
+	return Reply{Result: &proto.AckResult{ID: appID}}
+}
+
+func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembershipPayload) Reply {
+	if p.Application == "" || p.Status == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "application and status are required", false)}
+	}
+	status, errReply := normalizeMemberApplicationStatus(p.Status)
+	if errReply.Err != nil {
+		return errReply
+	}
+	var boardID, userID, currentStatus string
+	err := qQueryRow(h.db, `SELECT board_id, user_id, status FROM board_member_applications WHERE id=?`, p.Application).Scan(&boardID, &userID, &currentStatus)
+	if err == sql.ErrNoRows {
+		return Reply{Err: errDetail(proto.ErrNotFound, "membership application not found", false)}
+	}
+	if err != nil {
+		return internalErr(err)
+	}
+	if currentStatus != "pending" {
+		return Reply{Err: errDetail(proto.ErrConflict, "membership application is already reviewed", false)}
+	}
+	if !h.actorCanManageBoardMembers(actor, boardID) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board member manager permission required", false)}
+	}
+	title := strings.TrimSpace(p.Title)
+	if len(title) > 80 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "member title must be 80 characters or less", false)}
+	}
+	note := strings.TrimSpace(p.Note)
+	if len(note) > 500 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "review note must be 500 characters or less", false)}
+	}
+	if status == "approved" {
+		requirements, err := getBoardMemberRequirements(h.db, boardID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if errReply := h.requireBoardMembershipAdmission(boardID, userID, requirements); errReply.Err != nil {
+			return errReply
+		}
+	}
+	if err := reviewBoardMemberApplication(h.db, p.Application, actor.ID, status, title, note); err != nil {
+		return internalErr(err)
+	}
+	if err := h.ensureBoardRegistrationSystemPost(actor, p.Application, status, boardID, userID); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Application}}
+}
+
+func (h *Handler) leaveBoardMembership(actor *User, p proto.LeaveBoardMembershipPayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if !h.isBoardMember(actor.ID, p.Board) {
+		return Reply{Err: errDetail(proto.ErrNotFound, "board membership not found", false)}
+	}
+	if err := setBoardMember(h.db, p.Board, actor.ID, false, BoardMemberPatch{}); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
+	if p.Post == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	post, err := getPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+	if post.Redacted {
+		return Reply{Err: errDetail(proto.ErrConflict, "cannot curate a redacted post", false)}
+	}
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil {
+		return internalErr(err)
+	}
+	if thread == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+	}
+	kind, errReply := normalizeDigestKind(p.Kind)
+	if errReply.Err != nil {
+		return errReply
+	}
+	if !h.actorCanCurateBoardKind(actor, thread.Board, kind) {
+		return Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(kind), false)}
+	}
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		title = fmt.Sprintf("%s #%d", thread.Title, post.CreatedSeq)
+	}
+	entryID, err := upsertDigestEntry(
+		h.db,
+		newID("dig_"),
+		thread.Board,
+		"post",
+		post.ID,
+		kind,
+		title,
+		normalizeDigestPath(p.Path),
+		strings.TrimSpace(p.Note),
+		actor.ID,
+	)
+	if err != nil {
+		return internalErr(err)
+	}
+	if kind == "announcement" {
+		if err := h.ensureAnnouncementSystemPost(actor, entryID); err != nil {
+			return internalErr(err)
+		}
+	}
+	return Reply{Result: &proto.AckResult{ID: entryID}}
+}
+
+func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
+	if p.Thread == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	}
+	thread, err := getThread(h.db, p.Thread)
+	if err != nil {
+		return internalErr(err)
+	}
+	if thread == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+	}
+	kind, errReply := normalizeDigestKind(p.Kind)
+	if errReply.Err != nil {
+		return errReply
+	}
+	if !h.actorCanCurateBoardKind(actor, thread.Board, kind) {
+		return Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(kind), false)}
+	}
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		title = thread.Title
+	}
+	entryID, err := upsertDigestEntry(
+		h.db,
+		newID("dig_"),
+		thread.Board,
+		"thread",
+		thread.ID,
+		kind,
+		title,
+		normalizeDigestPath(p.Path),
+		strings.TrimSpace(p.Note),
+		actor.ID,
+	)
+	if err != nil {
+		return internalErr(err)
+	}
+	if kind == "announcement" {
+		if err := h.ensureAnnouncementSystemPost(actor, entryID); err != nil {
+			return internalErr(err)
+		}
+	}
+	return Reply{Result: &proto.AckResult{ID: entryID}}
+}
+
+func (h *Handler) removeDigestEntry(actor *User, p proto.RemoveDigestEntryPayload) Reply {
+	if p.Entry == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "entry is required", false)}
+	}
+	entry, errReply := h.digestEntryForCuration(actor, p.Entry)
+	if errReply.Err != nil {
+		return errReply
+	}
+	if err := removeDigestEntry(h.db, p.Entry); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: entry.ID}}
+}
+
+func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayload) Reply {
+	if p.Entry == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "entry is required", false)}
+	}
+	entry, errReply := h.digestEntryForCuration(actor, p.Entry)
+	if errReply.Err != nil {
+		return errReply
+	}
+	title := entry.Title
+	if p.Title != nil {
+		title = strings.TrimSpace(*p.Title)
+		if title == "" {
+			return Reply{Err: errDetail(proto.ErrValidationFailed, "title is required", false)}
+		}
+	}
+	path := entry.Path
+	if p.Path != nil {
+		path = normalizeDigestPath(*p.Path)
+	}
+	note := entry.Note
+	if p.Note != nil {
+		note = strings.TrimSpace(*p.Note)
+	}
+	if path != entry.Path {
+		var conflictID string
+		err := qQueryRow(
+			h.db,
+			`SELECT id
+			   FROM digest_entries
+			  WHERE board_id=? AND target_kind=? AND target_id=? AND kind=? AND path=? AND id<>?
+			  LIMIT 1`,
+			entry.BoardID, entry.TargetKind, entry.TargetID, entry.Kind, path, entry.ID,
+		).Scan(&conflictID)
+		if err == nil {
+			return Reply{Err: errDetail(proto.ErrConflict, "digest entry already exists at that path", false)}
+		}
+		if err != sql.ErrNoRows {
+			return internalErr(err)
+		}
+	}
+	if err := updateDigestEntry(h.db, entry.ID, title, path, note); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: entry.ID}}
+}
+
+func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayload) Reply {
+	if p.Entry == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "entry is required", false)}
+	}
+	entry, errReply := h.digestEntryForCuration(actor, p.Entry)
+	if errReply.Err != nil {
+		return errReply
+	}
+	body := p.Body
+	edited := !p.Reset
+	if p.Reset {
+		body = ""
+	}
+	if err := setDigestEntryBody(h.db, entry.ID, body, edited); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: entry.ID}}
+}
+
+func (h *Handler) createDigestDirectory(actor *User, p proto.CreateDigestDirectoryPayload) Reply {
+	boardID, kind, path, _, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.Path, "")
+	if errReply.Err != nil {
+		return errReply
+	}
+	directoryID, err := upsertDigestDirectory(h.db, newID("dir_"), boardID, kind, path, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: directoryID}}
+}
+
+func (h *Handler) moveDigestPath(actor *User, p proto.MoveDigestPathPayload) Reply {
+	boardID, kind, fromPath, toPath, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.FromPath, p.ToPath)
+	if errReply.Err != nil {
+		return errReply
+	}
+	if fromPath == toPath {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "destination path must differ from source path", false)}
+	}
+	if toPath != "" && (toPath == fromPath || strings.HasPrefix(toPath, fromPath+"/")) {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "cannot move an archive path into itself", false)}
+	}
+	count, err := moveDigestPath(h.db, boardID, kind, fromPath, toPath)
+	if err != nil {
+		if errors.Is(err, projections.ErrDigestPathConflict) {
+			return Reply{Err: errDetail(proto.ErrConflict, "digest path move would overwrite an existing entry", false)}
+		}
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count)}}
+}
+
+func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Reply {
+	boardID, kind, fromPath, toPath, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.FromPath, p.ToPath)
+	if errReply.Err != nil {
+		return errReply
+	}
+	if fromPath == toPath {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "destination path must differ from source path", false)}
+	}
+	count, err := countDigestPathEntries(h.db, boardID, kind, fromPath)
+	if err != nil {
+		return internalErr(err)
+	}
+	dirCount, err := countDigestPathDirectories(h.db, boardID, kind, fromPath)
+	if err != nil {
+		return internalErr(err)
+	}
+	ids := make([]string, count)
+	for i := range ids {
+		ids[i] = newID("dig_")
+	}
+	dirIDs := make([]string, dirCount)
+	for i := range dirIDs {
+		dirIDs[i] = newID("dir_")
+	}
+	count, err = copyDigestPath(h.db, boardID, kind, fromPath, toPath, actor.ID, ids, dirIDs)
+	if err != nil {
+		if errors.Is(err, projections.ErrDigestPathConflict) {
+			return Reply{Err: errDetail(proto.ErrConflict, "digest path copy would overwrite an existing entry", false)}
+		}
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count)}}
+}
+
+func (h *Handler) deleteDigestPath(actor *User, p proto.DeleteDigestPathPayload) Reply {
+	boardID, kind, path, _, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.Path, "")
+	if errReply.Err != nil {
+		return errReply
+	}
+	count, err := deleteDigestPath(h.db, boardID, kind, path)
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count)}}
+}
+
+func (h *Handler) markBoardRead(actor *User, p proto.MarkBoardReadPayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if err := markBoardRead(h.db, actor.ID, p.Board); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) restoreBoardRead(actor *User, p proto.RestoreBoardReadPayload) Reply {
+	if p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
+		return errReply
+	}
+	if err := restoreBoardRead(h.db, actor.ID, p.Board); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
+}
+
+func (h *Handler) markFavoriteFolderRead(actor *User, p proto.MarkFavoriteFolderReadPayload) Reply {
+	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
+		return errReply
+	}
+	if err := markFavoriteFolderRead(h.db, actor.ID, p.Folder); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Folder}}
+}
+
+func (h *Handler) restoreFavoriteFolderRead(actor *User, p proto.RestoreFavoriteFolderReadPayload) Reply {
+	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
+		return errReply
+	}
+	if err := restoreFavoriteFolderRead(h.db, actor.ID, p.Folder); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Folder}}
+}
+
+func (h *Handler) markThreadRead(actor *User, p proto.MarkThreadReadPayload) Reply {
+	if p.Thread == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	}
+	if errReply := h.requireThread(p.Thread); errReply.Err != nil {
+		return errReply
+	}
+	if err := markThreadRead(h.db, actor.ID, p.Thread); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Thread}}
+}
+
+func (h *Handler) restoreThreadRead(actor *User, p proto.RestoreThreadReadPayload) Reply {
+	if p.Thread == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	}
+	if errReply := h.requireThread(p.Thread); errReply.Err != nil {
+		return errReply
+	}
+	if err := restoreThreadRead(h.db, actor.ID, p.Thread); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Thread}}
+}
+
+func (h *Handler) markPostRead(actor *User, p proto.MarkPostReadPayload) Reply {
+	if p.Post == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	if errReply := h.requirePost(p.Post); errReply.Err != nil {
+		return errReply
+	}
+	if err := markPostRead(h.db, actor.ID, p.Post); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: p.Post}}
+}
+
+type digestEntryForCommand struct {
+	ID         string
+	BoardID    string
+	TargetKind string
+	TargetID   string
+	Kind       string
+	Title      string
+	Path       string
+	Note       string
+}
+
+func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*digestEntryForCommand, Reply) {
+	var entry digestEntryForCommand
+	err := qQueryRow(
+		h.db,
+		`SELECT id, board_id, target_kind, target_id, kind, title, path, note
+		   FROM digest_entries
+		  WHERE id=?`,
+		entryID,
+	).Scan(&entry.ID, &entry.BoardID, &entry.TargetKind, &entry.TargetID, &entry.Kind, &entry.Title, &entry.Path, &entry.Note)
+	if err == sql.ErrNoRows {
+		return nil, Reply{Err: errDetail(proto.ErrNotFound, "digest entry not found", false)}
+	}
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if !h.actorCanCurateBoardKind(actor, entry.BoardID, entry.Kind) {
+		return nil, Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(entry.Kind), false)}
+	}
+	return &entry, Reply{}
+}
+
+func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath, toPath string) (string, string, string, string, Reply) {
+	boardID = strings.TrimSpace(boardID)
+	if boardID == "" {
+		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(boardID); errReply.Err != nil {
+		return "", "", "", "", errReply
+	}
+	if strings.TrimSpace(kind) == "" {
+		kind = "archive"
+	}
+	normalizedKind, errReply := normalizeDigestKind(kind)
+	if errReply.Err != nil {
+		return "", "", "", "", errReply
+	}
+	if !h.actorCanCurateBoardKind(actor, boardID, normalizedKind) {
+		return "", "", "", "", Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(normalizedKind), false)}
+	}
+	normalizedFrom := normalizeDigestPath(fromPath)
+	if normalizedFrom == "" {
+		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, "source path is required", false)}
+	}
+	return boardID, normalizedKind, normalizedFrom, normalizeDigestPath(toPath), Reply{}
+}
+
+const announcementSystemBoardID = "0announce"
+const statsSystemBoardID = "BBSLists"
+const registrySystemBoardID = "Registry"
+const rejectRegistrySystemBoardID = "reject_registry"
+const syssecuritySystemBoardID = "syssecurity"
+const blessingSystemBoardID = "Blessing"
+
+type systemNoticeBoard struct {
+	ID          string
+	Name        string
+	Description string
+}
+
+func (h *Handler) publishSystemNotice(actor *User, p proto.PublishSystemNoticePayload) Reply {
+	if !actor.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	}
+	board, ok := normalizeSystemNoticeBoard(p.Board)
+	if !ok {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "notice board must be notepad, GiveupNotice, or bbsnet", false)}
+	}
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "title is required", false)}
+	}
+	if len(title) > 160 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "title must be 160 characters or less", false)}
+	}
+	body := strings.TrimSpace(p.Body)
+	if body == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "body is required", false)}
+	}
+	if len(body) > 20000 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "body must be 20000 characters or less", false)}
+	}
+	source := strings.TrimSpace(p.Source)
+	if len(source) > 160 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "source must be 160 characters or less", false)}
+	}
+	threadID, seq, err := h.appendSystemNoticePost(actor, board, title, body, source, nowMS())
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
+}
+
+func normalizeSystemNoticeBoard(raw string) (systemNoticeBoard, bool) {
+	board := strings.TrimSpace(raw)
+	if board == "" || strings.EqualFold(board, "notepad") {
+		return systemNoticeBoard{ID: "notepad", Name: "notepad", Description: "Generated public system notes"}, true
+	}
+	switch strings.ToLower(board) {
+	case "giveupnotice", "giveup_notice":
+		return systemNoticeBoard{ID: "GiveupNotice", Name: "GiveupNotice", Description: "Generated give-up-net notices"}, true
+	case "bbsnet":
+		return systemNoticeBoard{ID: "bbsnet", Name: "bbsnet", Description: "Generated site-hop and network notices"}, true
+	default:
+		return systemNoticeBoard{}, false
+	}
+}
+
+func (h *Handler) appendSystemNoticePost(actor *User, board systemNoticeBoard, title, noticeBody, source string, ts int64) (string, int64, error) {
+	threadID := newID("notice_thr_")
+	postID := newID("notice_pst_")
+	body := formatSystemNoticeBody(board, title, noticeBody, source, actor.Name)
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return "", 0, err
+	}
+	defer tx.Rollback() //nolint
+
+	boardCreated := false
+	var boardSeq int64
+	var exists int
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, board.ID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		position, err := boardCategoryPosition(tx, "", nil)
+		if err != nil {
+			return "", 0, err
+		}
+		boardScopes := []string{"board:" + board.ID}
+		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
+			ID:          board.ID,
+			Name:        board.Name,
+			Description: board.Description,
+			Position:    position,
+			By:          actor.ID,
+			TS:          ts,
+		})
+		if err != nil {
+			return "", 0, err
+		}
+		if err := insertBoard(tx, board.ID, board.Name, board.Description, "", position); err != nil {
+			return "", 0, err
+		}
+		boardCreated = true
+	} else if err != nil {
+		return "", 0, err
+	}
+
+	scopes := []string{"board:" + board.ID}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: board.ID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	threadScopes := append(scopes, "thread:"+threadID)
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: board.ID, Author: actor.Name, AuthorID: actor.ID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return "", 0, err
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
+		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return "", 0, err
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return "", 0, err
+	}
+	if err := ftsInsertPost(tx, postID, threadID, board.ID, actor.Name, body); err != nil {
+		return "", 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", 0, err
+	}
+
+	if boardCreated {
+		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + board.ID},
+			Payload: &proto.BoardCreatedPayload{ID: board.ID, Name: board.Name, Description: board.Description, By: actor.Name, TS: ts}, TS: ts})
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: board.ID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	return threadID, pseq, nil
+}
+
+func formatSystemNoticeBody(board systemNoticeBoard, title, noticeBody, source, actorName string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	fmt.Fprintf(&b, "- Notice board: %s\n", board.Name)
+	fmt.Fprintf(&b, "- Actor: %s\n", actorName)
+	if source != "" {
+		fmt.Fprintf(&b, "- Source: %s\n", source)
+	}
+	b.WriteString("\n")
+	b.WriteString(noticeBody)
+	if !strings.HasSuffix(noticeBody, "\n") {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\nGenerated public system notice.\n")
+	return b.String()
+}
+
+func (h *Handler) ensureBlessingSystemPost(actor, target *User, blessingID, message string, ts int64) error {
+	threadID := "blessing_thr_" + blessingID
+	postID := "blessing_pst_" + blessingID
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	title := "Blessing: " + actor.Name + " -> " + target.Name
+	body := formatBlessingSystemBody(actor.Name, target.Name, message)
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	boardCreated := false
+	var boardSeq int64
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, blessingSystemBoardID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		position, err := boardCategoryPosition(tx, "", nil)
+		if err != nil {
+			return err
+		}
+		boardScopes := []string{"board:" + blessingSystemBoardID}
+		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
+			ID:          blessingSystemBoardID,
+			Name:        "Blessing",
+			Description: "Generated blessing rituals and rankings",
+			Position:    position,
+			By:          actor.ID,
+			TS:          ts,
+		})
+		if err != nil {
+			return err
+		}
+		if err := insertBoard(tx, blessingSystemBoardID, "Blessing", "Generated blessing rituals and rankings", "", position); err != nil {
+			return err
+		}
+		boardCreated = true
+	} else if err != nil {
+		return err
+	}
+
+	scopes := []string{"board:" + blessingSystemBoardID}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: blessingSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	threadScopes := append(scopes, "thread:"+threadID)
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: blessingSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
+		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return err
+	}
+	if err := ftsInsertPost(tx, postID, threadID, blessingSystemBoardID, actor.Name, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if boardCreated {
+		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + blessingSystemBoardID},
+			Payload: &proto.BoardCreatedPayload{ID: blessingSystemBoardID, Name: "Blessing", Description: "Generated blessing rituals and rankings", By: actor.Name, TS: ts}, TS: ts})
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: blessingSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	return nil
+}
+
+func formatBlessingSystemBody(fromName, toName, message string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Blessing for %s\n\n", toName)
+	fmt.Fprintf(&b, "- From: %s\n", fromName)
+	fmt.Fprintf(&b, "- To: %s\n\n", toName)
+	if strings.TrimSpace(message) == "" {
+		b.WriteString("A public blessing was sent.\n")
+	} else {
+		b.WriteString(strings.TrimSpace(message))
+		if !strings.HasSuffix(message, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString("\nGenerated public blessing record.\n")
+	return b.String()
+}
+
+func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshotPayload) Reply {
+	if !actor.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	}
+	ts := nowMS()
+	dateLabel, dateID, errReply := normalizeStatsSnapshotDate(p.Date, ts)
+	if errReply.Err != nil {
+		return errReply
+	}
+	threadID, seq, err := h.ensureStatsSnapshotSystemPost(actor, dateLabel, dateID, ts)
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
+}
+
+func normalizeStatsSnapshotDate(raw string, ts int64) (dateLabel, dateID string, reply Reply) {
+	raw = strings.TrimSpace(raw)
+	var day time.Time
+	var err error
+	if raw == "" {
+		day = time.UnixMilli(ts).UTC()
+	} else {
+		day, err = time.Parse("2006-01-02", raw)
+		if err != nil {
+			return "", "", Reply{Err: errDetail(proto.ErrValidationFailed, "date must be YYYY-MM-DD", false)}
+		}
+	}
+	return day.Format("2006-01-02"), day.Format("20060102"), Reply{}
+}
+
+func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_stats_" + dateID
+	postID := "bbslists_stats_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+
+	stats, err := projections.GetCommunityStats(h.db)
+	if err != nil {
+		return "", 0, err
+	}
+	boards, err := projections.ListBoardRankings(h.db, "", false, 5, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	threads, err := projections.ListThreadRankings(h.db, "", false, "", 5, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	users, err := projections.ListUserRankings(h.db, 5, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	archives, err := projections.ListArchiveRankings(h.db, "", false, "", 5, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	blessings, err := projections.ListBlessingRankings(h.db, 5, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsSnapshotBody(dateLabel, stats, boards, threads, users, archives, blessings)
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return "", 0, err
+	}
+	defer tx.Rollback() //nolint
+
+	boardCreated := false
+	var boardSeq int64
+	var exists int
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, statsSystemBoardID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		position, err := boardCategoryPosition(tx, "", nil)
+		if err != nil {
+			return "", 0, err
+		}
+		boardScopes := []string{"board:" + statsSystemBoardID}
+		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
+			ID:          statsSystemBoardID,
+			Name:        "BBSLists",
+			Description: "Generated community rankings and statistics",
+			Position:    position,
+			By:          actor.ID,
+			TS:          ts,
+		})
+		if err != nil {
+			return "", 0, err
+		}
+		if err := insertBoard(tx, statsSystemBoardID, "BBSLists", "Generated community rankings and statistics", "", position); err != nil {
+			return "", 0, err
+		}
+		boardCreated = true
+	} else if err != nil {
+		return "", 0, err
+	}
+
+	title := "Community stats " + dateLabel
+	authorName := actor.Name
+	authorID := actor.ID
+	scopes := []string{"board:" + statsSystemBoardID}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	threadScopes := append(scopes, "thread:"+threadID)
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return "", 0, err
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
+		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return "", 0, err
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return "", 0, err
+	}
+	if err := ftsInsertPost(tx, postID, threadID, statsSystemBoardID, authorName, body); err != nil {
+		return "", 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", 0, err
+	}
+
+	if boardCreated {
+		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + statsSystemBoardID},
+			Payload: &proto.BoardCreatedPayload{ID: statsSystemBoardID, Name: "BBSLists", Description: "Generated community rankings and statistics", By: actor.Name, TS: ts}, TS: ts})
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	return threadID, pseq, nil
+}
+
+func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, threads []projections.ThreadRanking, users []projections.UserRanking, archives []projections.ArchiveRanking, blessings []projections.BlessingRanking) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Community stats %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Total users: %d\n", stats.TotalUsers)
+	fmt.Fprintf(&b, "- Total boards: %d\n", stats.TotalBoards)
+	fmt.Fprintf(&b, "- Total threads: %d\n", stats.TotalThreads)
+	fmt.Fprintf(&b, "- Total posts: %d\n", stats.TotalPosts)
+	fmt.Fprintf(&b, "- Total reactions: %d\n", stats.TotalReactions)
+	fmt.Fprintf(&b, "- Total mail messages: %d\n", stats.TotalMail)
+	fmt.Fprintf(&b, "- Total direct messages: %d\n", stats.TotalDirectMessages)
+	fmt.Fprintf(&b, "- Online users: %d\n", stats.OnlineUsers)
+	fmt.Fprintf(&b, "- Event head: %d\n\n", stats.HeadSeq)
+
+	b.WriteString("## Active boards\n")
+	if len(boards) == 0 {
+		b.WriteString("- No public board activity yet.\n")
+	}
+	for i, board := range boards {
+		fmt.Fprintf(&b, "%d. %s (%s): %d posts, %d threads\n", i+1, board.Name, board.ID, board.PostCount, board.ThreadCount)
+	}
+	b.WriteString("\n## Hot threads\n")
+	if len(threads) == 0 {
+		b.WriteString("- No public thread activity yet.\n")
+	}
+	for i, thread := range threads {
+		fmt.Fprintf(&b, "%d. %s / %s: %d posts, %d reactions, score %d\n", i+1, thread.BoardName, thread.Title, thread.PostCount, thread.ReactionCount, thread.Score)
+	}
+	b.WriteString("\n## Top users\n")
+	if len(users) == 0 {
+		b.WriteString("- No user activity yet.\n")
+	}
+	for i, user := range users {
+		fmt.Fprintf(&b, "%d. %s: %d posts, %d reactions received, %d logins\n", i+1, user.Name, user.PostsCreated, user.ReactionsReceived, user.LoginCount)
+	}
+	b.WriteString("\n## Blessings\n")
+	if len(blessings) == 0 {
+		b.WriteString("- No blessing rituals yet.\n")
+	}
+	for i, blessing := range blessings {
+		fmt.Fprintf(&b, "%d. %s: %d blessings\n", i+1, blessing.Name, blessing.BlessingCount)
+	}
+	b.WriteString("\n## Archive paths\n")
+	if len(archives) == 0 {
+		b.WriteString("- No public archive paths yet.\n")
+	}
+	for i, archive := range archives {
+		fmt.Fprintf(&b, "%d. %s / %s / %s: %d entries\n", i+1, archive.BoardName, archive.Kind, archive.Path, archive.EntryCount)
+	}
+	return b.String()
+}
+
+func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) error {
+	export, err := getDigestExport(h.db, entryID)
+	if err != nil || export == nil {
+		return err
+	}
+	if export.Entry.BoardID == announcementSystemBoardID {
+		return nil
+	}
+	settings, err := getBoardSettings(h.db, export.Entry.BoardID)
+	if err != nil {
+		return err
+	}
+	if settings != nil && settings.MemberReadMode {
+		return nil
+	}
+
+	threadID := "ann_thr_" + entryID
+	postID := "ann_pst_" + entryID
+	var exists int
+	err = qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	ts := nowMS()
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	boardCreated := false
+	var boardSeq int64
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, announcementSystemBoardID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		position, err := boardCategoryPosition(tx, "", nil)
+		if err != nil {
+			return err
+		}
+		boardScopes := []string{"board:" + announcementSystemBoardID}
+		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
+			ID:          announcementSystemBoardID,
+			Name:        "0Announce",
+			Description: "Generated site-wide announcements",
+			Position:    position,
+			By:          actor.ID,
+			TS:          ts,
+		})
+		if err != nil {
+			return err
+		}
+		if err := insertBoard(tx, announcementSystemBoardID, "0Announce", "Generated site-wide announcements", "", position); err != nil {
+			return err
+		}
+		boardCreated = true
+	} else if err != nil {
+		return err
+	}
+
+	title := strings.TrimSpace(export.Entry.Title)
+	if title == "" {
+		title = "Announcement"
+	}
+	body := projections.FormatDigestExportText(export)
+	authorName := actor.Name
+	authorID := actor.ID
+	scopes := []string{"board:" + announcementSystemBoardID}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: announcementSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	threadScopes := append(scopes, "thread:"+threadID)
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: announcementSystemBoardID, Author: authorName, AuthorID: authorID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
+		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return err
+	}
+	if err := ftsInsertPost(tx, postID, threadID, announcementSystemBoardID, authorName, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if boardCreated {
+		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + announcementSystemBoardID},
+			Payload: &proto.BoardCreatedPayload{ID: announcementSystemBoardID, Name: "0Announce", Description: "Generated site-wide announcements", By: actor.Name, TS: ts}, TS: ts})
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: announcementSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	return nil
+}
+
+func (h *Handler) ensureBoardRegistrationSystemPost(actor *User, applicationID, status, boardID, userID string) error {
+	switch status {
+	case "approved", "rejected", "blacklisted":
+	default:
+		return nil
+	}
+	settings, err := getBoardSettings(h.db, boardID)
+	if err != nil {
+		return err
+	}
+	if settings != nil && settings.MemberReadMode {
+		return nil
+	}
+
+	boardIDOut := registrySystemBoardID
+	boardNameOut := "Registry"
+	boardDescription := "Generated board registration approvals"
+	if status != "approved" {
+		boardIDOut = rejectRegistrySystemBoardID
+		boardNameOut = "reject_registry"
+		boardDescription = "Generated rejected board registrations"
+	}
+	threadID := "registry_" + status + "_thr_" + applicationID
+	postID := "registry_" + status + "_pst_" + applicationID
+	var exists int
+	err = qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	var sourceBoardName string
+	if err := qQueryRow(h.db, `SELECT name FROM boards WHERE id=?`, boardID).Scan(&sourceBoardName); err != nil {
+		return err
+	}
+	var applicantName string
+	if err := qQueryRow(h.db, `SELECT name FROM users WHERE id=?`, userID).Scan(&applicantName); err != nil {
+		return err
+	}
+
+	ts := nowMS()
+	title := "Board registration " + status + " " + applicationID
+	body := fmt.Sprintf("# %s\n\n- Application: %s\n- Status: %s\n- Board: %s (%s)\n- Applicant: %s\n- Reviewer: %s\n\nApplication and review notes are kept in the board member manager queue.\n",
+		title, applicationID, status, sourceBoardName, boardID, applicantName, actor.Name)
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	boardCreated := false
+	var boardSeq int64
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, boardIDOut).Scan(&exists)
+	if err == sql.ErrNoRows {
+		position, err := boardCategoryPosition(tx, "", nil)
+		if err != nil {
+			return err
+		}
+		boardScopes := []string{"board:" + boardIDOut}
+		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
+			ID:          boardIDOut,
+			Name:        boardNameOut,
+			Description: boardDescription,
+			Position:    position,
+			By:          actor.ID,
+			TS:          ts,
+		})
+		if err != nil {
+			return err
+		}
+		if err := insertBoard(tx, boardIDOut, boardNameOut, boardDescription, "", position); err != nil {
+			return err
+		}
+		boardCreated = true
+	} else if err != nil {
+		return err
+	}
+
+	scopes := []string{"board:" + boardIDOut}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: boardIDOut, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	threadScopes := append(scopes, "thread:"+threadID)
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: boardIDOut, Author: actor.Name, AuthorID: actor.ID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
+		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return err
+	}
+	if err := ftsInsertPost(tx, postID, threadID, boardIDOut, actor.Name, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if boardCreated {
+		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + boardIDOut},
+			Payload: &proto.BoardCreatedPayload{ID: boardIDOut, Name: boardNameOut, Description: boardDescription, By: actor.Name, TS: ts}, TS: ts})
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: boardIDOut, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	return nil
+}
+
+func (h *Handler) ensureSyssecuritySystemPost(actor *User, title string, lines []string, sourceBoardID string) error {
+	if sourceBoardID != "" {
+		settings, err := getBoardSettings(h.db, sourceBoardID)
+		if err != nil {
+			return err
+		}
+		if settings != nil && settings.MemberReadMode {
+			return nil
+		}
+	}
+
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "Security notice"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", title)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "- %s\n", line)
+	}
+	b.WriteString("\nGenerated security notices omit private notes and article content.\n")
+	body := b.String()
+
+	ts := nowMS()
+	threadID := newID("syssecurity_thr_")
+	postID := newID("syssecurity_pst_")
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	boardCreated := false
+	var boardSeq int64
+	var exists int
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, syssecuritySystemBoardID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		position, err := boardCategoryPosition(tx, "", nil)
+		if err != nil {
+			return err
+		}
+		boardScopes := []string{"board:" + syssecuritySystemBoardID}
+		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
+			ID:          syssecuritySystemBoardID,
+			Name:        "syssecurity",
+			Description: "Generated security and administration audit log",
+			Position:    position,
+			By:          actor.ID,
+			TS:          ts,
+		})
+		if err != nil {
+			return err
+		}
+		if err := insertBoard(tx, syssecuritySystemBoardID, "syssecurity", "Generated security and administration audit log", "", position); err != nil {
+			return err
+		}
+		boardCreated = true
+	} else if err != nil {
+		return err
+	}
+
+	scopes := []string{"board:" + syssecuritySystemBoardID}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: syssecuritySystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	threadScopes := append(scopes, "thread:"+threadID)
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+	})
+	if err != nil {
+		return err
+	}
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: syssecuritySystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
+		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return err
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return err
+	}
+	if err := ftsInsertPost(tx, postID, threadID, syssecuritySystemBoardID, actor.Name, body); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	if boardCreated {
+		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + syssecuritySystemBoardID},
+			Payload: &proto.BoardCreatedPayload{ID: syssecuritySystemBoardID, Name: "syssecurity", Description: "Generated security and administration audit log", By: actor.Name, TS: ts}, TS: ts})
+	}
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: syssecuritySystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	return nil
+}
+
+func normalizeDigestKind(kind string) (string, Reply) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" {
+		kind = "digest"
+	}
+	switch kind {
+	case "digest", "archive", "recommended", "pinned", "announcement":
+		return kind, Reply{}
+	default:
+		return "", Reply{Err: errDetail(proto.ErrValidationFailed, `kind must be "digest", "archive", "recommended", "pinned", or "announcement"`, false)}
+	}
+}
+
+func boardCurationPermissionMessage(kind string) string {
+	if kind == "announcement" {
+		return "board announcement permission required"
+	}
+	return "board curator permission required"
+}
+
+func normalizeDigestPath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.Trim(path, "/")
+	if len(path) > 120 {
+		return path[:120]
+	}
+	return path
+}
+
+func (h *Handler) actorCanModerateBoard(actor *User, boardID string) bool {
+	if actor == nil {
+		return false
+	}
+	if actor.IsMod() {
+		return true
+	}
+	return h.isBoardModerator(actor.ID, boardID)
+}
+
+func (h *Handler) actorCanUseMemberBoard(actor *User, boardID string) bool {
+	if h.actorCanModerateBoard(actor, boardID) {
+		return true
+	}
+	if actor == nil {
+		return false
+	}
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&exists)
+	return err == nil
+}
+
+func (h *Handler) actorCanManageBoardMembers(actor *User, boardID string) bool {
+	if h.actorCanModerateBoard(actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermission(actor, boardID, "can_manage_members")
+}
+
+func (h *Handler) actorCanSetBoardSettings(actor *User, boardID string) bool {
+	if h.actorCanModerateBoard(actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermission(actor, boardID, "can_set_board_settings")
+}
+
+func (h *Handler) actorCanCurateBoard(actor *User, boardID string) bool {
+	if h.actorCanModerateBoard(actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermission(actor, boardID, "can_curate")
+}
+
+func (h *Handler) actorCanAnnounceBoard(actor *User, boardID string) bool {
+	if h.actorCanModerateBoard(actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermission(actor, boardID, "can_announce")
+}
+
+func (h *Handler) actorCanCurateBoardKind(actor *User, boardID, kind string) bool {
+	if kind == "announcement" {
+		return h.actorCanCurateBoard(actor, boardID) || h.actorCanAnnounceBoard(actor, boardID)
+	}
+	return h.actorCanCurateBoard(actor, boardID)
+}
+
+func (h *Handler) actorHasBoardMemberPermission(actor *User, boardID, column string) bool {
+	if actor == nil {
+		return false
+	}
+	switch column {
+	case "can_manage_members", "can_curate", "can_moderate_posts", "can_moderate_threads", "can_announce", "can_set_board_settings":
+	default:
+		return false
+	}
+	var allowed int
+	err := qQueryRow(h.db, `SELECT `+column+` FROM board_members WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&allowed)
+	return err == nil && allowed != 0
+}
+
+func (h *Handler) actorCanModerateBoardTx(tx *sql.Tx, actor *User, boardID string) bool {
+	if actor == nil {
+		return false
+	}
+	if actor.IsMod() {
+		return true
+	}
+	var exists int
+	err := qQueryRow(tx, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&exists)
+	return err == nil
+}
+
+func (h *Handler) actorCanModerateBoardPostsTx(tx *sql.Tx, actor *User, boardID string) bool {
+	if h.actorCanModerateBoardTx(tx, actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermissionTx(tx, actor, boardID, "can_moderate_posts")
+}
+
+func (h *Handler) actorCanModerateBoardThreadsTx(tx *sql.Tx, actor *User, boardID string) bool {
+	if h.actorCanModerateBoardTx(tx, actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermissionTx(tx, actor, boardID, "can_moderate_threads")
+}
+
+func (h *Handler) actorHasBoardMemberPermissionTx(tx *sql.Tx, actor *User, boardID, column string) bool {
+	if actor == nil {
+		return false
+	}
+	switch column {
+	case "can_moderate_posts", "can_moderate_threads":
+	default:
+		return false
+	}
+	var allowed int
+	err := qQueryRow(tx, `SELECT `+column+` FROM board_members WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&allowed)
+	return err == nil && allowed != 0
+}
+
+func (h *Handler) isBoardModerator(userID, boardID string) bool {
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&exists)
+	return err == nil
+}
+
+func (h *Handler) isBoardMember(userID, boardID string) bool {
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&exists)
+	return err == nil
+}
+
+func (h *Handler) latestBoardMembershipApplicationStatus(boardID, userID string) (string, error) {
+	var status string
+	err := qQueryRow(h.db,
+		`SELECT status FROM board_member_applications
+		  WHERE board_id=? AND user_id=?
+		    AND status IN ('pending', 'blacklisted')
+		  ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC LIMIT 1`,
+		boardID, userID,
+	).Scan(&status)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return status, err
+}
+
+func boardMemberPermissionsChanged(p proto.SetBoardMemberPayload) bool {
+	return p.CanManageMembers != nil ||
+		p.CanCurate != nil ||
+		p.CanModeratePosts != nil ||
+		p.CanModerateThreads != nil ||
+		p.CanAnnounce != nil ||
+		p.CanSetBoardSettings != nil
+}
+
+func boardSettingsAuditLines(p proto.SetBoardSettingsPayload) []string {
+	fields := []struct {
+		name  string
+		value *bool
+	}{
+		{"anonymousAllowed", p.AnonymousAllowed},
+		{"readOnly", p.ReadOnly},
+		{"noReply", p.NoReply},
+		{"attachmentsAllowed", p.AttachmentsAllowed},
+		{"mailInAllowed", p.MailInAllowed},
+		{"relayEnabled", p.RelayEnabled},
+		{"memberReadMode", p.MemberReadMode},
+		{"memberPostMode", p.MemberPostMode},
+	}
+	out := []string{}
+	for _, field := range fields {
+		if field.value == nil {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s: %t", field.name, *field.value))
+	}
+	return out
+}
+
+func (h *Handler) requireBoardMembershipAdmission(boardID, userID string, requirements *BoardMemberRequirements) Reply {
+	if requirements == nil {
+		return Reply{}
+	}
+	if requirements.MaxMembers > 0 && !h.isBoardMember(userID, boardID) {
+		var currentMembers int
+		if err := qQueryRow(h.db, `SELECT COUNT(*) FROM board_members WHERE board_id=?`, boardID).Scan(&currentMembers); err != nil {
+			return internalErr(err)
+		}
+		if currentMembers >= requirements.MaxMembers {
+			return Reply{Err: errDetail(proto.ErrConflict, "board membership is full", false)}
+		}
+	}
+	if requirements.MinLoginCount > 0 {
+		loginCount, err := h.userLoginCount(userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if loginCount < requirements.MinLoginCount {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum login count is %d", requirements.MinLoginCount), false)}
+		}
+	}
+	if requirements.MinPostCount > 0 {
+		postsCreated, err := h.userPostsCreated(userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if postsCreated < requirements.MinPostCount {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum post count is %d", requirements.MinPostCount), false)}
+		}
+	}
+	if requirements.MinScore > 0 {
+		score, err := h.userReactionScore(userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if score < requirements.MinScore {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum score is %d", requirements.MinScore), false)}
+		}
+	}
+	if requirements.MinBoardPostCount > 0 {
+		boardPosts, err := h.userBoardPostCount(boardID, userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if boardPosts < requirements.MinBoardPostCount {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board post count is %d", requirements.MinBoardPostCount), false)}
+		}
+	}
+	if requirements.MinBoardOriginalPostCount > 0 {
+		boardOriginalPosts, err := h.userBoardOriginalPostCount(boardID, userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if boardOriginalPosts < requirements.MinBoardOriginalPostCount {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board original post count is %d", requirements.MinBoardOriginalPostCount), false)}
+		}
+	}
+	if requirements.MinBoardDigestCount > 0 {
+		boardDigests, err := h.userBoardDigestCount(boardID, userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if boardDigests < requirements.MinBoardDigestCount {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board digest count is %d", requirements.MinBoardDigestCount), false)}
+		}
+	}
+	if requirements.MinBoardMarkCount > 0 {
+		boardMarks, err := h.userBoardMarkCount(boardID, userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if boardMarks < requirements.MinBoardMarkCount {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board mark count is %d", requirements.MinBoardMarkCount), false)}
+		}
+	}
+	if requirements.MinTrustLevel > 0 {
+		level, err := userTrustLevel(h.db, userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if level < requirements.MinTrustLevel {
+			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum trust level is %d", requirements.MinTrustLevel), false)}
+		}
+	}
+	return Reply{}
+}
+
+func (h *Handler) userLoginCount(userID string) (int, error) {
+	var loginCount int
+	err := qQueryRow(h.db, `SELECT login_count FROM user_activity WHERE user_id=?`, userID).Scan(&loginCount)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return loginCount, err
+}
+
+func (h *Handler) userPostsCreated(userID string) (int, error) {
+	var postsCreated int
+	err := qQueryRow(h.db, `SELECT COUNT(*) FROM posts WHERE author_id=? AND redacted=0`, userID).Scan(&postsCreated)
+	return postsCreated, err
+}
+
+func (h *Handler) userReactionScore(userID string) (int, error) {
+	var count int
+	err := qQueryRow(h.db,
+		`SELECT COUNT(*)
+		   FROM post_reactions r
+		   JOIN posts p ON p.id=r.post_id
+		  WHERE p.author_id=? AND p.redacted=0`,
+		userID,
+	).Scan(&count)
+	return count, err
+}
+
+func (h *Handler) userBoardPostCount(boardID, userID string) (int, error) {
+	var count int
+	err := qQueryRow(h.db,
+		`SELECT COUNT(*)
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		  WHERE t.board=? AND p.author_id=? AND p.redacted=0`,
+		boardID, userID,
+	).Scan(&count)
+	return count, err
+}
+
+func (h *Handler) userBoardOriginalPostCount(boardID, userID string) (int, error) {
+	var count int
+	err := qQueryRow(h.db,
+		`SELECT COUNT(*) FROM threads WHERE board=? AND author_id=?`,
+		boardID, userID,
+	).Scan(&count)
+	return count, err
+}
+
+func (h *Handler) userBoardMarkCount(boardID, userID string) (int, error) {
+	var count int
+	err := qQueryRow(h.db,
+		`SELECT COUNT(*)
+		   FROM post_reactions r
+		   JOIN posts p ON p.id=r.post_id
+		   JOIN threads t ON t.id=p.thread
+		  WHERE t.board=? AND p.author_id=? AND p.redacted=0`,
+		boardID, userID,
+	).Scan(&count)
+	return count, err
+}
+
+func (h *Handler) userBoardDigestCount(boardID, userID string) (int, error) {
+	var count int
+	err := qQueryRow(h.db,
+		`SELECT COUNT(*)
+		   FROM digest_entries d
+		   LEFT JOIN posts p ON d.target_kind='post' AND p.id=d.target_id
+		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id=d.target_id
+		  WHERE d.board_id=?
+		    AND (
+		      (d.target_kind='post' AND p.author_id=?)
+		      OR (d.target_kind='thread' AND tt.author_id=?)
+		    )`,
+		boardID, userID, userID,
+	).Scan(&count)
+	return count, err
+}
+
+func normalizeBoardMemberApprovalMode(mode string) (string, Reply) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "manual":
+		return "manual", Reply{}
+	case "auto", "automatic":
+		return "auto", Reply{}
+	default:
+		return "", Reply{Err: errDetail(proto.ErrValidationFailed, `approvalMode must be "manual" or "auto"`, false)}
+	}
+}
+
+func normalizeMemberApplicationStatus(status string) (string, Reply) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "approved", "approve":
+		return "approved", Reply{}
+	case "rejected", "reject":
+		return "rejected", Reply{}
+	case "blacklisted", "blacklist":
+		return "blacklisted", Reply{}
+	default:
+		return "", Reply{Err: errDetail(proto.ErrValidationFailed, `status must be "approved", "rejected", or "blacklisted"`, false)}
+	}
+}
+
+func (h *Handler) resolveUserRef(ref string) (string, string, Reply) {
+	var userID, name string
+	err := qQueryRow(h.db, `SELECT id, name FROM users WHERE id=? OR name=?`, ref, ref).Scan(&userID, &name)
+	if err == sql.ErrNoRows {
+		return "", "", Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
+	}
+	if err != nil {
+		return "", "", internalErr(err)
+	}
+	return userID, name, Reply{}
+}
+
+func (h *Handler) requireFavoriteFolder(userID, folderID string) Reply {
+	if folderID == "" {
+		return Reply{}
+	}
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM favorite_folders WHERE user_id=? AND id=?`, userID, folderID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return Reply{Err: errDetail(proto.ErrNotFound, "favorite folder not found", false)}
+	}
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{}
+}
+
+func (h *Handler) favoriteFolderContains(userID, ancestorID, folderID string) bool {
+	for folderID != "" {
+		if folderID == ancestorID {
+			return true
+		}
+		var parentID string
+		err := qQueryRow(h.db, `SELECT parent_id FROM favorite_folders WHERE user_id=? AND id=?`, userID, folderID).Scan(&parentID)
+		if err != nil {
+			return false
+		}
+		folderID = parentID
+	}
+	return false
+}
+
+func (h *Handler) requireBoard(boardID string) Reply {
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
+	}
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{}
+}
+
+func (h *Handler) requirePost(postID string) Reply {
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM posts WHERE id=?`, postID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{}
+}
+
+func (h *Handler) requireThread(threadID string) Reply {
+	var exists int
+	err := qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+	}
+	if err != nil {
+		return internalErr(err)
+	}
+	return Reply{}
+}

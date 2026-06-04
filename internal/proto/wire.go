@@ -35,10 +35,10 @@ type OutboundMessage struct {
 
 // ErrorDetail describes a command rejection.
 type ErrorDetail struct {
-	Code        string `json:"code"`
-	Message     string `json:"message"`
-	Retryable   bool   `json:"retryable"`
-	RetryAfterMs int64 `json:"retryAfterMs,omitempty"`
+	Code         string `json:"code"`
+	Message      string `json:"message"`
+	Retryable    bool   `json:"retryable"`
+	RetryAfterMs int64  `json:"retryAfterMs,omitempty"`
 }
 
 // AckResult carries the stable ID and seq of a successfully created resource.
