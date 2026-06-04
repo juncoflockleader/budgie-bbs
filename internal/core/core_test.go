@@ -1193,6 +1193,52 @@ func TestPollCreationOnReplyPost(t *testing.T) {
 	}
 }
 
+func TestPollCreationOnReplyWithMissingCloseTagLeavesBodyIntact(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	base := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Base", Body: "hello",
+	})
+	replyBody := "before\n[poll]\nQuestion?\nOption A\nOption B\nafter"
+	replyRes := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID,
+		Body:   replyBody,
+	})
+
+	posts, err := c.ListPosts(base.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts, got %d", len(posts))
+	}
+
+	var reply *core.Post
+	for i := range posts {
+		if posts[i].ID == replyRes.ID {
+			reply = &posts[i]
+			break
+		}
+	}
+	if reply == nil {
+		t.Fatal("append post response not found in thread")
+	}
+	if reply.Body != replyBody {
+		t.Fatalf("expected missing-close reply poll body to remain intact, got %q", reply.Body)
+	}
+	poll, err := c.GetPollByPostID(reply.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		t.Fatal("expected no poll for missing close tag reply")
+	}
+}
+
 func TestPollCreationOnReplyRejectsInvalidExpires(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
