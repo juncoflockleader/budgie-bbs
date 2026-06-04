@@ -245,6 +245,57 @@ func (s *Server) handleRestorePost(w http.ResponseWriter, r *http.Request) {
 	writeAck(w, cid, reply)
 }
 
+func (s *Server) handleRedactPostRange(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	boardID := r.PathValue("board")
+
+	var p proto.RedactPostRangePayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Board = boardID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdRedactPostRange, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+func (s *Server) handleRestorePostRange(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	boardID := r.PathValue("board")
+
+	var p proto.RestorePostRangePayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Board = boardID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdRestorePostRange, raw, cid)
+	writeAck(w, cid, reply)
+}
+
+func (s *Server) handleClearBoardJunk(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	boardID := r.PathValue("board")
+
+	var p proto.ClearBoardJunkPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Board = boardID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdClearBoardJunk, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 func (s *Server) handleMailPostAuthor(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	postID := r.PathValue("post")

@@ -12,6 +12,7 @@ const (
 	EvtPostFlagsSet        EventKind = "post.flags_set"
 	EvtPostRedacted        EventKind = "post.redacted"
 	EvtPostRestored        EventKind = "post.restored"
+	EvtPostDeletionCleared EventKind = "post.deletion_cleared"
 	EvtThreadTitleSet      EventKind = "thread.title_set"
 	EvtThreadLocked        EventKind = "thread.locked"
 	EvtThreadMoved         EventKind = "thread.moved"
@@ -67,7 +68,7 @@ type Event struct {
 func (e *Event) IsDurable() bool {
 	switch e.Kind {
 	case EvtThreadNew, EvtPostAppended, EvtPostAttachmentAdded, EvtPostEdited, EvtPostRedacted,
-		EvtPostFlagsSet, EvtPostRestored, EvtPostPurged, EvtThreadTitleSet, EvtThreadLocked, EvtThreadMoved,
+		EvtPostFlagsSet, EvtPostRestored, EvtPostDeletionCleared, EvtPostPurged, EvtThreadTitleSet, EvtThreadLocked, EvtThreadMoved,
 		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated,
 		EvtMailSent, EvtMailAttachmentAdded, EvtDirectMessageSent,
 		EvtUserBlessed, EvtPostReacted, EvtPostUnreacted, EvtPollVoted,
@@ -152,6 +153,15 @@ type PostRedactedPayload struct {
 type PostRestoredPayload struct {
 	ID     string `json:"id"`
 	Thread string `json:"thread"`
+	By     string `json:"by"`
+	TS     int64  `json:"ts"`
+}
+
+type PostDeletionClearedPayload struct {
+	ID     string `json:"id"`
+	Thread string `json:"thread"`
+	Board  string `json:"board"`
+	Kind   string `json:"kind"`
 	By     string `json:"by"`
 	TS     int64  `json:"ts"`
 }

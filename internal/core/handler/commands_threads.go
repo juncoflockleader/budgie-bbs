@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -1343,6 +1344,260 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 		Payload: &proto.PostRestoredPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
+}
+
+func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) Reply {
+	boardID := strings.TrimSpace(p.Board)
+	if boardID == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	postIDs, errReply := normalizePostRangeIDs(p.Posts)
+	if errReply.Err != nil {
+		return errReply
+	}
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if errReply := ensureRangeBoardAccessTx(tx, h, actor, boardID); errReply.Err != nil {
+		return errReply
+	}
+
+	published := make([]proto.Event, 0, len(postIDs))
+	var lastSeq int64
+	for _, postID := range postIDs {
+		post, thread, errReply := loadRangePostTx(tx, postID, boardID)
+		if errReply.Err != nil {
+			return errReply
+		}
+		if post.Redacted {
+			return Reply{Err: errDetail(proto.ErrConflict, "post is already redacted: "+postID, false)}
+		}
+		scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
+		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRedacted, scopes, &proto.PostRedactedPayload{
+			ID: post.ID, Thread: post.Thread, By: actor.ID, Reason: p.Reason, TS: ts,
+		})
+		if err != nil {
+			return internalErr(err)
+		}
+		if err := markPostRedacted(tx, post.ID, seq); err != nil {
+			return internalErr(err)
+		}
+		if err := recordPostDeletion(tx, post.ID, post.Thread, thread.Board, actor.ID, actor.Name, p.Reason, "recycle", ts, seq); err != nil {
+			return internalErr(err)
+		}
+		if err := ftsDeletePost(tx, post.ID); err != nil {
+			return internalErr(err)
+		}
+		lastSeq = seq
+		published = append(published, proto.Event{Kind: proto.EvtPostRedacted, Seq: seq, Scopes: scopes,
+			Payload: &proto.PostRedactedPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+	for i := range published {
+		h.bus.Publish(&published[i])
+	}
+	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
+}
+
+func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload) Reply {
+	boardID := strings.TrimSpace(p.Board)
+	if boardID == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	postIDs, errReply := normalizePostRangeIDs(p.Posts)
+	if errReply.Err != nil {
+		return errReply
+	}
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if errReply := ensureRangeBoardAccessTx(tx, h, actor, boardID); errReply.Err != nil {
+		return errReply
+	}
+
+	published := make([]proto.Event, 0, len(postIDs))
+	var lastSeq int64
+	for _, postID := range postIDs {
+		post, thread, errReply := loadRangePostTx(tx, postID, boardID)
+		if errReply.Err != nil {
+			return errReply
+		}
+		if !post.Redacted {
+			return Reply{Err: errDetail(proto.ErrConflict, "post is not redacted: "+postID, false)}
+		}
+		scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
+		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRestored, scopes, &proto.PostRestoredPayload{
+			ID: post.ID, Thread: post.Thread, By: actor.ID, TS: ts,
+		})
+		if err != nil {
+			return internalErr(err)
+		}
+		if err := markPostRestored(tx, post.ID, seq); err != nil {
+			return internalErr(err)
+		}
+		if err := clearPostDeletion(tx, post.ID); err != nil {
+			return internalErr(err)
+		}
+		lastSeq = seq
+		published = append(published, proto.Event{Kind: proto.EvtPostRestored, Seq: seq, Scopes: scopes,
+			Payload: &proto.PostRestoredPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, TS: ts}, TS: ts})
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+	for i := range published {
+		h.bus.Publish(&published[i])
+	}
+	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
+}
+
+func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Reply {
+	boardID := strings.TrimSpace(p.Board)
+	if boardID == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if errReply := ensureRangeBoardAccessTx(tx, h, actor, boardID); errReply.Err != nil {
+		return errReply
+	}
+	postIDs, errReply := boardJunkIDsTx(tx, boardID, p.Posts)
+	if errReply.Err != nil {
+		return errReply
+	}
+
+	published := make([]proto.Event, 0, len(postIDs))
+	var lastSeq int64
+	for _, postID := range postIDs {
+		var threadID string
+		err := qQueryRow(tx,
+			`SELECT thread_id FROM post_deletions WHERE post_id=? AND board_id=? AND kind='junk'`,
+			postID, boardID,
+		).Scan(&threadID)
+		if err == sql.ErrNoRows {
+			return Reply{Err: errDetail(proto.ErrNotFound, "junk post not found: "+postID, false)}
+		}
+		if err != nil {
+			return internalErr(err)
+		}
+		scopes := []string{"thread:" + threadID, "board:" + boardID}
+		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostDeletionCleared, scopes, &proto.PostDeletionClearedPayload{
+			ID: postID, Thread: threadID, Board: boardID, Kind: "junk", By: actor.ID, TS: ts,
+		})
+		if err != nil {
+			return internalErr(err)
+		}
+		if err := clearPostDeletion(tx, postID); err != nil {
+			return internalErr(err)
+		}
+		lastSeq = seq
+		published = append(published, proto.Event{Kind: proto.EvtPostDeletionCleared, Seq: seq, Scopes: scopes,
+			Payload: &proto.PostDeletionClearedPayload{ID: postID, Thread: threadID, Board: boardID, Kind: "junk", By: actor.Name, TS: ts}, TS: ts})
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+	for i := range published {
+		h.bus.Publish(&published[i])
+	}
+	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
+}
+
+func ensureRangeBoardAccessTx(tx *sql.Tx, h *Handler, actor *User, boardID string) Reply {
+	var exists int
+	if err := qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists); err == sql.ErrNoRows {
+		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
+	} else if err != nil {
+		return internalErr(err)
+	}
+	if !h.actorCanModerateBoardPostsTx(tx, actor, boardID) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board post moderation permission required", false)}
+	}
+	return Reply{}
+}
+
+func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*Post, *Thread, Reply) {
+	post, err := getPostTx(tx, postID)
+	if err != nil {
+		return nil, nil, internalErr(err)
+	}
+	if post == nil {
+		return nil, nil, Reply{Err: errDetail(proto.ErrNotFound, "post not found: "+postID, false)}
+	}
+	thread, err := getThreadTx(tx, post.Thread)
+	if err != nil {
+		return nil, nil, internalErr(err)
+	}
+	if thread == nil || thread.Board != boardID {
+		return nil, nil, Reply{Err: errDetail(proto.ErrNotFound, "post not found in board: "+postID, false)}
+	}
+	return post, thread, Reply{}
+}
+
+func boardJunkIDsTx(tx *sql.Tx, boardID string, requested []string) ([]string, Reply) {
+	if len(requested) > 0 {
+		return normalizePostRangeIDs(requested)
+	}
+	rows, err := projections.QQuery(tx,
+		`SELECT post_id FROM post_deletions WHERE board_id=? AND kind='junk' ORDER BY deleted_at DESC, seq DESC`,
+		boardID,
+	)
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var postID string
+		if err := rows.Scan(&postID); err != nil {
+			return nil, internalErr(err)
+		}
+		out = append(out, postID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, internalErr(err)
+	}
+	return out, Reply{}
+}
+
+func normalizePostRangeIDs(input []string) ([]string, Reply) {
+	if len(input) == 0 {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "posts are required", false)}
+	}
+	if len(input) > 100 {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "post range can include at most 100 items", false)}
+	}
+	out := make([]string, 0, len(input))
+	seen := map[string]bool{}
+	for _, raw := range input {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "post id cannot be empty", false)}
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, Reply{}
 }
 
 func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Reply {

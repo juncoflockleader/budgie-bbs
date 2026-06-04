@@ -597,8 +597,11 @@ archive areas. Budgie now has the first durable curation layer:
 - Board post redactions are projected into KBS-style board deletion bins.
   Moderator/site-moderator deletions enter the board `recycle` bin, author
   self-deletions inside the edit window enter `junk`, moderators can read them
-  with `GET /api/v1/boards/{board}/deleted?kind=recycle|junk`, and restoring a
-  post removes it from the bin.
+  with `GET /api/v1/boards/{board}/deleted?kind=recycle|junk`, restoring a
+  post removes it from the bin, board post moderators can range-delete and
+  range-restore selected board posts, and they can clear selected or all board
+  junk entries. Delegated board-member `canModeratePosts` permissions act as
+  the board-local recycle/junk access list.
 - Public-board moderation flags and review resolutions lazily create sanitized
   `0moderation` audit-log threads. Member-read board reviews stay only in the
   moderator queue so private report text and article bodies are not mirrored.
@@ -1019,8 +1022,6 @@ social graph:
 
 ## Remaining Major KBS Parity Areas
 
-- Board deletion-bin bulk/range workflows: range-delete, range restore, recycle
-  access-list editing, and junk clearing.
 - Remaining specialized historical/stat-log boards and richer community
   statistics.
 - Explicitly out of the current BBS/forum parity goal: POP3/SMTP bridges,
@@ -1029,6 +1030,5 @@ social graph:
 
 ## Suggested Next Slices
 
-1. Board deletion-bin bulk/range workflows.
-2. Remaining specialized historical/stat-log boards and richer community
+1. Remaining specialized historical/stat-log boards and richer community
    statistics.

@@ -7843,6 +7843,31 @@ func TestBoardDeletedPostsRebuildFromEventLog(t *testing.T) {
 
 	assertDeletedBin("junk", junkPosts[0].ID, "bob", "author cleanup")
 	assertDeletedBin("recycle", recyclePosts[0].ID, "admin", "moderator cleanup")
+
+	exec(t, c, admin, proto.CmdClearBoardJunk, proto.ClearBoardJunkPayload{
+		Board: "general",
+		Posts: []string{junkPosts[0].ID},
+	})
+	junkAfterClear, err := c.ListBoardDeletedPosts("general", "junk", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(junkAfterClear) != 0 {
+		t.Fatalf("expected cleared junk bin before rebuild, got %+v", junkAfterClear)
+	}
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatalf("rebuild after junk clear failed: %v", err)
+	}
+
+	junkAfterRebuildClear, err := c.ListBoardDeletedPosts("general", "junk", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(junkAfterRebuildClear) != 0 {
+		t.Fatalf("expected cleared junk bin after rebuild, got %+v", junkAfterRebuildClear)
+	}
+	assertDeletedBin("recycle", recyclePosts[0].ID, "admin", "moderator cleanup")
 }
 
 type forumSnapshot struct {

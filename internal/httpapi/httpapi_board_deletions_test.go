@@ -119,3 +119,132 @@ func TestHTTPBoardDeletedPostsRecycleAndJunkBins(t *testing.T) {
 		t.Fatalf("expected restored post to leave recycle bin, got %+v", recycle.Posts)
 	}
 }
+
+func TestHTTPBoardDeletedPostRangeActionsAndJunkClear(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	bobToken := registerUser(t, handler, "bob")
+
+	_, firstPost := createRootPostForDeletionTest(t, handler, bobToken, "Range one", "first range body")
+	_, secondPost := createRootPostForDeletionTest(t, handler, bobToken, "Range two", "second range body")
+
+	denied := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/posts/range-delete", bobToken, map[string]any{
+		"posts": []string{firstPost, secondPost},
+	}, &denied); status != http.StatusForbidden {
+		t.Fatalf("expected ordinary author range-delete to be forbidden, got status %d error=%+v", status, denied.Error)
+	}
+
+	rangeDelete := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/posts/range-delete", adminToken, map[string]any{
+		"posts":  []string{firstPost, secondPost},
+		"reason": "range cleanup",
+	}, &rangeDelete); status != http.StatusCreated {
+		t.Fatalf("range delete status: %d error=%+v", status, rangeDelete.Error)
+	}
+	if rangeDelete.Result == nil || rangeDelete.Result.ID != "2" {
+		t.Fatalf("expected range-delete count 2, got %+v", rangeDelete.Result)
+	}
+
+	recycle := boardDeletedPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/deleted?kind=recycle", adminToken, nil, &recycle); status != http.StatusOK {
+		t.Fatalf("list recycle after range delete status: %d", status)
+	}
+	if !deletedPostIDs(recycle)[firstPost] || !deletedPostIDs(recycle)[secondPost] {
+		t.Fatalf("expected both range-deleted posts in recycle bin, got %+v", recycle.Posts)
+	}
+	for _, post := range recycle.Posts {
+		if post.Reason != "range cleanup" || post.Kind != "recycle" {
+			t.Fatalf("unexpected range recycle metadata: %+v", post)
+		}
+	}
+
+	restore := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/deleted/range-restore", adminToken, map[string]any{
+		"posts": []string{firstPost},
+	}, &restore); status != http.StatusCreated {
+		t.Fatalf("range restore status: %d error=%+v", status, restore.Error)
+	}
+	if restore.Result == nil || restore.Result.ID != "1" {
+		t.Fatalf("expected range-restore count 1, got %+v", restore.Result)
+	}
+	recycle = boardDeletedPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/deleted?kind=recycle", adminToken, nil, &recycle); status != http.StatusOK {
+		t.Fatalf("list recycle after range restore status: %d", status)
+	}
+	recycleIDs := deletedPostIDs(recycle)
+	if recycleIDs[firstPost] || !recycleIDs[secondPost] {
+		t.Fatalf("expected only second post to remain in recycle bin, got %+v", recycle.Posts)
+	}
+
+	_, firstJunk := createRootPostForDeletionTest(t, handler, bobToken, "Junk one", "first junk body")
+	_, secondJunk := createRootPostForDeletionTest(t, handler, bobToken, "Junk two", "second junk body")
+	for _, postID := range []string{firstJunk, secondJunk} {
+		if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/posts/"+postID, bobToken, map[string]string{
+			"reason": "self cleanup",
+		}, &ackResponse{}); status != http.StatusCreated {
+			t.Fatalf("author junk delete %s status: %d", postID, status)
+		}
+	}
+
+	clearOne := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/deleted/junk/clear", adminToken, map[string]any{
+		"posts": []string{firstJunk},
+	}, &clearOne); status != http.StatusCreated {
+		t.Fatalf("selected junk clear status: %d error=%+v", status, clearOne.Error)
+	}
+	if clearOne.Result == nil || clearOne.Result.ID != "1" {
+		t.Fatalf("expected selected junk clear count 1, got %+v", clearOne.Result)
+	}
+	junk := boardDeletedPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/deleted?kind=junk", adminToken, nil, &junk); status != http.StatusOK {
+		t.Fatalf("list junk after selected clear status: %d", status)
+	}
+	junkIDs := deletedPostIDs(junk)
+	if junkIDs[firstJunk] || !junkIDs[secondJunk] {
+		t.Fatalf("expected only second junk post after selected clear, got %+v", junk.Posts)
+	}
+
+	clearAll := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/deleted/junk/clear", adminToken, map[string]any{}, &clearAll); status != http.StatusCreated {
+		t.Fatalf("whole-board junk clear status: %d error=%+v", status, clearAll.Error)
+	}
+	if clearAll.Result == nil || clearAll.Result.ID != "1" {
+		t.Fatalf("expected whole-board junk clear count 1, got %+v", clearAll.Result)
+	}
+	junk = boardDeletedPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/deleted?kind=junk", adminToken, nil, &junk); status != http.StatusOK {
+		t.Fatalf("list junk after clear all status: %d", status)
+	}
+	if len(junk.Posts) != 0 {
+		t.Fatalf("expected junk bin to be empty after clear all, got %+v", junk.Posts)
+	}
+}
+
+func createRootPostForDeletionTest(t *testing.T, handler http.Handler, token, title, body string) (string, string) {
+	t.Helper()
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", token, map[string]string{
+		"title": title,
+		"body":  body,
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("create thread %q status: %d error=%+v", title, status, thread.Error)
+	}
+	posts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts for %q status: %d", title, status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected one post for %q, got %+v", title, posts.Posts)
+	}
+	return thread.Result.ID, posts.Posts[0].ID
+}
+
+func deletedPostIDs(resp boardDeletedPostsResponse) map[string]bool {
+	out := map[string]bool{}
+	for _, post := range resp.Posts {
+		out[post.PostID] = true
+	}
+	return out
+}

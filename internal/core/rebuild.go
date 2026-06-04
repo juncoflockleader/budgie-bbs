@@ -258,6 +258,10 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 		); err != nil {
 			return err
 		}
+	case *proto.PostDeletionClearedPayload:
+		if err := clearPostDeletion(tx, evt.ID); err != nil {
+			return err
+		}
 	case *proto.PostPurgedPayload:
 		if _, err := qExec(tx,
 			`UPDATE posts SET body='', redacted=1, updated_seq=?, updated_at=? WHERE id=?`,

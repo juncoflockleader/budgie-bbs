@@ -357,6 +357,9 @@ Returns: the ack envelope.
 | `POST /api/v1/posts/{id}/repost` | `repostPost` |
 | `DELETE /api/v1/posts/{id}` | `redactPost` |
 | `POST /api/v1/posts/{id}/restore` | `restorePost` |
+| `POST /api/v1/boards/{id}/posts/range-delete` | `redactPostRange` |
+| `POST /api/v1/boards/{id}/deleted/range-restore` | `restorePostRange` |
+| `POST /api/v1/boards/{id}/deleted/junk/clear` | `clearBoardJunk` |
 | `PATCH /api/v1/threads/{id}/title` | `setThreadTitle` |
 | `POST /api/v1/threads/{id}/lock` | `lockThread` |
 | `PATCH /api/v1/categories/{id}` | update category metadata/visibility |
@@ -482,6 +485,9 @@ editPost       { post*, body* }                             -> post.edited
 setPostFlag    { post*, marked?, recommended?, noReply?, tex?, mailBack? } -> post.flags_set
 redactPost     { post*, reason }                            -> post.redacted
 restorePost    { post* }                                    -> post.restored
+redactPostRange { board*, posts[], reason }                  -> post.redacted*
+restorePostRange { board*, posts[] }                         -> post.restored*
+clearBoardJunk { board*, posts[]? }                          -> post.deletion_cleared*
 setThreadTitle { thread*, title* }                          -> thread.title_set
 flagPost       { post*, reason }                             -> post.flagged
 ```
@@ -644,7 +650,10 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
 - `GET /api/v1/boards/{id}/deleted` exposes a moderator-only board deletion
   bin. `kind=recycle` lists moderator/site-moderator redactions, `kind=junk`
   lists author self-deletions inside the edit window, and restored posts leave
-  the bin.
+  the bin. Board moderators and delegated members with `canModeratePosts` can
+  range-delete selected board posts into `recycle`, range-restore selected
+  deleted posts, and clear selected or all `junk` entries while leaving the
+  underlying posts redacted.
 - Board membership requirements expose KBS-style admission knobs. `maxMembers`,
   `minLoginCount`, `minPostCount`, `minTrustLevel`, `minScore`,
   `minBoardPostCount`, `minBoardOriginalPostCount`, `minBoardDigestCount`, and

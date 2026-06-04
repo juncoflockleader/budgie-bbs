@@ -13,6 +13,9 @@ const (
 	CmdSetPostFlag                CommandName = "setPostFlag"
 	CmdRedactPost                 CommandName = "redactPost"
 	CmdRestorePost                CommandName = "restorePost"
+	CmdRedactPostRange            CommandName = "redactPostRange"
+	CmdRestorePostRange           CommandName = "restorePostRange"
+	CmdClearBoardJunk             CommandName = "clearBoardJunk"
 	CmdSetThreadTitle             CommandName = "setThreadTitle"
 	CmdLockThread                 CommandName = "lockThread"
 	CmdMoveThread                 CommandName = "moveThread"
@@ -511,6 +514,22 @@ type RedactPostPayload struct {
 
 type RestorePostPayload struct {
 	Post string `json:"post"`
+}
+
+type RedactPostRangePayload struct {
+	Board  string   `json:"board"`
+	Posts  []string `json:"posts"`
+	Reason string   `json:"reason,omitempty"`
+}
+
+type RestorePostRangePayload struct {
+	Board string   `json:"board"`
+	Posts []string `json:"posts"`
+}
+
+type ClearBoardJunkPayload struct {
+	Board string   `json:"board"`
+	Posts []string `json:"posts,omitempty"`
 }
 
 type SetThreadTitlePayload struct {
