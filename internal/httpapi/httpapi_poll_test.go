@@ -408,6 +408,86 @@ func TestHTTPCommandEndpointPollMissingCloseTagDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPPollCreationRequiresQuestionText(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+
+	body := "[poll]\n- Option A\n- Option B\n[/poll]"
+	createAck := ackResponse{}
+	createStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", token, map[string]string{
+		"title": "Missing question poll",
+		"body":  body,
+	}, &createAck)
+	if createStatus != http.StatusCreated {
+		t.Fatalf("create thread status: %d", createStatus)
+	}
+	if !createAck.OK || createAck.Result == nil {
+		t.Fatalf("thread create failed: %+v", createAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected one post in malformed body thread, got %d", len(posts.Posts))
+	}
+	if posts.Posts[0].Body != body {
+		t.Fatalf("expected malformed poll body to remain intact, got %q", posts.Posts[0].Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/polls", token, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected malformed poll body to produce no poll projection")
+	}
+}
+
+func TestHTTPCommandEndpointPollRequiresQuestionText(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Missing question command poll",
+			"body":  "[poll]\n- Option A\n- Option B\n[/poll]",
+		},
+	}
+
+	commandAck := ackResponse{}
+	commandStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &commandAck)
+	if commandStatus != http.StatusCreated || !commandAck.OK || commandAck.Result == nil {
+		t.Fatalf("create command thread status: %d ok=%v err=%+v", commandStatus, commandAck.OK, commandAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected one post in malformed command thread, got %d", len(posts.Posts))
+	}
+	if posts.Posts[0].Body != "[poll]\n- Option A\n- Option B\n[/poll]" {
+		t.Fatalf("expected malformed command poll body to remain intact, got %q", posts.Posts[0].Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected malformed command poll to produce no poll projection")
+	}
+}
+
 func TestHTTPCommandEndpointCreatesPoll(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
