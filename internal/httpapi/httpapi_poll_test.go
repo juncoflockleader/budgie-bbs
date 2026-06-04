@@ -898,6 +898,135 @@ func TestHTTPPollVoteEndpointPayloadMismatch(t *testing.T) {
 	}
 }
 
+func TestHTTPPollVoteEndpointValidationAndErrors(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	createThreadAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Vote error base",
+			"body":  "[poll]\nChoice?\nA\nB\n[/poll]",
+		},
+	}, &createThreadAck); status != http.StatusCreated || !createThreadAck.OK || createThreadAck.Result == nil {
+		t.Fatalf("create thread for vote errors failed: status=%d ok=%v err=%+v", status, createThreadAck.OK, createThreadAck.Error)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createThreadAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 1 {
+		t.Fatalf("expected one poll for validation test, got %d", len(threadPolls.Polls))
+	}
+	var pollID string
+	for _, poll := range threadPolls.Polls {
+		if poll != nil {
+			pollID = poll.ID
+			break
+		}
+	}
+	if pollID == "" {
+		t.Fatal("expected poll projection with id")
+	}
+
+	missingOption := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+pollID+"/vote", adminToken, map[string]string{}, &missingOption); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for missing option, got %d", status)
+	}
+
+	unknown := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/does-not-exist/vote", adminToken, map[string]string{"option": "opt_x"}, &unknown); status != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing poll, got %d", status)
+	}
+
+	// Build endpoint-specific invalid payload (malformed JSON) for direct validation path.
+	errReq, err := http.NewRequest(http.MethodPost, "http://example.com/api/v1/polls/"+pollID+"/vote", strings.NewReader("{this is not json"))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	errReq.Header.Set("Authorization", "Bearer "+adminToken)
+	errReq.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, errReq)
+	if rec.Result().StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for malformed json body, got %d", rec.Result().StatusCode)
+	}
+
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+pollID+"/vote", "", map[string]string{"option": "any"}, &ackResponse{}); status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated vote, got %d", status)
+	}
+
+	// Missing endpoint-auth with valid payload but wrong option.
+	unknownOption := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+pollID+"/vote", adminToken, map[string]string{"option": "opt_missing"}, &unknownOption); status != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown option, got %d", status)
+	}
+}
+
+func TestHTTPPollVoteEndpointRejectsExpiredPoll(t *testing.T) {
+	c, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	createThreadAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Expired vote base",
+			"body":  "[poll]\nExpire now?\nA\nB\n[/poll]",
+		},
+	}, &createThreadAck); status != http.StatusCreated || !createThreadAck.OK || createThreadAck.Result == nil {
+		t.Fatalf("create thread for expired poll test failed: status=%d ok=%v err=%+v", status, createThreadAck.OK, createThreadAck.Error)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createThreadAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 1 {
+		t.Fatalf("expected one poll for expired poll test, got %d", len(threadPolls.Polls))
+	}
+	var pollID string
+	for _, poll := range threadPolls.Polls {
+		if poll != nil {
+			pollID = poll.ID
+			break
+		}
+	}
+	if pollID == "" {
+		t.Fatal("expected poll id for expiry test")
+	}
+
+	if _, err := c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), pollID); err != nil {
+		t.Fatalf("expire poll in DB: %v", err)
+	}
+
+	var optionID string
+	for _, poll := range threadPolls.Polls {
+		if poll == nil || len(poll.Options) == 0 {
+			continue
+		}
+		optionID = poll.Options[0].ID
+		break
+	}
+	if optionID == "" {
+		t.Fatalf("expected option ID for expired poll test")
+	}
+
+	expired := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+pollID+"/vote", adminToken, map[string]string{"option": optionID}, &expired); status != http.StatusConflict {
+		t.Fatalf("expected 409 for expired poll, got %d", status)
+	}
+	if expired.Error == nil || expired.Error.Code != "conflict" {
+		t.Fatalf("expected conflict code for expired poll, got %+v", expired.Error)
+	}
+}
+
 func TestHTTPCommandEndpointInvalidPayload(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
