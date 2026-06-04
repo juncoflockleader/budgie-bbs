@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import * as api from '../api/client'
-import type { ArchiveRanking, BlessingRanking, Board, BoardRanking, CommunityStatHistory, CommunityStats, Thread, ThreadRanking, UserRanking } from '../api/types'
+import type { ArchiveRanking, BlessingRanking, Board, BoardRanking, CommunityStatHistory, CommunityStats, ReplyRanking, Thread, ThreadRanking, UserRanking } from '../api/types'
 import { Spinner } from '../components/Spinner'
 
 interface Props {
@@ -15,6 +15,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
   const [history, setHistory] = useState<CommunityStatHistory[]>([])
   const [boards, setBoards] = useState<BoardRanking[]>([])
   const [threads, setThreads] = useState<ThreadRanking[]>([])
+  const [replies, setReplies] = useState<ReplyRanking[]>([])
   const [users, setUsers] = useState<UserRanking[]>([])
   const [blessings, setBlessings] = useState<BlessingRanking[]>([])
   const [archives, setArchives] = useState<ArchiveRanking[]>([])
@@ -30,13 +31,14 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
       api.listCommunityStatHistory(token, 7),
       api.listBoardRankings(token, 12),
       api.listThreadRankings(token, 12),
+      api.listReplyRankings(token, 12),
       api.listUserRankings(token, 12),
       api.listBlessingRankings(token, 12),
       api.listArchiveRankings(token, 12),
-    ]).then(([statsRes, historyRes, boardRes, threadRes, userRes, blessingRes, archiveRes]) => {
+    ]).then(([statsRes, historyRes, boardRes, threadRes, replyRes, userRes, blessingRes, archiveRes]) => {
       if (cancelled) return
       setLoading(false)
-      const failure = statsRes.error ?? historyRes.error ?? boardRes.error ?? threadRes.error ?? userRes.error ?? blessingRes.error ?? archiveRes.error
+      const failure = statsRes.error ?? historyRes.error ?? boardRes.error ?? threadRes.error ?? replyRes.error ?? userRes.error ?? blessingRes.error ?? archiveRes.error
       if (failure) {
         setError(failure.message)
         return
@@ -45,6 +47,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
       setHistory(historyRes.data ?? [])
       setBoards(boardRes.data ?? [])
       setThreads(threadRes.data ?? [])
+      setReplies(replyRes.data ?? [])
       setUsers(userRes.data ?? [])
       setBlessings(blessingRes.data ?? [])
       setArchives(archiveRes.data ?? [])
@@ -121,6 +124,25 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
                 <span className="item-meta muted">{thread.boardName} / {thread.postCount} posts / {thread.reactionCount} reactions</span>
               </span>
               <span className="ranking-score">{thread.score}</span>
+            </button>
+          ))}
+        </RankingPanel>
+        <RankingPanel title="Latest Replies">
+          {replies.map((reply, index) => (
+            <button
+              key={reply.postId}
+              className="ranking-row"
+              onClick={() => onOpenThread(
+                { id: reply.board, name: reply.boardName, description: '' },
+                replyToThread(reply),
+              )}
+            >
+              <span className="ranking-index">{index + 1}</span>
+              <span className="ranking-main">
+                <span className="item-title">{reply.title}</span>
+                <span className="item-meta muted">{reply.boardName} / {reply.author} / {formatDateTime(reply.createdAt)}</span>
+                <span className="item-meta muted">{reply.excerpt}</span>
+              </span>
             </button>
           ))}
         </RankingPanel>
@@ -209,5 +231,21 @@ function rankingToThread(thread: ThreadRanking): Thread {
     createdTs: thread.createdAt,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
+  }
+}
+
+function replyToThread(reply: ReplyRanking): Thread {
+  return {
+    id: reply.threadId,
+    board: reply.board,
+    author: reply.author,
+    authorId: reply.authorId,
+    title: reply.title,
+    locked: false,
+    postCount: 0,
+    lastSeq: reply.seq,
+    createdTs: reply.createdAt,
+    createdAt: reply.createdAt,
+    updatedAt: reply.createdAt,
   }
 }

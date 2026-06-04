@@ -88,6 +88,19 @@ export interface ThreadRanking {
   updatedAt: number
 }
 
+export interface ReplyRanking {
+  postId: string
+  threadId: string
+  board: string
+  boardName: string
+  title: string
+  author: string
+  authorId?: string
+  excerpt: string
+  seq: number
+  createdAt: number
+}
+
 export interface UserRanking {
   userId: string
   name: string

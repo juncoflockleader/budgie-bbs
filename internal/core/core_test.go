@@ -1358,7 +1358,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		Title: "Hot topic",
 		Body:  "first",
 	})
-	exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+	hotReply := exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
 		Thread: hot.ID,
 		Body:   "second",
 	})
@@ -1371,6 +1371,10 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		Board: "secret",
 		Title: "Private topic",
 		Body:  "hidden",
+	})
+	exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: secret.ID,
+		Body:   "classified reply",
 	})
 
 	posts, err := c.ListPosts(hot.ID, 10, 0)
@@ -1416,7 +1420,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 4 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
+	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 5 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("unexpected community stats: %+v", stats)
 	}
 	if stats.HeadSeq == 0 {
@@ -1434,7 +1438,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 1 || history[0].OnlineUsers != 1 || history[0].MaxOnlineUsers != 2 || history[0].MaxOnlineAt == 0 || history[0].TotalPosts != 4 {
+	if len(history) != 1 || history[0].OnlineUsers != 1 || history[0].MaxOnlineUsers != 2 || history[0].MaxOnlineAt == 0 || history[0].TotalPosts != 5 {
 		t.Fatalf("expected daily stat history with preserved max-online peak, got %+v", history)
 	}
 
@@ -1509,6 +1513,20 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if len(boardThreads) != 1 || boardThreads[0].ID != life.ID {
 		t.Fatalf("expected board-scoped life ranking, got %+v", boardThreads)
 	}
+	replies, err := c.ListReplyRankings(alice, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replies) != 1 || replies[0].PostID != hotReply.ID || replies[0].ThreadID != hot.ID || !strings.Contains(replies[0].Excerpt, "second") {
+		t.Fatalf("expected latest public reply only, got %+v", replies)
+	}
+	adminReplies, err := c.ListReplyRankings(admin, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adminReplies) == 0 || adminReplies[0].ThreadID != secret.ID || !strings.Contains(adminReplies[0].Excerpt, "classified reply") {
+		t.Fatalf("expected admin latest reply to include private board, got %+v", adminReplies)
+	}
 
 	users, err := c.ListUserRankings(10, 0)
 	if err != nil {
@@ -1549,12 +1567,12 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
 	}
 	body := systemPosts[0].Body
-	for _, want := range []string{"Total users: 3", "Max online users: 2", "Recent daily history", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total posts: 5", "Max online users: 2", "Recent daily history", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
 	}
-	for _, forbidden := range []string{"Secret", "Private topic", "private"} {
+	for _, forbidden := range []string{"Secret", "Private topic", "classified reply", "private"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("expected stats snapshot body to hide private %q, got:\n%s", forbidden, body)
 		}

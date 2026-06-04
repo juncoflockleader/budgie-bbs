@@ -115,6 +115,17 @@ func (s *Server) handleListThreadRankings(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"threads": threads})
 }
 
+func (s *Server) handleListReplyRankings(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	limit, offset := paginate(r)
+	replies, err := s.core.ListReplyRankings(actor, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"replies": replies})
+}
+
 func (s *Server) handleListUserRankings(w http.ResponseWriter, r *http.Request) {
 	limit, offset := paginate(r)
 	users, err := s.core.ListUserRankings(limit, offset)

@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/stats/community/history", auth(http.HandlerFunc(s.handleListCommunityStatHistory)))
 	mux.Handle("GET /api/v1/rankings/boards", auth(http.HandlerFunc(s.handleListBoardRankings)))
 	mux.Handle("GET /api/v1/rankings/threads", auth(http.HandlerFunc(s.handleListThreadRankings)))
+	mux.Handle("GET /api/v1/rankings/replies", auth(http.HandlerFunc(s.handleListReplyRankings)))
 	mux.Handle("GET /api/v1/rankings/users", auth(http.HandlerFunc(s.handleListUserRankings)))
 	mux.Handle("GET /api/v1/rankings/blessings", auth(http.HandlerFunc(s.handleListBlessingRankings)))
 	mux.Handle("GET /api/v1/rankings/archive", auth(http.HandlerFunc(s.handleListArchiveRankings)))

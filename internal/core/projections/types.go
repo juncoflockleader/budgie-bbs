@@ -105,6 +105,19 @@ type ThreadRanking struct {
 	UpdatedAt     int64  `json:"updatedAt"`
 }
 
+type ReplyRanking struct {
+	PostID    string `json:"postId"`
+	ThreadID  string `json:"threadId"`
+	Board     string `json:"board"`
+	BoardName string `json:"boardName"`
+	Title     string `json:"title"`
+	Author    string `json:"author"`
+	AuthorID  string `json:"authorId,omitempty"`
+	Excerpt   string `json:"excerpt"`
+	Seq       int64  `json:"seq"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
 type UserRanking struct {
 	UserID            string `json:"userId"`
 	Name              string `json:"name"`

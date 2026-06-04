@@ -32,6 +32,7 @@ import type {
   Thread,
   ThreadRanking,
   ThreadSummary,
+  ReplyRanking,
   UserRanking,
   UserProfile,
   AccountRegistration,
@@ -147,6 +148,14 @@ export async function listThreadRankings(token: string, limit = 20, board = ''):
   const r = await json<{ threads: ThreadRanking[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.threads ?? [] }
+}
+
+export async function listReplyRankings(token: string, limit = 20): Promise<ApiResponse<ReplyRanking[]>> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  const res = await fetch(`${BASE}/rankings/replies?${params}`, { headers: authHeaders(token) })
+  const r = await json<{ replies: ReplyRanking[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.replies ?? [] }
 }
 
 export async function listUserRankings(token: string, limit = 20): Promise<ApiResponse<UserRanking[]>> {

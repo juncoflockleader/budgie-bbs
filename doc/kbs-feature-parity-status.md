@@ -86,6 +86,7 @@ ranking surface:
 - Authenticated daily stat history: `GET /api/v1/stats/community/history`.
 - Authenticated active-board rankings: `GET /api/v1/rankings/boards`.
 - Authenticated hot-thread rankings: `GET /api/v1/rankings/threads`.
+- Authenticated latest-reply rankings: `GET /api/v1/rankings/replies`.
 - Authenticated top-poster rankings: `GET /api/v1/rankings/users`.
 - Authenticated blessing rankings: `GET /api/v1/rankings/blessings`.
 - Authenticated archive-path rankings: `GET /api/v1/rankings/archive`.
@@ -102,11 +103,11 @@ ranking surface:
 - Stat snapshots lazily create a KBS-style `BBSLists` system board and
   deterministic daily generated thread/posts containing community counters,
   max-online history, recent daily stat-history rows, plus public-safe board,
-  thread, user, blessing, and archive rankings.
+  thread, latest-reply, user, blessing, and archive rankings.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
-  stat history, active boards, hot threads, top posters, blessing counts, and
-  archive paths, with board/thread/archive rows opening the relevant reading
-  surface.
+  stat history, active boards, hot threads, latest replies, top posters,
+  blessing counts, and archive paths, with board/thread/reply/archive rows
+  opening the relevant reading surface.
 
 This does not yet implement guest counters, deeper historical charting, or
 richer topic-decay algorithms.
@@ -768,8 +769,9 @@ social graph:
   cloak presence.
 - Direct-message shortcuts from online People rows and board online chips.
 - Community counters, active-board rankings, hot-thread rankings, top-poster
-  rankings, blessing rankings/rituals, archive-path rankings, automatic
-  `BBSLists` generated stat snapshots, and a web `Rankings` surface.
+  rankings, latest-reply rankings, blessing rankings/rituals, archive-path
+  rankings, automatic `BBSLists` generated stat snapshots, and a web `Rankings`
+  surface.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

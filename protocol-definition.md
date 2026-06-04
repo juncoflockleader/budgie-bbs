@@ -260,6 +260,7 @@ GET /api/v1/stats/community
 GET /api/v1/stats/community/history?limit=&offset=
 GET /api/v1/rankings/boards?limit=&offset=
 GET /api/v1/rankings/threads?board=&limit=&offset=
+GET /api/v1/rankings/replies?limit=&offset=
 GET /api/v1/rankings/users?limit=&offset=
 GET /api/v1/rankings/blessings?limit=&offset=
 GET /api/v1/rankings/archive?kind=&limit=&offset=
@@ -314,10 +315,10 @@ GET /api/v1/chat/{room}/recent?limit=    -> bounded ephemeral history (ring buff
 ```
 These read projection tables directly (see Decision 2) and are CDN-cacheable. Moderator views (`?include=redacted`) require role and are never cached.
 Ranking reads are derived projection views for KBS-style public lists: community
-counters, active boards, hot threads, top posters, blessing rituals, and active
-archive paths.
-Board/thread/archive rankings hide member-read boards unless the viewer can read
-them; direct thread ranking queries scoped to an inaccessible board are
+counters, active boards, hot threads, latest replies, top posters, blessing
+rituals, and active archive paths.
+Board/thread/reply/archive rankings hide member-read boards unless the viewer
+can read them; direct thread ranking queries scoped to an inaccessible board are
 rejected. Public generated system boards such as `newcomers`, `BBSLists`,
 `Registry`, `reject_registry`, `syssecurity`, `Goodbye`, `Blessing`,
 `GiveupNotice`, `bbsnet`, `notepad`, `Filter`, `Recommend`, `denypost`,
@@ -649,7 +650,7 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
 - `publishStatsSnapshot` is admin-only. It creates the `BBSLists` system board
   if needed and writes a deterministic daily generated thread/post containing
   community counters, max-online history, recent daily stat-history rows, plus
-  public-safe board, thread, user, blessing, and archive rankings.
+  public-safe board, thread, latest-reply, user, blessing, and archive rankings.
   `date` is optional `YYYY-MM-DD` and defaults to the current UTC day; publishing
   the same date again returns the existing generated thread instead of
   duplicating it.

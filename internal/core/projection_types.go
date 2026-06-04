@@ -8,6 +8,7 @@ type CommunityStats = projections.CommunityStats
 type CommunityStatHistory = projections.CommunityStatHistory
 type BoardRanking = projections.BoardRanking
 type ThreadRanking = projections.ThreadRanking
+type ReplyRanking = projections.ReplyRanking
 type UserRanking = projections.UserRanking
 type Blessing = projections.Blessing
 type BlessingRanking = projections.BlessingRanking

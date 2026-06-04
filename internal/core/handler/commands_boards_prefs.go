@@ -1178,6 +1178,10 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 	if err != nil {
 		return "", 0, err
 	}
+	replies, err := projections.ListReplyRankings(h.db, "", false, 5, 0)
+	if err != nil {
+		return "", 0, err
+	}
 	users, err := projections.ListUserRankings(h.db, 5, 0)
 	if err != nil {
 		return "", 0, err
@@ -1194,7 +1198,7 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 	if err != nil {
 		return "", 0, err
 	}
-	body := formatStatsSnapshotBody(dateLabel, stats, boards, threads, users, archives, blessings, history)
+	body := formatStatsSnapshotBody(dateLabel, stats, boards, threads, replies, users, archives, blessings, history)
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -1281,7 +1285,7 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 	return threadID, pseq, nil
 }
 
-func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, threads []projections.ThreadRanking, users []projections.UserRanking, archives []projections.ArchiveRanking, blessings []projections.BlessingRanking, history []projections.CommunityStatHistory) string {
+func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, threads []projections.ThreadRanking, replies []projections.ReplyRanking, users []projections.UserRanking, archives []projections.ArchiveRanking, blessings []projections.BlessingRanking, history []projections.CommunityStatHistory) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Community stats %s\n\n", dateLabel)
 	fmt.Fprintf(&b, "- Total users: %d\n", stats.TotalUsers)
@@ -1326,6 +1330,13 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 	}
 	for i, thread := range threads {
 		fmt.Fprintf(&b, "%d. %s / %s: %d posts, %d reactions, score %d\n", i+1, thread.BoardName, thread.Title, thread.PostCount, thread.ReactionCount, thread.Score)
+	}
+	b.WriteString("\n## Latest replies\n")
+	if len(replies) == 0 {
+		b.WriteString("- No public replies yet.\n")
+	}
+	for i, reply := range replies {
+		fmt.Fprintf(&b, "%d. %s / %s by %s: %s\n", i+1, reply.BoardName, reply.Title, reply.Author, reply.Excerpt)
 	}
 	b.WriteString("\n## Top users\n")
 	if len(users) == 0 {

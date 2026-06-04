@@ -161,6 +161,20 @@ type threadRankingsResponse struct {
 	} `json:"threads"`
 }
 
+type replyRankingsResponse struct {
+	Replies []struct {
+		PostID    string `json:"postId"`
+		ThreadID  string `json:"threadId"`
+		Board     string `json:"board"`
+		BoardName string `json:"boardName"`
+		Title     string `json:"title"`
+		Author    string `json:"author"`
+		Excerpt   string `json:"excerpt"`
+		Seq       int64  `json:"seq"`
+		CreatedAt int64  `json:"createdAt"`
+	} `json:"replies"`
+}
+
 type postsResponse struct {
 	Posts []struct {
 		ID           string `json:"id"`
@@ -787,10 +801,11 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	}, &hot); status != http.StatusCreated {
 		t.Fatalf("create hot topic status: %d error=%+v", status, hot.Error)
 	}
+	hotReply := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+hot.Result.ID+"/posts", bobToken, map[string]string{
 		"body": "second",
-	}, &ack); status != http.StatusCreated {
-		t.Fatalf("reply hot topic status: %d error=%+v", status, ack.Error)
+	}, &hotReply); status != http.StatusCreated {
+		t.Fatalf("reply hot topic status: %d error=%+v", status, hotReply.Error)
 	}
 	life := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/life/threads", aliceToken, map[string]string{
@@ -805,6 +820,11 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		"body":  "hidden",
 	}, &secret); status != http.StatusCreated {
 		t.Fatalf("create secret topic status: %d error=%+v", status, secret.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+secret.Result.ID+"/posts", adminToken, map[string]string{
+		"body": "classified reply",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("reply secret topic status: %d error=%+v", status, ack.Error)
 	}
 
 	hotPosts := postsResponse{}
@@ -861,7 +881,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community", aliceToken, nil, &stats); status != http.StatusOK {
 		t.Fatalf("community stats status: %d", status)
 	}
-	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 4 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 || stats.HeadSeq == 0 {
+	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 5 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 || stats.HeadSeq == 0 {
 		t.Fatalf("unexpected community stats: %+v", stats)
 	}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/presence", bobToken, map[string]string{
@@ -880,7 +900,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community/history?limit=7", aliceToken, nil, &history); status != http.StatusOK {
 		t.Fatalf("community stat history status: %d", status)
 	}
-	if len(history.Days) != 1 || history.Days[0].OnlineUsers != 1 || history.Days[0].MaxOnlineUsers != 2 || history.Days[0].MaxOnlineAt == 0 || history.Days[0].TotalPosts != 4 {
+	if len(history.Days) != 1 || history.Days[0].OnlineUsers != 1 || history.Days[0].MaxOnlineUsers != 2 || history.Days[0].MaxOnlineAt == 0 || history.Days[0].TotalPosts != 5 {
 		t.Fatalf("expected daily stat history with preserved max-online peak, got %+v", history)
 	}
 
@@ -953,6 +973,21 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected direct secret thread ranking to be forbidden, got %d", status)
 	}
 
+	replies := replyRankingsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/replies", aliceToken, nil, &replies); status != http.StatusOK {
+		t.Fatalf("reply rankings status: %d", status)
+	}
+	if len(replies.Replies) != 1 || replies.Replies[0].PostID != hotReply.Result.ID || replies.Replies[0].ThreadID != hot.Result.ID || !strings.Contains(replies.Replies[0].Excerpt, "second") {
+		t.Fatalf("expected latest public reply only, got %+v", replies.Replies)
+	}
+	adminReplies := replyRankingsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/replies", adminToken, nil, &adminReplies); status != http.StatusOK {
+		t.Fatalf("admin reply rankings status: %d", status)
+	}
+	if len(adminReplies.Replies) == 0 || adminReplies.Replies[0].ThreadID != secret.Result.ID || !strings.Contains(adminReplies.Replies[0].Excerpt, "classified reply") {
+		t.Fatalf("expected admin latest reply to include private board, got %+v", adminReplies.Replies)
+	}
+
 	lifeThreads := threadRankingsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/threads?board=life", aliceToken, nil, &lifeThreads); status != http.StatusOK {
 		t.Fatalf("life thread rankings status: %d", status)
@@ -999,12 +1034,12 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts.Posts)
 	}
 	body := systemPosts.Posts[0].Body
-	for _, want := range []string{"Total users: 3", "Max online users: 2", "Recent daily history", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total posts: 5", "Max online users: 2", "Recent daily history", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
 	}
-	for _, forbidden := range []string{"Secret", "Private topic", "private"} {
+	for _, forbidden := range []string{"Secret", "Private topic", "classified reply", "private"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("expected stats snapshot body to hide private %q, got:\n%s", forbidden, body)
 		}

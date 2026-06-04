@@ -260,6 +260,60 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 	return out, rows.Err()
 }
 
+func ListReplyRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]ReplyRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT p.id, t.id, t.board, b.name, t.title, p.author, COALESCE(p.author_id, ''),
+		        COALESCE(p.body, '') AS body,
+		        p.created_seq, p.created_at
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		   JOIN boards b ON b.id=t.board
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE p.redacted=0
+		    AND p.created_seq > (SELECT MIN(root.created_seq) FROM posts root WHERE root.thread=t.id)
+		    AND t.board NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND (
+		      COALESCE(s.member_read_mode, 0)=0
+		      OR ?=1
+		      OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		      OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		    )
+		  ORDER BY p.created_seq DESC
+		  LIMIT ? OFFSET ?`,
+		boolInt(includePrivate), viewerID, viewerID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ReplyRanking{}
+	for rows.Next() {
+		var rank ReplyRanking
+		var body string
+		if err := rows.Scan(&rank.PostID, &rank.ThreadID, &rank.Board, &rank.BoardName, &rank.Title, &rank.Author, &rank.AuthorID, &body, &rank.Seq, &rank.CreatedAt); err != nil {
+			return nil, err
+		}
+		rank.Excerpt = replyRankingExcerpt(body)
+		out = append(out, rank)
+	}
+	return out, rows.Err()
+}
+
+func replyRankingExcerpt(body string) string {
+	excerpt := strings.TrimSpace(strings.NewReplacer("\n", " ", "\r", " ").Replace(body))
+	runes := []rune(excerpt)
+	if len(runes) > 180 {
+		return string(runes[:180])
+	}
+	return excerpt
+}
+
 func ListUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50

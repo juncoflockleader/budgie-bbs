@@ -949,6 +949,9 @@ func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]BoardRanking
 func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int) ([]ThreadRanking, error) {
 	return listThreadRankings(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
 }
+func (c *Core) ListReplyRankings(actor *User, limit, offset int) ([]ReplyRanking, error) {
+	return listReplyRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
+}
 func (c *Core) ListUserRankings(limit, offset int) ([]UserRanking, error) {
 	return listUserRankings(c.DB, limit, offset)
 }

@@ -238,6 +238,10 @@ func listThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 	return projections.ListThreadRankings(db, viewerID, includePrivate, boardID, limit, offset)
 }
 
+func listReplyRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]ReplyRanking, error) {
+	return projections.ListReplyRankings(db, viewerID, includePrivate, limit, offset)
+}
+
 func listUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
 	return projections.ListUserRankings(db, limit, offset)
 }
