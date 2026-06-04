@@ -8,40 +8,35 @@ interface Props {
 
 export function PollWidget({ poll, onVote }: Props) {
   const [voting, setVoting] = useState<string | null>(null)
-  const [localPoll, setLocalPoll] = useState<Poll>(poll)
 
-  const expired = localPoll.expiresAt ? localPoll.expiresAt < Date.now() : false
-  const totalVotes = localPoll.options.reduce((s, o) => s + o.voteCount, 0)
+  const expired = poll.expiresAt ? poll.expiresAt < Date.now() : false
+  const totalVotes = poll.options.reduce((s, o) => s + o.voteCount, 0)
 
   async function handleVote(optionId: string) {
-    if (localPoll.voted || expired) return
+    if (expired) return
+    if (poll.voted === optionId) return
     setVoting(optionId)
-    await onVote(optionId)
-    // Optimistically mark as voted and increment count
-    setLocalPoll(prev => ({
-      ...prev,
-      voted: optionId,
-      options: prev.options.map(o =>
-        o.id === optionId ? { ...o, voteCount: o.voteCount + 1 } : o
-      ),
-    }))
-    setVoting(null)
+    try {
+      await onVote(optionId)
+    } finally {
+      setVoting(null)
+    }
   }
 
   return (
     <div className="poll-widget">
-      {localPoll.question && <div className="poll-question">{localPoll.question}</div>}
+      {poll.question && <div className="poll-question">{poll.question}</div>}
       <div className="poll-options">
-        {localPoll.options.map(opt => {
+        {poll.options.map(opt => {
           const pct = totalVotes > 0 ? Math.round((opt.voteCount / totalVotes) * 100) : 0
-          const isVoted = localPoll.voted === opt.id
-          const showResults = !!localPoll.voted || expired
+          const isVoted = poll.voted === opt.id
+          const showResults = !!poll.voted || expired
 
           return (
             <div
               key={opt.id}
-              className={`poll-option${isVoted ? ' poll-option--voted' : ''}${!localPoll.voted && !expired ? ' poll-option--clickable' : ''}`}
-              onClick={() => { if (!localPoll.voted && !expired) handleVote(opt.id) }}
+              className={`poll-option${isVoted ? ' poll-option--voted' : ''}${!expired ? ' poll-option--clickable' : ''}`}
+              onClick={() => { if (!expired) handleVote(opt.id) }}
             >
               {showResults && (
                 <div className="poll-bar" style={{ width: `${pct}%` }} />
@@ -61,7 +56,7 @@ export function PollWidget({ poll, onVote }: Props) {
       <div className="poll-footer muted">
         {totalVotes} vote{totalVotes !== 1 ? 's' : ''}
         {expired && ' · Closed'}
-        {localPoll.expiresAt && !expired && ` · Closes ${new Date(localPoll.expiresAt).toLocaleDateString()}`}
+        {poll.expiresAt && !expired && ` · Closes ${new Date(poll.expiresAt).toLocaleDateString()}`}
       </div>
     </div>
   )

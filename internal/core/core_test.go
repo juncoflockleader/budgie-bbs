@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -450,6 +451,56 @@ func TestPollVoteReplacesPriorVote(t *testing.T) {
 	if votesA != 0 || votesB != 1 {
 		t.Fatalf("expected Option A=0 and Option B=1 after replacement vote, got %d/%d", votesA, votesB)
 	}
+}
+
+func TestPollVoteValidations(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Vote validation poll", Body: "[poll]\nQuestion?\nOption A\nOption B\n[/poll]",
+	})
+	threadPosts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threadPosts) != 1 {
+		t.Fatalf("expected 1 post in new poll thread, got %d", len(threadPosts))
+	}
+	poll, err := c.GetPollByPostID(threadPosts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatalf("expected poll row for thread post")
+	}
+	pollState, err := c.GetPoll(poll.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var optionID string
+	if len(pollState.Options) == 0 {
+		t.Fatalf("expected poll options")
+	}
+	optionID = pollState.Options[0].ID
+
+	execExpectErr(t, c, alice, proto.CmdVotePoll, proto.VotePollPayload{
+		Poll: "pol_missing", Option: "whatever",
+	}, proto.ErrNotFound)
+	execExpectErr(t, c, alice, proto.CmdVotePoll, proto.VotePollPayload{
+		Poll: poll.ID, Option: "option_missing",
+	}, proto.ErrNotFound)
+
+	_, err = c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), poll.ID)
+	if err != nil {
+		t.Fatalf("failed to expire poll: %v", err)
+	}
+	execExpectErr(t, c, alice, proto.CmdVotePoll, proto.VotePollPayload{
+		Poll: poll.ID, Option: optionID,
+	}, proto.ErrConflict)
 }
 
 type forumSnapshot struct {

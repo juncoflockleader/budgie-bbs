@@ -90,6 +90,20 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
     })
   }
 
+  const refreshPoll = useCallback(async (pollId: string) => {
+    const pollRes = await api.getPoll(token, pollId)
+    if (!pollRes.data) return
+
+    setPolls(prev => {
+      for (const [postId, poll] of Object.entries(prev)) {
+        if (poll?.id === pollId) {
+          return { ...prev, [postId]: pollRes.data! }
+        }
+      }
+      return prev
+    })
+  }, [token])
+
   useEffect(() => {
     ;(async () => {
       setLoading(true)
@@ -185,23 +199,9 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
       }))
     } else if (evt.event === 'poll.voted') {
       const p = evt.payload as PollVotedPayload
-      setPolls(prev => {
-        const entry = Object.entries(prev).find(([, poll]) => poll?.id === p.poll)
-        if (!entry) return prev
-        const [postId, poll] = entry
-        if (!poll) return prev
-        return {
-          ...prev,
-          [postId]: {
-            ...poll,
-            options: poll.options.map(o =>
-              o.id === p.option ? { ...o, voteCount: o.voteCount + 1 } : o
-            ),
-          },
-        }
-      })
+      void refreshPoll(p.poll)
     }
-  }, [thread.id, currentUserId])
+  }, [thread.id, currentUserId, refreshPoll])
 
   useStream({ token }, onEvent)
 
@@ -284,14 +284,13 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
     }
   }
 
-  async function handleVotePoll(postId: string, pollId: string, optionId: string) {
+  async function handleVotePoll(pollId: string, optionId: string) {
     const res = await api.votePoll(token, pollId, optionId)
-    if (res.error) { alert(res.error.message); return }
-    // Refresh from server to get accurate counts
-    const pollRes = await api.getPoll(token, pollId)
-    if (pollRes.data) {
-      setPolls(prev => ({ ...prev, [postId]: pollRes.data! }))
+    if (res.error) {
+      alert(res.error.message)
+      return
     }
+    void refreshPoll(pollId)
   }
 
   if (loading) return <Spinner />
@@ -372,7 +371,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
               {poll && (
                 <PollWidget
                   poll={poll}
-                  onVote={optionId => handleVotePoll(post.id, poll.id, optionId)}
+                  onVote={optionId => handleVotePoll(poll.id, optionId)}
                 />
               )}
             </div>
