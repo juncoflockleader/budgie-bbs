@@ -307,6 +307,57 @@ func TestHTTPMalformedPollDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointCreatesPoll(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Command endpoint poll",
+			"body":  "before\n[poll]\nFavorite color?\nBlue\nGreen\n[/poll]\nafter",
+		},
+	}
+
+	commandAck := ackResponse{}
+	commandStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &commandAck)
+	if commandStatus != http.StatusCreated || !commandAck.OK || commandAck.Result == nil {
+		t.Fatalf("command create thread with poll failed: status=%d ok=%v err=%+v", commandStatus, commandAck.OK, commandAck.Error)
+	}
+	threadID := commandAck.Result.ID
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected 1 post in created thread, got %d", len(posts.Posts))
+	}
+	post := posts.Posts[0]
+	if got := strings.TrimSpace(post.Body); got != "before\nafter" {
+		t.Fatalf("expected command-created poll body stripped, got %q", got)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	poll := threadPolls.Polls[post.ID]
+	if poll == nil {
+		t.Fatalf("expected poll attached to command-created post %s", post.ID)
+	}
+	if poll.Question != "Favorite color?" {
+		t.Fatalf("unexpected poll question: %q", poll.Question)
+	}
+	if len(poll.Options) != 2 {
+		t.Fatalf("expected 2 options from command payload, got %d", len(poll.Options))
+	}
+}
+
 func TestHTTPReplyPollLifecycle(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
