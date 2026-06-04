@@ -82,8 +82,9 @@ KBS surfaced community attention through hot topics, board statistics, public
 counters, and generated list boards. Budgie now has the first projection-backed
 ranking surface:
 
-- Authenticated community counters including cumulative online/stay time and
-  anonymous web guest counters: `GET /api/v1/stats/community`.
+- Authenticated community counters including cumulative login count, cumulative
+  online/stay time, and anonymous web guest counters:
+  `GET /api/v1/stats/community`.
 - Authenticated daily stat history with derived trend deltas: `GET
   /api/v1/stats/community/history`.
 - Authenticated active-board rankings: `GET /api/v1/rankings/boards`.
@@ -95,11 +96,12 @@ ranking surface:
 - Admin-triggered generated stat snapshots: `POST
   /api/v1/stats/community/snapshot`.
 - Automatic daily stat-log publishing runs from the server process and ensures
-  the current UTC day has a deterministic `BBSLists` snapshot thread.
+  the current UTC day has deterministic `BBSLists` snapshot and login-count
+  history threads.
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters, max-online users/time, and
-  day-over-day deltas for user, board, thread, post, reaction, mail, and direct
-  message totals, plus cumulative online/stay-time and guest totals.
+  day-over-day deltas for user, board, thread, post, reaction, mail, direct
+  message, and login totals, plus cumulative online/stay-time and guest totals.
 - Presence updates accrue per-user total online seconds from visible sessions
   with a five-minute cap per update so stale clients do not inflate stay time.
 - Public guest-presence pings (`POST /api/v1/presence/guest`) maintain anonymous
@@ -114,18 +116,21 @@ ranking surface:
   deterministic daily generated thread/posts containing community counters,
   max-online history, recent daily stat-history rows with trend deltas, plus
   public-safe board, thread, latest-reply, user, blessing, and archive rankings.
+- Stat snapshots also create deterministic daily KBS `countlogins`-style
+  `BBSLists` login-count history threads showing total logins, user totals,
+  online users, anonymous guests, online time, and recent daily deltas.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
-  stat history with trend deltas, cumulative online/stay time, anonymous guest
-  counts, active boards, hot threads, latest replies, top posters, blessing
-  counts, and archive paths, with board/thread/reply/archive rows opening the
-  relevant reading surface.
+  stat history with trend deltas, cumulative login count, cumulative online/stay
+  time, anonymous guest counts, active boards, hot threads, latest replies, top
+  posters, blessing counts, and archive paths, with board/thread/reply/archive
+  rows opening the relevant reading surface.
 - Web `Rankings` includes a 30-day selectable history chart for post deltas,
-  user totals, reaction deltas, online-time deltas, max-online users, and max
-  anonymous guests, plus compact latest/previous/low/high summaries for the
-  selected metric.
+  login deltas, user totals, reaction deltas, online-time deltas, max-online
+  users, and max anonymous guests, plus compact latest/previous/low/high
+  summaries for the selected metric.
 
-This does not yet implement separate historical/stat-log boards beyond the
-generated `BBSLists` snapshot board.
+This does not yet implement every historical/stat-log board from KBS local
+utilities beyond the generated `BBSLists` snapshot and login-history threads.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -786,11 +791,12 @@ social graph:
 - Anonymous web guest presence pings, online guest counters, daily guest deltas,
   and max guest peaks.
 - Direct-message shortcuts from online People rows and board online chips.
-- Community counters including cumulative online/stay time and anonymous guest
-  counters, active-board rankings, hot-thread rankings, top-poster rankings,
-  latest-reply rankings, blessing rankings/rituals, archive-path rankings,
-  automatic `BBSLists` generated stat snapshots, and a web `Rankings` surface
-  with selectable 30-day history charts.
+- Community counters including cumulative login count, cumulative online/stay
+  time and anonymous guest counters, active-board rankings, hot-thread rankings,
+  top-poster rankings, latest-reply rankings, blessing rankings/rituals,
+  archive-path rankings, automatic `BBSLists` generated stat snapshots and
+  login-count history posts, and a web `Rankings` surface with selectable
+  30-day history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

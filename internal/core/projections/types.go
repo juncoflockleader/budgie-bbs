@@ -47,6 +47,7 @@ type CommunityStats struct {
 	TotalReactions      int   `json:"totalReactions"`
 	TotalMail           int   `json:"totalMail"`
 	TotalDirectMessages int   `json:"totalDirectMessages"`
+	TotalLogins         int   `json:"totalLogins"`
 	TotalOnlineSeconds  int64 `json:"totalOnlineSeconds"`
 	OnlineUsers         int   `json:"onlineUsers"`
 	OnlineGuests        int   `json:"onlineGuests"`
@@ -67,6 +68,7 @@ type CommunityStatHistory struct {
 	TotalReactions      int    `json:"totalReactions"`
 	TotalMail           int    `json:"totalMail"`
 	TotalDirectMessages int    `json:"totalDirectMessages"`
+	TotalLogins         int    `json:"totalLogins"`
 	TotalOnlineSeconds  int64  `json:"totalOnlineSeconds"`
 	OnlineUsers         int    `json:"onlineUsers"`
 	OnlineGuests        int    `json:"onlineGuests"`
@@ -82,6 +84,7 @@ type CommunityStatHistory struct {
 	DeltaReactions      int    `json:"deltaReactions"`
 	DeltaMail           int    `json:"deltaMail"`
 	DeltaDirectMessages int    `json:"deltaDirectMessages"`
+	DeltaLogins         int    `json:"deltaLogins"`
 	DeltaOnlineSeconds  int64  `json:"deltaOnlineSeconds"`
 	DeltaGuests         int    `json:"deltaGuests"`
 }

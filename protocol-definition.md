@@ -655,7 +655,9 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   if needed and writes a deterministic daily generated thread/post containing
   community counters, cumulative online/stay time, max-online history, recent
   daily stat-history rows, plus public-safe board, thread, latest-reply, user,
-  blessing, and archive rankings.
+  blessing, and archive rankings. It also writes a deterministic daily
+  `BBSLists` login-count history thread/post modeled on KBS `countlogins`
+  autoposts.
   `date` is optional `YYYY-MM-DD` and defaults to the current UTC day; publishing
   the same date again returns the existing generated thread instead of
   duplicating it.
@@ -663,11 +665,12 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   `GET /api/v1/stats/community` exposes current authenticated `onlineUsers`,
   anonymous web `onlineGuests`, historical `maxOnlineUsers`, `maxOnlineAt`,
   `maxOnlineGuests`, `maxOnlineGuestsAt`, and cumulative
-  `totalOnlineSeconds`; `GET /api/v1/stats/community/history` returns daily
-  stat-log rows ordered newest first with derived `deltaUsers`, `deltaBoards`,
-  `deltaThreads`, `deltaPosts`, `deltaReactions`, `deltaMail`,
-  `deltaDirectMessages`, `deltaOnlineSeconds`, and `deltaGuests` fields
-  compared to the next older fetched row.
+  `totalLogins` and `totalOnlineSeconds`; `GET
+  /api/v1/stats/community/history` returns daily stat-log rows ordered newest
+  first with derived `deltaUsers`, `deltaBoards`, `deltaThreads`, `deltaPosts`,
+  `deltaReactions`, `deltaMail`, `deltaDirectMessages`, `deltaLogins`,
+  `deltaOnlineSeconds`, and `deltaGuests` fields compared to the next older
+  fetched row.
 - Presence updates accrue per-user `totalOnlineSeconds` while the previous
   session status was visibly online. A single update contributes at most five
   minutes so stale sessions do not create inflated stay-time totals.

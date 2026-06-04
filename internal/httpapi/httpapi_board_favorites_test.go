@@ -118,6 +118,7 @@ type communityStatsResponse struct {
 	TotalReactions      int   `json:"totalReactions"`
 	TotalMail           int   `json:"totalMail"`
 	TotalDirectMessages int   `json:"totalDirectMessages"`
+	TotalLogins         int   `json:"totalLogins"`
 	TotalOnlineSeconds  int64 `json:"totalOnlineSeconds"`
 	OnlineUsers         int   `json:"onlineUsers"`
 	OnlineGuests        int   `json:"onlineGuests"`
@@ -146,6 +147,7 @@ type communityStatHistoryResponse struct {
 		TotalReactions      int    `json:"totalReactions"`
 		TotalMail           int    `json:"totalMail"`
 		TotalDirectMessages int    `json:"totalDirectMessages"`
+		TotalLogins         int    `json:"totalLogins"`
 		TotalOnlineSeconds  int64  `json:"totalOnlineSeconds"`
 		DeltaUsers          int    `json:"deltaUsers"`
 		DeltaBoards         int    `json:"deltaBoards"`
@@ -154,6 +156,7 @@ type communityStatHistoryResponse struct {
 		DeltaReactions      int    `json:"deltaReactions"`
 		DeltaMail           int    `json:"deltaMail"`
 		DeltaDirectMessages int    `json:"deltaDirectMessages"`
+		DeltaLogins         int    `json:"deltaLogins"`
 		DeltaOnlineSeconds  int64  `json:"deltaOnlineSeconds"`
 		DeltaGuests         int    `json:"deltaGuests"`
 	} `json:"days"`
@@ -432,6 +435,15 @@ type threadSummariesResponse struct {
 		UnreadPosts       int    `json:"unreadPosts"`
 		FirstUnreadPostID string `json:"firstUnreadPostId"`
 	} `json:"threads"`
+}
+
+func hasHTTPThreadSummary(resp threadSummariesResponse, id, titlePart string) bool {
+	for _, thread := range resp.Threads {
+		if thread.ID == id && strings.Contains(thread.Title, titlePart) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestHTTPBoardFavoritesLifecycle(t *testing.T) {
@@ -902,7 +914,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community", aliceToken, nil, &stats); status != http.StatusOK {
 		t.Fatalf("community stats status: %d", status)
 	}
-	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 5 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 || stats.HeadSeq == 0 {
+	if stats.TotalUsers != 3 || stats.TotalLogins != 4 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 5 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 || stats.HeadSeq == 0 {
 		t.Fatalf("unexpected community stats: %+v", stats)
 	}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/presence", bobToken, map[string]string{
@@ -950,12 +962,12 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
 	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
+		total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
 		online_guests, max_online_users, max_online_at, max_online_guests,
 		max_online_guests_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
-		2, 3, 1, 2, 0, 0, 0, int64(60), 0, 0, 1, previousAt.UnixMilli(), 0, int64(0), 1,
+		2, 3, 1, 2, 0, 0, 0, 0, int64(60), 0, 0, 1, previousAt.UnixMilli(), 0, int64(0), 1,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -966,7 +978,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if len(history.Days) != 2 || history.Days[0].OnlineUsers != 1 || history.Days[0].MaxOnlineUsers != 2 || history.Days[0].MaxOnlineAt == 0 || history.Days[0].TotalPosts != 5 {
 		t.Fatalf("expected daily stat history with preserved max-online peak, got %+v", history)
 	}
-	if history.Days[0].DeltaUsers != 1 || history.Days[0].DeltaBoards != 1 || history.Days[0].DeltaThreads != 2 || history.Days[0].DeltaPosts != 3 || history.Days[0].DeltaReactions != 1 || history.Days[0].DeltaMail != 0 || history.Days[0].DeltaDirectMessages != 0 {
+	if history.Days[0].TotalLogins != 4 || history.Days[0].DeltaUsers != 1 || history.Days[0].DeltaLogins != 4 || history.Days[0].DeltaBoards != 1 || history.Days[0].DeltaThreads != 2 || history.Days[0].DeltaPosts != 3 || history.Days[0].DeltaReactions != 1 || history.Days[0].DeltaMail != 0 || history.Days[0].DeltaDirectMessages != 0 {
 		t.Fatalf("expected newest daily stat history row to include deltas, got %+v", history.Days[0])
 	}
 	if history.Days[0].TotalOnlineSeconds != 120 || history.Days[0].DeltaOnlineSeconds != 60 {
@@ -975,7 +987,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if history.Days[0].OnlineGuests != 1 || history.Days[0].DeltaGuests != 1 || history.Days[0].MaxOnlineGuests != 1 || history.Days[0].MaxOnlineGuestsAt == 0 {
 		t.Fatalf("expected newest daily stat history row to include guest counters and deltas, got %+v", history.Days[0])
 	}
-	if history.Days[1].DeltaUsers != 0 || history.Days[1].DeltaPosts != 0 || history.Days[1].DeltaReactions != 0 {
+	if history.Days[1].DeltaUsers != 0 || history.Days[1].DeltaLogins != 0 || history.Days[1].DeltaPosts != 0 || history.Days[1].DeltaReactions != 0 {
 		t.Fatalf("expected oldest fetched daily stat history row to have zero deltas without an older comparison row, got %+v", history.Days[1])
 	}
 
@@ -1098,8 +1110,11 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads status: %d", status)
 	}
-	if len(systemThreads.Threads) != 1 || systemThreads.Threads[0].ID != snapshot.Result.ID || !strings.Contains(systemThreads.Threads[0].Title, "2026-06-04") {
-		t.Fatalf("expected one generated stats thread, got %+v", systemThreads.Threads)
+	if len(systemThreads.Threads) != 2 {
+		t.Fatalf("expected generated stats and login-history threads, got %+v", systemThreads.Threads)
+	}
+	if !hasHTTPThreadSummary(systemThreads, snapshot.Result.ID, "2026-06-04") || !hasHTTPThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") {
+		t.Fatalf("expected generated stats and login-history threads, got %+v", systemThreads.Threads)
 	}
 	systemPosts := listPostsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+snapshot.Result.ID+"/posts", aliceToken, nil, &systemPosts); status != http.StatusOK {
@@ -1109,9 +1124,22 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts.Posts)
 	}
 	body := systemPosts.Posts[0].Body
-	for _, want := range []string{"Total users: 3", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total logins: 4", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "4 logins (+4)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
+		}
+	}
+	loginPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_countlogins_20260604/posts", aliceToken, nil, &loginPosts); status != http.StatusOK {
+		t.Fatalf("list BBSLists login-history posts status: %d", status)
+	}
+	if len(loginPosts.Posts) != 1 {
+		t.Fatalf("expected one generated login-history post, got %+v", loginPosts.Posts)
+	}
+	loginBody := loginPosts.Posts[0].Body
+	for _, want := range []string{"Login count history 2026-06-04", "Total logins: 4", "Recent login and guest history", "4 logins (+4)", "3 users (+1)", "1 guests (+1)", "2m online time (+1m)"} {
+		if !strings.Contains(loginBody, want) {
+			t.Fatalf("expected login-history body to contain %q, got:\n%s", want, loginBody)
 		}
 	}
 	for _, forbidden := range []string{"Secret", "Private topic", "classified reply", "private"} {
@@ -1132,7 +1160,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads after repeat status: %d", status)
 	}
-	if len(systemThreads.Threads) != 1 {
+	if len(systemThreads.Threads) != 2 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads.Threads)
 	}
 }

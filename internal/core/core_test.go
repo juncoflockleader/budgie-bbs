@@ -1421,7 +1421,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 5 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
+	if stats.TotalUsers != 3 || stats.TotalLogins != 1 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 5 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("unexpected community stats: %+v", stats)
 	}
 	if stats.HeadSeq == 0 {
@@ -1463,12 +1463,12 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
 	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
+		total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
 		online_guests, max_online_users, max_online_at, max_online_guests,
 		max_online_guests_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
-		2, 3, 1, 2, 0, 0, 0, int64(60), 0, 0, 1, previousAt.UnixMilli(), 0, int64(0), 1,
+		2, 3, 1, 2, 0, 0, 0, 0, int64(60), 0, 0, 1, previousAt.UnixMilli(), 0, int64(0), 1,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1479,7 +1479,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if len(history) != 2 || history[0].OnlineUsers != 1 || history[0].MaxOnlineUsers != 2 || history[0].MaxOnlineAt == 0 || history[0].TotalPosts != 5 {
 		t.Fatalf("expected daily stat history with preserved max-online peak, got %+v", history)
 	}
-	if history[0].DeltaUsers != 1 || history[0].DeltaBoards != 1 || history[0].DeltaThreads != 2 || history[0].DeltaPosts != 3 || history[0].DeltaReactions != 1 || history[0].DeltaMail != 0 || history[0].DeltaDirectMessages != 0 {
+	if history[0].TotalLogins != 1 || history[0].DeltaUsers != 1 || history[0].DeltaLogins != 1 || history[0].DeltaBoards != 1 || history[0].DeltaThreads != 2 || history[0].DeltaPosts != 3 || history[0].DeltaReactions != 1 || history[0].DeltaMail != 0 || history[0].DeltaDirectMessages != 0 {
 		t.Fatalf("expected newest daily stat history row to include deltas, got %+v", history[0])
 	}
 	if history[0].TotalOnlineSeconds != 120 || history[0].DeltaOnlineSeconds != 60 {
@@ -1488,7 +1488,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if history[0].OnlineGuests != 1 || history[0].DeltaGuests != 1 || history[0].MaxOnlineGuests != 1 || history[0].MaxOnlineGuestsAt == 0 {
 		t.Fatalf("expected newest daily stat history row to include guest counters and deltas, got %+v", history[0])
 	}
-	if history[1].DeltaUsers != 0 || history[1].DeltaPosts != 0 || history[1].DeltaReactions != 0 {
+	if history[1].DeltaUsers != 0 || history[1].DeltaLogins != 0 || history[1].DeltaPosts != 0 || history[1].DeltaReactions != 0 {
 		t.Fatalf("expected oldest fetched daily stat history row to have zero deltas without an older comparison row, got %+v", history[1])
 	}
 
@@ -1606,8 +1606,11 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 1 || systemThreads[0].ID != snapshot.ID || !strings.Contains(systemThreads[0].Title, "2026-06-04") {
-		t.Fatalf("expected one generated stats thread, got %+v", systemThreads)
+	if len(systemThreads) != 2 {
+		t.Fatalf("expected generated stats and login-history threads, got %+v", systemThreads)
+	}
+	if !hasThreadSummary(systemThreads, snapshot.ID, "2026-06-04") || !hasThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") {
+		t.Fatalf("expected generated stats and login-history threads, got %+v", systemThreads)
 	}
 	systemPosts, err := c.ListPosts(snapshot.ID, 10, 0)
 	if err != nil {
@@ -1617,9 +1620,22 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
 	}
 	body := systemPosts[0].Body
-	for _, want := range []string{"Total users: 3", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total logins: 1", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "1 login (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
+		}
+	}
+	loginPosts, err := c.ListPosts("bbslists_countlogins_20260604", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loginPosts) != 1 {
+		t.Fatalf("expected one generated login-history post, got %+v", loginPosts)
+	}
+	loginBody := loginPosts[0].Body
+	for _, want := range []string{"Login count history 2026-06-04", "Total logins: 1", "Recent login and guest history", "1 login (+1)", "3 users (+1)", "1 guests (+1)", "2m online time (+1m)"} {
+		if !strings.Contains(loginBody, want) {
+			t.Fatalf("expected login-history body to contain %q, got:\n%s", want, loginBody)
 		}
 	}
 	for _, forbidden := range []string{"Secret", "Private topic", "classified reply", "private"} {
@@ -1637,7 +1653,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 1 {
+	if len(systemThreads) != 2 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads)
 	}
 }
@@ -1755,8 +1771,21 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 2 {
-		t.Fatalf("expected two daily stat-log threads, got %+v", systemThreads)
+	if len(systemThreads) != 4 {
+		t.Fatalf("expected stats and login-history threads for two days, got %+v", systemThreads)
+	}
+	for _, want := range []struct {
+		id    string
+		title string
+	}{
+		{"bbslists_stats_20260605", "Community stats 2026-06-05"},
+		{"bbslists_countlogins_20260605", "Login count history 2026-06-05"},
+		{"bbslists_stats_20260606", "Community stats 2026-06-06"},
+		{"bbslists_countlogins_20260606", "Login count history 2026-06-06"},
+	} {
+		if !hasThreadSummary(systemThreads, want.id, want.title) {
+			t.Fatalf("expected generated thread %s / %s, got %+v", want.id, want.title, systemThreads)
+		}
 	}
 	posts, err := c.ListPosts(snapshot.ID, 10, 0)
 	if err != nil {
@@ -1765,6 +1794,15 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	if len(posts) != 1 || posts[0].Author != "system" || !strings.Contains(posts[0].Body, "Community stats 2026-06-05") {
 		t.Fatalf("expected system-authored automatic stats post, got %+v", posts)
 	}
+}
+
+func hasThreadSummary(threads []core.Thread, id, titlePart string) bool {
+	for _, thread := range threads {
+		if thread.ID == id && strings.Contains(thread.Title, titlePart) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPublishSystemNoticeCreatesPublicNoticeBoard(t *testing.T) {

@@ -40,6 +40,7 @@ export interface CommunityStats {
   totalReactions: number
   totalMail: number
   totalDirectMessages: number
+  totalLogins: number
   totalOnlineSeconds: number
   onlineUsers: number
   onlineGuests: number
@@ -60,6 +61,7 @@ export interface CommunityStatHistory {
   totalReactions: number
   totalMail: number
   totalDirectMessages: number
+  totalLogins: number
   totalOnlineSeconds: number
   onlineUsers: number
   onlineGuests: number
@@ -75,6 +77,7 @@ export interface CommunityStatHistory {
   deltaReactions: number
   deltaMail: number
   deltaDirectMessages: number
+  deltaLogins: number
   deltaOnlineSeconds: number
   deltaGuests: number
 }

@@ -1540,10 +1540,10 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 	_, err = QExec(db,
 		`INSERT INTO community_stat_history (
 		    day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		    total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
+		    total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
 		    online_guests, max_online_users, max_online_at, max_online_guests,
 		    max_online_guests_at, head_seq
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(day)
 		 DO UPDATE SET
 		    snapshot_at=excluded.snapshot_at,
@@ -1554,6 +1554,7 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		    total_reactions=excluded.total_reactions,
 		    total_mail=excluded.total_mail,
 		    total_direct_messages=excluded.total_direct_messages,
+		    total_logins=excluded.total_logins,
 		    total_online_seconds=excluded.total_online_seconds,
 		    online_users=excluded.online_users,
 		    online_guests=excluded.online_guests,
@@ -1583,6 +1584,7 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		stats.TotalReactions,
 		stats.TotalMail,
 		stats.TotalDirectMessages,
+		stats.TotalLogins,
 		stats.TotalOnlineSeconds,
 		stats.OnlineUsers,
 		stats.OnlineGuests,

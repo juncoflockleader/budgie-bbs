@@ -394,6 +394,7 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_reactions       INTEGER NOT NULL DEFAULT 0,
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    total_logins          INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  INTEGER NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     online_guests         INTEGER NOT NULL DEFAULT 0,

@@ -10,7 +10,7 @@ interface Props {
   onOpenThread: (board: Board, thread: Thread) => void
 }
 
-type HistoryMetricKey = 'posts' | 'users' | 'reactions' | 'onlineTime' | 'maxOnline' | 'maxGuests'
+type HistoryMetricKey = 'posts' | 'logins' | 'users' | 'reactions' | 'onlineTime' | 'maxOnline' | 'maxGuests'
 
 interface HistoryMetric {
   key: HistoryMetricKey
@@ -21,6 +21,7 @@ interface HistoryMetric {
 
 const historyMetrics: HistoryMetric[] = [
   { key: 'posts', label: 'Posts', value: day => day.deltaPosts, format: formatCompactNumber },
+  { key: 'logins', label: 'Logins', value: day => day.deltaLogins, format: formatCompactNumber },
   { key: 'users', label: 'Users', value: day => day.totalUsers, format: formatCompactNumber },
   { key: 'reactions', label: 'Reactions', value: day => day.deltaReactions, format: formatCompactNumber },
   { key: 'onlineTime', label: 'Online Time', value: day => day.deltaOnlineSeconds, format: formatDuration },
@@ -95,6 +96,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
           <Stat label="Threads" value={stats.totalThreads} />
           <Stat label="Posts" value={stats.totalPosts} />
           <Stat label="Reactions" value={stats.totalReactions} />
+          <Stat label="Logins" value={stats.totalLogins} />
           <Stat label="Online" value={stats.onlineUsers} />
           <Stat label="Guests" value={stats.onlineGuests} />
           <Stat label="Max Online" value={stats.maxOnlineUsers ?? 0} />
@@ -121,7 +123,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
             <span className="ranking-main">
               <span className="item-title">{day.day}</span>
               <span className="item-meta muted">
-                {day.totalUsers} users {formatDelta(day.deltaUsers)} / {day.totalPosts} posts {formatDelta(day.deltaPosts)} / {day.totalReactions} reactions {formatDelta(day.deltaReactions)}
+                {day.totalUsers} users {formatDelta(day.deltaUsers)} / {day.totalLogins} logins {formatDelta(day.deltaLogins)} / {day.totalPosts} posts {formatDelta(day.deltaPosts)} / {day.totalReactions} reactions {formatDelta(day.deltaReactions)}
               </span>
               <span className="item-meta muted">
                 online time {formatDuration(day.totalOnlineSeconds)} {formatDurationDelta(day.deltaOnlineSeconds)}

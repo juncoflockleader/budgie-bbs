@@ -95,6 +95,7 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		      WHERE t.board NOT IN (`+generatedSystemBoardSQLList+`)),
 		    (SELECT COUNT(*) FROM mail_messages),
 		    (SELECT COUNT(*) FROM direct_messages),
+		    COALESCE((SELECT SUM(login_count) FROM user_activity), 0),
 		    COALESCE((SELECT SUM(total_online_seconds) FROM user_activity), 0),
 		    (SELECT COUNT(DISTINCT user_id) FROM user_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')),
 		    (SELECT COUNT(*) FROM guest_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'inactive')),
@@ -109,6 +110,7 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		&stats.TotalReactions,
 		&stats.TotalMail,
 		&stats.TotalDirectMessages,
+		&stats.TotalLogins,
 		&stats.TotalOnlineSeconds,
 		&stats.OnlineUsers,
 		&stats.OnlineGuests,
@@ -168,7 +170,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	fetchLimit := limit + 1
 	rows, err := QQuery(db,
 		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		        total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
+		        total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
 		        online_guests, max_online_users, max_online_at, max_online_guests,
 		        max_online_guests_at, head_seq
 		   FROM community_stat_history
@@ -183,7 +185,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	out := []CommunityStatHistory{}
 	for rows.Next() {
 		var h CommunityStatHistory
-		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.OnlineGuests, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.MaxOnlineGuests, &h.MaxOnlineGuestsAt, &h.HeadSeq); err != nil {
+		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalLogins, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.OnlineGuests, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.MaxOnlineGuests, &h.MaxOnlineGuestsAt, &h.HeadSeq); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -211,6 +213,7 @@ func (h *CommunityStatHistory) applyDeltaFrom(previous CommunityStatHistory) {
 	h.DeltaReactions = h.TotalReactions - previous.TotalReactions
 	h.DeltaMail = h.TotalMail - previous.TotalMail
 	h.DeltaDirectMessages = h.TotalDirectMessages - previous.TotalDirectMessages
+	h.DeltaLogins = h.TotalLogins - previous.TotalLogins
 	h.DeltaOnlineSeconds = h.TotalOnlineSeconds - previous.TotalOnlineSeconds
 	h.DeltaGuests = h.OnlineGuests - previous.OnlineGuests
 }

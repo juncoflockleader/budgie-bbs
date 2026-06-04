@@ -530,6 +530,7 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_reactions       INTEGER NOT NULL DEFAULT 0,
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    total_logins          INTEGER NOT NULL DEFAULT 0,
     total_online_seconds  BIGINT NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     online_guests         INTEGER NOT NULL DEFAULT 0,
@@ -1678,6 +1679,18 @@ ALTER TABLE user_profiles
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (35, 'postgres-user-profile-title', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 36,
+			Name:    "postgres-community-total-logins",
+			SQL: `
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS total_logins INTEGER NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (36, 'postgres-community-total-logins', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
