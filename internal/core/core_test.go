@@ -437,6 +437,79 @@ func TestPollCreationSupportsExpiryDuration(t *testing.T) {
 	}
 }
 
+func TestPollCreationSupportsExpiryUppercaseDuration(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll expires=2H]\nQuestion?\nOption A\nOption B\n[/poll]"
+	start := time.Now().UTC().Truncate(time.Second)
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Uppercase duration expiry poll", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for uppercase duration expiry poll")
+	}
+
+	end := start.Add(2 * time.Hour).UnixMilli()
+	if poll.ExpiresAt < end-10_000 || poll.ExpiresAt > end+10_000 {
+		t.Fatalf("expected approx %d, got %d", end, poll.ExpiresAt)
+	}
+}
+
+func TestPollCreationSupportsExpiryLocalDateTime(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	raw := time.Now().In(time.Local).Add(15 * time.Minute).Truncate(time.Minute).Format("2006-01-02T15:04")
+	threadBody := "[poll expires=" + raw + "]\nQuestion?\nOption A\nOption B\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Local datetime expiry poll", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for local datetime expiry poll")
+	}
+
+	expected, err := time.ParseInLocation("2006-01-02T15:04", raw, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll.ExpiresAt != expected.UnixMilli() {
+		t.Fatalf("expected local parsed expiresAt=%d, got=%d", expected.UnixMilli(), poll.ExpiresAt)
+	}
+}
+
 func TestPollCreationRejectsInvalidExpires(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

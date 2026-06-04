@@ -1446,6 +1446,7 @@ func parsePollExpires(raw string) (int64, error) {
 	if raw == "" {
 		return 0, nil
 	}
+	rawLower := strings.ToLower(raw)
 
 	if rawInt, err := strconv.ParseInt(raw, 10, 64); err == nil {
 		if rawInt <= 0 {
@@ -1458,15 +1459,15 @@ func parsePollExpires(raw string) (int64, error) {
 		return rawInt, nil
 	}
 
-	if dur, err := time.ParseDuration(raw); err == nil {
+	if dur, err := time.ParseDuration(rawLower); err == nil {
 		if dur <= 0 {
 			return 0, nil
 		}
 		return time.Now().Add(dur).UnixMilli(), nil
 	}
 
-	if strings.HasSuffix(strings.ToLower(raw), "d") {
-		daysRaw := strings.TrimSuffix(strings.ToLower(raw), "d")
+	if strings.HasSuffix(rawLower, "d") {
+		daysRaw := strings.TrimSuffix(rawLower, "d")
 		days, err := strconv.ParseFloat(daysRaw, 64)
 		if err == nil && days > 0 {
 			return time.Now().Add(time.Duration(days*24) * time.Hour).UnixMilli(), nil
@@ -1481,13 +1482,13 @@ func parsePollExpires(raw string) (int64, error) {
 		"2006-01-02",
 	}
 	for _, layout := range layouts {
-		if t, err := time.Parse(layout, raw); err == nil {
-			return t.UnixMilli(), nil
-		}
 		if layout == "2006-01-02T15:04:05" || layout == "2006-01-02T15:04" || layout == "2006-01-02" {
 			if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
 				return t.UnixMilli(), nil
 			}
+		}
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UnixMilli(), nil
 		}
 	}
 
