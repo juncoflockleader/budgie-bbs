@@ -622,6 +622,71 @@ func TestPollCreationSupportsUppercasePollCloseTag(t *testing.T) {
 	}
 }
 
+func TestPollCreationSupportsUppercasePollTagsAfterRebuild(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[POLL]\nQuestion?\nOption A\nOption B\n[/POLL]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Uppercase poll tags after rebuild", Body: threadBody,
+	})
+
+	threadPosts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threadPosts) != 1 {
+		t.Fatalf("expected 1 post before rebuild, got %d", len(threadPosts))
+	}
+
+	prePoll, err := c.GetPollByPostID(threadPosts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prePoll == nil {
+		t.Fatal("expected poll row before rebuild")
+	}
+
+	clearProjectionTablesForTest(t, c)
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatalf("rebuild failed: %v", err)
+	}
+
+	postPoll, err := c.GetPollByPostID(threadPosts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postPoll == nil {
+		t.Fatal("expected poll row after rebuild")
+	}
+	if postPoll.ExpiresAt != prePoll.ExpiresAt {
+		t.Fatalf("expected same poll expiry after rebuild: %d vs %d", prePoll.ExpiresAt, postPoll.ExpiresAt)
+	}
+
+	rebuiltPosts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rebuiltPosts) != 1 {
+		t.Fatalf("expected 1 post after rebuild, got %d", len(rebuiltPosts))
+	}
+
+	fullPoll, err := c.GetPoll(postPoll.ID, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullPoll == nil {
+		t.Fatal("expected full poll after rebuild")
+	}
+	if len(fullPoll.Options) != 2 {
+		t.Fatalf("expected 2 options after rebuild, got %d", len(fullPoll.Options))
+	}
+}
+
 func TestPollCreationSupportsExpiryLocalDateTime(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
