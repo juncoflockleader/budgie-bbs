@@ -180,6 +180,19 @@ type boardRankingsResponse struct {
 	} `json:"boards"`
 }
 
+type recommendedBoardsResponse struct {
+	Boards []struct {
+		ID            string `json:"id"`
+		Name          string `json:"name"`
+		Note          string `json:"note"`
+		Position      int    `json:"position"`
+		CuratedByName string `json:"curatedByName"`
+		ThreadCount   int    `json:"threadCount"`
+		PostCount     int    `json:"postCount"`
+		OnlineUsers   int    `json:"onlineUsers"`
+	} `json:"boards"`
+}
+
 type threadRankingsResponse struct {
 	Threads []struct {
 		ID               string `json:"id"`
@@ -1056,6 +1069,35 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("set secret member-read status: %d error=%+v", status, ack.Error)
 	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/tech/recommended", aliceToken, map[string]string{
+		"note": "Start here for campus computing.",
+	}, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected non-admin recommended-board curation forbidden, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/secret/recommended", adminToken, map[string]string{
+		"note": "Private board",
+	}, &ack); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected private recommended-board curation validation error, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/tech/recommended", adminToken, map[string]any{
+		"note":     "Start here for campus computing.",
+		"position": 10,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("recommend tech board status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/life/recommended", adminToken, map[string]any{
+		"note":     "Campus life and clubs.",
+		"position": 20,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("recommend life board status: %d error=%+v", status, ack.Error)
+	}
+	recommendedBoards := recommendedBoardsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/recommended", aliceToken, nil, &recommendedBoards); status != http.StatusOK {
+		t.Fatalf("recommended boards status: %d", status)
+	}
+	if len(recommendedBoards.Boards) != 2 || recommendedBoards.Boards[0].ID != "tech" || recommendedBoards.Boards[0].Note != "Start here for campus computing." || recommendedBoards.Boards[1].ID != "life" {
+		t.Fatalf("expected ordered recommended boards, got %+v", recommendedBoards.Boards)
+	}
 
 	hot := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/tech/threads", bobToken, map[string]string{
@@ -1363,17 +1405,18 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads status: %d", status)
 	}
-	if len(systemThreads.Threads) != 7 {
-		t.Fatalf("expected generated stats, login-history, board-activity, board-rank, new-board, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
+	if len(systemThreads.Threads) != 8 {
+		t.Fatalf("expected generated stats, login-history, board-activity, board-rank, new-board, recommended-board, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
 	}
 	if !hasHTTPThreadSummary(systemThreads, snapshot.Result.ID, "2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_boardrank_20260604", "Board popularity list 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_newboards_20260604", "New board list 2026-06-04") ||
+		!hasHTTPThreadSummary(systemThreads, "bbslists_rcmdbrd_20260604", "Recommended board list 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_toplog_20260604", "Hot topic history 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_bless_20260604", "Daily blessing list 2026-06-04") {
-		t.Fatalf("expected generated stats, login-history, board-activity, board-rank, new-board, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
+		t.Fatalf("expected generated stats, login-history, board-activity, board-rank, new-board, recommended-board, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
 	}
 	systemPosts := listPostsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+snapshot.Result.ID+"/posts", aliceToken, nil, &systemPosts); status != http.StatusOK {
@@ -1440,6 +1483,19 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 			t.Fatalf("expected new-board body to contain %q, got:\n%s", want, newBoardBody)
 		}
 	}
+	recommendedBoardPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_rcmdbrd_20260604/posts", aliceToken, nil, &recommendedBoardPosts); status != http.StatusOK {
+		t.Fatalf("list BBSLists recommended-board posts status: %d", status)
+	}
+	if len(recommendedBoardPosts.Posts) != 1 {
+		t.Fatalf("expected one generated recommended-board post, got %+v", recommendedBoardPosts.Posts)
+	}
+	recommendedBoardBody := recommendedBoardPosts.Posts[0].Body
+	for _, want := range []string{"Recommended board list 2026-06-04", "Recommended public boards: 2", "Recommended public boards", "tech (tech): 2 posts, 1 threads", "Curator note: Start here for campus computing.", "life (life): 1 posts, 1 threads", "Curator note: Campus life and clubs."} {
+		if !strings.Contains(recommendedBoardBody, want) {
+			t.Fatalf("expected recommended-board body to contain %q, got:\n%s", want, recommendedBoardBody)
+		}
+	}
 	topLogPosts := listPostsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_toplog_20260604/posts", aliceToken, nil, &topLogPosts); status != http.StatusOK {
 		t.Fatalf("list BBSLists hot-topic posts status: %d", status)
@@ -1482,6 +1538,9 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		if strings.Contains(newBoardBody, forbidden) {
 			t.Fatalf("expected new-board body to hide private %q, got:\n%s", forbidden, newBoardBody)
 		}
+		if strings.Contains(recommendedBoardBody, forbidden) {
+			t.Fatalf("expected recommended-board body to hide private %q, got:\n%s", forbidden, recommendedBoardBody)
+		}
 	}
 	again := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
@@ -1496,7 +1555,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads after repeat status: %d", status)
 	}
-	if len(systemThreads.Threads) != 7 {
+	if len(systemThreads.Threads) != 8 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads.Threads)
 	}
 }
@@ -1534,6 +1593,16 @@ func TestHTTPStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	}
 	if !info.Board.StatsExcluded || !info.Settings.StatsExcluded {
 		t.Fatalf("expected hidden board to expose statsExcluded, got %+v", info)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/hidden_stats/recommended", adminToken, map[string]string{
+		"note": "Hidden recommendation",
+	}, &ack); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected hidden stats-excluded recommendation validation error, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/visible_stats/recommended", adminToken, map[string]string{
+		"note": "Visible board recommendation",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("recommend visible board status: %d error=%+v", status, ack.Error)
 	}
 
 	visible := ackResponse{}
@@ -1619,7 +1688,7 @@ func TestHTTPStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	}, &snapshot); status != http.StatusCreated {
 		t.Fatalf("publish stats snapshot status: %d error=%+v", status, snapshot.Error)
 	}
-	for _, threadID := range []string{snapshot.Result.ID, "bbslists_boardlog_20260607", "bbslists_boardrank_20260607", "bbslists_newboards_20260607", "bbslists_toplog_20260607"} {
+	for _, threadID := range []string{snapshot.Result.ID, "bbslists_boardlog_20260607", "bbslists_boardrank_20260607", "bbslists_newboards_20260607", "bbslists_rcmdbrd_20260607", "bbslists_toplog_20260607"} {
 		posts := listPostsResponse{}
 		if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
 			t.Fatalf("list generated posts for %s status: %d", threadID, status)

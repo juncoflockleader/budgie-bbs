@@ -287,6 +287,19 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_blessings_from_created ON blessings(from_user_id, created_at DESC, seq DESC)`); err != nil {
 		return fmt.Errorf("ensure blessings sender index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS recommended_boards (
+		    board_id   TEXT    PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+		    note       TEXT    NOT NULL DEFAULT '',
+		    position   INTEGER NOT NULL DEFAULT 0,
+		    curated_by TEXT    NOT NULL REFERENCES users(id),
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    updated_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure recommended boards table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_recommended_boards_position ON recommended_boards(position, updated_at DESC, board_id)`); err != nil {
+		return fmt.Errorf("ensure recommended boards index: %w", err)
+	}
 
 	ts := nowMS()
 	updates := []string{

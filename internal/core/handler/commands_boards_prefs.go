@@ -174,6 +174,90 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
+func (h *Handler) setRecommendedBoard(actor *User, p proto.SetRecommendedBoardPayload) Reply {
+	if !actor.IsAdmin() {
+		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	}
+	boardID := strings.TrimSpace(p.Board)
+	if boardID == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	if errReply := h.requireBoard(boardID); errReply.Err != nil {
+		return errReply
+	}
+	if p.Position != nil && *p.Position < 0 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "position cannot be negative", false)}
+	}
+	note := strings.TrimSpace(p.Note)
+	if len(note) > 500 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "recommendation note must be 500 characters or less", false)}
+	}
+	if p.Recommended {
+		if ok, reason, err := h.boardCanBePubliclyRecommended(boardID); err != nil {
+			return internalErr(err)
+		} else if !ok {
+			return Reply{Err: errDetail(proto.ErrValidationFailed, reason, false)}
+		}
+	}
+	if err := setRecommendedBoard(h.db, boardID, note, actor.ID, p.Position, p.Recommended); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: boardID}}
+}
+
+func (h *Handler) boardCanBePubliclyRecommended(boardID string) (bool, string, error) {
+	if generatedSystemBoardIDSet[boardID] {
+		return false, "generated system boards cannot be recommended", nil
+	}
+	var visibility string
+	var memberReadMode, statsExcluded int
+	err := qQueryRow(
+		h.db,
+		`SELECT COALESCE(c.visibility, 'public'),
+		        COALESCE(s.member_read_mode, 0),
+		        COALESCE(s.stats_excluded, 0)
+		   FROM boards b
+		   LEFT JOIN categories c ON c.id=b.id
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE b.id=?`,
+		boardID,
+	).Scan(&visibility, &memberReadMode, &statsExcluded)
+	if err != nil {
+		return false, "", err
+	}
+	if strings.ToLower(strings.TrimSpace(visibility)) != "public" {
+		return false, "only public directory boards can be recommended", nil
+	}
+	if memberReadMode != 0 {
+		return false, "member-read boards cannot be publicly recommended", nil
+	}
+	if statsExcluded != 0 {
+		return false, "stats-excluded boards cannot be publicly recommended", nil
+	}
+	return true, "", nil
+}
+
+var generatedSystemBoardIDSet = map[string]bool{
+	"0announce":       true,
+	"0moderation":     true,
+	"BBSLists":        true,
+	"Blessing":        true,
+	"Filter":          true,
+	"Goodbye":         true,
+	"GiveupNotice":    true,
+	"Recommend":       true,
+	"Registry":        true,
+	"bbsnet":          true,
+	"denypost":        true,
+	"newcomers":       true,
+	"notepad":         true,
+	"reject_registry": true,
+	"sysmail":         true,
+	"syssecurity":     true,
+	"undenypost":      true,
+	"vote":            true,
+}
+
 func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayload) Reply {
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
@@ -1144,6 +1228,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsNewBoardListSystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsRecommendedBoardListSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsHotTopicHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1358,6 +1445,31 @@ func (h *Handler) ensureStatsNewBoardListSystemPost(actor *User, dateLabel, date
 	}
 	body := formatStatsNewBoardListBody(dateLabel, boards, startAt, endAt)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "New board list "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsRecommendedBoardListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_rcmdbrd_" + dateID
+	postID := "bbslists_rcmdbrd_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	boards, err := projections.ListRecommendedBoards(h.db, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsRecommendedBoardListBody(dateLabel, boards)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Recommended board list "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -1975,6 +2087,48 @@ func formatStatsNewBoardListBody(dateLabel string, boards []projections.BoardSum
 			lastActivity)
 		if strings.TrimSpace(board.Description) != "" {
 			fmt.Fprintf(&b, "   - %s\n", board.Description)
+		}
+	}
+	return b.String()
+}
+
+func formatStatsRecommendedBoardListBody(dateLabel string, boards []projections.RecommendedBoard) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Recommended board list %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Recommended public boards: %d\n", len(boards))
+	onlineTotal := 0
+	for _, board := range boards {
+		onlineTotal += board.OnlineUsers
+	}
+	fmt.Fprintf(&b, "- Users currently on recommended boards: %d\n\n", onlineTotal)
+
+	if len(boards) == 0 {
+		b.WriteString("- No public boards are currently recommended.\n")
+		return b.String()
+	}
+	b.WriteString("## Recommended public boards\n")
+	for i, board := range boards {
+		lastActivity := "no posts yet"
+		if board.LastPostAt > 0 {
+			lastActivity = time.UnixMilli(board.LastPostAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s (%s): %d posts, %d threads, %d users online, %d moderators, last activity %s\n",
+			i+1,
+			board.Name,
+			board.ID,
+			board.PostCount,
+			board.ThreadCount,
+			board.OnlineUsers,
+			board.ModeratorCount,
+			lastActivity)
+		if strings.TrimSpace(board.Description) != "" {
+			fmt.Fprintf(&b, "   - %s\n", board.Description)
+		}
+		if strings.TrimSpace(board.Note) != "" {
+			fmt.Fprintf(&b, "   - Curator note: %s\n", board.Note)
+		}
+		if strings.TrimSpace(board.CuratedByName) != "" {
+			fmt.Fprintf(&b, "   - Curated by %s\n", board.CuratedByName)
 		}
 	}
 	return b.String()

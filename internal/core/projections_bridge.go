@@ -554,6 +554,10 @@ func setBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 	return projections.SetBoardSettings(db, boardID, patch)
 }
 
+func setRecommendedBoard(db *sql.DB, boardID, note, curatedBy string, position *int, recommended bool) error {
+	return projections.SetRecommendedBoard(db, boardID, note, curatedBy, position, recommended)
+}
+
 func setBoardMemberRequirements(db *sql.DB, boardID string, patch BoardMemberRequirementsPatch) error {
 	return projections.SetBoardMemberRequirements(db, boardID, patch)
 }

@@ -476,6 +476,17 @@ CREATE INDEX IF NOT EXISTS idx_blessings_to_created
 CREATE INDEX IF NOT EXISTS idx_blessings_from_created
     ON blessings(from_user_id, created_at DESC, seq DESC);
 
+CREATE TABLE IF NOT EXISTS recommended_boards (
+    board_id   TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    note       TEXT NOT NULL DEFAULT '',
+    position   INTEGER NOT NULL DEFAULT 0,
+    curated_by TEXT NOT NULL REFERENCES users(id),
+    created_at BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_recommended_boards_position
+    ON recommended_boards(position, updated_at DESC, board_id);
+
 CREATE TABLE IF NOT EXISTS user_presence (
     user_id        TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     status         TEXT NOT NULL DEFAULT 'active',
@@ -1734,6 +1745,26 @@ CREATE INDEX IF NOT EXISTS idx_login_hourly_stats_updated
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (38, 'postgres-login-hourly-stats', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 39,
+			Name:    "postgres-recommended-boards",
+			SQL: `
+CREATE TABLE IF NOT EXISTS recommended_boards (
+    board_id   TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    note       TEXT NOT NULL DEFAULT '',
+    position   INTEGER NOT NULL DEFAULT 0,
+    curated_by TEXT NOT NULL REFERENCES users(id),
+    created_at BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_recommended_boards_position
+    ON recommended_boards(position, updated_at DESC, board_id);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (39, 'postgres-recommended-boards', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

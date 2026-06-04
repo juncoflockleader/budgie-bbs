@@ -560,6 +560,51 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 	return err
 }
 
+func SetRecommendedBoard(db *sql.DB, boardID, note, curatedBy string, position *int, recommended bool) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	if !recommended {
+		if _, err := QExec(tx, `DELETE FROM recommended_boards WHERE board_id=?`, boardID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
+	pos := 0
+	if position != nil {
+		pos = *position
+	} else {
+		err := QQueryRow(tx, `SELECT position FROM recommended_boards WHERE board_id=?`, boardID).Scan(&pos)
+		if err == sql.ErrNoRows {
+			if err := QQueryRow(tx, `SELECT COALESCE(MAX(position), -10) + 10 FROM recommended_boards`).Scan(&pos); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+	}
+
+	now := NowMS()
+	_, err = QExec(tx,
+		`INSERT INTO recommended_boards (board_id, note, position, curated_by, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(board_id)
+		 DO UPDATE SET note=excluded.note,
+		               position=excluded.position,
+		               curated_by=excluded.curated_by,
+		               updated_at=excluded.updated_at`,
+		boardID, note, pos, curatedBy, now, now,
+	)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func SetBoardMemberRequirements(db *sql.DB, boardID string, patch BoardMemberRequirementsPatch) error {
 	req, err := GetBoardMemberRequirements(db, boardID)
 	if err != nil {

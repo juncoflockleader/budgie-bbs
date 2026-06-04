@@ -85,6 +85,7 @@ func newHandler(db *sql.DB, bus Bus) *Handler {
 		ImportFavoriteTree:           importFavoriteTree,
 		GetBoardSettings:             getBoardSettings,
 		SetBoardSettings:             setBoardSettings,
+		SetRecommendedBoard:          setRecommendedBoard,
 		GetBoardMemberRequirements:   getBoardMemberRequirements,
 		SetBoardMemberRequirements:   setBoardMemberRequirements,
 		SetBoardModerator:            setBoardModerator,

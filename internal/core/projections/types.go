@@ -132,6 +132,24 @@ type BoardRanking struct {
 	ModeratorCount int    `json:"moderatorCount"`
 }
 
+type RecommendedBoard struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	Note           string `json:"note,omitempty"`
+	Position       int    `json:"position"`
+	CuratedBy      string `json:"curatedBy"`
+	CuratedByName  string `json:"curatedByName"`
+	RecommendedAt  int64  `json:"recommendedAt"`
+	UpdatedAt      int64  `json:"updatedAt"`
+	ThreadCount    int    `json:"threadCount"`
+	PostCount      int    `json:"postCount"`
+	OnlineUsers    int    `json:"onlineUsers"`
+	LastSeq        int64  `json:"lastSeq"`
+	LastPostAt     int64  `json:"lastPostAt"`
+	ModeratorCount int    `json:"moderatorCount"`
+}
+
 type ThreadRanking struct {
 	ID               string `json:"id"`
 	Board            string `json:"board"`

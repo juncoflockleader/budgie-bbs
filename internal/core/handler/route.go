@@ -223,6 +223,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.setBoardMemberRequirements(actor, p)
 
+	case proto.CmdSetRecommendedBoard:
+		var p proto.SetRecommendedBoardPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.setRecommendedBoard(actor, p)
+
 	case proto.CmdApplyBoardMembership:
 		var p proto.ApplyBoardMembershipPayload
 		if err := json.Unmarshal(payload, &p); err != nil {

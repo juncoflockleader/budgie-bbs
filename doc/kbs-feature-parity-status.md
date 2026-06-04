@@ -148,6 +148,11 @@ ranking surface:
 - Stat snapshots also create deterministic daily KBS `gennewboard`-style
   `BBSLists` new-board list threads for public boards opened in the last 30
   days, excluding member-read and `statsExcluded` boards.
+- Admin-curated public-board recommendations expose a KBS `rcmdbrd.xml`-style
+  recommended-board list through `/api/v1/boards/recommended`, the web Boards
+  discovery page, and deterministic daily `BBSLists` recommended-board list
+  threads. Member-read, hidden/staff-directory, generated system, and
+  `statsExcluded` boards cannot be publicly recommended.
 - Stat snapshots also create deterministic daily KBS `toplog`-style
   `BBSLists` hot-topic history threads showing ranked public hot topics,
   distinct participant counts, post/reaction counts, decayed score, and last
@@ -375,8 +380,11 @@ enforced version:
     created on that board.
   - `statsExcluded` keeps otherwise readable/postable boards out of public
     board/thread/reply/user/archive rankings and generated `BBSLists`
-    snapshot, board-activity, board-popularity, new-board, and hot-topic stat
-    logs.
+    snapshot, board-activity, board-popularity, new-board, recommended-board,
+    and hot-topic stat logs.
+  - Admins can curate public recommended boards with position and note metadata;
+    only public, non-member-read, non-generated, non-`statsExcluded` boards are
+    eligible for the KBS `rcmdbrd`-style discovery list.
   - Board membership applications enforce `maxMembers`, minimum login count,
     minimum post count, minimum trust level, board-local post count,
     board-local original-thread count, board-local digest count, global reaction
@@ -493,7 +501,8 @@ archive areas. Budgie now has the first durable curation layer:
   system board and a deterministic generated thread/post in it. Member-read
   recommendations stay digest-only to avoid exposing private content.
 - Admin-triggered and automatic stat snapshots lazily create the `BBSLists`
-  system board and deterministic generated daily stat/ranking/list threads.
+  system board and deterministic generated daily stat/ranking/list threads,
+  including the KBS `rcmdbrd`-style recommended-board list.
 - Public blessing rituals lazily create the `Blessing` system board and
   generated public blessing threads/posts.
 - Public poll result publishing lazily creates the `vote` system board and
@@ -875,7 +884,8 @@ social graph:
   distinct-participant hot-topic scoring, top-poster rankings, latest-reply
   rankings, blessing rankings/rituals, archive-path rankings, automatic
   `BBSLists` generated stat snapshots and login-count, board-activity,
-  board-popularity, new-board, hot-topic, and blessing history posts,
+  board-popularity, new-board, recommended-board, hot-topic, and blessing
+  history posts,
   category/section hot-topic groups, 24-hour login histograms, plus completed
   week/month/year activity and hot-topic summaries, and a web `Rankings`
   surface with selectable 30-day history charts.

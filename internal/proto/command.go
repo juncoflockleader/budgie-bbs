@@ -30,6 +30,7 @@ const (
 	CmdSetBoardModerator          CommandName = "setBoardModerator"
 	CmdSetBoardMember             CommandName = "setBoardMember"
 	CmdSetBoardMemberRequirements CommandName = "setBoardMemberRequirements"
+	CmdSetRecommendedBoard        CommandName = "setRecommendedBoard"
 	CmdApplyBoardMembership       CommandName = "applyBoardMembership"
 	CmdReviewBoardMembership      CommandName = "reviewBoardMembership"
 	CmdLeaveBoardMembership       CommandName = "leaveBoardMembership"
@@ -145,6 +146,13 @@ type SetBoardMemberRequirementsPayload struct {
 	MinBoardMarkCount         *int    `json:"minBoardMarkCount,omitempty"`
 	MaxMembers                *int    `json:"maxMembers,omitempty"`
 	ApprovalMode              *string `json:"approvalMode,omitempty"`
+}
+
+type SetRecommendedBoardPayload struct {
+	Board       string `json:"board"`
+	Recommended bool   `json:"recommended"`
+	Note        string `json:"note,omitempty"`
+	Position    *int   `json:"position,omitempty"`
 }
 
 type SetContentFilterPayload struct {

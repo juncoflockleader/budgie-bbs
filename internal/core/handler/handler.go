@@ -83,6 +83,7 @@ type Runtime struct {
 	ImportFavoriteTree           func(db *sql.DB, userID string, tree *projections.FavoriteTree, replace bool) error
 	GetBoardSettings             func(db *sql.DB, boardID string) (*BoardSettings, error)
 	SetBoardSettings             func(db *sql.DB, boardID string, patch BoardSettingsPatch) error
+	SetRecommendedBoard          func(db *sql.DB, boardID, note, curatedBy string, position *int, recommended bool) error
 	GetBoardMemberRequirements   func(db *sql.DB, boardID string) (*BoardMemberRequirements, error)
 	SetBoardMemberRequirements   func(db *sql.DB, boardID string, patch BoardMemberRequirementsPatch) error
 	SetBoardModerator            func(db *sql.DB, boardID, userID string, moderator bool, position *int) error

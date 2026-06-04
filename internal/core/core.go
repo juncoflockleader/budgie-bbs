@@ -954,6 +954,9 @@ func (c *Core) PublishDailyStatsSnapshot(ctx context.Context, at time.Time) (*pr
 func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]BoardRanking, error) {
 	return listBoardRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
 }
+func (c *Core) ListRecommendedBoards(limit, offset int) ([]RecommendedBoard, error) {
+	return projections.ListRecommendedBoards(c.DB, limit, offset)
+}
 func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int) ([]ThreadRanking, error) {
 	return listThreadRankings(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
 }

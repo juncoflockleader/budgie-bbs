@@ -1790,6 +1790,26 @@ func (s *Server) handlePublishStatsSnapshot(w http.ResponseWriter, r *http.Reque
 	writeAck(w, cid, reply)
 }
 
+func (s *Server) handleSetRecommendedBoard(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	p := proto.SetRecommendedBoardPayload{
+		Board:       r.PathValue("board"),
+		Recommended: r.Method != http.MethodDelete,
+	}
+	if r.Method != http.MethodDelete && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+			return
+		}
+		p.Board = r.PathValue("board")
+		p.Recommended = true
+	}
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetRecommendedBoard, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 func (s *Server) handlePublishSystemNotice(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	var p proto.PublishSystemNoticePayload

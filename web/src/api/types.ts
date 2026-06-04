@@ -101,6 +101,24 @@ export interface BoardRanking {
   moderatorCount: number
 }
 
+export interface RecommendedBoard {
+  id: string
+  name: string
+  description: string
+  note?: string
+  position: number
+  curatedBy: string
+  curatedByName: string
+  recommendedAt: number
+  updatedAt: number
+  threadCount: number
+  postCount: number
+  onlineUsers: number
+  lastSeq: number
+  lastPostAt: number
+  moderatorCount: number
+}
+
 export interface ThreadRanking {
   id: string
   board: string

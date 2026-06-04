@@ -361,6 +361,77 @@ func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, 
 	return out, rows.Err()
 }
 
+func ListRecommendedBoards(db *sql.DB, limit, offset int) ([]RecommendedBoard, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	onlineCutoff := NowMS() - 5*60*1000
+	rows, err := QQuery(db,
+		`SELECT rb.board_id, b.name, b.description, rb.note, rb.position,
+		        rb.curated_by, COALESCE(u.name, ''), rb.created_at, rb.updated_at,
+		        COALESCE((SELECT COUNT(*) FROM threads t WHERE t.board=b.id), 0) AS thread_count,
+		        COALESCE((SELECT COUNT(*)
+		                    FROM posts p
+		                    JOIN threads t ON t.id=p.thread
+		                   WHERE t.board=b.id AND p.redacted=0), 0) AS post_count,
+		        COALESCE((SELECT COUNT(DISTINCT ups.user_id)
+		                    FROM user_presence_sessions ups
+		                   WHERE ups.board_id=b.id
+		                     AND ups.last_seen >= ?
+		                     AND LOWER(ups.status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')), 0) AS online_users,
+		        COALESCE((SELECT MAX(t.last_seq) FROM threads t WHERE t.board=b.id), 0) AS last_seq,
+		        COALESCE((SELECT MAX(p.created_at)
+		                    FROM posts p
+		                    JOIN threads t ON t.id=p.thread
+		                   WHERE t.board=b.id AND p.redacted=0), 0) AS last_post_at,
+		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0) AS moderator_count
+		   FROM recommended_boards rb
+		   JOIN boards b ON b.id=rb.board_id
+		   LEFT JOIN users u ON u.id=rb.curated_by
+		   LEFT JOIN categories c ON c.id=b.id
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE b.id NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(c.visibility, 'public')='public'
+		    AND COALESCE(s.member_read_mode, 0)=0
+		    AND COALESCE(s.stats_excluded, 0)=0
+		  ORDER BY rb.position ASC, rb.updated_at DESC, LOWER(b.name), LOWER(rb.board_id)
+		  LIMIT ? OFFSET ?`,
+		onlineCutoff, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RecommendedBoard{}
+	for rows.Next() {
+		var board RecommendedBoard
+		if err := rows.Scan(
+			&board.ID,
+			&board.Name,
+			&board.Description,
+			&board.Note,
+			&board.Position,
+			&board.CuratedBy,
+			&board.CuratedByName,
+			&board.RecommendedAt,
+			&board.UpdatedAt,
+			&board.ThreadCount,
+			&board.PostCount,
+			&board.OnlineUsers,
+			&board.LastSeq,
+			&board.LastPostAt,
+			&board.ModeratorCount,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, board)
+	}
+	return out, rows.Err()
+}
+
 func ListRecentPublicBoards(db *sql.DB, startAt, endAt int64, limit int) ([]BoardSummary, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 100

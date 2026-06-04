@@ -33,6 +33,7 @@ import type {
   ThreadRanking,
   ThreadSummary,
   ReplyRanking,
+  RecommendedBoard,
   UserRanking,
   UserProfile,
   AccountRegistration,
@@ -153,6 +154,28 @@ export async function listBoardRankings(token: string, limit = 20): Promise<ApiR
   const r = await json<{ boards: BoardRanking[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.boards ?? [] }
+}
+
+export async function listRecommendedBoards(token: string, limit = 20): Promise<ApiResponse<RecommendedBoard[]>> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  const res = await fetch(`${BASE}/boards/recommended?${params}`, { headers: authHeaders(token) })
+  const r = await json<{ boards: RecommendedBoard[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.boards ?? [] }
+}
+
+export async function setRecommendedBoard(
+  token: string,
+  board: string,
+  recommended: boolean,
+  payload: { note?: string; position?: number } = {},
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/boards/${board}/recommended`, {
+    method: recommended ? 'PUT' : 'DELETE',
+    headers: recommended ? { 'Content-Type': 'application/json', ...authHeaders(token) } : authHeaders(token),
+    body: recommended ? JSON.stringify(payload) : undefined,
+  })
+  return json<AckResult>(res)
 }
 
 export async function listThreadRankings(token: string, limit = 20, board = ''): Promise<ApiResponse<ThreadRanking[]>> {

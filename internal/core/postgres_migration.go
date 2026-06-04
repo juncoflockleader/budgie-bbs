@@ -86,6 +86,7 @@ func MigrateSQLiteToPostgres(ctx context.Context, sqlitePath, pgDSN string) erro
 		{src: "mail_group_members", dst: "mail_group_members", cols: []string{"group_id", "user_id", "position", "created_at"}},
 		{src: "user_relationships", dst: "user_relationships", cols: []string{"user_id", "target_user_id", "kind", "note", "created_at", "updated_at"}},
 		{src: "blessings", dst: "blessings", cols: []string{"id", "from_user_id", "to_user_id", "message", "created_at", "seq"}},
+		{src: "recommended_boards", dst: "recommended_boards", cols: []string{"board_id", "note", "position", "curated_by", "created_at", "updated_at"}},
 		{src: "user_presence", dst: "user_presence", cols: []string{"user_id", "status", "mode", "board_id", "thread_id", "location_label", "from_host", "last_seen", "updated_at"}},
 		{src: "user_presence_sessions", dst: "user_presence_sessions", cols: []string{"user_id", "session_id", "status", "mode", "board_id", "thread_id", "location_label", "from_host", "last_seen", "updated_at"}},
 		{src: "guest_presence_sessions", dst: "guest_presence_sessions", cols: []string{"session_id", "status", "location_label", "from_host", "last_seen", "updated_at"}},

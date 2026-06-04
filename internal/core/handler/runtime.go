@@ -307,6 +307,10 @@ func setBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 	return currentRuntime().SetBoardSettings(db, boardID, patch)
 }
 
+func setRecommendedBoard(db *sql.DB, boardID, note, curatedBy string, position *int, recommended bool) error {
+	return currentRuntime().SetRecommendedBoard(db, boardID, note, curatedBy, position, recommended)
+}
+
 func getBoardMemberRequirements(db *sql.DB, boardID string) (*BoardMemberRequirements, error) {
 	return currentRuntime().GetBoardMemberRequirements(db, boardID)
 }

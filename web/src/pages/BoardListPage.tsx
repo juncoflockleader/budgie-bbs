@@ -1,6 +1,6 @@
 import { type MouseEvent, useEffect, useState } from 'react'
 import * as api from '../api/client'
-import type { Board, BoardSummary, Category, FavoriteBoardEntry, FavoriteFolder, FavoriteTree } from '../api/types'
+import type { Board, BoardSummary, Category, FavoriteBoardEntry, FavoriteFolder, FavoriteTree, RecommendedBoard } from '../api/types'
 import { Spinner } from '../components/Spinner'
 
 type BoardSortMode = 'name' | 'new' | 'online' | 'posts' | 'activity' | 'unread'
@@ -13,6 +13,7 @@ interface Props {
 
 export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   const [boards, setBoards] = useState<BoardSummary[]>([])
+  const [recommendedBoards, setRecommendedBoards] = useState<RecommendedBoard[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [favoriteTree, setFavoriteTree] = useState<FavoriteTree>({ folders: [], boards: [] })
   const [loading, setLoading] = useState(true)
@@ -24,11 +25,15 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all([api.listBoardSummaries(token), api.listFavoriteTree(token), api.listCategories(token)]).then(([boardsRes, treeRes, categoriesRes]) => {
+    Promise.all([api.listBoardSummaries(token), api.listRecommendedBoards(token), api.listFavoriteTree(token), api.listCategories(token)]).then(([boardsRes, recommendedRes, treeRes, categoriesRes]) => {
       if (cancelled) return
       setLoading(false)
       if (boardsRes.error) {
         setError(boardsRes.error.message)
+        return
+      }
+      if (recommendedRes.error) {
+        setError(recommendedRes.error.message)
         return
       }
       if (treeRes.error) {
@@ -40,6 +45,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         return
       }
       setBoards(boardsRes.data ?? [])
+      setRecommendedBoards(recommendedRes.data ?? [])
       setFavoriteTree(treeRes.data ?? { folders: [], boards: [] })
       setCategories(categoriesRes.data ?? [])
     })
@@ -54,6 +60,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   const visibleBoards = sortBoards(boards.filter(board => matchesBoardSearch(board, boardQuery)), boardSort)
   const unreadBoards = visibleBoards.filter(board => board.unreadPosts > 0)
   const newBoards = visibleBoards.filter(board => board.newBoard)
+  const recommendedVisibleBoards = sortRecommendedBoards(recommendedBoards.filter(board => matchesBoardSearch(board, boardQuery)))
   const boardsById = indexBoardsById(visibleBoards)
   const categoriesByParent = groupCategoriesByParent(categories)
   const categoryIds = new Set(categories.map(category => category.id))
@@ -66,27 +73,38 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     .sort((a, b) => a.name.localeCompare(b.name))
   const isAdmin = currentUserRole === 'admin'
 
-  async function reloadBoards(previousBoards = boards, previousTree = favoriteTree) {
-    const [boardsRes, treeRes, categoriesRes] = await Promise.all([api.listBoardSummaries(token), api.listFavoriteTree(token), api.listCategories(token)])
+  async function reloadBoards(previousBoards = boards, previousTree = favoriteTree, previousRecommended = recommendedBoards) {
+    const [boardsRes, recommendedRes, treeRes, categoriesRes] = await Promise.all([api.listBoardSummaries(token), api.listRecommendedBoards(token), api.listFavoriteTree(token), api.listCategories(token)])
     if (boardsRes.error) {
       setBoards(previousBoards)
       setFavoriteTree(previousTree)
+      setRecommendedBoards(previousRecommended)
       setError(boardsRes.error.message)
+      return
+    }
+    if (recommendedRes.error) {
+      setBoards(previousBoards)
+      setFavoriteTree(previousTree)
+      setRecommendedBoards(previousRecommended)
+      setError(recommendedRes.error.message)
       return
     }
     if (treeRes.error) {
       setBoards(previousBoards)
       setFavoriteTree(previousTree)
+      setRecommendedBoards(previousRecommended)
       setError(treeRes.error.message)
       return
     }
     if (categoriesRes.error) {
       setBoards(previousBoards)
       setFavoriteTree(previousTree)
+      setRecommendedBoards(previousRecommended)
       setError(categoriesRes.error.message)
       return
     }
     setBoards(boardsRes.data ?? [])
+    setRecommendedBoards(recommendedRes.data ?? [])
     setFavoriteTree(treeRes.data ?? { folders: [], boards: [] })
     setCategories(categoriesRes.data ?? [])
   }
@@ -416,6 +434,24 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     )
   }
 
+  function renderRecommendedBoard(board: RecommendedBoard) {
+    const summary = recommendedBoardToSummary(board, boardsById[board.id])
+    return (
+      <li key={board.id} className="item-row board-row" onClick={() => onSelect(summary)}>
+        <span className="board-row-content">
+          <span className="item-title">{board.name}</span>
+          {board.description && <span className="item-desc muted">{board.description}</span>}
+          {board.note && <span className="item-meta muted">{board.note}</span>}
+          <BoardStats board={summary} />
+          <PolicyBadges board={summary} />
+        </span>
+        <span className="board-row-actions">
+          {summary.favorite && <span className="favorite-btn favorite-btn--active" title="Favorite board">★</span>}
+        </span>
+      </li>
+    )
+  }
+
   function renderFavoriteFolder(folder: FavoriteFolder, depth = 0) {
     const childFolders = foldersByParent[folder.id] ?? []
     const folderBoards = favoritesByFolder[folder.id] ?? []
@@ -530,6 +566,15 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         )}
       </section>
       <section className="board-section">
+        <h3 className="board-section-title">Recommended</h3>
+        {recommendedVisibleBoards.length === 0 && <p className="muted">No recommended boards.</p>}
+        {recommendedVisibleBoards.length > 0 && (
+          <ul className="item-list">
+            {recommendedVisibleBoards.map(renderRecommendedBoard)}
+          </ul>
+        )}
+      </section>
+      <section className="board-section">
         <div className="board-section-heading">
           <h3 className="board-section-title">Favorites</h3>
           <span className="favorite-folder-actions">
@@ -633,6 +678,12 @@ function sortBoards(boards: BoardSummary[], mode: BoardSortMode) {
   return copy
 }
 
+function sortRecommendedBoards(boards: RecommendedBoard[]) {
+  return boards
+    .slice()
+    .sort((a, b) => a.position - b.position || b.updatedAt - a.updatedAt || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+}
+
 function indexBoardsById(boards: BoardSummary[]) {
   const out: Record<string, BoardSummary> = {}
   boards.forEach(board => { out[board.id] = board })
@@ -692,6 +743,34 @@ function favoriteEntryToSummary(board: FavoriteBoardEntry): BoardSummary {
     memberPostMode: false,
     statsExcluded: false,
     moderatorCount: 0,
+  }
+}
+
+function recommendedBoardToSummary(board: RecommendedBoard, existing?: BoardSummary): BoardSummary {
+  return {
+    id: board.id,
+    name: board.name,
+    description: board.description,
+    favorite: existing?.favorite ?? false,
+    unreadThreads: existing?.unreadThreads ?? 0,
+    unreadPosts: existing?.unreadPosts ?? 0,
+    threadCount: board.threadCount,
+    postCount: board.postCount,
+    onlineUsers: board.onlineUsers,
+    lastSeq: board.lastSeq,
+    readSeq: existing?.readSeq ?? 0,
+    createdAt: existing?.createdAt ?? 0,
+    newBoard: existing?.newBoard ?? false,
+    anonymousAllowed: existing?.anonymousAllowed ?? false,
+    readOnly: existing?.readOnly ?? false,
+    noReply: existing?.noReply ?? false,
+    attachmentsAllowed: existing?.attachmentsAllowed ?? false,
+    mailInAllowed: existing?.mailInAllowed ?? false,
+    relayEnabled: existing?.relayEnabled ?? false,
+    memberReadMode: existing?.memberReadMode ?? false,
+    memberPostMode: existing?.memberPostMode ?? false,
+    statsExcluded: existing?.statsExcluded ?? false,
+    moderatorCount: board.moderatorCount,
   }
 }
 

@@ -94,6 +94,16 @@ func (s *Server) handleListBoardRankings(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"boards": boards})
 }
 
+func (s *Server) handleListRecommendedBoards(w http.ResponseWriter, r *http.Request) {
+	limit, offset := paginate(r)
+	boards, err := s.core.ListRecommendedBoards(limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"boards": boards})
+}
+
 func (s *Server) handleListThreadRankings(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	limit, offset := paginate(r)

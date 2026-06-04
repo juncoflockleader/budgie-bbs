@@ -116,6 +116,17 @@ CREATE TABLE IF NOT EXISTS board_settings (
     updated_at          INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS recommended_boards (
+    board_id   TEXT    PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    note       TEXT    NOT NULL DEFAULT '',
+    position   INTEGER NOT NULL DEFAULT 0,
+    curated_by TEXT    NOT NULL REFERENCES users(id),
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_recommended_boards_position
+    ON recommended_boards(position, updated_at DESC, board_id);
+
 CREATE TABLE IF NOT EXISTS board_moderators (
     board_id   TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
     user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
