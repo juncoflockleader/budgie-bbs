@@ -687,6 +687,54 @@ func TestPollCreationSupportsUppercasePollTagsAfterRebuild(t *testing.T) {
 	}
 }
 
+func TestPollCreationSupportsUppercasePollTagsWithSurroundingText(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "before line\n[POLL]\nQuestion?\nOption A\nOption B\n[/POLL]\nafter line"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Uppercase poll with surrounding text", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	expectedBody := "before line\nafter line"
+	if posts[0].Body != expectedBody {
+		t.Fatalf("expected poll-stripped body %q, got %q", expectedBody, posts[0].Body)
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for uppercase poll with surrounding text")
+	}
+
+	fullPoll, err := c.GetPoll(poll.ID, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullPoll == nil {
+		t.Fatal("expected full poll projection")
+	}
+	if fullPoll.Question != "Question?" {
+		t.Fatalf("expected question %q, got %q", "Question?", fullPoll.Question)
+	}
+	if len(fullPoll.Options) != 2 {
+		t.Fatalf("expected 2 options, got %d", len(fullPoll.Options))
+	}
+}
+
 func TestPollCreationSupportsExpiryLocalDateTime(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
