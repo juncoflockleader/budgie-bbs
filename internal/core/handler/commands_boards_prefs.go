@@ -1225,6 +1225,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsBoardOnlineListSystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsOnlineUserRosterSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1413,6 +1416,92 @@ func (h *Handler) ensureStatsBoardOnlineListSystemPost(actor *User, dateLabel, d
 	}
 	body := formatStatsBoardOnlineListBody(dateLabel, stats, boards)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Board online occupancy "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsOnlineUserRosterSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_uonline_" + dateID
+	postID := "bbslists_uonline_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	stats, err := projections.GetCommunityStats(h.db)
+	if err != nil {
+		return "", 0, err
+	}
+	users, err := projections.ListOnlineUsers(h.db, "", "", 200, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := h.maskStatsOnlineUserRosterLocations(users); err != nil {
+		return "", 0, err
+	}
+	body := formatStatsOnlineUserRosterBody(dateLabel, stats, users)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Online user roster "+dateLabel, body, ts)
+}
+
+func (h *Handler) maskStatsOnlineUserRosterLocations(users []projections.SocialUser) error {
+	masked := make(map[string]bool)
+	for i := range users {
+		boardID := users[i].BoardID
+		if boardID == "" {
+			continue
+		}
+		shouldMask, ok := masked[boardID]
+		if !ok {
+			var err error
+			shouldMask, err = h.shouldMaskStatsOnlineUserBoard(boardID)
+			if err != nil {
+				return err
+			}
+			masked[boardID] = shouldMask
+		}
+		if !shouldMask {
+			continue
+		}
+		users[i].BoardID = ""
+		users[i].BoardName = ""
+		users[i].ThreadID = ""
+		users[i].LocationLabel = "hidden board"
+		if users[i].Mode != "" {
+			users[i].Status = users[i].Mode
+		} else {
+			users[i].Status = "online"
+		}
+	}
+	return nil
+}
+
+func (h *Handler) shouldMaskStatsOnlineUserBoard(boardID string) (bool, error) {
+	if generatedSystemBoardIDSet[boardID] {
+		return true, nil
+	}
+	var memberReadMode, statsExcluded int
+	err := qQueryRow(
+		h.db,
+		`SELECT COALESCE(s.member_read_mode, 0), COALESCE(s.stats_excluded, 0)
+		   FROM boards b
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE b.id=?`,
+		boardID,
+	).Scan(&memberReadMode, &statsExcluded)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return memberReadMode != 0 || statsExcluded != 0, nil
 }
 
 func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -2252,6 +2341,79 @@ func onlineBoardRankings(boards []projections.BoardRanking) []projections.BoardR
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out
+}
+
+func formatStatsOnlineUserRosterBody(dateLabel string, stats *projections.CommunityStats, users []projections.SocialUser) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Online user roster %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Online user sessions: %d\n", len(users))
+	fmt.Fprintf(&b, "- Distinct online users: %d\n", distinctOnlineUserCount(users))
+	fmt.Fprintf(&b, "- Online guests: %d\n\n", stats.OnlineGuests)
+
+	b.WriteString("## Visible online users\n")
+	if len(users) == 0 {
+		b.WriteString("- No visible users are online.\n")
+		return b.String()
+	}
+	for i, user := range users {
+		location := formatStatsOnlineUserLocation(user)
+		lastSeen := "unknown"
+		if user.LastSeen > 0 {
+			lastSeen = time.UnixMilli(user.LastSeen).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		host := strings.TrimSpace(user.FromHost)
+		if host == "" {
+			host = "unknown host"
+		}
+		fmt.Fprintf(&b, "%d. %s: %s, idle %s, last seen %s, from %s\n",
+			i+1,
+			user.Name,
+			location,
+			formatStatsDuration(user.IdleSeconds),
+			lastSeen,
+			host)
+	}
+	return b.String()
+}
+
+func distinctOnlineUserCount(users []projections.SocialUser) int {
+	seen := make(map[string]bool)
+	for _, user := range users {
+		if user.UserID == "" {
+			continue
+		}
+		seen[user.UserID] = true
+	}
+	return len(seen)
+}
+
+func formatStatsOnlineUserLocation(user projections.SocialUser) string {
+	mode := strings.TrimSpace(user.Mode)
+	status := strings.TrimSpace(user.Status)
+	if mode == "" {
+		mode = status
+	}
+	if mode == "" {
+		mode = "online"
+	}
+	if user.BoardID != "" {
+		board := user.BoardID
+		if user.BoardName != "" {
+			board = fmt.Sprintf("%s (%s)", user.BoardName, user.BoardID)
+		}
+		parts := []string{mode + " on " + board}
+		if user.ThreadID != "" {
+			parts = append(parts, "thread "+user.ThreadID)
+		}
+		if label := strings.TrimSpace(user.LocationLabel); label != "" {
+			parts = append(parts, label)
+		}
+		return strings.Join(parts, ", ")
+	}
+	if label := strings.TrimSpace(user.LocationLabel); label != "" {
+		return mode + " in " + label
+	}
+	return mode
 }
 
 func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, history []projections.CommunityStatHistory) string {
