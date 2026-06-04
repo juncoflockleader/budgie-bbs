@@ -940,6 +940,183 @@ func TestHTTPCommandEndpointReplyPollCreatePayloadMismatch(t *testing.T) {
 	}
 }
 
+func TestHTTPRestEndpointPollCreateIsIdempotent(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	cmdID := "rest-poll-create-idempotent-1"
+	body := map[string]string{
+		"title": "Retry-safe poll",
+		"body":  "before\n[poll]\nYes?\nA\nB\n[/poll]\nafter",
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, body, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first REST thread poll create failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+	threadID := first.Result.ID
+	if countThreadPosts(t, handler, adminToken, threadID) != 1 {
+		t.Fatalf("expected 1 post after first REST thread create")
+	}
+
+	second := ackResponse{}
+	secondStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, body, &second, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if secondStatus != http.StatusCreated {
+		t.Fatalf("expected idempotent REST replay status 201, got %d", secondStatus)
+	}
+	if second.Result == nil || second.Result.ID != first.Result.ID {
+		t.Fatalf("expected same thread id from idempotent replay, got %s and %s", first.Result.ID, valueOrEmpty(second.Result))
+	}
+	if !second.OK {
+		t.Fatalf("expected replayed REST command to be ok: %+v", second.Error)
+	}
+
+	if countThreadPosts(t, handler, adminToken, threadID) != 1 {
+		t.Fatalf("expected no duplicate posts from idempotent REST replay")
+	}
+}
+
+func TestHTTPRestEndpointPollCreatePayloadMismatch(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	cmdID := "rest-poll-create-mismatch-1"
+	firstBody := map[string]string{
+		"title": "Idempotent poll baseline",
+		"body":  "[poll]\nChoose first\nA\nB\n[/poll]",
+	}
+	secondBody := map[string]string{
+		"title": "Idempotent poll baseline",
+		"body":  "[poll]\nChoose second\nX\nY\n[/poll]",
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, firstBody, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first REST poll create failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+
+	conflict := ackResponse{}
+	conflictStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, secondBody, &conflict, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if conflictStatus != http.StatusConflict {
+		t.Fatalf("expected 409 for mismatched REST payload replay, got %d", conflictStatus)
+	}
+	if conflict.Error == nil || conflict.Error.Code != "conflict" {
+		t.Fatalf("expected conflict code for mismatched REST payload, got %+v", conflict.Error)
+	}
+}
+
+func TestHTTPRestEndpointReplyPollCreateIsIdempotent(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Base for REST reply poll",
+			"body":  "base body",
+		},
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || !threadAck.OK || threadAck.Result == nil {
+		t.Fatalf("REST base thread create failed: status=%d ok=%v err=%+v", threadStatus, threadAck.OK, threadAck.Error)
+	}
+	threadID := threadAck.Result.ID
+
+	cmdID := "rest-reply-poll-idempotent-1"
+	replyBody := map[string]string{
+		"body": "before\n[poll]\nPick one\nOption A\nOption B\n[/poll]\nafter",
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, replyBody, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first REST reply poll failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+	if countThreadPosts(t, handler, adminToken, threadID) != 2 {
+		t.Fatalf("expected one reply post after first REST reply poll")
+	}
+
+	second := ackResponse{}
+	secondStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, replyBody, &second, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if secondStatus != http.StatusCreated {
+		t.Fatalf("expected idempotent REST reply status 201, got %d", secondStatus)
+	}
+	if second.Result == nil || second.Result.ID != first.Result.ID {
+		t.Fatalf("expected same reply id from REST idempotent replay, got %s and %s", valueOrEmpty(first.Result), valueOrEmpty(second.Result))
+	}
+	if !second.OK {
+		t.Fatalf("expected replayed REST reply to be ok: %+v", second.Error)
+	}
+	if countThreadPosts(t, handler, adminToken, threadID) != 2 {
+		t.Fatalf("expected no duplicate posts from REST reply idempotent replay")
+	}
+}
+
+func TestHTTPRestEndpointReplyPollCreatePayloadMismatch(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Base for REST reply mismatch",
+			"body":  "base body",
+		},
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || !threadAck.OK || threadAck.Result == nil {
+		t.Fatalf("REST base thread create failed: status=%d ok=%v err=%+v", threadStatus, threadAck.OK, threadAck.Error)
+	}
+	threadID := threadAck.Result.ID
+
+	cmdID := "rest-reply-poll-mismatch-1"
+	firstPayload := map[string]string{
+		"body": "[poll]\nChoose first\nA\nB\n[/poll]",
+	}
+	secondPayload := map[string]string{
+		"body": "[poll]\nChoose second\nX\nY\n[/poll]",
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, firstPayload, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first REST reply poll failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+
+	second := ackResponse{}
+	secondStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, secondPayload, &second, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if secondStatus != http.StatusConflict {
+		t.Fatalf("expected 409 for mismatched REST reply payload replay, got %d", secondStatus)
+	}
+	if second.Error == nil || second.Error.Code != "conflict" {
+		t.Fatalf("expected conflict code for mismatched REST reply payload, got %+v", second.Error)
+	}
+}
+
 func valueOrEmpty(r *ackResult) string {
 	if r == nil {
 		return ""
