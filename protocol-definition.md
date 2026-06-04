@@ -267,8 +267,8 @@ GET /api/v1/rankings/archive?kind=&limit=&offset=
 GET /api/v1/boards/favorites
 GET /api/v1/boards/favorites/tree
 GET /api/v1/boards/favorites/export
-GET /api/v1/boards/summary
-GET /api/v1/boards/unread
+GET /api/v1/boards/summary?q=&sort=&new=&newDays=
+GET /api/v1/boards/unread?q=&sort=&new=&newDays=
 GET /api/v1/boards/{id}
 GET /api/v1/boards/{id}/online?limit=&offset=
 GET /api/v1/boards/{id}/members
@@ -566,6 +566,13 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   parent, sibling position, and directory `visibility`. Visibility is a
   directory-level ACL: `public` is visible to all authenticated users, `staff`
   is visible to moderators/admins, and `hidden` is visible only to admins.
+- `GET /api/v1/boards/summary` and `/boards/unread` return per-board favorite
+  state, read-marker cursors, unread counts, article/thread counts, current
+  online-user count, category creation time, and a derived `newBoard` flag for
+  KBS-style board discovery. `q` searches board id/name/description; `new=1`
+  filters to boards created within `newDays` days, defaulting to 30; `sort`
+  accepts `name`, `new`, `online`, `posts`, `threads`, `activity`, and
+  `unread`.
 - Board settings expose KBS-style policy flags. `readOnly`, `noReply`, and
   `anonymousAllowed` are enforced in the posting path. `memberReadMode` gates
   board/thread/post reads, `memberPostMode` gates new threads and replies, and

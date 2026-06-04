@@ -2017,17 +2017,62 @@ func ListFavoriteTree(db *sql.DB, userID string) (*FavoriteTree, error) {
 	return tree, boardRows.Err()
 }
 
-func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool) ([]BoardSummary, error) {
+func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool, opts ...BoardSummaryOptions) ([]BoardSummary, error) {
+	opt := BoardSummaryOptions{NewDays: 30}
+	if len(opts) > 0 {
+		opt = opts[0]
+		if opt.NewDays <= 0 {
+			opt.NewDays = 30
+		}
+	}
+	search := strings.TrimSpace(strings.ToLower(opt.Search))
+	searchLike := "%" + search + "%"
 	unreadFilter := 0
 	if unreadOnly {
 		unreadFilter = 1
+	}
+	newFilter := 0
+	if opt.NewOnly {
+		newFilter = 1
+	}
+	newCutoff := NowMS() - int64(opt.NewDays)*24*60*60*1000
+	onlineCutoff := NowMS() - 5*60*1000
+	orderBy := "favorite DESC, LOWER(name), LOWER(id)"
+	switch strings.ToLower(strings.TrimSpace(opt.Sort)) {
+	case "name", "":
+		orderBy = "favorite DESC, LOWER(name), LOWER(id)"
+	case "new", "newest":
+		orderBy = "created_at DESC, favorite DESC, LOWER(name), LOWER(id)"
+	case "online":
+		orderBy = "online_users DESC, favorite DESC, LOWER(name), LOWER(id)"
+	case "posts", "articles":
+		orderBy = "post_count DESC, thread_count DESC, favorite DESC, LOWER(name), LOWER(id)"
+	case "threads":
+		orderBy = "thread_count DESC, post_count DESC, favorite DESC, LOWER(name), LOWER(id)"
+	case "activity", "recent":
+		orderBy = "last_seq DESC, favorite DESC, LOWER(name), LOWER(id)"
+	case "unread":
+		orderBy = "unread_posts DESC, unread_threads DESC, favorite DESC, LOWER(name), LOWER(id)"
 	}
 	rows, err := QQuery(db,
 		`WITH board_state AS (
 		    SELECT b.id, b.name, b.description,
 		           CASE WHEN f.board_id IS NULL THEN 0 ELSE 1 END AS favorite,
 		           COALESCE(m.last_seq, 0) AS read_seq,
+		           COALESCE(c.created_at, 0) AS created_at,
+		           CASE WHEN COALESCE(c.created_at, 0) > 0 AND COALESCE(c.created_at, 0) >= ? THEN 1 ELSE 0 END AS new_board,
 		           COALESCE((SELECT MAX(t.last_seq) FROM threads t WHERE t.board = b.id), 0) AS last_seq,
+		           COALESCE((SELECT COUNT(*) FROM threads t WHERE t.board = b.id), 0) AS thread_count,
+		           COALESCE((SELECT COUNT(*)
+		                     FROM posts p
+		                     JOIN threads t ON t.id = p.thread
+		                     WHERE t.board = b.id
+		                       AND p.redacted = 0), 0) AS post_count,
+		           COALESCE((SELECT COUNT(DISTINCT ups.user_id)
+		                     FROM user_presence_sessions ups
+		                     WHERE ups.board_id = b.id
+		                       AND ups.last_seen >= ?
+		                       AND LOWER(ups.status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')), 0) AS online_users,
 		           COALESCE((SELECT COUNT(*) FROM threads t WHERE t.board = b.id AND t.last_seq > COALESCE(m.last_seq, 0)), 0) AS unread_threads,
 		           COALESCE((SELECT COUNT(*)
 		                     FROM posts p
@@ -2036,11 +2081,13 @@ func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool) ([]BoardSumm
 		                       AND p.created_seq > COALESCE(m.last_seq, 0)
 		                       AND p.redacted = 0), 0) AS unread_posts
 		      FROM boards b
+		      LEFT JOIN categories c ON c.id = b.id
 		      LEFT JOIN board_favorites f ON f.board_id = b.id AND f.user_id = ?
 		      LEFT JOIN board_read_markers m ON m.board_id = b.id AND m.user_id = ?
 		      LEFT JOIN board_settings s ON s.board_id = b.id
 		)
-		SELECT id, name, description, favorite, unread_threads, unread_posts, last_seq, read_seq,
+		SELECT id, name, description, favorite, unread_threads, unread_posts,
+		       thread_count, post_count, online_users, last_seq, read_seq, created_at, new_board,
 		       COALESCE((SELECT anonymous_allowed FROM board_settings WHERE board_id=id), 0),
 		       COALESCE((SELECT read_only FROM board_settings WHERE board_id=id), 0),
 		       COALESCE((SELECT no_reply FROM board_settings WHERE board_id=id), 0),
@@ -2051,9 +2098,11 @@ func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool) ([]BoardSumm
 		       COALESCE((SELECT member_post_mode FROM board_settings WHERE board_id=id), 0),
 		       COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=id), 0)
 		  FROM board_state
-		 WHERE ? = 0 OR unread_posts > 0
-		 ORDER BY favorite DESC, name`,
-		userID, userID, unreadFilter,
+		 WHERE (? = 0 OR unread_posts > 0)
+		   AND (? = '' OR LOWER(id) LIKE ? OR LOWER(name) LIKE ? OR LOWER(description) LIKE ?)
+		   AND (? = 0 OR new_board = 1)
+		 ORDER BY `+orderBy,
+		newCutoff, onlineCutoff, userID, userID, unreadFilter, search, searchLike, searchLike, searchLike, newFilter,
 	)
 	if err != nil {
 		return nil, err
@@ -2063,11 +2112,13 @@ func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool) ([]BoardSumm
 	for rows.Next() {
 		var b BoardSummary
 		var favorite int
+		var newBoard int
 		var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
-		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &favorite, &b.UnreadThreads, &b.UnreadPosts, &b.LastSeq, &b.ReadSeq, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount); err != nil {
+		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &favorite, &b.UnreadThreads, &b.UnreadPosts, &b.ThreadCount, &b.PostCount, &b.OnlineUsers, &b.LastSeq, &b.ReadSeq, &b.CreatedAt, &newBoard, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount); err != nil {
 			return nil, err
 		}
 		b.Favorite = favorite != 0
+		b.NewBoard = newBoard != 0
 		applyBoardSummaryPolicyFlags(&b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
 		boards = append(boards, b)
 	}

@@ -494,7 +494,7 @@ func (s *Server) handleExportFavoriteTree(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleListBoardSummaries(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	boards, err := s.core.ListBoardSummaries(actor.ID, false)
+	boards, err := s.core.ListBoardSummaries(actor.ID, false, boardSummaryOptions(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
@@ -504,12 +504,33 @@ func (s *Server) handleListBoardSummaries(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleListUnreadBoards(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	boards, err := s.core.ListBoardSummaries(actor.ID, true)
+	boards, err := s.core.ListBoardSummaries(actor.ID, true, boardSummaryOptions(r))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"boards": boards})
+}
+
+func boardSummaryOptions(r *http.Request) core.BoardSummaryOptions {
+	q := r.URL.Query()
+	newOnly := false
+	switch strings.ToLower(strings.TrimSpace(q.Get("new"))) {
+	case "1", "true", "yes":
+		newOnly = true
+	}
+	newDays := 30
+	if raw := strings.TrimSpace(q.Get("newDays")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			newDays = parsed
+		}
+	}
+	return core.BoardSummaryOptions{
+		Search:  q.Get("q"),
+		Sort:    q.Get("sort"),
+		NewOnly: newOnly,
+		NewDays: newDays,
+	}
 }
 
 func (s *Server) handleListCategories(w http.ResponseWriter, r *http.Request) {

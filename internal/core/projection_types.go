@@ -4,6 +4,7 @@ import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 
 type Board = projections.Board
 type BoardSummary = projections.BoardSummary
+type BoardSummaryOptions = projections.BoardSummaryOptions
 type CommunityStats = projections.CommunityStats
 type CommunityStatHistory = projections.CommunityStatHistory
 type BoardRanking = projections.BoardRanking

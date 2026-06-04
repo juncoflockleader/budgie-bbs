@@ -315,8 +315,17 @@ export async function importFavoriteTree(
   return json<FavoriteTree>(res)
 }
 
-export async function listBoardSummaries(token: string): Promise<ApiResponse<BoardSummary[]>> {
-  const res = await fetch(`${BASE}/boards/summary`, { headers: authHeaders(token) })
+export async function listBoardSummaries(
+  token: string,
+  options: { q?: string; sort?: string; newOnly?: boolean; newDays?: number } = {},
+): Promise<ApiResponse<BoardSummary[]>> {
+  const params = new URLSearchParams()
+  if (options.q) params.set('q', options.q)
+  if (options.sort) params.set('sort', options.sort)
+  if (options.newOnly) params.set('new', '1')
+  if (options.newDays) params.set('newDays', String(options.newDays))
+  const suffix = params.toString() ? `?${params}` : ''
+  const res = await fetch(`${BASE}/boards/summary${suffix}`, { headers: authHeaders(token) })
   const r = await json<{ boards: BoardSummary[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.boards ?? [] }

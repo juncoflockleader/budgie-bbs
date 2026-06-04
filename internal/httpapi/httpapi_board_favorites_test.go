@@ -29,8 +29,13 @@ type boardSummariesResponse struct {
 		Favorite      bool   `json:"favorite"`
 		UnreadThreads int    `json:"unreadThreads"`
 		UnreadPosts   int    `json:"unreadPosts"`
+		ThreadCount   int    `json:"threadCount"`
+		PostCount     int    `json:"postCount"`
+		OnlineUsers   int    `json:"onlineUsers"`
 		LastSeq       int64  `json:"lastSeq"`
 		ReadSeq       int64  `json:"readSeq"`
+		CreatedAt     int64  `json:"createdAt"`
+		NewBoard      bool   `json:"newBoard"`
 	} `json:"boards"`
 }
 
@@ -686,6 +691,101 @@ func TestHTTPBoardDirectoryHierarchy(t *testing.T) {
 		if category.ID == "sports" {
 			t.Fatalf("staff category should be hidden from normal user, got %+v", categories.Categories)
 		}
+	}
+}
+
+func TestHTTPBoardSummaryDiscoveryFilters(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":          "tech",
+		"name":        "Tech Talk",
+		"description": "Computing laboratory",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create tech board status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":          "music",
+		"name":        "Music Club",
+		"description": "Campus bands",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create music board status: %d error=%+v", status, ack.Error)
+	}
+	tech := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/tech/threads", adminToken, map[string]string{
+		"title": "Build notes",
+		"body":  "First post",
+	}, &tech); status != http.StatusCreated {
+		t.Fatalf("create tech thread status: %d error=%+v", status, tech.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+tech.Result.ID+"/posts", adminToken, map[string]string{
+		"body": "Second post",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("append tech post status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/music/threads", adminToken, map[string]string{
+		"title": "Gig list",
+		"body":  "First post",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create music thread status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/presence", bobToken, map[string]string{
+		"sessionId": "web",
+		"status":    "active",
+		"mode":      "reading",
+		"board":     "tech",
+	}, &ack); status != http.StatusOK {
+		t.Fatalf("set bob board presence status: %d error=%+v", status, ack.Error)
+	}
+
+	search := boardSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/summary?q=computing&sort=posts", aliceToken, nil, &search); status != http.StatusOK {
+		t.Fatalf("search board summaries status: %d", status)
+	}
+	if len(search.Boards) != 1 || search.Boards[0].ID != "tech" || search.Boards[0].PostCount != 2 || search.Boards[0].ThreadCount != 1 || !search.Boards[0].NewBoard || search.Boards[0].CreatedAt == 0 {
+		t.Fatalf("expected search to return tech with discovery metadata, got %+v", search.Boards)
+	}
+
+	online := boardSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/summary?sort=online", aliceToken, nil, &online); status != http.StatusOK {
+		t.Fatalf("online board summaries status: %d", status)
+	}
+	if len(online.Boards) == 0 || online.Boards[0].ID != "tech" || online.Boards[0].OnlineUsers != 1 {
+		t.Fatalf("expected online sort to lead with tech, got %+v", online.Boards)
+	}
+
+	newBoards := boardSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/summary?new=1", aliceToken, nil, &newBoards); status != http.StatusOK {
+		t.Fatalf("new board summaries status: %d", status)
+	}
+	foundTech := false
+	foundMusic := false
+	for _, board := range newBoards.Boards {
+		if board.ID == "tech" {
+			foundTech = true
+		}
+		if board.ID == "music" {
+			foundMusic = true
+		}
+		if board.ID == "general" {
+			t.Fatalf("seeded general board should not be returned by new-board filter, got %+v", newBoards.Boards)
+		}
+	}
+	if !foundTech || !foundMusic {
+		t.Fatalf("expected new-board filter to include created boards, got %+v", newBoards.Boards)
+	}
+
+	unread := boardSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/unread?q=music", aliceToken, nil, &unread); status != http.StatusOK {
+		t.Fatalf("filtered unread board summaries status: %d", status)
+	}
+	if len(unread.Boards) != 1 || unread.Boards[0].ID != "music" || unread.Boards[0].UnreadPosts != 1 {
+		t.Fatalf("expected unread search to return music, got %+v", unread.Boards)
 	}
 }
 

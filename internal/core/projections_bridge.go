@@ -258,8 +258,8 @@ func listArchiveRankings(db *sql.DB, viewerID string, includePrivate bool, kind 
 	return projections.ListArchiveRankings(db, viewerID, includePrivate, kind, limit, offset)
 }
 
-func listBoardSummaries(db *sql.DB, userID string, unreadOnly bool) ([]BoardSummary, error) {
-	return projections.ListBoardSummaries(db, userID, unreadOnly)
+func listBoardSummaries(db *sql.DB, userID string, unreadOnly bool, opts ...BoardSummaryOptions) ([]BoardSummary, error) {
+	return projections.ListBoardSummaries(db, userID, unreadOnly, opts...)
 }
 
 func getBoardSettings(db *sql.DB, boardID string) (*BoardSettings, error) {

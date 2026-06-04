@@ -26,8 +26,13 @@ type BoardSummary struct {
 	Favorite           bool   `json:"favorite"`
 	UnreadThreads      int    `json:"unreadThreads"`
 	UnreadPosts        int    `json:"unreadPosts"`
+	ThreadCount        int    `json:"threadCount"`
+	PostCount          int    `json:"postCount"`
+	OnlineUsers        int    `json:"onlineUsers"`
 	LastSeq            int64  `json:"lastSeq"`
 	ReadSeq            int64  `json:"readSeq"`
+	CreatedAt          int64  `json:"createdAt"`
+	NewBoard           bool   `json:"newBoard"`
 	AnonymousAllowed   bool   `json:"anonymousAllowed"`
 	ReadOnly           bool   `json:"readOnly"`
 	NoReply            bool   `json:"noReply"`
@@ -37,6 +42,13 @@ type BoardSummary struct {
 	MemberReadMode     bool   `json:"memberReadMode"`
 	MemberPostMode     bool   `json:"memberPostMode"`
 	ModeratorCount     int    `json:"moderatorCount"`
+}
+
+type BoardSummaryOptions struct {
+	Search  string
+	Sort    string
+	NewOnly bool
+	NewDays int
 }
 
 type CommunityStats struct {

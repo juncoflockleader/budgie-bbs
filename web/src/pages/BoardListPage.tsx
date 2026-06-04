@@ -3,6 +3,8 @@ import * as api from '../api/client'
 import type { Board, BoardSummary, Category, FavoriteBoardEntry, FavoriteFolder, FavoriteTree } from '../api/types'
 import { Spinner } from '../components/Spinner'
 
+type BoardSortMode = 'name' | 'new' | 'online' | 'posts' | 'activity' | 'unread'
+
 interface Props {
   token: string
   currentUserRole: string
@@ -15,6 +17,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   const [favoriteTree, setFavoriteTree] = useState<FavoriteTree>({ folders: [], boards: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [boardQuery, setBoardQuery] = useState('')
+  const [boardSort, setBoardSort] = useState<BoardSortMode>('name')
 
   useEffect(() => {
     let cancelled = false
@@ -47,14 +51,16 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
 
-  const unreadBoards = boards.filter(board => board.unreadPosts > 0)
-  const boardsById = indexBoardsById(boards)
+  const visibleBoards = sortBoards(boards.filter(board => matchesBoardSearch(board, boardQuery)), boardSort)
+  const unreadBoards = visibleBoards.filter(board => board.unreadPosts > 0)
+  const newBoards = visibleBoards.filter(board => board.newBoard)
+  const boardsById = indexBoardsById(visibleBoards)
   const categoriesByParent = groupCategoriesByParent(categories)
   const categoryIds = new Set(categories.map(category => category.id))
   const directoryRoots = rootCategories(categories)
-  const uncategorizedBoards = boards.filter(board => !categoryIds.has(board.id))
+  const uncategorizedBoards = visibleBoards.filter(board => !categoryIds.has(board.id))
   const foldersByParent = groupFoldersByParent(favoriteTree.folders)
-  const favoritesByFolder = groupFavoritesByFolder(favoriteTree.boards)
+  const favoritesByFolder = groupFavoritesByFolder(favoriteTree.boards.filter(board => matchesBoardSearch(board, boardQuery)))
   const folderOptions = favoriteTree.folders
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))
@@ -313,6 +319,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         <span className="board-row-content">
           <span className="item-title">{board.name}</span>
           {board.description && <span className="item-desc muted">{board.description}</span>}
+          <BoardStats board={board} />
           <PolicyBadges board={board} />
           {board.unreadPosts > 0 && (
             <span className="item-meta unread-meta">
@@ -438,6 +445,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   function renderCategory(category: Category, depth = 0) {
     const board = boardsById[category.id]
     const children = categoriesByParent[category.id] ?? []
+    const renderedChildren = children.map(child => renderCategory(child, depth + 1))
+    if (!board && renderedChildren.every(child => child === null)) return null
     const parent = category.parentId && categoryIds.has(category.parentId) ? category.parentId : ''
     const siblings = categoriesByParent[parent] ?? []
     const index = siblings.findIndex(item => item.id === category.id)
@@ -476,7 +485,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
             {controls}
           </div>
         )}
-        {children.map(child => renderCategory(child, depth + 1))}
+        {renderedChildren}
       </div>
     )
   }
@@ -486,12 +495,37 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   return (
     <div className="board-list">
       <h2>Boards</h2>
+      <div className="board-discovery-controls">
+        <input
+          value={boardQuery}
+          onChange={e => setBoardQuery(e.target.value)}
+          placeholder="Search boards"
+          aria-label="Search boards"
+        />
+        <select value={boardSort} onChange={e => setBoardSort(e.target.value as BoardSortMode)} aria-label="Sort boards">
+          <option value="name">Name</option>
+          <option value="new">New</option>
+          <option value="online">Online</option>
+          <option value="posts">Articles</option>
+          <option value="activity">Activity</option>
+          <option value="unread">Unread</option>
+        </select>
+      </div>
       <section className="board-section">
         <h3 className="board-section-title">Unread</h3>
         {unreadBoards.length === 0 && <p className="muted">No unread boards.</p>}
         {unreadBoards.length > 0 && (
           <ul className="item-list">
             {unreadBoards.map(renderBoard)}
+          </ul>
+        )}
+      </section>
+      <section className="board-section">
+        <h3 className="board-section-title">New Boards</h3>
+        {newBoards.length === 0 && <p className="muted">No new boards.</p>}
+        {newBoards.length > 0 && (
+          <ul className="item-list">
+            {newBoards.map(renderBoard)}
           </ul>
         )}
       </section>
@@ -516,7 +550,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
       </section>
       <section className="board-section">
         <h3 className="board-section-title">Directory</h3>
-        {directoryRoots.length === 0 && boards.length === 0 && <p className="muted">No boards yet.</p>}
+        {directoryRoots.length === 0 && visibleBoards.length === 0 && <p className="muted">No boards yet.</p>}
         {directoryRoots.map(category => renderCategory(category))}
         {uncategorizedBoards.length > 0 && (
           <ul className="item-list">
@@ -526,10 +560,10 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
       </section>
       <section className="board-section">
         <h3 className="board-section-title">All Boards</h3>
-        {boards.length === 0 && <p className="muted">No boards yet.</p>}
-        {boards.length > 0 && (
+        {visibleBoards.length === 0 && <p className="muted">No boards yet.</p>}
+        {visibleBoards.length > 0 && (
           <ul className="item-list">
-            {boards.map(renderBoard)}
+            {visibleBoards.map(renderBoard)}
           </ul>
         )}
       </section>
@@ -568,6 +602,35 @@ function rootCategories(categories: Category[]) {
     .filter(category => !category.parentId || !ids.has(category.parentId))
     .slice()
     .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
+}
+
+function matchesBoardSearch(board: Pick<Board, 'id' | 'name' | 'description'>, query: string) {
+  const needle = query.trim().toLocaleLowerCase()
+  if (!needle) return true
+  return [board.id, board.name, board.description].some(value => value.toLocaleLowerCase().includes(needle))
+}
+
+function sortBoards(boards: BoardSummary[], mode: BoardSortMode) {
+  const copy = boards.slice()
+  const byName = (a: BoardSummary, b: BoardSummary) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
+  copy.sort((a, b) => {
+    switch (mode) {
+      case 'new':
+        return b.createdAt - a.createdAt || byName(a, b)
+      case 'online':
+        return b.onlineUsers - a.onlineUsers || byName(a, b)
+      case 'posts':
+        return b.postCount - a.postCount || b.threadCount - a.threadCount || byName(a, b)
+      case 'activity':
+        return b.lastSeq - a.lastSeq || byName(a, b)
+      case 'unread':
+        return b.unreadPosts - a.unreadPosts || b.unreadThreads - a.unreadThreads || byName(a, b)
+      case 'name':
+      default:
+        return (Number(b.favorite) - Number(a.favorite)) || byName(a, b)
+    }
+  })
+  return copy
 }
 
 function indexBoardsById(boards: BoardSummary[]) {
@@ -612,8 +675,13 @@ function favoriteEntryToSummary(board: FavoriteBoardEntry): BoardSummary {
     favorite: true,
     unreadThreads: board.unreadThreads,
     unreadPosts: board.unreadPosts,
+    threadCount: 0,
+    postCount: 0,
+    onlineUsers: 0,
     lastSeq: board.lastSeq,
     readSeq: board.readSeq,
+    createdAt: 0,
+    newBoard: false,
     anonymousAllowed: false,
     readOnly: false,
     noReply: false,
@@ -624,6 +692,16 @@ function favoriteEntryToSummary(board: FavoriteBoardEntry): BoardSummary {
     memberPostMode: false,
     moderatorCount: 0,
   }
+}
+
+function BoardStats({ board }: { board: BoardSummary }) {
+  const parts = [
+    board.newBoard && 'New',
+    `${board.postCount} article${board.postCount === 1 ? '' : 's'}`,
+    `${board.threadCount} thread${board.threadCount === 1 ? '' : 's'}`,
+    `${board.onlineUsers} online`,
+  ].filter(Boolean)
+  return <span className="item-meta board-stat-meta muted">{parts.join(' / ')}</span>
 }
 
 function PolicyBadges({ board }: { board: BoardSummary }) {

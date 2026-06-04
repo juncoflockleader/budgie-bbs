@@ -4211,6 +4211,103 @@ func TestBoardReadMarkersLifecycle(t *testing.T) {
 	}, proto.ErrNotFound)
 }
 
+func TestBoardSummaryDiscoveryFilters(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "tech",
+		Name:        "Tech Talk",
+		Description: "Computing laboratory",
+	})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID:          "music",
+		Name:        "Music Club",
+		Description: "Campus bands",
+	})
+	techThread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "tech",
+		Title: "Build notes",
+		Body:  "First post",
+	})
+	exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: techThread.ID,
+		Body:   "Second post",
+	})
+	exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "music",
+		Title: "Gig list",
+		Body:  "First post",
+	})
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{
+		SessionID: "web",
+		Status:    "active",
+		Mode:      "reading",
+		Board:     "tech",
+	})
+
+	byPosts, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{Sort: "posts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tech *core.BoardSummary
+	var general *core.BoardSummary
+	for i := range byPosts {
+		if byPosts[i].ID == "tech" {
+			tech = &byPosts[i]
+		}
+		if byPosts[i].ID == "general" {
+			general = &byPosts[i]
+		}
+	}
+	if tech == nil || tech.ThreadCount != 1 || tech.PostCount != 2 || tech.OnlineUsers != 1 || !tech.NewBoard || tech.CreatedAt == 0 {
+		t.Fatalf("expected tech summary to include article, online, and new-board metadata, got %+v", tech)
+	}
+	if general == nil || general.NewBoard || general.CreatedAt != 0 {
+		t.Fatalf("expected seeded general board to remain old, got %+v", general)
+	}
+
+	search, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{Search: "computing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(search) != 1 || search[0].ID != "tech" {
+		t.Fatalf("expected board search to match description, got %+v", search)
+	}
+	online, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{Sort: "online"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(online) == 0 || online[0].ID != "tech" || online[0].OnlineUsers != 1 {
+		t.Fatalf("expected online-sorted board summaries to lead with tech, got %+v", online)
+	}
+	newBoards, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{NewOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundTech := false
+	foundMusic := false
+	foundGeneral := false
+	for _, board := range newBoards {
+		if board.ID == "tech" {
+			foundTech = true
+		}
+		if board.ID == "music" {
+			foundMusic = true
+		}
+		if board.ID == "general" {
+			foundGeneral = true
+		}
+	}
+	if !foundTech || !foundMusic || foundGeneral {
+		t.Fatalf("expected new-board filter to include created boards and exclude seeded general, got %+v", newBoards)
+	}
+}
+
 func TestThreadReadMarkersLifecycle(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

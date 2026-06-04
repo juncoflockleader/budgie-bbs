@@ -65,11 +65,20 @@ index. Budgie now has the first hierarchy-aware board directory:
 - Authenticated category read API: `GET /api/v1/categories`.
 - Admin category update API: `PATCH /api/v1/categories/{category}` for
   name/description, parent, sibling position, and directory visibility.
+- Board summaries expose KBS-style discovery metadata: board creation time,
+  `newBoard`, article/post count, thread count, and current online-user count.
+- Board summary reads support KBS-style discovery filters and sort modes:
+  `GET /api/v1/boards/summary?q=&sort=&new=&newDays=` and
+  `GET /api/v1/boards/unread?q=&sort=&new=&newDays=`.
+  Supported sort modes include name, newest, online, article count, thread
+  count, recent activity, and unread activity.
 - Category directory visibility supports public, staff-only, and hidden rows;
   admins see all categories, moderators see public/staff categories, and normal
   users see public categories.
 - Web board navigation renders a `Directory` section from the category tree and
   still keeps flat `Unread`, `Favorites`, and `All Boards` views.
+- Web board navigation now includes a search/sort toolbar, a `New Boards`
+  section, and compact per-board article/thread/online counts.
 - Web admins can edit category text, move categories between parents, reorder
   siblings, and change directory visibility from the board directory.
 
@@ -759,6 +768,8 @@ social graph:
 - Admin hard account deletion with tombstoned public authorship.
 - Hierarchical board categories, role-filtered category projection reads, and
   admin category management in the web board directory.
+- Board summary search, new-board filtering, and sort modes by name, newest,
+  online users, article/thread count, recent activity, and unread activity.
 - Delegated board-member manager, curator, announcement, post-moderation,
   thread-moderation, and board-settings permissions without full board
   moderator status.

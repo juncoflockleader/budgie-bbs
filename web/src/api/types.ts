@@ -19,8 +19,13 @@ export interface BoardSummary extends Board {
   favorite: boolean
   unreadThreads: number
   unreadPosts: number
+  threadCount: number
+  postCount: number
+  onlineUsers: number
   lastSeq: number
   readSeq: number
+  createdAt: number
+  newBoard: boolean
   anonymousAllowed: boolean
   readOnly: boolean
   noReply: boolean

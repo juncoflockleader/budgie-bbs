@@ -972,8 +972,8 @@ func (c *Core) ListBlessings(limit, offset int) ([]Blessing, error) {
 func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) ([]ArchiveRanking, error) {
 	return listArchiveRankings(c.DB, actor.ID, actor.IsMod(), kind, limit, offset)
 }
-func (c *Core) ListBoardSummaries(userID string, unreadOnly bool) ([]BoardSummary, error) {
-	return listBoardSummaries(c.DB, userID, unreadOnly)
+func (c *Core) ListBoardSummaries(userID string, unreadOnly bool, opts ...BoardSummaryOptions) ([]BoardSummary, error) {
+	return listBoardSummaries(c.DB, userID, unreadOnly, opts...)
 }
 func (c *Core) GetBoardInfo(boardID string) (*BoardInfo, error) {
 	return getBoardInfo(c.DB, boardID)
