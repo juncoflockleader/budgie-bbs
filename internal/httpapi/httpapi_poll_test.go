@@ -426,6 +426,104 @@ func TestHTTPCommandEndpointMalformedPollDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointPollWithExpiry(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	expiresAt := time.Now().Add(10 * time.Minute).UTC().Truncate(time.Second)
+	rawExpires := expiresAt.Format(time.RFC3339)
+	threadBody := "[poll expires=" + rawExpires + "]\nPick color\nBlue\nGreen\n[/poll]"
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Command expiry poll",
+			"body":  threadBody,
+		},
+	}
+
+	commandAck := ackResponse{}
+	commandStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &commandAck)
+	if commandStatus != http.StatusCreated || !commandAck.OK || commandAck.Result == nil {
+		t.Fatalf("command create expiry poll failed: status=%d ok=%v err=%+v", commandStatus, commandAck.OK, commandAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected 1 post in expiry poll thread, got %d", len(posts.Posts))
+	}
+	post := posts.Posts[0]
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	poll := threadPolls.Polls[post.ID]
+	if poll == nil {
+		t.Fatalf("expected poll projection for command expiry poll")
+	}
+	if poll.Question != "Pick color" {
+		t.Fatalf("expected poll question %q, got %q", "Pick color", poll.Question)
+	}
+	if poll.ExpiresAt == 0 {
+		t.Fatalf("expected expiry on command-created poll")
+	}
+	targetMin := expiresAt.Add(-15 * time.Second).UnixMilli()
+	targetMax := expiresAt.Add(15 * time.Second).UnixMilli()
+	if poll.ExpiresAt < targetMin || poll.ExpiresAt > targetMax {
+		t.Fatalf("expected expiry close to %d, got %d", expiresAt.UnixMilli(), poll.ExpiresAt)
+	}
+}
+
+func TestHTTPCommandEndpointMalformedExpiryPollDoesNotCreatePoll(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Command malformed expiry poll",
+			"body":  "[poll expires=badtime]\nQuestion?\nOne\nTwo\n[/poll]",
+		},
+	}
+
+	commandAck := ackResponse{}
+	commandStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &commandAck)
+	if commandStatus != http.StatusCreated || !commandAck.OK || commandAck.Result == nil {
+		t.Fatalf("create malformed expiry poll via command failed: status=%d ok=%v err=%+v", commandStatus, commandAck.OK, commandAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected 1 post in malformed expiry command thread, got %d", len(posts.Posts))
+	}
+	post := posts.Posts[0]
+	if !strings.Contains(post.Body, "[poll") {
+		t.Fatalf("malformed expiry poll should remain in body, got %q", post.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected malformed expiry poll command to produce no poll projection")
+	}
+}
+
 func TestHTTPCommandEndpointReplyPollLifecycle(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
