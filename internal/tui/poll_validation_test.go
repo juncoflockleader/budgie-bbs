@@ -15,6 +15,7 @@ func TestValidatePollMarkupValid(t *testing.T) {
 	cases := []string{
 		"[poll]\nQuestion?\n- Option 1\n- Option 2\n[/poll]",
 		"[POLL]\nQuestion?\n- Option 1\n- Option 2\n[/poll]",
+		"[poll]\nQuestion?\n- Option 1\n- Option 2\n[/POLL]",
 	}
 	for _, body := range cases {
 		if err := validatePollMarkup(body); err != nil {
