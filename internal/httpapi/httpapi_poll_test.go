@@ -305,3 +305,154 @@ func TestHTTPMalformedPollDoesNotCreatePoll(t *testing.T) {
 		t.Fatalf("expected 404 for posts/%s/poll, got %d", post.ID, getPollStatus)
 	}
 }
+
+func TestHTTPReplyPollLifecycle(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	userToken := registerUser(t, handler, "alice")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Reply poll check",
+		"body":  "base body",
+	}, &threadAck)
+	if threadStatus != http.StatusCreated {
+		t.Fatalf("create thread status: %d", threadStatus)
+	}
+	threadID := threadAck.Result.ID
+
+	replyPollBody := "before\n[poll]\nLunch time?\nTaco\nBurrito\n[/poll]\nafter"
+	replyAck := ackResponse{}
+	replyCreateStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", userToken, map[string]string{
+		"body": replyPollBody,
+	}, &replyAck)
+	if replyCreateStatus != http.StatusForbidden {
+		t.Fatalf("expected non-trust reply poll to be forbidden, got %d", replyCreateStatus)
+	}
+	if replyAck.Error == nil || replyAck.Error.Code != "forbidden" {
+		t.Fatalf("expected forbidden payload for non-trust reply poll, got %+v", replyAck.Error)
+	}
+
+	// Now create a valid poll reply as trusted user (admin).
+	trustedReplyAck := ackResponse{}
+	trustedReplyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, map[string]string{
+		"body": replyPollBody,
+	}, &trustedReplyAck)
+	if trustedReplyStatus != http.StatusCreated {
+		t.Fatalf("trusted reply poll create status: %d", trustedReplyStatus)
+	}
+	if trustedReplyAck.Result == nil || trustedReplyAck.Result.ID == "" {
+		t.Fatalf("trusted reply poll create missing result: %+v", trustedReplyAck)
+	}
+	replyPostID := trustedReplyAck.Result.ID
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 2 {
+		t.Fatalf("expected 2 posts after trusted poll reply, got %d", len(posts.Posts))
+	}
+
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyPostID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("expected newly created reply post %s in listing", replyPostID)
+	}
+	expectedBody := "before\nafter"
+	if strings.TrimSpace(replyPost.Body) != expectedBody {
+		t.Fatalf("expected poll stripped reply body %q, got %q", expectedBody, replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	poll := threadPolls.Polls[replyPostID]
+	if poll == nil {
+		t.Fatalf("expected poll attached to reply post %s", replyPostID)
+	}
+	if len(poll.Options) != 2 {
+		t.Fatalf("expected 2 options for reply poll, got %d", len(poll.Options))
+	}
+
+	vote := ackResponse{}
+	voteStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/vote", adminToken, map[string]string{
+		"option": poll.Options[0].ID,
+	}, &vote)
+	if voteStatus != http.StatusCreated || !vote.OK {
+		t.Fatalf("vote on reply poll failed: status=%d ok=%v err=%+v", voteStatus, vote.OK, vote.Error)
+	}
+
+	getVoted := pollPayload{}
+	getVotedStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/polls/"+poll.ID, adminToken, nil, &getVoted)
+	if getVotedStatus != http.StatusOK {
+		t.Fatalf("get voted poll status: %d", getVotedStatus)
+	}
+	if getVoted.Voted != poll.Options[0].ID {
+		t.Fatalf("expected voted option %q after reply poll vote, got %q", poll.Options[0].ID, getVoted.Voted)
+	}
+}
+
+func TestHTTPMalformedReplyPollDoesNotCreatePoll(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Malformed reply poll",
+		"body":  "starter body",
+	}, &threadAck)
+	if threadStatus != http.StatusCreated {
+		t.Fatalf("create thread status: %d", threadStatus)
+	}
+
+	malformedReply := "[poll]\nQuestion only\nOnly one option\n[/poll]"
+	replyAck := ackResponse{}
+	replyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadAck.Result.ID+"/posts", adminToken, map[string]string{
+		"body": malformedReply,
+	}, &replyAck)
+	if replyStatus != http.StatusCreated || replyAck.Result == nil {
+		t.Fatalf("expected malformed reply to be accepted as post create: status=%d err=%+v", replyStatus, replyAck.Error)
+	}
+	replyPostID := replyAck.Result.ID
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadAck.Result.ID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyPostID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("reply post %s should be in thread list", replyPostID)
+	}
+	if !strings.Contains(replyPost.Body, "[poll") {
+		t.Fatalf("malformed reply poll should remain in stored body, got %q", replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadAck.Result.ID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected malformed reply poll to produce no poll projection")
+	}
+	if got, ok := threadPolls.Polls[replyPostID]; ok && got != nil {
+		t.Fatalf("expected malformed reply poll to produce no poll projection, got %+v", got)
+	}
+}
