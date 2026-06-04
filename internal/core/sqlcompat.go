@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"strconv"
 	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 const (
@@ -26,6 +28,7 @@ func SQLFlavor() int {
 // want to force placeholder rewriting behavior without constructing a full core.
 func SetSQLFlavorForTests(flavor int) {
 	setSQLFlavor(flavor)
+	projections.SetSQLFlavor(flavor)
 }
 
 var currentSQLFlavor = sqliteFlavor
@@ -48,7 +51,9 @@ func qQuery(queryable sqlLike, query string, args ...any) (*sql.Rows, error) {
 	return queryable.Query(rebindPlaceholders(query), args...)
 }
 
-func qQueryRow(queryable sqlLike, query string, args ...any) *sql.Row {
+func qQueryRow(queryable interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, query string, args ...any) *sql.Row {
 	return queryable.QueryRow(rebindPlaceholders(query), args...)
 }
 

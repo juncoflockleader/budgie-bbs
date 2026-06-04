@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	_ "modernc.org/sqlite"
 )
@@ -29,6 +30,7 @@ type Core struct {
 // New opens the SQLite database, runs migrations, and returns a ready Core.
 func New(dbPath string) (*Core, error) {
 	setSQLFlavor(sqliteFlavor)
+	projections.SetSQLFlavor(sqliteFlavor)
 	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=on", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -54,6 +56,7 @@ func New(dbPath string) (*Core, error) {
 // but SQL execution is normalized to Postgres placeholder style.
 func NewPostgres(dsn string) (*Core, error) {
 	setSQLFlavor(postgresFlavor)
+	projections.SetSQLFlavor(postgresFlavor)
 	db, err := OpenPostgres(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres db: %w", err)
