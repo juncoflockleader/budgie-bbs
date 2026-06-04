@@ -6,9 +6,10 @@ interface Props {
   onInsert: (pollMarkup: string) => void
 }
 
-function buildPollMarkup(question: string, options: string[]): string {
+function buildPollMarkup(question: string, options: string[], expiresAt: string): string {
+  const openTag = expiresAt ? `[poll expires=${expiresAt}]` : '[poll]'
   const lines = [question.trim(), ...options.map(o => o.trim()).filter(Boolean)]
-  return `[poll]\n${lines.join('\n')}\n[/poll]`
+  return `${openTag}\n${lines.join('\n')}\n[/poll]`
 }
 
 function normalizeOptions(values: string[]) {
@@ -19,6 +20,7 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
   const [options, setOptions] = useState(['', ''])
+  const [expiresAt, setExpiresAt] = useState('')
 
   const validQuestion = question.trim() !== ''
   const normalizedOptions = useMemo(() => normalizeOptions(options), [options])
@@ -28,6 +30,7 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
   function resetBuilder() {
     setQuestion('')
     setOptions(['', ''])
+    setExpiresAt('')
   }
 
   function addOption() {
@@ -49,7 +52,7 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
 
   function insertPoll() {
     if (!canInsert) return
-    const markup = buildPollMarkup(question, normalizedOptions)
+    const markup = buildPollMarkup(question, normalizedOptions, expiresAt)
     onInsert(markup)
     resetBuilder()
     setOpen(false)
@@ -78,6 +81,17 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
             value={question}
             onChange={e => setQuestion(e.target.value)}
             placeholder="What do you want to ask?"
+          />
+        </label>
+      </div>
+      <div className="compose-field">
+        <label>
+          Close at (optional)
+          <input
+            type="datetime-local"
+            value={expiresAt}
+            onChange={e => setExpiresAt(e.target.value)}
+            title={expiresAt ? `Closes at ${new Date(expiresAt).toLocaleString()}` : 'Leave blank for no close time'}
           />
         </label>
       </div>

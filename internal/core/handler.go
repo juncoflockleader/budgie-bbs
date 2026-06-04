@@ -355,7 +355,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 	if pollBlock != nil && cleanBody != p.Body {
 		pollID := newID("pol_")
-		if err := insertPoll(tx, pollID, postID, pollBlock.question, 0, ts); err != nil {
+		if err := insertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
 			return internalErr(err)
 		}
 		for i, opt := range pollBlock.options {
@@ -466,7 +466,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if pollBlock != nil && cleanBody != p.Body {
 		// Create poll rows within the same TX.
 		pollID := newID("pol_")
-		if err := insertPoll(tx, pollID, postID, pollBlock.question, 0, ts); err != nil {
+		if err := insertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
 			return internalErr(err)
 		}
 		for i, opt := range pollBlock.options {
@@ -1366,24 +1366,51 @@ func parseMentions(body string) []string {
 
 // pollBlock represents a parsed [poll] block from post markup.
 type pollBlock struct {
-	question string
-	options  []string
+	question  string
+	options   []string
+	expiresAt int64
 }
+
+var pollTagOpenRe = regexp.MustCompile(`(?i)^\[poll(?:\s+expires\s*=\s*([^\]]+))?\s*\]$`)
 
 // extractPoll looks for [poll]...[/poll] in body. Returns the parsed block
 // (or nil if absent) and the body with the poll block stripped.
 func extractPoll(body string) (*pollBlock, string) {
-	const open = "[poll]"
 	const close = "[/poll]"
-	start := strings.Index(body, open)
+	start := strings.Index(body, "[poll")
 	if start < 0 {
 		return nil, body
 	}
-	end := strings.Index(body, close)
-	if end < start {
+	openClose := strings.Index(body[start:], "]")
+	if openClose < 0 {
 		return nil, body
 	}
-	inner := strings.TrimSpace(body[start+len(open) : end])
+	openClose += start
+	openTag := body[start : openClose+1]
+	openMatch := pollTagOpenRe.FindStringSubmatch(openTag)
+	if len(openMatch) == 0 {
+		return nil, body
+	}
+
+	expiresAt := int64(0)
+	if openMatch[1] != "" {
+		parsed, err := parsePollExpires(openMatch[1])
+		if err != nil {
+			return nil, body
+		}
+		expiresAt = parsed
+	}
+
+	end := strings.Index(body[openClose+1:], close)
+	if end < 0 {
+		return nil, body
+	}
+	end += openClose + 1
+
+	inner := strings.TrimSpace(body[openClose+1 : end])
+	if inner == "" {
+		return nil, body
+	}
 	lines := strings.Split(inner, "\n")
 	var question string
 	var options []string
@@ -1411,7 +1438,45 @@ func extractPoll(body string) (*pollBlock, string) {
 	} else {
 		cleanBody = cleanBody + after
 	}
-	return &pollBlock{question: question, options: options}, cleanBody
+	return &pollBlock{question: question, options: options, expiresAt: expiresAt}, cleanBody
+}
+
+func parsePollExpires(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+
+	if rawInt, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if rawInt <= 0 {
+			return 0, nil
+		}
+		if rawInt < 1_000_000_000_000 {
+			// seconds -> milliseconds
+			rawInt *= 1000
+		}
+		return rawInt, nil
+	}
+
+	layouts := []string{
+		time.RFC3339,
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UnixMilli(), nil
+		}
+		if layout == "2006-01-02T15:04:05" || layout == "2006-01-02T15:04" || layout == "2006-01-02" {
+			if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+				return t.UnixMilli(), nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("invalid poll expiry: %q", raw)
 }
 
 // --- Helpers ---

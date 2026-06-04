@@ -380,7 +380,7 @@ func rebuildPollForPost(tx *sql.Tx, postID, body string, ts int64) error {
 	pollID := deterministicID("poll", postID, strings.Join(pollBlock.options, "|"), pollBlock.question)
 	if _, err := qExec(tx,
 		`INSERT INTO polls (id, post_id, question, expires_at, ts) VALUES (?,?,?,?,?)`,
-		pollID, postID, pollBlock.question, 0, ts,
+		pollID, postID, pollBlock.question, pollBlock.expiresAt, ts,
 	); err != nil {
 		return err
 	}

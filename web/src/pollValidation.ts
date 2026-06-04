@@ -4,20 +4,57 @@ interface PollValidation {
   message?: string
 }
 
-const OPEN_TAG = '[poll]'
 const CLOSE_TAG = '[/poll]'
+const OPEN_TAG_PREFIX = '[poll'
+
+function looksLikeValidExpires(raw: string): boolean {
+  const value = raw.trim()
+  if (!value) return false
+  if (/^\d+$/.test(value)) {
+    return value !== '0'
+  }
+  return !Number.isNaN(Date.parse(value))
+}
 
 function trimBullet(line: string): string {
   return line.replace(/^[-* ]+/, '')
 }
 
 export function validatePollMarkup(body: string): PollValidation {
-  const openIdx = body.indexOf(OPEN_TAG)
+  const openIdx = body.indexOf(OPEN_TAG_PREFIX)
   if (openIdx < 0) {
     return { hasPollTag: false, valid: true }
   }
 
-  const closeIdx = body.indexOf(CLOSE_TAG, openIdx + OPEN_TAG.length)
+  const closeBracketIdx = body.indexOf(']', openIdx)
+  if (closeBracketIdx < openIdx) {
+    return {
+      hasPollTag: true,
+      valid: false,
+      message: 'Poll block has an invalid opening tag.',
+    }
+  }
+
+  const openTag = body.slice(openIdx, closeBracketIdx + 1)
+  const openTagMatch = /^\[poll(?:\s+expires\s*=\s*([^\]]+))?\]$/i.exec(openTag)
+  if (!openTagMatch) {
+    return {
+      hasPollTag: true,
+      valid: false,
+      message: 'Poll tag is malformed. Use [poll] or [poll expires=<timestamp>].',
+    }
+  }
+
+  const expires = openTagMatch[1]
+  if (expires && !looksLikeValidExpires(expires)) {
+    return {
+      hasPollTag: true,
+      valid: false,
+      message: 'Poll closing time is invalid. Use a timestamp like 2026-06-15T14:30 or UNIX ms.',
+    }
+  }
+
+  const closeIdx = body.indexOf(CLOSE_TAG, closeBracketIdx)
   if (closeIdx < 0) {
     return {
       hasPollTag: true,
@@ -26,7 +63,7 @@ export function validatePollMarkup(body: string): PollValidation {
     }
   }
 
-  const inner = body.slice(openIdx + OPEN_TAG.length, closeIdx)
+  const inner = body.slice(closeBracketIdx + 1, closeIdx)
   const lines = inner.split('\n')
 
   let question = ''
@@ -60,4 +97,3 @@ export function validatePollMarkup(body: string): PollValidation {
 
   return { hasPollTag: true, valid: true }
 }
-

@@ -56,7 +56,7 @@ export function PollWidget({ poll, onVote }: Props) {
       <div className="poll-footer muted">
         {totalVotes} vote{totalVotes !== 1 ? 's' : ''}
         {expired && ' · Closed'}
-        {poll.expiresAt && !expired && ` · Closes ${new Date(poll.expiresAt).toLocaleDateString()}`}
+        {poll.expiresAt && !expired && ` · Closes ${new Date(poll.expiresAt).toLocaleString()}`}
       </div>
     </div>
   )

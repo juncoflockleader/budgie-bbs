@@ -331,6 +331,41 @@ func TestPollCreationRespectsTrustLevel(t *testing.T) {
 	}, proto.ErrForbidden)
 }
 
+func TestPollCreationSupportsExpiry(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	expiresAt := time.Now().Add(3 * time.Minute).UTC()
+	expiresRaw := expiresAt.Format(time.RFC3339)
+	threadBody := "[poll expires=" + expiresRaw + "]\nQuestion?\nOption A\nOption B\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Timed poll", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for timed poll")
+	}
+
+	if poll.ExpiresAt != expiresAt.UnixMilli() {
+		t.Fatalf("expected expiresAt=%d, got %d", expiresAt.UnixMilli(), poll.ExpiresAt)
+	}
+}
+
 func TestPollCreationPreservesBodyAroundMarkup(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
