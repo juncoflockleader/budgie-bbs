@@ -28,17 +28,23 @@ const (
 	pageCompose
 	pageChat
 	pageSearch
+	pageNotifications
 )
 
 // msg types for the bubbletea update cycle.
 type (
-	eventMsg      struct{ evt *proto.Event }
-	errMsg        struct{ err error }
-	boardsMsg     struct{ boards []core.Board }
-	threadsMsg    struct{ threads []core.Thread }
-	postsMsg      struct{ posts []core.Post }
-	searchMsg     struct{ posts []core.Post }
-	disconnectMsg struct{}
+	eventMsg         struct{ evt *proto.Event }
+	errMsg           struct{ err error }
+	boardsMsg        struct{ boards []core.Board }
+	threadsMsg       struct{ threads []core.Thread }
+	postsMsg         struct{ posts []core.Post }
+	searchMsg        struct{ posts []core.Post }
+	notificationsMsg struct {
+		notifications []core.Notification
+		unread        int
+	}
+	notificationStatusMsg struct{ unread int }
+	disconnectMsg         struct{}
 )
 
 // model is the root bubbletea model.
@@ -71,6 +77,9 @@ type model struct {
 	threads []core.Thread
 	posts   []core.Post
 	chat    []chatLine
+	// Notifications tracked in the current actor session.
+	notifications []core.Notification
+	unreadNotifs  int
 }
 
 type chatLine struct {
@@ -143,6 +152,7 @@ func (m *model) popPage() bool {
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		m.fetchBoards(),
+		m.fetchNotificationStatus(),
 		m.awaitEvent(),
 	)
 }
@@ -176,6 +186,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case searchMsg:
 		m.rebuildSearchView(msg.posts)
 
+	case notificationsMsg:
+		m.notifications = msg.notifications
+		m.unreadNotifs = msg.unread
+		if m.page == pageNotifications {
+			m.rebuildList()
+		}
+
+	case notificationStatusMsg:
+		m.unreadNotifs = msg.unread
+
 	case eventMsg:
 		cmds = append(cmds, m.awaitEvent()) // re-arm listener
 		cmds = append(cmds, m.handleEvent(msg.evt)...)
@@ -197,7 +217,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Delegate to the component that was active when the key arrived.
 		switch activePage {
-		case pageBoardList, pageThreadList:
+		case pageBoardList, pageThreadList, pageNotifications:
 			var c tea.Cmd
 			m.list, c = m.list.Update(msg)
 			cmds = append(cmds, c)
@@ -229,6 +249,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var c tea.Cmd
 		m.vp, c = m.vp.Update(msg)
 		cmds = append(cmds, c)
+	case pageNotifications:
+		var c tea.Cmd
+		m.list, c = m.list.Update(msg)
+		cmds = append(cmds, c)
 	case pageCompose:
 		if m.composingNewThread && m.titleInput.Focused() {
 			var c tea.Cmd
@@ -259,6 +283,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "c":
 			m.pushPage(pageChat)
 			m.rebuildChatView()
+		case "N":
+			m.pushPage(pageNotifications)
+			m.notifications = nil
+			m.rebuildList()
+			return m.fetchNotifications()
 		case "/":
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
@@ -310,6 +339,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			if m.actor.IsMod() {
 				return m.toggleThreadLock()
 			}
+		case "N":
+			m.pushPage(pageNotifications)
+			m.notifications = nil
+			m.rebuildList()
+			return m.fetchNotifications()
 		case "esc", "left":
 			m.popPage()
 			return m.fetchThreads(m.currentBoard)
@@ -385,16 +419,54 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				m.vp.SetContent(styleTitle.Render("Search: ") + m.searchQuery + "▌")
 			}
 		}
+	case pageNotifications:
+		switch msg.String() {
+		case "enter":
+			selection := m.selectedNotification()
+			if selection == nil || selection.Read {
+				return nil
+			}
+			if err := m.c.MarkNotificationRead(selection.ID, m.actor.ID); err != nil {
+				m.statusMsg = "failed to mark notification read"
+				return func() tea.Msg { return errMsg{err} }
+			}
+			for i := range m.notifications {
+				if m.notifications[i].ID == selection.ID {
+					m.notifications[i].Read = true
+					if m.unreadNotifs > 0 {
+						m.unreadNotifs--
+					}
+					break
+				}
+			}
+			m.rebuildList()
+			m.statusMsg = "notification marked as read"
+		case "a":
+			if err := m.c.MarkAllNotificationsRead(m.actor.ID); err != nil {
+				m.statusMsg = "failed to mark notifications read"
+				return func() tea.Msg { return errMsg{err} }
+			}
+			for i := range m.notifications {
+				m.notifications[i].Read = true
+			}
+			m.unreadNotifs = 0
+			m.rebuildList()
+		case "esc", "left":
+			m.popPage()
+			m.rebuildList()
+		}
 	}
 	return nil
 }
 
 func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
+	var cmds []tea.Cmd
+
 	switch evt.Kind {
 	case proto.EvtPostAppended:
 		p, ok := evt.Payload.(*proto.PostAppendedPayload)
 		if !ok {
-			return nil
+			return []tea.Cmd{m.fetchNotificationStatus()}
 		}
 		if p.Thread == m.currentThread {
 			m.posts = append(m.posts, core.Post{
@@ -419,11 +491,15 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 				m.threads[i].LastSeq = evt.Seq
 			}
 		}
+		cmds = append(cmds, m.fetchNotificationStatus())
+		if m.page == pageNotifications {
+			cmds = append(cmds, m.fetchNotifications())
+		}
 
 	case proto.EvtChatLine:
 		p, ok := evt.Payload.(*proto.ChatLinePayload)
 		if !ok {
-			return nil
+			return []tea.Cmd{m.fetchNotificationStatus()}
 		}
 		m.chat = append(m.chat, chatLine{user: p.User, text: p.Text, ts: p.TS})
 		if len(m.chat) > 200 {
@@ -433,16 +509,18 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			m.rebuildChatView()
 			m.vp.GotoBottom()
 		}
+		cmds = append(cmds, m.fetchNotificationStatus())
 
 	case proto.EvtThreadNew:
 		if m.page == pageThreadList {
-			return []tea.Cmd{m.fetchThreads(m.currentBoard)}
+			cmds = append(cmds, m.fetchThreads(m.currentBoard))
 		}
+		cmds = append(cmds, m.fetchNotificationStatus())
 
 	case proto.EvtPostEdited:
 		p, ok := evt.Payload.(*proto.PostEditedPayload)
 		if !ok {
-			return nil
+			return []tea.Cmd{m.fetchNotificationStatus()}
 		}
 		for i, post := range m.posts {
 			if post.ID == p.ID {
@@ -454,11 +532,12 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		if m.page == pageThread {
 			m.rebuildPostView()
 		}
+		cmds = append(cmds, m.fetchNotificationStatus())
 
 	case proto.EvtPostRedacted:
 		p, ok := evt.Payload.(*proto.PostRedactedPayload)
 		if !ok {
-			return nil
+			return []tea.Cmd{m.fetchNotificationStatus()}
 		}
 		for i, post := range m.posts {
 			if post.ID == p.ID {
@@ -468,11 +547,12 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		if m.page == pageThread {
 			m.rebuildPostView()
 		}
+		cmds = append(cmds, m.fetchNotificationStatus())
 
 	case proto.EvtThreadLocked:
 		p, ok := evt.Payload.(*proto.ThreadLockedPayload)
 		if !ok {
-			return nil
+			return []tea.Cmd{m.fetchNotificationStatus()}
 		}
 		for i, t := range m.threads {
 			if t.ID == p.Thread {
@@ -486,14 +566,21 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			}
 			m.statusMsg = fmt.Sprintf("thread %s by %s", action, p.By)
 		}
+		cmds = append(cmds, m.fetchNotificationStatus())
 	}
-	return nil
+
+	if cmds == nil {
+		cmds = []tea.Cmd{m.fetchNotificationStatus()}
+	}
+	return cmds
 }
 
 func (m model) View() string {
-	header := styleHeader.Render(
-		fmt.Sprintf(" BudgieBBS | %s | %s ", m.actor.Name, pageName(m.page)),
-	)
+	headerLabel := fmt.Sprintf(" BudgieBBS | %s | %s ", m.actor.Name, pageName(m.page))
+	if m.unreadNotifs > 0 {
+		headerLabel += fmt.Sprintf(" ● %d unread", m.unreadNotifs)
+	}
+	header := styleHeader.Render(headerLabel)
 	status := styleDim.Render(m.statusMsg)
 
 	var body string
@@ -502,6 +589,8 @@ func (m model) View() string {
 		body = m.list.View()
 	case pageThreadList:
 		body = m.list.View()
+	case pageNotifications:
+		body = m.list.View() + "\n" + styleDim.Render("enter=mark read  a=mark all read  esc/←=back")
 	case pageThread:
 		help := "n=reply  esc/←=back  q=quit"
 		if m.actor.IsMod() {
@@ -547,6 +636,42 @@ func (i threadItem) Description() string {
 }
 func (i threadItem) FilterValue() string { return i.t.Title }
 
+type notificationItem struct{ n core.Notification }
+
+func notificationKindLabel(kind string) string {
+	switch kind {
+	case "mention":
+		return "@ mention"
+	case "reply":
+		return "↩ reply"
+	case "watched":
+		return "👁 watched"
+	default:
+		return kind
+	}
+}
+
+func (i notificationItem) Title() string {
+	if i.n.Read {
+		return fmt.Sprintf("%s in %s", notificationKindLabel(i.n.Kind), i.n.ThreadID)
+	}
+	return "● " + fmt.Sprintf("%s in %s", notificationKindLabel(i.n.Kind), i.n.ThreadID)
+}
+
+func (i notificationItem) Description() string {
+	ts := ""
+	if i.n.TS > 1_000_000_000_000 {
+		ts = time.UnixMilli(i.n.TS).Format("2006-01-02 15:04")
+	} else {
+		ts = fmt.Sprintf("#%d", i.n.TS)
+	}
+	return fmt.Sprintf("%s • %s", i.n.Actor, ts)
+}
+
+func (i notificationItem) FilterValue() string {
+	return i.n.Actor + " " + i.n.ThreadID
+}
+
 func (m *model) rebuildList() {
 	switch m.page {
 	case pageBoardList:
@@ -563,6 +688,13 @@ func (m *model) rebuildList() {
 		}
 		m.list.SetItems(items)
 		m.list.Title = m.currentBoard
+	case pageNotifications:
+		items := make([]list.Item, len(m.notifications))
+		for i, n := range m.notifications {
+			items[i] = notificationItem{n}
+		}
+		m.list.SetItems(items)
+		m.list.Title = "Notifications"
 	}
 }
 
@@ -580,6 +712,14 @@ func (m *model) selectedThread() *core.Thread {
 		return nil
 	}
 	return &sel.t
+}
+
+func (m *model) selectedNotification() *core.Notification {
+	sel, ok := m.list.SelectedItem().(notificationItem)
+	if !ok {
+		return nil
+	}
+	return &sel.n
 }
 
 // --- Post/chat view rendering ---
@@ -759,6 +899,30 @@ func (m model) runSearch(query string) tea.Cmd {
 	}
 }
 
+func (m model) fetchNotifications() tea.Cmd {
+	return func() tea.Msg {
+		notifs, err := m.c.ListNotifications(m.actor.ID, 50, 0, false)
+		if err != nil {
+			return errMsg{err}
+		}
+		unread, err := m.c.CountUnreadNotifications(m.actor.ID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return notificationsMsg{notifications: notifs, unread: unread}
+	}
+}
+
+func (m model) fetchNotificationStatus() tea.Cmd {
+	return func() tea.Msg {
+		unread, err := m.c.CountUnreadNotifications(m.actor.ID)
+		if err != nil {
+			return errMsg{err}
+		}
+		return notificationStatusMsg{unread: unread}
+	}
+}
+
 func (m *model) rebuildSearchView(posts []core.Post) {
 	var b strings.Builder
 	b.WriteString(styleTitle.Render(fmt.Sprintf("Search results (%d)", len(posts))) + "\n\n")
@@ -808,6 +972,8 @@ func pageName(p page) string {
 		return "Chat"
 	case pageSearch:
 		return "Search"
+	case pageNotifications:
+		return "Notifications"
 	}
 	return ""
 }
