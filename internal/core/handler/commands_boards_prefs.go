@@ -1138,6 +1138,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsBoardRankListSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsNewBoardListSystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1293,6 +1296,37 @@ func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLab
 	}
 	body := formatStatsBoardActivityHistoryBody(dateLabel, stats, boards, history)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Board activity history "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsBoardRankListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_boardrank_" + dateID
+	postID := "bbslists_boardrank_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	activeBoards := boards[:0]
+	for _, board := range boards {
+		if board.PostCount > 0 || board.ThreadCount > 0 || board.OnlineUsers > 0 {
+			activeBoards = append(activeBoards, board)
+		}
+	}
+	body := formatStatsBoardRankListBody(dateLabel, activeBoards)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Board popularity list "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsNewBoardListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -1870,6 +1904,42 @@ func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.Co
 			formatStatsDelta(day.DeltaPosts),
 			day.TotalReactions,
 			formatStatsDelta(day.DeltaReactions))
+	}
+	return b.String()
+}
+
+func formatStatsBoardRankListBody(dateLabel string, boards []projections.BoardRanking) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Board popularity list %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Ranked public boards: %d\n", len(boards))
+	onlineTotal := 0
+	for _, board := range boards {
+		onlineTotal += board.OnlineUsers
+	}
+	fmt.Fprintf(&b, "- Users currently on ranked boards: %d\n\n", onlineTotal)
+
+	b.WriteString("## Public board ranking\n")
+	if len(boards) == 0 {
+		b.WriteString("- No public board activity yet.\n")
+		return b.String()
+	}
+	for i, board := range boards {
+		lastActivity := "no posts yet"
+		if board.LastPostAt > 0 {
+			lastActivity = time.UnixMilli(board.LastPostAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s (%s): %d posts, %d threads, %d users online, %d moderators, last activity %s\n",
+			i+1,
+			board.Name,
+			board.ID,
+			board.PostCount,
+			board.ThreadCount,
+			board.OnlineUsers,
+			board.ModeratorCount,
+			lastActivity)
+		if strings.TrimSpace(board.Description) != "" {
+			fmt.Fprintf(&b, "   - %s\n", board.Description)
+		}
 	}
 	return b.String()
 }

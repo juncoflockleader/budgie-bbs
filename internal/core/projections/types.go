@@ -126,6 +126,7 @@ type BoardRanking struct {
 	Description    string `json:"description"`
 	ThreadCount    int    `json:"threadCount"`
 	PostCount      int    `json:"postCount"`
+	OnlineUsers    int    `json:"onlineUsers"`
 	LastSeq        int64  `json:"lastSeq"`
 	LastPostAt     int64  `json:"lastPostAt"`
 	ModeratorCount int    `json:"moderatorCount"`

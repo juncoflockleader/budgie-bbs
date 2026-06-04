@@ -316,12 +316,18 @@ func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, 
 	if offset < 0 {
 		offset = 0
 	}
+	onlineCutoff := NowMS() - 5*60*1000
 	rows, err := QQuery(db,
 		`SELECT b.id, b.name, b.description,
 		        COUNT(DISTINCT t.id) AS thread_count,
 		        COUNT(p.id) AS post_count,
 		        COALESCE(MAX(t.last_seq), 0) AS last_seq,
 		        COALESCE(MAX(p.created_at), 0) AS last_post_at,
+		        COALESCE((SELECT COUNT(DISTINCT ups.user_id)
+		                    FROM user_presence_sessions ups
+		                   WHERE ups.board_id=b.id
+		                     AND ups.last_seen >= ?
+		                     AND LOWER(ups.status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')), 0) AS online_users,
 		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0) AS moderator_count
 		   FROM boards b
 		   LEFT JOIN board_settings s ON s.board_id=b.id
@@ -338,7 +344,7 @@ func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, 
 		  GROUP BY b.id, b.name, b.description
 		  ORDER BY post_count DESC, thread_count DESC, last_seq DESC, b.name
 		  LIMIT ? OFFSET ?`,
-		boolInt(includePrivate), viewerID, viewerID, limit, offset,
+		onlineCutoff, boolInt(includePrivate), viewerID, viewerID, limit, offset,
 	)
 	if err != nil {
 		return nil, err
@@ -347,7 +353,7 @@ func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, 
 	out := []BoardRanking{}
 	for rows.Next() {
 		var rank BoardRanking
-		if err := rows.Scan(&rank.ID, &rank.Name, &rank.Description, &rank.ThreadCount, &rank.PostCount, &rank.LastSeq, &rank.LastPostAt, &rank.ModeratorCount); err != nil {
+		if err := rows.Scan(&rank.ID, &rank.Name, &rank.Description, &rank.ThreadCount, &rank.PostCount, &rank.LastSeq, &rank.LastPostAt, &rank.OnlineUsers, &rank.ModeratorCount); err != nil {
 			return nil, err
 		}
 		out = append(out, rank)

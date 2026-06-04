@@ -95,6 +95,7 @@ export interface BoardRanking {
   description: string
   threadCount: number
   postCount: number
+  onlineUsers: number
   lastSeq: number
   lastPostAt: number
   moderatorCount: number
