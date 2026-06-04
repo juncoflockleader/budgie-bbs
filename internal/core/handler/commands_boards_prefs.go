@@ -1133,6 +1133,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsLoginHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
@@ -1202,90 +1205,7 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 		return "", 0, err
 	}
 	body := formatStatsSnapshotBody(dateLabel, stats, boards, threads, replies, users, archives, blessings, history)
-
-	tx, err := h.db.Begin()
-	if err != nil {
-		return "", 0, err
-	}
-	defer tx.Rollback() //nolint
-
-	boardCreated := false
-	var boardSeq int64
-	var exists int
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, statsSystemBoardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return "", 0, err
-		}
-		boardScopes := []string{"board:" + statsSystemBoardID}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          statsSystemBoardID,
-			Name:        "BBSLists",
-			Description: "Generated community rankings and statistics",
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return "", 0, err
-		}
-		if err := insertBoard(tx, statsSystemBoardID, "BBSLists", "Generated community rankings and statistics", "", position); err != nil {
-			return "", 0, err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return "", 0, err
-	}
-
-	title := "Community stats " + dateLabel
-	authorName := actor.Name
-	authorID := actor.ID
-	scopes := []string{"board:" + statsSystemBoardID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
-	})
-	if err != nil {
-		return "", 0, err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return "", 0, err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return "", 0, err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return "", 0, err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return "", 0, err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, statsSystemBoardID, authorName, body); err != nil {
-		return "", 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", 0, err
-	}
-
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + statsSystemBoardID},
-			Payload: &proto.BoardCreatedPayload{ID: statsSystemBoardID, Name: "BBSLists", Description: "Generated community rankings and statistics", By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
-	return threadID, pseq, nil
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Community stats "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -1314,7 +1234,43 @@ func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, date
 		return "", 0, err
 	}
 	body := formatStatsLoginHistoryBody(dateLabel, stats, history)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Login count history "+dateLabel, body, ts)
+}
 
+func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_boardlog_" + dateID
+	postID := "bbslists_boardlog_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	stats, err := projections.GetCommunityStats(h.db)
+	if err != nil {
+		return "", 0, err
+	}
+	boards, err := projections.ListBoardRankings(h.db, "", false, 30, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	history, err := projections.ListCommunityStatHistory(h.db, 30, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsBoardActivityHistoryBody(dateLabel, stats, boards, history)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Board activity history "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, body string, ts int64) (string, int64, error) {
 	tx, err := h.db.Begin()
 	if err != nil {
 		return "", 0, err
@@ -1350,7 +1306,6 @@ func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, date
 		return "", 0, err
 	}
 
-	title := "Login count history " + dateLabel
 	authorName := actor.Name
 	authorID := actor.ID
 	scopes := []string{"board:" + statsSystemBoardID}
@@ -1539,6 +1494,46 @@ func formatStatsLoginHistoryBody(dateLabel string, stats *projections.CommunityS
 			formatStatsDelta(day.DeltaGuests),
 			formatStatsDuration(day.TotalOnlineSeconds),
 			formatStatsDurationDelta(day.DeltaOnlineSeconds))
+	}
+	return b.String()
+}
+
+func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, history []projections.CommunityStatHistory) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Board activity history %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Total boards: %d\n", stats.TotalBoards)
+	fmt.Fprintf(&b, "- Total threads: %d\n", stats.TotalThreads)
+	fmt.Fprintf(&b, "- Total posts: %d\n", stats.TotalPosts)
+	fmt.Fprintf(&b, "- Ranked public boards: %d\n", len(boards))
+	fmt.Fprintf(&b, "- Event head: %d\n\n", stats.HeadSeq)
+
+	b.WriteString("## Top public boards\n")
+	if len(boards) == 0 {
+		b.WriteString("- No public board activity yet.\n")
+	}
+	for i, board := range boards {
+		lastActivity := "no posts yet"
+		if board.LastPostAt > 0 {
+			lastActivity = time.UnixMilli(board.LastPostAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s (%s): %d posts, %d threads, last activity %s\n", i+1, board.Name, board.ID, board.PostCount, board.ThreadCount, lastActivity)
+	}
+
+	b.WriteString("\n## Recent board activity history\n")
+	if len(history) == 0 {
+		b.WriteString("- No daily stat history yet.\n")
+	}
+	for _, day := range history {
+		fmt.Fprintf(&b, "- %s: %d boards%s, %d threads%s, %d posts%s, %d reactions%s\n",
+			day.Day,
+			day.TotalBoards,
+			formatStatsDelta(day.DeltaBoards),
+			day.TotalThreads,
+			formatStatsDelta(day.DeltaThreads),
+			day.TotalPosts,
+			formatStatsDelta(day.DeltaPosts),
+			day.TotalReactions,
+			formatStatsDelta(day.DeltaReactions))
 	}
 	return b.String()
 }

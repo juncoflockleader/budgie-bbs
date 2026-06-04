@@ -105,8 +105,8 @@ ranking surface:
 - Admin-triggered generated stat snapshots: `POST
   /api/v1/stats/community/snapshot`.
 - Automatic daily stat-log publishing runs from the server process and ensures
-  the current UTC day has deterministic `BBSLists` snapshot and login-count
-  history threads.
+  the current UTC day has deterministic `BBSLists` snapshot, login-count
+  history, and board-activity history threads.
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters, max-online users/time, and
   day-over-day deltas for user, board, thread, post, reaction, mail, direct
@@ -128,6 +128,10 @@ ranking surface:
 - Stat snapshots also create deterministic daily KBS `countlogins`-style
   `BBSLists` login-count history threads showing total logins, user totals,
   online users, anonymous guests, online time, and recent daily deltas.
+- Stat snapshots also create deterministic daily KBS-style `BBSLists`
+  board-activity history threads showing total board/thread/post counts, top
+  public board rankings, last public board activity times, and recent
+  board/thread/post/reaction deltas.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
   stat history with trend deltas, cumulative login count, cumulative online/stay
   time, anonymous guest counts, active boards, hot threads, latest replies, top
@@ -139,7 +143,8 @@ ranking surface:
   summaries for the selected metric.
 
 This does not yet implement every historical/stat-log board from KBS local
-utilities beyond the generated `BBSLists` snapshot and login-history threads.
+utilities beyond the generated `BBSLists` snapshot, login-history, and
+board-activity history threads.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -832,8 +837,8 @@ social graph:
   time and anonymous guest counters, active-board rankings, hot-thread rankings,
   top-poster rankings, latest-reply rankings, blessing rankings/rituals,
   archive-path rankings, automatic `BBSLists` generated stat snapshots and
-  login-count history posts, and a web `Rankings` surface with selectable
-  30-day history charts.
+  login-count and board-activity history posts, and a web `Rankings` surface
+  with selectable 30-day history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter
@@ -853,12 +858,13 @@ social graph:
 
 ## Remaining Major KBS Parity Areas
 
-- Remaining special system boards, historical/stat-log boards, and richer
-  community statistics.
+- Remaining specialized historical/stat-log boards and richer community
+  statistics.
 - Explicitly out of the current BBS/forum parity goal: POP3/SMTP bridges,
   blog/personal corpus, legacy transfer protocols, SMS/pager layers, sysop
   import/repair tooling, and optional campus utilities/games.
 
 ## Suggested Next Slices
 
-1. Remaining historical/stat-log boards and richer community statistics.
+1. Remaining specialized historical/stat-log boards and richer community
+   statistics.

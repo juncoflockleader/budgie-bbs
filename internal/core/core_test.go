@@ -1729,11 +1729,13 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 2 {
-		t.Fatalf("expected generated stats and login-history threads, got %+v", systemThreads)
+	if len(systemThreads) != 3 {
+		t.Fatalf("expected generated stats, login-history, and board-activity threads, got %+v", systemThreads)
 	}
-	if !hasThreadSummary(systemThreads, snapshot.ID, "2026-06-04") || !hasThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") {
-		t.Fatalf("expected generated stats and login-history threads, got %+v", systemThreads)
+	if !hasThreadSummary(systemThreads, snapshot.ID, "2026-06-04") ||
+		!hasThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") ||
+		!hasThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") {
+		t.Fatalf("expected generated stats, login-history, and board-activity threads, got %+v", systemThreads)
 	}
 	systemPosts, err := c.ListPosts(snapshot.ID, 10, 0)
 	if err != nil {
@@ -1761,9 +1763,25 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 			t.Fatalf("expected login-history body to contain %q, got:\n%s", want, loginBody)
 		}
 	}
+	boardLogPosts, err := c.ListPosts("bbslists_boardlog_20260604", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(boardLogPosts) != 1 {
+		t.Fatalf("expected one generated board-activity post, got %+v", boardLogPosts)
+	}
+	boardLogBody := boardLogPosts[0].Body
+	for _, want := range []string{"Board activity history 2026-06-04", "Total boards", "Total threads", "Total posts: 5", "Ranked public boards", "Top public boards", "(tech): 2 posts", "Recent board activity history", "5 posts (+3)", "1 reactions (+1)"} {
+		if !strings.Contains(boardLogBody, want) {
+			t.Fatalf("expected board-activity body to contain %q, got:\n%s", want, boardLogBody)
+		}
+	}
 	for _, forbidden := range []string{"Secret", "Private topic", "classified reply", "private"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("expected stats snapshot body to hide private %q, got:\n%s", forbidden, body)
+		}
+		if strings.Contains(boardLogBody, forbidden) {
+			t.Fatalf("expected board-activity body to hide private %q, got:\n%s", forbidden, boardLogBody)
 		}
 	}
 	again := exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
@@ -1776,7 +1794,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 2 {
+	if len(systemThreads) != 3 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads)
 	}
 }
@@ -1894,8 +1912,8 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 4 {
-		t.Fatalf("expected stats and login-history threads for two days, got %+v", systemThreads)
+	if len(systemThreads) != 6 {
+		t.Fatalf("expected stats, login-history, and board-activity threads for two days, got %+v", systemThreads)
 	}
 	for _, want := range []struct {
 		id    string
@@ -1903,8 +1921,10 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	}{
 		{"bbslists_stats_20260605", "Community stats 2026-06-05"},
 		{"bbslists_countlogins_20260605", "Login count history 2026-06-05"},
+		{"bbslists_boardlog_20260605", "Board activity history 2026-06-05"},
 		{"bbslists_stats_20260606", "Community stats 2026-06-06"},
 		{"bbslists_countlogins_20260606", "Login count history 2026-06-06"},
+		{"bbslists_boardlog_20260606", "Board activity history 2026-06-06"},
 	} {
 		if !hasThreadSummary(systemThreads, want.id, want.title) {
 			t.Fatalf("expected generated thread %s / %s, got %+v", want.id, want.title, systemThreads)
