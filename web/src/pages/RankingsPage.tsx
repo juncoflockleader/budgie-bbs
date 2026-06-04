@@ -75,6 +75,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
           <Stat label="Reactions" value={stats.totalReactions} />
           <Stat label="Online" value={stats.onlineUsers} />
           <Stat label="Max Online" value={stats.maxOnlineUsers ?? 0} />
+          <Stat label="Online Time" value={formatDuration(stats.totalOnlineSeconds)} />
         </section>
       )}
       <RankingPanel title="Daily History">
@@ -86,6 +87,9 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
               <span className="item-title">{day.day}</span>
               <span className="item-meta muted">
                 {day.totalUsers} users {formatDelta(day.deltaUsers)} / {day.totalPosts} posts {formatDelta(day.deltaPosts)} / {day.totalReactions} reactions {formatDelta(day.deltaReactions)}
+              </span>
+              <span className="item-meta muted">
+                online time {formatDuration(day.totalOnlineSeconds)} {formatDurationDelta(day.deltaOnlineSeconds)}
               </span>
               <span className="item-meta muted">
                 max {day.maxOnlineUsers} online {formatDateTime(day.maxOnlineAt)}
@@ -155,7 +159,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
               <span className="ranking-index">{index + 1}</span>
               <span className="ranking-main">
                 <span className="item-title">{user.name}</span>
-                <span className="item-meta muted">{user.postsCreated} posts / {user.reactionsReceived} reactions / {user.loginCount} logins</span>
+                <span className="item-meta muted">{user.postsCreated} posts / {user.reactionsReceived} reactions / {user.loginCount} logins / {formatDuration(user.totalOnlineSeconds)} online</span>
               </span>
               <span className="ranking-score">TL{user.trustLevel}</span>
             </div>
@@ -202,7 +206,7 @@ function RankingPanel({ title, children }: { title: string; children: ReactNode 
   )
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rankings-stat">
       <span className="rankings-stat-value">{value}</span>
@@ -224,6 +228,25 @@ function formatDateTime(ts: number) {
 function formatDelta(value: number) {
   if (!value) return ''
   return `(${value > 0 ? '+' : ''}${value})`
+}
+
+function formatDurationDelta(value: number) {
+  if (!value) return ''
+  const sign = value > 0 ? '+' : '-'
+  return `(${sign}${formatDuration(Math.abs(value))})`
+}
+
+function formatDuration(seconds: number) {
+  const normalized = Math.max(0, Math.floor(seconds || 0))
+  if (normalized < 60) return `${normalized}s`
+  const minutes = Math.floor(normalized / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const minuteRemainder = minutes % 60
+  if (hours < 24) return minuteRemainder ? `${hours}h ${minuteRemainder}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  const hourRemainder = hours % 24
+  return hourRemainder ? `${days}d ${hourRemainder}h` : `${days}d`
 }
 
 function rankingToThread(thread: ThreadRanking): Thread {

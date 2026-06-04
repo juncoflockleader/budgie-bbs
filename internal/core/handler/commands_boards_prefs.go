@@ -1295,6 +1295,7 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 	fmt.Fprintf(&b, "- Total reactions: %d\n", stats.TotalReactions)
 	fmt.Fprintf(&b, "- Total mail messages: %d\n", stats.TotalMail)
 	fmt.Fprintf(&b, "- Total direct messages: %d\n", stats.TotalDirectMessages)
+	fmt.Fprintf(&b, "- Total online time: %s\n", formatStatsDuration(stats.TotalOnlineSeconds))
 	fmt.Fprintf(&b, "- Online users: %d\n", stats.OnlineUsers)
 	fmt.Fprintf(&b, "- Max online users: %d", stats.MaxOnlineUsers)
 	if stats.MaxOnlineAt > 0 {
@@ -1312,7 +1313,7 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 		if day.MaxOnlineAt > 0 {
 			maxAt = time.UnixMilli(day.MaxOnlineAt).UTC().Format("2006-01-02 15:04")
 		}
-		fmt.Fprintf(&b, "- %s: %d users%s, %d posts%s, %d reactions%s, %d online now, max %d online at %s UTC\n",
+		fmt.Fprintf(&b, "- %s: %d users%s, %d posts%s, %d reactions%s, %s online time%s, %d online now, max %d online at %s UTC\n",
 			day.Day,
 			day.TotalUsers,
 			formatStatsDelta(day.DeltaUsers),
@@ -1320,6 +1321,8 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 			formatStatsDelta(day.DeltaPosts),
 			day.TotalReactions,
 			formatStatsDelta(day.DeltaReactions),
+			formatStatsDuration(day.TotalOnlineSeconds),
+			formatStatsDurationDelta(day.DeltaOnlineSeconds),
 			day.OnlineUsers,
 			day.MaxOnlineUsers,
 			maxAt)
@@ -1376,6 +1379,45 @@ func formatStatsDelta(value int) string {
 		return ""
 	}
 	return fmt.Sprintf(" (%+d)", value)
+}
+
+func formatStatsDurationDelta(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	sign := "+"
+	if value < 0 {
+		sign = "-"
+		value = -value
+	}
+	return fmt.Sprintf(" (%s%s)", sign, formatStatsDuration(value))
+}
+
+func formatStatsDuration(seconds int64) string {
+	if seconds < 0 {
+		seconds = -seconds
+	}
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	hours := minutes / 60
+	minutes = minutes % 60
+	if hours < 24 {
+		if minutes == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	days := hours / 24
+	hours = hours % 24
+	if hours == 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd %dh", days, hours)
 }
 
 type digestMirrorSystemBoard struct {

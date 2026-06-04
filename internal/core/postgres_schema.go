@@ -518,6 +518,7 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_reactions       INTEGER NOT NULL DEFAULT 0,
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    total_online_seconds  BIGINT NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     max_online_users      INTEGER NOT NULL DEFAULT 0,
     max_online_at         BIGINT NOT NULL DEFAULT 0,
@@ -655,6 +656,7 @@ CREATE TABLE IF NOT EXISTS user_activity (
     days_visited   INTEGER NOT NULL DEFAULT 0,
     last_visit_day TEXT NOT NULL DEFAULT '',
     reactions_recv INTEGER NOT NULL DEFAULT 0,
+    total_online_seconds BIGINT NOT NULL DEFAULT 0,
     trust_level    INTEGER NOT NULL DEFAULT 0
 );
 
@@ -1157,6 +1159,8 @@ ON CONFLICT (version) DO NOTHING;
 			SQL: `
 ALTER TABLE user_activity
     ADD COLUMN IF NOT EXISTS login_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE user_activity
+    ADD COLUMN IF NOT EXISTS total_online_seconds BIGINT NOT NULL DEFAULT 0;
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (13, 'postgres-user-activity-login-count', 0)
@@ -1540,6 +1544,7 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_reactions       INTEGER NOT NULL DEFAULT 0,
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    total_online_seconds  BIGINT NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     max_online_users      INTEGER NOT NULL DEFAULT 0,
     max_online_at         BIGINT NOT NULL DEFAULT 0,
@@ -1602,6 +1607,20 @@ ALTER TABLE posts
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (32, 'postgres-post-tex-mailback-flags', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 33,
+			Name:    "postgres-total-online-seconds",
+			SQL: `
+ALTER TABLE user_activity
+    ADD COLUMN IF NOT EXISTS total_online_seconds BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE community_stat_history
+    ADD COLUMN IF NOT EXISTS total_online_seconds BIGINT NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (33, 'postgres-total-online-seconds', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

@@ -1399,7 +1399,24 @@ func SetUserPresence(db *sql.DB, userID, sessionID, status, mode, boardID, threa
 	threadID = strings.TrimSpace(threadID)
 	locationLabel = strings.TrimSpace(locationLabel)
 	fromHost = strings.TrimSpace(fromHost)
-	_, err := QExec(db,
+	var previousStatus string
+	var previousLastSeen int64
+	err := QQueryRow(db,
+		`SELECT status, last_seen
+		   FROM user_presence_sessions
+		  WHERE user_id=? AND session_id=?`,
+		userID,
+		sessionID,
+	).Scan(&previousStatus, &previousLastSeen)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if seconds := presenceOnlineAccrualSeconds(previousStatus, previousLastSeen, ts); seconds > 0 {
+		if err := RecordOnlineSeconds(db, userID, seconds); err != nil {
+			return err
+		}
+	}
+	_, err = QExec(db,
 		`INSERT INTO user_presence_sessions (user_id, session_id, status, mode, board_id, thread_id, location_label, from_host, last_seen, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id, session_id)
@@ -1432,6 +1449,28 @@ func SetUserPresence(db *sql.DB, userID, sessionID, status, mode, boardID, threa
 	return UpsertCommunityStatHistoryFromCurrent(db, ts)
 }
 
+const maxPresenceAccrualMS int64 = 5 * 60 * 1000
+
+func presenceOnlineAccrualSeconds(previousStatus string, previousLastSeen, ts int64) int64 {
+	if !presenceStatusCountsOnline(previousStatus) || previousLastSeen <= 0 || ts <= previousLastSeen {
+		return 0
+	}
+	elapsed := ts - previousLastSeen
+	if elapsed > maxPresenceAccrualMS {
+		elapsed = maxPresenceAccrualMS
+	}
+	return elapsed / 1000
+}
+
+func presenceStatusCountsOnline(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "offline", "invisible", "cloak", "cloaked":
+		return false
+	default:
+		return true
+	}
+}
+
 func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 	if ts <= 0 {
 		ts = NowMS()
@@ -1448,9 +1487,9 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 	_, err = QExec(db,
 		`INSERT INTO community_stat_history (
 		    day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		    total_reactions, total_mail, total_direct_messages, online_users,
+		    total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
 		    max_online_users, max_online_at, head_seq
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(day)
 		 DO UPDATE SET
 		    snapshot_at=excluded.snapshot_at,
@@ -1461,6 +1500,7 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		    total_reactions=excluded.total_reactions,
 		    total_mail=excluded.total_mail,
 		    total_direct_messages=excluded.total_direct_messages,
+		    total_online_seconds=excluded.total_online_seconds,
 		    online_users=excluded.online_users,
 		    max_online_users=CASE
 		      WHEN excluded.online_users > community_stat_history.max_online_users THEN excluded.online_users
@@ -1480,6 +1520,7 @@ func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
 		stats.TotalReactions,
 		stats.TotalMail,
 		stats.TotalDirectMessages,
+		stats.TotalOnlineSeconds,
 		stats.OnlineUsers,
 		stats.OnlineUsers,
 		maxOnlineAt,
@@ -1972,6 +2013,21 @@ func RecordLogin(db *sql.DB, userID string) error {
 		 ON CONFLICT(user_id)
 		 DO UPDATE SET login_count=login_count + 1`,
 		userID,
+	)
+	return err
+}
+
+func RecordOnlineSeconds(db *sql.DB, userID string, seconds int64) error {
+	if seconds <= 0 {
+		return nil
+	}
+	_, err := QExec(db,
+		`INSERT INTO user_activity (user_id, total_online_seconds)
+		 VALUES (?, ?)
+		 ON CONFLICT(user_id)
+		 DO UPDATE SET total_online_seconds=user_activity.total_online_seconds + excluded.total_online_seconds`,
+		userID,
+		seconds,
 	)
 	return err
 }

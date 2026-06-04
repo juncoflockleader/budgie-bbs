@@ -40,6 +40,7 @@ export interface CommunityStats {
   totalReactions: number
   totalMail: number
   totalDirectMessages: number
+  totalOnlineSeconds: number
   onlineUsers: number
   maxOnlineUsers: number
   maxOnlineAt: number
@@ -56,6 +57,7 @@ export interface CommunityStatHistory {
   totalReactions: number
   totalMail: number
   totalDirectMessages: number
+  totalOnlineSeconds: number
   onlineUsers: number
   maxOnlineUsers: number
   maxOnlineAt: number
@@ -67,6 +69,7 @@ export interface CommunityStatHistory {
   deltaReactions: number
   deltaMail: number
   deltaDirectMessages: number
+  deltaOnlineSeconds: number
 }
 
 export interface BoardRanking {
@@ -115,6 +118,7 @@ export interface UserRanking {
   postsCreated: number
   reactionsReceived: number
   loginCount: number
+  totalOnlineSeconds: number
   trustLevel: number
 }
 
@@ -783,5 +787,6 @@ export interface TrustInfo {
   postsCreated: number
   daysVisited: number
   reactionsReceived: number
+  totalOnlineSeconds: number
   trustLevel: number
 }

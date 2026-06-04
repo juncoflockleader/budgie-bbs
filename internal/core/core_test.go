@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -1434,14 +1435,29 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if stats.OnlineUsers != 1 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("expected max-online history to preserve peak after offline, got %+v", stats)
 	}
+	if _, err := c.DB.Exec(`INSERT INTO user_activity (user_id, total_online_seconds)
+		VALUES (?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`, bob.ID, int64(120)); err != nil {
+		t.Fatal(err)
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(c.DB, time.Now().UTC().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalOnlineSeconds != 120 {
+		t.Fatalf("expected total online seconds in community stats, got %+v", stats)
+	}
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
 	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		total_reactions, total_mail, total_direct_messages, online_users,
+		total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
 		max_online_users, max_online_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
-		2, 3, 1, 2, 0, 0, 0, 0, 1, previousAt.UnixMilli(), 1,
+		2, 3, 1, 2, 0, 0, 0, int64(60), 0, 1, previousAt.UnixMilli(), 1,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1454,6 +1470,9 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	}
 	if history[0].DeltaUsers != 1 || history[0].DeltaBoards != 1 || history[0].DeltaThreads != 2 || history[0].DeltaPosts != 3 || history[0].DeltaReactions != 1 || history[0].DeltaMail != 0 || history[0].DeltaDirectMessages != 0 {
 		t.Fatalf("expected newest daily stat history row to include deltas, got %+v", history[0])
+	}
+	if history[0].TotalOnlineSeconds != 120 || history[0].DeltaOnlineSeconds != 60 {
+		t.Fatalf("expected newest daily stat history row to include online-time totals and deltas, got %+v", history[0])
 	}
 	if history[1].DeltaUsers != 0 || history[1].DeltaPosts != 0 || history[1].DeltaReactions != 0 {
 		t.Fatalf("expected oldest fetched daily stat history row to have zero deltas without an older comparison row, got %+v", history[1])
@@ -1549,7 +1568,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(users) == 0 || users[0].Name != "bob" || users[0].PostsCreated != 2 || users[0].ReactionsReceived != 1 || users[0].LoginCount != 1 {
+	if len(users) == 0 || users[0].Name != "bob" || users[0].PostsCreated != 2 || users[0].ReactionsReceived != 1 || users[0].LoginCount != 1 || users[0].TotalOnlineSeconds != 120 {
 		t.Fatalf("expected bob to lead user rankings, got %+v", users)
 	}
 
@@ -1584,7 +1603,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
 	}
 	body := systemPosts[0].Body
-	for _, want := range []string{"Total users: 3", "Total posts: 5", "Max online users: 2", "Recent daily history", "3 users (+1)", "5 posts (+3)", "1 reactions (+1)", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total posts: 5", "Total online time: 2m", "Max online users: 2", "Recent daily history", "3 users (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
@@ -1606,6 +1625,37 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	}
 	if len(systemThreads) != 1 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads)
+	}
+}
+
+func TestPresenceAccruesTotalOnlineTime(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	base := time.Now().UTC().Add(-10 * time.Minute).UnixMilli()
+	if err := projections.SetUserPresence(c.DB, alice.ID, "web", "active", "", "", "", "", "", base); err != nil {
+		t.Fatal(err)
+	}
+	if err := projections.SetUserPresence(c.DB, alice.ID, "web", "reading", "general", "", "", "", "", base+2*60*1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := projections.SetUserPresence(c.DB, alice.ID, "web", "offline", "", "", "", "", "", base+10*60*1000); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalOnlineSeconds != 420 {
+		t.Fatalf("expected two minutes plus capped five-minute offline accrual, got %+v", stats)
+	}
+	history, err := c.ListCommunityStatHistory(7, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].TotalOnlineSeconds != 420 {
+		t.Fatalf("expected online-time total in daily stat history, got %+v", history)
 	}
 }
 

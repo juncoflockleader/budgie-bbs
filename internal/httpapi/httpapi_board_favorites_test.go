@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 type boardsResponse struct {
@@ -116,6 +118,7 @@ type communityStatsResponse struct {
 	TotalReactions      int   `json:"totalReactions"`
 	TotalMail           int   `json:"totalMail"`
 	TotalDirectMessages int   `json:"totalDirectMessages"`
+	TotalOnlineSeconds  int64 `json:"totalOnlineSeconds"`
 	OnlineUsers         int   `json:"onlineUsers"`
 	MaxOnlineUsers      int   `json:"maxOnlineUsers"`
 	MaxOnlineAt         int64 `json:"maxOnlineAt"`
@@ -137,6 +140,7 @@ type communityStatHistoryResponse struct {
 		TotalReactions      int    `json:"totalReactions"`
 		TotalMail           int    `json:"totalMail"`
 		TotalDirectMessages int    `json:"totalDirectMessages"`
+		TotalOnlineSeconds  int64  `json:"totalOnlineSeconds"`
 		DeltaUsers          int    `json:"deltaUsers"`
 		DeltaBoards         int    `json:"deltaBoards"`
 		DeltaThreads        int    `json:"deltaThreads"`
@@ -144,6 +148,7 @@ type communityStatHistoryResponse struct {
 		DeltaReactions      int    `json:"deltaReactions"`
 		DeltaMail           int    `json:"deltaMail"`
 		DeltaDirectMessages int    `json:"deltaDirectMessages"`
+		DeltaOnlineSeconds  int64  `json:"deltaOnlineSeconds"`
 	} `json:"days"`
 }
 
@@ -208,12 +213,13 @@ type postsResponse struct {
 
 type userRankingsResponse struct {
 	Users []struct {
-		UserID            string `json:"userId"`
-		Name              string `json:"name"`
-		PostsCreated      int    `json:"postsCreated"`
-		ReactionsReceived int    `json:"reactionsReceived"`
-		LoginCount        int    `json:"loginCount"`
-		TrustLevel        int    `json:"trustLevel"`
+		UserID             string `json:"userId"`
+		Name               string `json:"name"`
+		PostsCreated       int    `json:"postsCreated"`
+		ReactionsReceived  int    `json:"reactionsReceived"`
+		LoginCount         int    `json:"loginCount"`
+		TotalOnlineSeconds int64  `json:"totalOnlineSeconds"`
+		TrustLevel         int    `json:"trustLevel"`
 	} `json:"users"`
 }
 
@@ -904,14 +910,29 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if stats.OnlineUsers != 1 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("expected max-online history to preserve peak after offline, got %+v", stats)
 	}
+	if _, err := c.DB.Exec(`INSERT INTO user_activity (user_id, total_online_seconds)
+		VALUES ((SELECT id FROM users WHERE name='bob'), ?)
+		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`, int64(120)); err != nil {
+		t.Fatal(err)
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(c.DB, time.Now().UTC().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	stats = communityStatsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community", aliceToken, nil, &stats); status != http.StatusOK {
+		t.Fatalf("community stats after online-time status: %d", status)
+	}
+	if stats.TotalOnlineSeconds != 120 {
+		t.Fatalf("expected total online seconds in community stats, got %+v", stats)
+	}
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
 	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		total_reactions, total_mail, total_direct_messages, online_users,
+		total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
 		max_online_users, max_online_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
-		2, 3, 1, 2, 0, 0, 0, 0, 1, previousAt.UnixMilli(), 1,
+		2, 3, 1, 2, 0, 0, 0, int64(60), 0, 1, previousAt.UnixMilli(), 1,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -924,6 +945,9 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	}
 	if history.Days[0].DeltaUsers != 1 || history.Days[0].DeltaBoards != 1 || history.Days[0].DeltaThreads != 2 || history.Days[0].DeltaPosts != 3 || history.Days[0].DeltaReactions != 1 || history.Days[0].DeltaMail != 0 || history.Days[0].DeltaDirectMessages != 0 {
 		t.Fatalf("expected newest daily stat history row to include deltas, got %+v", history.Days[0])
+	}
+	if history.Days[0].TotalOnlineSeconds != 120 || history.Days[0].DeltaOnlineSeconds != 60 {
+		t.Fatalf("expected newest daily stat history row to include online-time totals and deltas, got %+v", history.Days[0])
 	}
 	if history.Days[1].DeltaUsers != 0 || history.Days[1].DeltaPosts != 0 || history.Days[1].DeltaReactions != 0 {
 		t.Fatalf("expected oldest fetched daily stat history row to have zero deltas without an older comparison row, got %+v", history.Days[1])
@@ -1025,7 +1049,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/users", aliceToken, nil, &users); status != http.StatusOK {
 		t.Fatalf("user rankings status: %d", status)
 	}
-	if len(users.Users) == 0 || users.Users[0].Name != "bob" || users.Users[0].PostsCreated != 2 || users.Users[0].ReactionsReceived != 1 || users.Users[0].LoginCount != 2 {
+	if len(users.Users) == 0 || users.Users[0].Name != "bob" || users.Users[0].PostsCreated != 2 || users.Users[0].ReactionsReceived != 1 || users.Users[0].LoginCount != 2 || users.Users[0].TotalOnlineSeconds != 120 {
 		t.Fatalf("expected bob to lead user rankings, got %+v", users.Users)
 	}
 
@@ -1059,7 +1083,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts.Posts)
 	}
 	body := systemPosts.Posts[0].Body
-	for _, want := range []string{"Total users: 3", "Total posts: 5", "Max online users: 2", "Recent daily history", "3 users (+1)", "5 posts (+3)", "1 reactions (+1)", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total posts: 5", "Total online time: 2m", "Max online users: 2", "Recent daily history", "3 users (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}

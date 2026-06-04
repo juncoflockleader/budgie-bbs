@@ -315,8 +315,8 @@ GET /api/v1/chat/{room}/recent?limit=    -> bounded ephemeral history (ring buff
 ```
 These read projection tables directly (see Decision 2) and are CDN-cacheable. Moderator views (`?include=redacted`) require role and are never cached.
 Ranking reads are derived projection views for KBS-style public lists: community
-counters, active boards, hot threads, latest replies, top posters, blessing
-rituals, and active archive paths.
+counters including cumulative online/stay time, active boards, hot threads,
+latest replies, top posters, blessing rituals, and active archive paths.
 Hot-thread `score` is recency-decayed: visible posts and reactions form the
 activity base, then thread `updatedAt` applies a 48-hour half-life so stale
 activity gradually falls behind fresh conversation.
@@ -652,17 +652,22 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   boards.
 - `publishStatsSnapshot` is admin-only. It creates the `BBSLists` system board
   if needed and writes a deterministic daily generated thread/post containing
-  community counters, max-online history, recent daily stat-history rows, plus
-  public-safe board, thread, latest-reply, user, blessing, and archive rankings.
+  community counters, cumulative online/stay time, max-online history, recent
+  daily stat-history rows, plus public-safe board, thread, latest-reply, user,
+  blessing, and archive rankings.
   `date` is optional `YYYY-MM-DD` and defaults to the current UTC day; publishing
   the same date again returns the existing generated thread instead of
   duplicating it.
 - Presence changes and stats snapshots upsert `community_stat_history` rows.
   `GET /api/v1/stats/community` exposes current `onlineUsers` plus historical
-  `maxOnlineUsers` and `maxOnlineAt`; `GET /api/v1/stats/community/history`
-  returns daily stat-log rows ordered newest first with derived `deltaUsers`,
-  `deltaBoards`, `deltaThreads`, `deltaPosts`, `deltaReactions`, `deltaMail`,
-  and `deltaDirectMessages` fields compared to the next older fetched row.
+  `maxOnlineUsers`, `maxOnlineAt`, and cumulative `totalOnlineSeconds`;
+  `GET /api/v1/stats/community/history` returns daily stat-log rows ordered
+  newest first with derived `deltaUsers`, `deltaBoards`, `deltaThreads`,
+  `deltaPosts`, `deltaReactions`, `deltaMail`, `deltaDirectMessages`, and
+  `deltaOnlineSeconds` fields compared to the next older fetched row.
+- Presence updates accrue per-user `totalOnlineSeconds` while the previous
+  session status was visibly online. A single update contributes at most five
+  minutes so stale sessions do not create inflated stay-time totals.
 - The `budgied` server also runs an automatic stat publisher by default
   (`-auto-stats=true`). On startup and hourly thereafter it ensures the current
   UTC day has the same deterministic `BBSLists` snapshot, authored by the

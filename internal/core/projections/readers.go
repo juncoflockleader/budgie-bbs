@@ -95,6 +95,7 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		      WHERE t.board NOT IN (`+generatedSystemBoardSQLList+`)),
 		    (SELECT COUNT(*) FROM mail_messages),
 		    (SELECT COUNT(*) FROM direct_messages),
+		    COALESCE((SELECT SUM(total_online_seconds) FROM user_activity), 0),
 		    (SELECT COUNT(DISTINCT user_id) FROM user_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')),
 		    COALESCE((SELECT MAX(seq) FROM events), 0)`,
 		cutoff,
@@ -106,6 +107,7 @@ func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 		&stats.TotalReactions,
 		&stats.TotalMail,
 		&stats.TotalDirectMessages,
+		&stats.TotalOnlineSeconds,
 		&stats.OnlineUsers,
 		&stats.HeadSeq,
 	)
@@ -148,7 +150,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	fetchLimit := limit + 1
 	rows, err := QQuery(db,
 		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
-		        total_reactions, total_mail, total_direct_messages, online_users,
+		        total_reactions, total_mail, total_direct_messages, total_online_seconds, online_users,
 		        max_online_users, max_online_at, head_seq
 		   FROM community_stat_history
 		  ORDER BY day DESC
@@ -162,7 +164,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	out := []CommunityStatHistory{}
 	for rows.Next() {
 		var h CommunityStatHistory
-		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.OnlineUsers, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.HeadSeq); err != nil {
+		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.TotalOnlineSeconds, &h.OnlineUsers, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.HeadSeq); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -190,6 +192,7 @@ func (h *CommunityStatHistory) applyDeltaFrom(previous CommunityStatHistory) {
 	h.DeltaReactions = h.TotalReactions - previous.TotalReactions
 	h.DeltaMail = h.TotalMail - previous.TotalMail
 	h.DeltaDirectMessages = h.TotalDirectMessages - previous.TotalDirectMessages
+	h.DeltaOnlineSeconds = h.TotalOnlineSeconds - previous.TotalOnlineSeconds
 }
 
 func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]BoardRanking, error) {
@@ -385,6 +388,7 @@ func ListUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
 		        COUNT(DISTINCT p.id) AS posts_created,
 		        COUNT(pr.post_id) AS reactions_received,
 		        COALESCE(ua.login_count, 0),
+		        COALESCE(ua.total_online_seconds, 0),
 		        COALESCE(ua.trust_level, 0)
 		   FROM users u
 		   LEFT JOIN user_activity ua ON ua.user_id=u.id
@@ -394,10 +398,11 @@ func ListUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
 		           WHERE pt.id=p.thread AND pt.board IN (`+generatedSystemBoardSQLList+`)
 		        )
 		   LEFT JOIN post_reactions pr ON pr.post_id=p.id
-		  GROUP BY u.id, u.name, u.role, ua.login_count, ua.trust_level
+		  GROUP BY u.id, u.name, u.role, ua.login_count, ua.total_online_seconds, ua.trust_level
 		  ORDER BY posts_created DESC,
 		           reactions_received DESC,
 		           COALESCE(ua.login_count, 0) DESC,
+		           COALESCE(ua.total_online_seconds, 0) DESC,
 		           u.name
 		  LIMIT ? OFFSET ?`,
 		limit, offset,
@@ -409,7 +414,7 @@ func ListUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
 	out := []UserRanking{}
 	for rows.Next() {
 		var rank UserRanking
-		if err := rows.Scan(&rank.UserID, &rank.Name, &rank.Role, &rank.PostsCreated, &rank.ReactionsReceived, &rank.LoginCount, &rank.TrustLevel); err != nil {
+		if err := rows.Scan(&rank.UserID, &rank.Name, &rank.Role, &rank.PostsCreated, &rank.ReactionsReceived, &rank.LoginCount, &rank.TotalOnlineSeconds, &rank.TrustLevel); err != nil {
 			return nil, err
 		}
 		out = append(out, rank)
@@ -3657,9 +3662,9 @@ func TrustInfo(db *sql.DB, userID string) (*TrustLevelInfo, error) {
 	_ = EnsureActivity(db, userID)
 	t := &TrustLevelInfo{}
 	err := QQueryRow(db,
-		`SELECT login_count, posts_created, days_visited, reactions_recv, trust_level
+		`SELECT login_count, posts_created, days_visited, reactions_recv, total_online_seconds, trust_level
 		 FROM user_activity WHERE user_id=?`, userID,
-	).Scan(&t.LoginCount, &t.PostsCreated, &t.DaysVisited, &t.ReactionsRecv, &t.TrustLevel)
+	).Scan(&t.LoginCount, &t.PostsCreated, &t.DaysVisited, &t.ReactionsRecv, &t.TotalOnlineSeconds, &t.TrustLevel)
 	if err == sql.ErrNoRows {
 		return t, nil
 	}

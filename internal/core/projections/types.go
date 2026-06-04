@@ -47,6 +47,7 @@ type CommunityStats struct {
 	TotalReactions      int   `json:"totalReactions"`
 	TotalMail           int   `json:"totalMail"`
 	TotalDirectMessages int   `json:"totalDirectMessages"`
+	TotalOnlineSeconds  int64 `json:"totalOnlineSeconds"`
 	OnlineUsers         int   `json:"onlineUsers"`
 	MaxOnlineUsers      int   `json:"maxOnlineUsers"`
 	MaxOnlineAt         int64 `json:"maxOnlineAt"`
@@ -63,6 +64,7 @@ type CommunityStatHistory struct {
 	TotalReactions      int    `json:"totalReactions"`
 	TotalMail           int    `json:"totalMail"`
 	TotalDirectMessages int    `json:"totalDirectMessages"`
+	TotalOnlineSeconds  int64  `json:"totalOnlineSeconds"`
 	OnlineUsers         int    `json:"onlineUsers"`
 	MaxOnlineUsers      int    `json:"maxOnlineUsers"`
 	MaxOnlineAt         int64  `json:"maxOnlineAt"`
@@ -74,6 +76,7 @@ type CommunityStatHistory struct {
 	DeltaReactions      int    `json:"deltaReactions"`
 	DeltaMail           int    `json:"deltaMail"`
 	DeltaDirectMessages int    `json:"deltaDirectMessages"`
+	DeltaOnlineSeconds  int64  `json:"deltaOnlineSeconds"`
 }
 
 type ContentFilter struct {
@@ -126,13 +129,14 @@ type ReplyRanking struct {
 }
 
 type UserRanking struct {
-	UserID            string `json:"userId"`
-	Name              string `json:"name"`
-	Role              string `json:"role"`
-	PostsCreated      int    `json:"postsCreated"`
-	ReactionsReceived int    `json:"reactionsReceived"`
-	LoginCount        int    `json:"loginCount"`
-	TrustLevel        int    `json:"trustLevel"`
+	UserID             string `json:"userId"`
+	Name               string `json:"name"`
+	Role               string `json:"role"`
+	PostsCreated       int    `json:"postsCreated"`
+	ReactionsReceived  int    `json:"reactionsReceived"`
+	LoginCount         int    `json:"loginCount"`
+	TotalOnlineSeconds int64  `json:"totalOnlineSeconds"`
+	TrustLevel         int    `json:"trustLevel"`
 }
 
 type Blessing struct {
@@ -756,11 +760,12 @@ type Notification struct {
 
 // TrustLevelInfo holds computed activity stats and trust level for a user.
 type TrustLevelInfo struct {
-	LoginCount    int `json:"loginCount"`
-	PostsCreated  int `json:"postsCreated"`
-	DaysVisited   int `json:"daysVisited"`
-	ReactionsRecv int `json:"reactionsReceived"`
-	TrustLevel    int `json:"trustLevel"`
+	LoginCount         int   `json:"loginCount"`
+	PostsCreated       int   `json:"postsCreated"`
+	DaysVisited        int   `json:"daysVisited"`
+	ReactionsRecv      int   `json:"reactionsReceived"`
+	TotalOnlineSeconds int64 `json:"totalOnlineSeconds"`
+	TrustLevel         int   `json:"trustLevel"`
 }
 
 // IsMod reports if a user is a moderator or admin.

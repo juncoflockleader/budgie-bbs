@@ -383,6 +383,7 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
     total_reactions       INTEGER NOT NULL DEFAULT 0,
     total_mail            INTEGER NOT NULL DEFAULT 0,
     total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    total_online_seconds  INTEGER NOT NULL DEFAULT 0,
     online_users          INTEGER NOT NULL DEFAULT 0,
     max_online_users      INTEGER NOT NULL DEFAULT 0,
     max_online_at         INTEGER NOT NULL DEFAULT 0,
@@ -740,6 +741,7 @@ CREATE TABLE IF NOT EXISTS user_activity (
     days_visited   INTEGER NOT NULL DEFAULT 0,
     last_visit_day TEXT    NOT NULL DEFAULT '',  -- 'YYYY-MM-DD'
     reactions_recv INTEGER NOT NULL DEFAULT 0,
+    total_online_seconds INTEGER NOT NULL DEFAULT 0,
     trust_level    INTEGER NOT NULL DEFAULT 0    -- 0–4
 );
 `
