@@ -2005,6 +2005,128 @@ func TestHTTPMalformedReplyPollDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPMalformedExpiryReplyPollDoesNotCreatePoll(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Malformed expiry reply poll",
+		"body":  "starter body",
+	}, &threadAck)
+	if threadStatus != http.StatusCreated {
+		t.Fatalf("create thread status: %d", threadStatus)
+	}
+
+	threadID := threadAck.Result.ID
+	malformedReply := "[poll expires=badtime]\nQuestion only\nOne\nTwo\n[/poll]"
+	replyAck := ackResponse{}
+	replyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, map[string]string{
+		"body": malformedReply,
+	}, &replyAck)
+	if replyStatus != http.StatusCreated || replyAck.Result == nil {
+		t.Fatalf("expected malformed expiry reply to be accepted as post create: status=%d err=%+v", replyStatus, replyAck.Error)
+	}
+	replyPostID := replyAck.Result.ID
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyPostID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("reply post %s should be in thread list", replyPostID)
+	}
+	if !strings.Contains(replyPost.Body, "[poll") {
+		t.Fatalf("malformed expiry reply poll should remain in stored body, got %q", replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected malformed expiry reply poll to produce no poll projection")
+	}
+	if got, ok := threadPolls.Polls[replyPostID]; ok && got != nil {
+		t.Fatalf("expected malformed expiry reply poll to produce no poll projection, got %+v", got)
+	}
+}
+
+func TestHTTPCommandEndpointMalformedExpiryReplyPollDoesNotCreatePoll(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Malformed expiry reply poll base",
+			"body":  "starter body",
+		},
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || !threadAck.OK || threadAck.Result == nil {
+		t.Fatalf("command base thread create failed: status=%d ok=%v err=%+v", threadStatus, threadAck.OK, threadAck.Error)
+	}
+
+	threadID := threadAck.Result.ID
+	replyCommand := map[string]any{
+		"command": "appendPost",
+		"payload": map[string]any{
+			"thread": threadID,
+			"body":   "[poll expires=badtime]\nQuestion only\nOne\nTwo\n[/poll]",
+		},
+	}
+
+	replyAck := ackResponse{}
+	replyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, replyCommand, &replyAck)
+	if replyStatus != http.StatusCreated || !replyAck.OK || replyAck.Result == nil {
+		t.Fatalf("expected malformed expiry reply command to be accepted: status=%d ok=%v err=%+v", replyStatus, replyAck.OK, replyAck.Error)
+	}
+	replyPostID := replyAck.Result.ID
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyPostID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("reply post %s should be in thread list", replyPostID)
+	}
+	if !strings.Contains(replyPost.Body, "[poll") {
+		t.Fatalf("malformed expiry reply poll should remain in stored body, got %q", replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected malformed expiry reply command to produce no poll projection")
+	}
+	if got, ok := threadPolls.Polls[replyPostID]; ok && got != nil {
+		t.Fatalf("expected malformed expiry reply command to produce no poll projection, got %+v", got)
+	}
+}
+
 func TestHTTPPollVoteLifecycleAndErrors(t *testing.T) {
 	core, handler := setupHTTPTestServer(t)
 
