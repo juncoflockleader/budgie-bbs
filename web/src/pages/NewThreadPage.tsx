@@ -1,19 +1,41 @@
-import { useState, FormEvent } from 'react'
+import { useEffect, FormEvent, useState } from 'react'
 import * as api from '../api/client'
 import type { Board } from '../api/types'
+import { PollComposer } from '../components/PollComposer'
 
 interface Props {
   token: string
   board: Board
+  currentUsername: string
   onCreated: (threadId: string) => void
   onBack: () => void
 }
 
-export function NewThreadPage({ token, board, onCreated, onBack }: Props) {
+export function NewThreadPage({ token, board, currentUsername, onCreated, onBack }: Props) {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [isTrustLoaded, setIsTrustLoaded] = useState(false)
+  const [canCreatePoll, setCanCreatePoll] = useState(true)
+
+  function appendPoll(markup: string) {
+    setBody(prev => {
+      const trimmed = prev.trimEnd()
+      return trimmed ? `${trimmed}\n\n${markup}` : markup
+    })
+  }
+
+  useEffect(() => {
+    ;(async () => {
+      setIsTrustLoaded(false)
+      const trustRes = await api.getTrust(token, currentUsername)
+      if (trustRes.data) {
+        setCanCreatePoll(trustRes.data.trustLevel >= 2)
+      }
+      setIsTrustLoaded(true)
+    })()
+  }, [token, currentUsername])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -59,6 +81,13 @@ export function NewThreadPage({ token, board, onCreated, onBack }: Props) {
             placeholder="Markdown-light markup: **bold**, `code`, > quote"
           />
         </label>
+        <div className="compose-actions">
+          <PollComposer
+            onInsert={appendPoll}
+            disabled={isTrustLoaded && !canCreatePoll}
+            disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
+          />
+        </div>
         {error && <p className="error">{error}</p>}
         <div className="form-actions">
           <button type="submit" disabled={busy || !title.trim() || !body.trim()}>

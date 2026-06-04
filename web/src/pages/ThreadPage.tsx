@@ -7,6 +7,7 @@ import type {
 } from '../api/types'
 import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
+import { PollComposer } from '../components/PollComposer'
 import { PollWidget } from '../components/PollWidget'
 import { useStream } from '../hooks/useStream'
 
@@ -15,6 +16,7 @@ interface Props {
   thread: Thread
   currentUserId: string
   currentUserRole: string
+  currentUsername: string
   onBack: () => void
   onOpenProfile: (username: string) => void
 }
@@ -30,7 +32,7 @@ function hasPollBlock(body: string) {
   return body.includes('[poll]')
 }
 
-export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBack, onOpenProfile }: Props) {
+export function ThreadPage({ token, thread, currentUserId, currentUsername, currentUserRole, onBack, onOpenProfile }: Props) {
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -45,6 +47,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
   const [polls, setPolls] = useState<Record<string, Poll | null>>({})
   // authorName → trust level
   const [trustLevels, setTrustLevels] = useState<Record<string, number>>({})
+  const [canCreatePoll, setCanCreatePoll] = useState(true)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isMod = currentUserRole === 'moderator' || currentUserRole === 'admin'
   const isAdmin = currentUserRole === 'admin'
@@ -55,6 +58,13 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
     const res = await api.getTrust(token, author)
     if (res.data) {
       setTrustLevels(prev => ({ ...prev, [author]: res.data!.trustLevel }))
+    }
+  }
+
+  async function loadCurrentUserTrust() {
+    const trustRes = await api.getTrust(token, currentUsername)
+    if (trustRes.data) {
+      setCanCreatePoll(trustRes.data.trustLevel >= 2)
     }
   }
 
@@ -107,6 +117,10 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
       uniqueAuthors.forEach(a => loadTrust(a))
     })()
   }, [token, thread.id])
+
+  useEffect(() => {
+    loadCurrentUserTrust()
+  }, [token, currentUsername])
 
   const onEvent = useCallback((evt: BudgieEvent) => {
     if (evt.event === 'post.appended') {
@@ -202,6 +216,13 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
       setReplyTo(undefined)
       setComposing(false)
     }
+  }
+
+  function insertPollIntoDraft(markup: string) {
+    setDraftBody(prev => {
+      const trimmed = prev.trimEnd()
+      return trimmed ? `${trimmed}\n\n${markup}` : markup
+    })
   }
 
   async function redactPost(postId: string) {
@@ -369,13 +390,18 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
               className="compose-textarea"
               value={draftBody}
               onChange={e => setDraftBody(e.target.value)}
-              placeholder={"Write your reply…\n\nTip: add a poll with:\n[poll]\nOption A\nOption B\n[/poll]"}
+              placeholder="Write your reply…"
               rows={6}
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitPost()
               }}
             />
             <div className="compose-actions">
+              <PollComposer
+                onInsert={insertPollIntoDraft}
+                disabled={!canCreatePoll}
+                disabledHint={!canCreatePoll ? 'Polls require trust level 2+' : undefined}
+              />
               <button onClick={submitPost} disabled={submitting || !draftBody.trim()}>
                 {submitting ? '…' : 'Post reply'}
               </button>

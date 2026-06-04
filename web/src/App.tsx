@@ -123,6 +123,7 @@ export function App() {
             token={token}
             thread={page.thread}
             currentUserId={user.id}
+            currentUsername={user.name}
             currentUserRole={user.role}
             onBack={() => nav({ name: 'threads', board: page.board })}
             onOpenProfile={username => nav({ name: 'user-profile', username })}
@@ -140,6 +141,7 @@ export function App() {
           <NewThreadPage
             token={token}
             board={page.board}
+            currentUsername={user.name}
             onCreated={threadId => {
               void threadId
               nav({ name: 'threads', board: page.board })
