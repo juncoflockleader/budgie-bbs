@@ -52,6 +52,7 @@ const (
 	CmdAttachMail                 CommandName = "attachMail"
 	CmdUpdateMail                 CommandName = "updateMail"
 	CmdDeleteMail                 CommandName = "deleteMail"
+	CmdDeleteMailRange            CommandName = "deleteMailRange"
 	CmdSendDirectMessage          CommandName = "sendDirectMessage"
 	CmdSetDirectMessageSettings   CommandName = "setDirectMessageSettings"
 	CmdMarkDirectMessageRead      CommandName = "markDirectMessageRead"
@@ -308,6 +309,10 @@ type UpdateMailPayload struct {
 
 type DeleteMailPayload struct {
 	Mail string `json:"mail"`
+}
+
+type DeleteMailRangePayload struct {
+	Mail []string `json:"mail"`
 }
 
 type SendDirectMessagePayload struct {

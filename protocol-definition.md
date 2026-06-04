@@ -401,6 +401,7 @@ Returns: the ack envelope.
 | `POST /api/v1/posts/{id}/mail` | `mailPostAuthor` |
 | `POST /api/v1/mail` | `sendMail` |
 | `POST /api/v1/mail/{id}/forward` | `forwardMail` |
+| `POST /api/v1/mail/range-delete` | `deleteMailRange` |
 | `POST /api/v1/mail/groups` | `setMailGroup` |
 | `PUT /api/v1/mail/groups/{id}` | `setMailGroup` |
 | `PATCH /api/v1/mail/groups/{id}` | `setMailGroup` |
@@ -743,6 +744,7 @@ deleteMailGroup { group* }                                     -> ack only
 attachMail     { id?, mail*, filename*, contentType?, sizeBytes? } -> mail.attachment_added
 updateMail     { mail*, mailbox?, read?, kept? }               -> ack only
 deleteMail     { mail* }                                       -> ack only
+deleteMailRange { mail[] }                                     -> ack only
 sendDirectMessage { to*, body* }                               -> direct_message.sent
 setDirectMessageSettings { policy* }                           -> ack only
 markDirectMessageRead { message* }                             -> ack only
@@ -783,6 +785,9 @@ deleteDirectMessage { message* }                               -> ack only
   trash are rejected when they would exceed the affected user's quota.
 - `mailbox` may be a built-in mailbox (`inbox`, `sent`, `keep`, `trash`) or a
   lightweight custom mailbox slug.
+- `deleteMailRange` is the KBS-style range-delete mailbox action. It accepts up
+  to 100 visible mail ids and atomically moves the actor's copies to `trash`;
+  if any id is hidden or missing, no requested mail copy is moved.
 - `GET /api/v1/mail/thread/{id}` walks from a visible selected mail item to the
   root reply chain and returns the actor's visible copies in thread order.
   `GET /api/v1/mail/author/{id}` returns the actor's visible mail from the same

@@ -672,6 +672,64 @@ func (h *Handler) deleteMail(actor *User, p proto.DeleteMailPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: p.Mail}}
 }
 
+func (h *Handler) deleteMailRange(actor *User, p proto.DeleteMailRangePayload) Reply {
+	mailIDs, errReply := normalizeMailRangeIDs(p.Mail)
+	if errReply.Err != nil {
+		return errReply
+	}
+	ts := nowMS()
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback()
+
+	for _, mailID := range mailIDs {
+		res, err := projections.QExec(tx,
+			`UPDATE mail_copies
+			    SET mailbox='trash', updated_at=?
+			  WHERE user_id=? AND message_id=?`,
+			ts, actor.ID, mailID,
+		)
+		if err != nil {
+			return internalErr(err)
+		}
+		updated, err := res.RowsAffected()
+		if err != nil {
+			return internalErr(err)
+		}
+		if updated == 0 {
+			return Reply{Err: errDetail(proto.ErrNotFound, "mail not found: "+mailID, false)}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(mailIDs))}}
+}
+
+func normalizeMailRangeIDs(input []string) ([]string, Reply) {
+	if len(input) == 0 {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "mail is required", false)}
+	}
+	if len(input) > 100 {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "mail range can include at most 100 items", false)}
+	}
+	out := make([]string, 0, len(input))
+	seen := map[string]bool{}
+	for _, raw := range input {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "mail id cannot be empty", false)}
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, Reply{}
+}
+
 func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayload) Reply {
 	body := strings.TrimSpace(p.Body)
 	if strings.TrimSpace(p.To) == "" || body == "" {

@@ -377,6 +377,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.deleteMail(actor, p)
 
+	case proto.CmdDeleteMailRange:
+		var p proto.DeleteMailRangePayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.deleteMailRange(actor, p)
+
 	case proto.CmdSendDirectMessage:
 		var p proto.SendDirectMessagePayload
 		if err := json.Unmarshal(payload, &p); err != nil {

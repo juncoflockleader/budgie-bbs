@@ -753,6 +753,7 @@ split:
   - `POST /api/v1/mail/{mail}/attachments`
   - `PATCH /api/v1/mail/{mail}`
   - `DELETE /api/v1/mail/{mail}`
+  - `POST /api/v1/mail/range-delete`
   - `POST /api/v1/messages`
   - `PATCH /api/v1/messages/settings`
   - `POST /api/v1/messages/{message}/read`
@@ -766,6 +767,7 @@ split:
   - `attachMail`
   - `updateMail`
   - `deleteMail`
+  - `deleteMailRange`
   - `sendDirectMessage`
   - `setDirectMessageSettings`
   - `markDirectMessageRead`
@@ -794,14 +796,17 @@ split:
   the normal durable mail path, with optional sender note and quoted source
   transcript. Stored binary attachment blobs are not cloned; attachment names
   are preserved in the forwarded transcript.
+- KBS-style mailbox range-delete accepts selected visible mail ids and
+  atomically moves the actor's copies to `trash`; hidden or missing ids abort
+  the whole range without partial movement.
 - Short direct messages respect ignore rows and per-recipient policy:
   all users, friends only, or no messages.
 - Web thread readers expose a Mail action for visible non-anonymous article
   authors. Web `Inbox` surface with mailboxes, unread badges, mail compose/reply,
-  read/keep/move/trash/forward actions, thread/from-author mail traversal,
-  mail-group management, group/friend-list sending, used/quota display,
-  direct-message conversations, receive-policy control, replies, and per-user
-  message deletion.
+  read/keep/move/trash/forward/range-trash actions, thread/from-author mail
+  traversal, mail-group management, group/friend-list sending, used/quota
+  display, direct-message conversations, receive-policy control, replies, and
+  per-user message deletion.
 
 POP3/Internet email bridges and SMS are intentionally outside the current
 BBS/forum parity focus; real-time online-user pager shortcuts remain a possible
@@ -1002,8 +1007,8 @@ social graph:
 
 ## Remaining Major KBS Parity Areas
 
-- Private-mail refinements that are still forum-native: range-delete and
-  cross-post mail-to-board.
+- Private-mail refinements that are still forum-native: cross-post
+  mail-to-board.
 - Board recycle/junk/range-delete workflows for moderator/user-deleted
   articles.
 - Remaining specialized historical/stat-log boards and richer community
@@ -1014,7 +1019,7 @@ social graph:
 
 ## Suggested Next Slices
 
-1. Private-mail range-delete and mail-to-board workflows.
+1. Private-mail mail-to-board workflow.
 2. Board recycle/junk/range-delete workflows.
 3. Remaining specialized historical/stat-log boards and richer community
    statistics.

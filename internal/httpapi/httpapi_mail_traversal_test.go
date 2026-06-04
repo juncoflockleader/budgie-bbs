@@ -143,3 +143,87 @@ func TestHTTPForwardPrivateMail(t *testing.T) {
 		t.Fatalf("expected hidden mail forward to be not found, got %d error=%+v", status, hidden.Error)
 	}
 }
+
+func TestHTTPDeletePrivateMailRange(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+	registerUser(t, handler, "carol")
+
+	first := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail", bobToken, map[string]any{
+		"to":      []string{"alice"},
+		"subject": "Range one",
+		"body":    "first",
+	}, &first); status != http.StatusCreated {
+		t.Fatalf("send first mail status: %d error=%+v", status, first.Error)
+	}
+	second := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail", bobToken, map[string]any{
+		"to":      []string{"alice"},
+		"subject": "Range two",
+		"body":    "second",
+	}, &second); status != http.StatusCreated {
+		t.Fatalf("send second mail status: %d error=%+v", status, second.Error)
+	}
+	third := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail", bobToken, map[string]any{
+		"to":      []string{"alice"},
+		"subject": "Range three",
+		"body":    "third",
+	}, &third); status != http.StatusCreated {
+		t.Fatalf("send third mail status: %d error=%+v", status, third.Error)
+	}
+	carolOnly := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail", bobToken, map[string]any{
+		"to":      []string{"carol"},
+		"subject": "Hidden from alice",
+		"body":    "private",
+	}, &carolOnly); status != http.StatusCreated {
+		t.Fatalf("send carol-only mail status: %d error=%+v", status, carolOnly.Error)
+	}
+
+	rangeAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail/range-delete", aliceToken, map[string]any{
+		"mail": []string{first.Result.ID, second.Result.ID},
+	}, &rangeAck); status != http.StatusCreated {
+		t.Fatalf("range delete status: %d error=%+v", status, rangeAck.Error)
+	}
+	if rangeAck.Result == nil || rangeAck.Result.ID != "2" {
+		t.Fatalf("expected range delete ack count, got %+v", rangeAck.Result)
+	}
+
+	inbox := mailListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail", aliceToken, nil, &inbox); status != http.StatusOK {
+		t.Fatalf("list alice inbox status: %d", status)
+	}
+	if len(inbox.Mail) != 1 || inbox.Mail[0].ID != third.Result.ID {
+		t.Fatalf("expected only third mail in inbox, got %+v", inbox.Mail)
+	}
+	trash := mailListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail?mailbox=trash", aliceToken, nil, &trash); status != http.StatusOK {
+		t.Fatalf("list alice trash status: %d", status)
+	}
+	foundTrash := map[string]bool{}
+	for _, item := range trash.Mail {
+		foundTrash[item.ID] = true
+	}
+	if len(trash.Mail) != 2 || !foundTrash[first.Result.ID] || !foundTrash[second.Result.ID] {
+		t.Fatalf("expected first and second mail in trash, got %+v", trash.Mail)
+	}
+
+	hidden := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail/range-delete", aliceToken, map[string]any{
+		"mail": []string{third.Result.ID, carolOnly.Result.ID},
+	}, &hidden); status != http.StatusNotFound {
+		t.Fatalf("expected range delete with hidden mail to fail, got %d error=%+v", status, hidden.Error)
+	}
+	inbox = mailListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail", aliceToken, nil, &inbox); status != http.StatusOK {
+		t.Fatalf("list alice inbox after failed range status: %d", status)
+	}
+	if len(inbox.Mail) != 1 || inbox.Mail[0].ID != third.Result.ID {
+		t.Fatalf("expected failed range delete to roll back third mail, got %+v", inbox.Mail)
+	}
+}

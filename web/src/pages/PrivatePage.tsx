@@ -23,6 +23,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   const [mailbox, setMailbox] = useState('inbox')
   const [mail, setMail] = useState<MailItem[]>([])
   const [selectedMail, setSelectedMail] = useState<MailItem | null>(null)
+  const [selectedMailIDs, setSelectedMailIDs] = useState<string[]>([])
   const [relatedMail, setRelatedMail] = useState<MailItem[]>([])
   const [relatedTitle, setRelatedTitle] = useState('')
   const [relatedLoading, setRelatedLoading] = useState(false)
@@ -59,7 +60,9 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
       setError(res.error.message)
       return
     }
-    setMail(res.data?.mail ?? [])
+    const rows = res.data?.mail ?? []
+    setMail(rows)
+    setSelectedMailIDs(prev => prev.filter(id => rows.some(item => item.id === id)))
     setMailUnread(res.data?.unreadCount ?? 0)
   }
 
@@ -238,6 +241,27 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     await Promise.all([loadMail(mailbox), loadMailUsage()])
   }
 
+  function toggleMailSelection(item: MailItem) {
+    setSelectedMailIDs(prev => prev.includes(item.id) ? prev.filter(id => id !== item.id) : [...prev, item.id])
+  }
+
+  async function trashSelectedMail() {
+    if (selectedMailIDs.length === 0) return
+    const ids = selectedMailIDs
+    const res = await api.deleteMailRange(token, ids)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    setSelectedMailIDs([])
+    if (selectedMail && ids.includes(selectedMail.id)) {
+      setSelectedMail(null)
+      setRelatedMail([])
+      setRelatedTitle('')
+    }
+    await Promise.all([loadMail(mailbox), loadMailUsage()])
+  }
+
   async function toggleKept(item: MailItem) {
     const res = await api.updateMail(token, item.id, { kept: !item.kept })
     if (res.error) {
@@ -377,25 +401,36 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                 <button
                   key={box}
                   className={`mailbox-tab${mailbox === box ? ' mailbox-tab--active' : ''}`}
-                  onClick={() => setMailbox(box)}
+                  onClick={() => { setMailbox(box); setSelectedMailIDs([]) }}
                 >
                   {box}
                 </button>
               ))}
             </div>
+            {selectedMailIDs.length > 0 && (
+              <div className="mail-range-toolbar">
+                <span>{selectedMailIDs.length} selected</span>
+                <button className="link-btn danger" onClick={trashSelectedMail}>Trash selected</button>
+                <button className="link-btn" onClick={() => setSelectedMailIDs([])}>Clear</button>
+              </div>
+            )}
             <div className="private-list">
               {mail.length === 0 ? (
                 <p className="muted empty-state">No mail.</p>
               ) : mail.map(item => (
-                <button
-                  key={`${item.id}-${item.role}`}
-                  className={`private-list-row${selectedMail?.id === item.id ? ' private-list-row--active' : ''}${item.read ? '' : ' private-list-row--unread'}`}
-                  onClick={() => openMail(item)}
-                >
-                  <span className="private-row-title">{item.subject}</span>
-                  <span className="private-row-meta">{item.fromName} / {item.toNames.join(', ')}</span>
-                  <span className="private-row-excerpt">{item.excerpt}</span>
-                </button>
+                <div className="mail-range-row" key={`${item.id}-${item.role}`}>
+                  <label className="mail-range-check" title="Select for range trash">
+                    <input type="checkbox" checked={selectedMailIDs.includes(item.id)} onChange={() => toggleMailSelection(item)} />
+                  </label>
+                  <button
+                    className={`private-list-row${selectedMail?.id === item.id ? ' private-list-row--active' : ''}${item.read ? '' : ' private-list-row--unread'}`}
+                    onClick={() => openMail(item)}
+                  >
+                    <span className="private-row-title">{item.subject}</span>
+                    <span className="private-row-meta">{item.fromName} / {item.toNames.join(', ')}</span>
+                    <span className="private-row-excerpt">{item.excerpt}</span>
+                  </button>
+                </div>
               ))}
             </div>
             <section className="private-subsection">

@@ -903,6 +903,15 @@ export async function deleteMail(token: string, mail: string): Promise<ApiRespon
   return json<AckResult>(res)
 }
 
+export async function deleteMailRange(token: string, mail: string[]): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/mail/range-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ mail }),
+  })
+  return json<AckResult>(res)
+}
+
 export async function listDirectConversations(
   token: string,
 ): Promise<ApiResponse<{ conversations: DirectMessageConversation[]; unreadCount: number }>> {
@@ -1774,7 +1783,7 @@ export type CommandName =
   | 'setBoardMember' | 'applyBoardMembership' | 'reviewBoardMembership' | 'leaveBoardMembership'
   | 'curatePost' | 'curateThread' | 'removeDigestEntry' | 'updateDigestEntry' | 'setDigestEntryBody' | 'createDigestDirectory'
   | 'moveDigestPath' | 'copyDigestPath' | 'deleteDigestPath' | 'sendDigestEntryMail'
-  | 'mailPostAuthor' | 'sendMail' | 'forwardMail' | 'setMailGroup' | 'deleteMailGroup' | 'attachMail' | 'updateMail' | 'deleteMail'
+  | 'mailPostAuthor' | 'sendMail' | 'forwardMail' | 'setMailGroup' | 'deleteMailGroup' | 'attachMail' | 'updateMail' | 'deleteMail' | 'deleteMailRange'
   | 'sendDirectMessage' | 'setDirectMessageSettings' | 'markDirectMessageRead' | 'deleteDirectMessage'
   | 'setUserRelationship' | 'setLoginWatch'
   | 'setBoardFavorite' | 'createFavoriteFolder' | 'updateFavoriteFolder'

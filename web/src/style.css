@@ -1266,10 +1266,34 @@ button.ranking-row:hover {
   gap: 0.35rem;
   flex-wrap: wrap;
 }
+.mail-range-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  color: var(--c-muted);
+  font-size: 0.86em;
+}
 .private-list {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+.mail-range-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem;
+  align-items: stretch;
+}
+.mail-range-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
 }
 .private-list-row {
   display: flex;

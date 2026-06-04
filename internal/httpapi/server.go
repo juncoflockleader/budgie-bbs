@@ -212,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/digest/{entry}/body", auth(http.HandlerFunc(s.handleResetDigestEntryBody)))
 	mux.Handle("DELETE /api/v1/digest/{entry}", auth(http.HandlerFunc(s.handleRemoveDigestEntry)))
 	mux.Handle("POST /api/v1/mail", auth(http.HandlerFunc(s.handleSendMail)))
+	mux.Handle("POST /api/v1/mail/range-delete", auth(http.HandlerFunc(s.handleDeleteMailRange)))
 	mux.Handle("POST /api/v1/mail/groups", auth(http.HandlerFunc(s.handleSetMailGroup)))
 	mux.Handle("PUT /api/v1/mail/groups/{group}", auth(http.HandlerFunc(s.handleSetMailGroup)))
 	mux.Handle("PATCH /api/v1/mail/groups/{group}", auth(http.HandlerFunc(s.handleSetMailGroup)))

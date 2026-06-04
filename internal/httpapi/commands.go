@@ -915,6 +915,22 @@ func (s *Server) handleDeleteMail(w http.ResponseWriter, r *http.Request) {
 	writeAck(w, cid, reply)
 }
 
+// POST /api/v1/mail/range-delete
+func (s *Server) handleDeleteMailRange(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+
+	var p proto.DeleteMailRangePayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdDeleteMailRange, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 // POST /api/v1/messages
 func (s *Server) handleSendDirectMessage(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
