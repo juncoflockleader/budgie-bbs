@@ -507,6 +507,21 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.insertPollTemplateWithExpires("1h")
 			return nil
+		case "ctrl+d":
+			if !m.canCreatePoll {
+				if m.trustLoaded {
+					m.statusMsg = "polls require trust level 2+"
+				} else {
+					m.statusMsg = "checking poll permission…"
+				}
+				return nil
+			}
+			if m.composingNewThread && m.titleInput.Focused() {
+				m.statusMsg = "focus body first"
+				return nil
+			}
+			m.insertPollTemplateWithExpires("1d")
+			return nil
 		case "ctrl+s":
 			if m.composingNewThread {
 				// If title field still focused, move to body first.
@@ -1241,12 +1256,12 @@ func (m *model) insertPollTemplateWithExpires(expiresAt string) {
 func composeHelpLine(canCreatePoll, trustLoaded bool) string {
 	base := "Ctrl+S=submit  Esc=cancel"
 	if canCreatePoll {
-		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll"
+		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll"
 	}
 	if trustLoaded {
-		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll (trust level 2+ required)"
+		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll (trust level 2+ required)"
 	}
-	return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll (checking permission…)"
+	return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll (checking permission…)"
 }
 
 func (m model) fetchPollPermission() tea.Cmd {
