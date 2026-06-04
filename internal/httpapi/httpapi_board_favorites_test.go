@@ -2016,6 +2016,8 @@ func TestHTTPDelegatedBoardMemberPermissions(t *testing.T) {
 	adminToken := registerUser(t, handler, "admin")
 	aliceToken := registerUser(t, handler, "alice")
 	bobToken := registerUser(t, handler, "bob")
+	carolToken := registerUser(t, handler, "carol")
+	_ = registerUser(t, handler, "dave")
 
 	ack := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
@@ -2074,6 +2076,36 @@ func TestHTTPDelegatedBoardMemberPermissions(t *testing.T) {
 		"canSetBoardSettings": true,
 	}, &ack); status != http.StatusForbidden {
 		t.Fatalf("expected delegated manager cannot grant permissions, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/club/members/bob", aliceToken, map[string]any{
+		"title":    "resident",
+		"position": 1,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("alice manage ordinary member status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/club/member-applications", carolToken, nil, &apply); status != http.StatusCreated {
+		t.Fatalf("carol apply status: %d error=%+v", status, apply.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/board-member-applications/"+apply.Result.ID+"/review", aliceToken, map[string]string{
+		"status": "blacklisted",
+	}, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected delegated manager cannot blacklist application, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/board-member-applications/"+apply.Result.ID+"/review", aliceToken, map[string]string{
+		"status": "rejected",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("alice reject application status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/club/members/dave", adminToken, map[string]string{
+		"title": "operator",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("add dave member status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/club/moderators/dave", adminToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("appoint dave board moderator status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/boards/club/members/dave", aliceToken, nil, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected delegated manager cannot remove moderator member, got %d error=%+v", status, ack.Error)
 	}
 
 	thread := ackResponse{}
@@ -2153,6 +2185,9 @@ func TestHTTPDelegatedBoardMemberPermissions(t *testing.T) {
 		"title": "club notice",
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("bob announcement curate status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodDelete, "/api/v1/boards/club/members/bob", aliceToken, nil, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected delegated manager cannot remove delegated member, got %d error=%+v", status, ack.Error)
 	}
 }
 

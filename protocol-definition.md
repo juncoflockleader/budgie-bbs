@@ -596,7 +596,9 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   redact/restore, `canModerateThreads` delegates lock/move and article no-reply
   flags, `canManagePolls` delegates poll result publishing, and
   `canSetBoardSettings` delegates board policy and member-requirement edits.
-  Delegated member managers cannot grant or revoke those delegation flags.
+  Delegated member managers cannot grant or revoke those delegation flags,
+  manage board moderators, manage members who already hold delegated board
+  permissions, blacklist applications, or review their own application.
 - Board membership requirements expose KBS-style admission knobs. `maxMembers`,
   `minLoginCount`, `minPostCount`, `minTrustLevel`, `minScore`,
   `minBoardPostCount`, `minBoardOriginalPostCount`, `minBoardDigestCount`, and
@@ -605,10 +607,11 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   `"manual"` or `"auto"`; auto mode immediately approves an eligible
   application.
 - Board membership applications are durable projection rows. Users can apply
-  with a note, board moderators or delegated member managers can
-  approve/reject/blacklist pending applications, approval creates the member
-  row, blacklist removes any member row and blocks later self-application, and
-  members can leave themselves. Public-board approvals also lazily create the
+  with a note, board moderators can approve/reject/blacklist pending
+  applications, delegated member managers can approve/reject pending
+  applications, approval creates the member row, blacklist removes any member
+  row and blocks later self-application, and members can leave themselves.
+  Public-board approvals also lazily create the
   `Registry` system board and a deterministic sanitized generated thread/post;
   public-board rejections and blacklists do the same in `reject_registry`.
   Generated bodies include application id, status, board, applicant, and

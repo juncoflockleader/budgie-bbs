@@ -212,15 +212,28 @@ func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Rep
 		return errReply
 	}
 	canModerateBoard := h.actorCanModerateBoard(actor, p.Board)
-	if !canModerateBoard && !h.actorCanManageBoardMembers(actor, p.Board) {
+	canManageMembers := h.actorCanManageBoardMembers(actor, p.Board)
+	if !canModerateBoard && !canManageMembers {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board member manager permission required", false)}
-	}
-	if !canModerateBoard && boardMemberPermissionsChanged(p) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to change member permissions", false)}
 	}
 	userID, _, errReply := h.resolveUserRef(p.User)
 	if errReply.Err != nil {
 		return errReply
+	}
+	if !canModerateBoard {
+		if boardMemberPermissionsChanged(p) {
+			return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to change member permissions", false)}
+		}
+		if h.isBoardModerator(userID, p.Board) {
+			return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to manage board moderators", false)}
+		}
+		privilegedMember, err := h.boardMemberHasDelegatedPermissions(p.Board, userID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if privilegedMember {
+			return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to manage delegated board members", false)}
+		}
 	}
 	title := strings.TrimSpace(p.Title)
 	if len(title) > 80 {
@@ -363,8 +376,15 @@ func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembersh
 	if currentStatus != "pending" {
 		return Reply{Err: errDetail(proto.ErrConflict, "membership application is already reviewed", false)}
 	}
-	if !h.actorCanManageBoardMembers(actor, boardID) {
+	canModerateBoard := h.actorCanModerateBoard(actor, boardID)
+	if !canModerateBoard && !h.actorCanManageBoardMembers(actor, boardID) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board member manager permission required", false)}
+	}
+	if !canModerateBoard && actor.ID == userID {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to review your own application", false)}
+	}
+	if !canModerateBoard && status == "blacklisted" {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to blacklist membership applications", false)}
 	}
 	title := strings.TrimSpace(p.Title)
 	if len(title) > 80 {
@@ -1840,6 +1860,28 @@ func (h *Handler) isBoardMember(userID, boardID string) bool {
 	var exists int
 	err := qQueryRow(h.db, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&exists)
 	return err == nil
+}
+
+func (h *Handler) boardMemberHasDelegatedPermissions(boardID, userID string) (bool, error) {
+	var canManageMembers, canCurate, canModeratePosts, canModerateThreads, canAnnounce, canManagePolls, canSetBoardSettings int
+	err := qQueryRow(h.db,
+		`SELECT can_manage_members, can_curate, can_moderate_posts, can_moderate_threads, can_announce, can_manage_polls, can_set_board_settings
+		   FROM board_members WHERE board_id=? AND user_id=?`,
+		boardID, userID,
+	).Scan(&canManageMembers, &canCurate, &canModeratePosts, &canModerateThreads, &canAnnounce, &canManagePolls, &canSetBoardSettings)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return canManageMembers != 0 ||
+		canCurate != 0 ||
+		canModeratePosts != 0 ||
+		canModerateThreads != 0 ||
+		canAnnounce != 0 ||
+		canManagePolls != 0 ||
+		canSetBoardSettings != 0, nil
 }
 
 func (h *Handler) latestBoardMembershipApplicationStatus(boardID, userID string) (string, error) {

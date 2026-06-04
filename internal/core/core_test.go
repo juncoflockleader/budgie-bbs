@@ -2199,6 +2199,8 @@ func TestDelegatedBoardMemberPermissions(t *testing.T) {
 	admin := registerAndGetUser(t, c, "admin", "pw")
 	alice := registerAndGetUser(t, c, "alice", "pw")
 	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
+	_ = registerAndGetUser(t, c, "dave", "pw")
 
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
 		ID:          "club",
@@ -2244,6 +2246,38 @@ func TestDelegatedBoardMemberPermissions(t *testing.T) {
 		Member:              true,
 		CanCurate:           boolPtr(true),
 		CanSetBoardSettings: boolPtr(true),
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:    "club",
+		User:     "bob",
+		Member:   true,
+		Title:    "resident",
+		Position: intPtr(1),
+	})
+	carolApplication := exec(t, c, carol, proto.CmdApplyBoardMembership, proto.ApplyBoardMembershipPayload{Board: "club"})
+	execExpectErr(t, c, alice, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: carolApplication.ID,
+		Status:      "blacklisted",
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdReviewBoardMembership, proto.ReviewBoardMembershipPayload{
+		Application: carolApplication.ID,
+		Status:      "rejected",
+	})
+	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "club",
+		User:   "dave",
+		Member: true,
+		Title:  "operator",
+	})
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{
+		Board:     "club",
+		User:      "dave",
+		Moderator: true,
+	})
+	execExpectErr(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "club",
+		User:   "dave",
+		Member: false,
 	}, proto.ErrForbidden)
 
 	thread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
@@ -2302,6 +2336,19 @@ func TestDelegatedBoardMemberPermissions(t *testing.T) {
 	exec(t, c, alice, proto.CmdRestorePost, proto.RestorePostPayload{
 		Post: posts[0].ID,
 	})
+	exec(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:  "club",
+		User:   "bob",
+		Member: false,
+	})
+	isMember, err := c.UserIsBoardMember("club", bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isMember {
+		t.Fatal("expected delegated manager to remove ordinary member")
+	}
+
 	exec(t, c, admin, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
 		Board:       "club",
 		User:        "bob",
@@ -2319,18 +2366,11 @@ func TestDelegatedBoardMemberPermissions(t *testing.T) {
 		Title:  "club notice",
 	})
 
-	exec(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+	execExpectErr(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
 		Board:  "club",
 		User:   "bob",
 		Member: false,
-	})
-	isMember, err := c.UserIsBoardMember("club", bob.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if isMember {
-		t.Fatal("expected delegated manager to remove ordinary member")
-	}
+	}, proto.ErrForbidden)
 }
 
 func TestBoardMemberRequirementsAdmission(t *testing.T) {

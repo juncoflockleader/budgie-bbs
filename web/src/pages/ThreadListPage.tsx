@@ -1,6 +1,6 @@
 import { type MouseEvent, useEffect, useState, useCallback } from 'react'
 import * as api from '../api/client'
-import type { Board, BoardInfo, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
+import type { Board, BoardInfo, BoardMember, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
 import type { BudgieEvent, ThreadNewPayload } from '../api/types'
 import { Spinner } from '../components/Spinner'
 import { useStream } from '../hooks/useStream'
@@ -121,6 +121,20 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   const canUseMemberBoard = canManageBoard || currentUserIsMember
   const canCreateThread = (!settings?.readOnly || canManageBoard) && (!settings?.memberPostMode || canUseMemberBoard)
   const canOpenBoardSettings = canEditBoardSettings || canManageBoardMembers
+
+  function memberHasDelegatedPermissions(member: BoardMember) {
+    return member.canManageMembers ||
+      member.canCurate ||
+      member.canModeratePosts ||
+      member.canModerateThreads ||
+      member.canAnnounce ||
+      member.canManagePolls ||
+      member.canSetBoardSettings
+  }
+
+  function memberRequiresBoardManager(member: BoardMember) {
+    return memberHasDelegatedPermissions(member) || Boolean(boardInfo?.moderators.some(moderator => moderator.userId === member.userId))
+  }
 
   function updateThread(threadId: string, patch: Partial<ThreadSummary>) {
     setThreads(current => current.map(thread => (thread.id === threadId ? { ...thread, ...patch } : thread)))
@@ -601,7 +615,14 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                     </button>
                   </>
                 )}
-                <button className="link-btn" onClick={() => removeMember(member.name)}>×</button>
+                <button
+                  className="link-btn"
+                  disabled={!canManageBoard && memberRequiresBoardManager(member)}
+                  title={!canManageBoard && memberRequiresBoardManager(member) ? 'Board moderator required' : undefined}
+                  onClick={() => removeMember(member.name)}
+                >
+                  ×
+                </button>
               </span>
             ))}
             <input
@@ -658,7 +679,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                   <span>{app.name}{app.note ? ` · ${app.note}` : ''}</span>
                   <button className="link-btn" onClick={() => reviewMembershipApplication(app, 'approved')}>Approve</button>
                   <button className="link-btn" onClick={() => reviewMembershipApplication(app, 'rejected')}>Reject</button>
-                  <button className="link-btn danger" onClick={() => reviewMembershipApplication(app, 'blacklisted')}>Blacklist</button>
+                  {canManageBoard && <button className="link-btn danger" onClick={() => reviewMembershipApplication(app, 'blacklisted')}>Blacklist</button>}
                 </span>
               ))}
             </div>

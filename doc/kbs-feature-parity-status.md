@@ -323,6 +323,11 @@ enforced version:
   - Publish public poll-result records with `canManagePolls`.
   - Edit board policy flags and member admission requirements with
     `canSetBoardSettings`.
+- KBS-style member-manager edge permissions are enforced: delegated member
+  managers can approve/reject applications and manage ordinary member rows, but
+  cannot grant/revoke delegated operator flags, blacklist applications, review
+  their own application, manage board moderators, or manage members who already
+  hold delegated board permissions.
 - Web thread lists expose board policy badges, settings toggles, moderator
   controls, member controls, member-manager controls, and delegated permission
   badges/toggles.
@@ -333,8 +338,8 @@ enforced version:
   for stored attachments.
 - Web board lists expose a membership application action for member-mode boards.
 - Web board settings expose membership requirements, pending applications with
-  approve/reject/blacklist actions, current-member leave flows, and delegated
-  member-permission toggles for full moderators.
+  approve/reject actions for delegated managers, blacklist actions and delegated
+  member-permission toggles for full moderators, and current-member leave flows.
 
 External SMTP/Internet-email bridges and legacy transfer protocols such as
 ZModem are intentionally outside the current BBS/forum parity focus.
@@ -779,13 +784,11 @@ social graph:
 
 ## Remaining Major KBS Parity Areas
 
-- KBS member-manager edge permissions not yet modeled as Budgie forum
-  workflows.
 - Remaining special system boards, historical/stat-log boards, and richer
   community statistics.
 - Optional social/services layer: games and campus utilities.
 
 ## Suggested Next Slices
 
-1. KBS member-manager edge permissions not yet modeled in Budgie.
+1. Remaining historical/stat-log boards and richer community statistics.
 2. Remaining BBS social utilities and games.
