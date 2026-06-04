@@ -113,6 +113,10 @@ func registerUser(t *testing.T, handler http.Handler, name string) string {
 }
 
 func doJSONRequest(t *testing.T, handler http.Handler, method, path, token string, body any, out any) int {
+	return doJSONRequestWithHeaders(t, handler, method, path, token, body, out, nil)
+}
+
+func doJSONRequestWithHeaders(t *testing.T, handler http.Handler, method, path, token string, body any, out any, headers map[string]string) int {
 	t.Helper()
 
 	var reader io.Reader
@@ -136,6 +140,11 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path, token strin
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	if headers != nil {
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+	}
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -155,6 +164,16 @@ func doJSONRequest(t *testing.T, handler http.Handler, method, path, token strin
 		}
 	}
 	return res.StatusCode
+}
+
+func countThreadPosts(t *testing.T, handler http.Handler, token, threadID string) int {
+	t.Helper()
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	return len(posts.Posts)
 }
 
 func TestHTTPPollLifecycle(t *testing.T) {
@@ -644,6 +663,59 @@ func TestHTTPCommandEndpointInvalidPayload(t *testing.T) {
 	}, &ack); status != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for non-object command payload, got %d", status)
 	}
+}
+
+func TestHTTPCommandEndpointPollCreateIsIdempotent(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	cmdID := "poll-create-idempotent-1"
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Retry-safe poll",
+			"body":  "[poll]\nYes?\nA\nB\n[/poll]",
+		},
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first command create failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+	threadID := first.Result.ID
+	if countThreadPosts(t, handler, adminToken, threadID) != 1 {
+		t.Fatalf("expected 1 post after first command-created thread")
+	}
+
+	second := ackResponse{}
+	secondStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &second, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if secondStatus != http.StatusCreated {
+		t.Fatalf("expected idempotent replay status 201, got %d", secondStatus)
+	}
+	if second.Result == nil || second.Result.ID != first.Result.ID {
+		t.Fatalf("expected same thread id from idempotent replay, got %s and %s", first.Result.ID, valueOrEmpty(second.Result))
+	}
+	if !second.OK {
+		t.Fatalf("expected replayed command to be ok: %+v", second.Error)
+	}
+
+	if countThreadPosts(t, handler, adminToken, threadID) != 1 {
+		t.Fatalf("expected no duplicate posts from idempotent replay")
+	}
+}
+
+func valueOrEmpty(r *ackResult) string {
+	if r == nil {
+		return ""
+	}
+	return r.ID
 }
 
 func TestHTTPCommandEndpointReplyPollLifecycle(t *testing.T) {
