@@ -408,6 +408,16 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
 CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
     ON community_stat_history(snapshot_at DESC, day DESC);
 
+CREATE TABLE IF NOT EXISTS login_hourly_stats (
+    day         TEXT    NOT NULL,
+    hour        INTEGER NOT NULL CHECK(hour >= 0 AND hour <= 23),
+    login_count INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, hour)
+);
+CREATE INDEX IF NOT EXISTS idx_login_hourly_stats_updated
+    ON login_hourly_stats(updated_at DESC, day DESC, hour);
+
 -- Per-board read markers power the BBS "unread boards" workflow. previous_seq
 -- supports restoring the last marker after an accidental mark-read.
 CREATE TABLE IF NOT EXISTS board_read_markers (

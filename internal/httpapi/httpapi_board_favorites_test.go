@@ -1638,6 +1638,48 @@ func TestHTTPStatsPeriodHistorySystemPosts(t *testing.T) {
 	}
 }
 
+func TestHTTPStatsLoginHistoryHourlyHistogramSystemPost(t *testing.T) {
+	c, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	insertHourly := func(day string, hour, loginCount int) {
+		t.Helper()
+		at, err := time.Parse("2006-01-02", day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.DB.Exec(`INSERT INTO login_hourly_stats (day, hour, login_count, updated_at)
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(day, hour)
+			DO UPDATE SET login_count=excluded.login_count, updated_at=excluded.updated_at`,
+			day, hour, loginCount, at.Add(time.Duration(hour)*time.Hour).UnixMilli(),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertHourly("2026-08-15", 5, 42)
+	insertHourly("2026-08-15", 23, 17)
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
+		"date": "2026-08-15",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("publish stats snapshot status: %d error=%+v", status, ack.Error)
+	}
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_countlogins_20260815/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list login-history posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected one generated login-history post, got %+v", posts.Posts)
+	}
+	for _, want := range []string{"Hourly login histogram", "Day login samples: 59", "Peak hour: 05:00 UTC (42 logins)", "| 05:00 | 42 |", "| 23:00 | 17 |"} {
+		if !strings.Contains(posts.Posts[0].Body, want) {
+			t.Fatalf("expected generated login-history post to contain %q, got:\n%s", want, posts.Posts[0].Body)
+		}
+	}
+}
+
 func TestHTTPPublishSystemNoticeCreatesPublicNoticeBoard(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 

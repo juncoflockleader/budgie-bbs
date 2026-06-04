@@ -7,6 +7,7 @@ type BoardSummary = projections.BoardSummary
 type BoardSummaryOptions = projections.BoardSummaryOptions
 type CommunityStats = projections.CommunityStats
 type CommunityStatHistory = projections.CommunityStatHistory
+type LoginHourlyStat = projections.LoginHourlyStat
 type BoardRanking = projections.BoardRanking
 type ThreadRanking = projections.ThreadRanking
 type ReplyRanking = projections.ReplyRanking

@@ -261,6 +261,41 @@ func ListCommunityStatHistoryRange(db *sql.DB, startDay, endDay string) ([]Commu
 	return out, nil
 }
 
+func ListLoginHourlyStats(db *sql.DB, day string) ([]LoginHourlyStat, error) {
+	out := make([]LoginHourlyStat, 24)
+	for i := range out {
+		out[i] = LoginHourlyStat{Day: day, Hour: i}
+	}
+	rows, err := QQuery(db,
+		`SELECT hour, login_count, updated_at
+		   FROM login_hourly_stats
+		  WHERE day=?
+		  ORDER BY hour ASC`,
+		day,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hour int
+		var count int
+		var updatedAt int64
+		if err := rows.Scan(&hour, &count, &updatedAt); err != nil {
+			return nil, err
+		}
+		if hour < 0 || hour >= len(out) {
+			continue
+		}
+		out[hour].LoginCount = count
+		out[hour].UpdatedAt = updatedAt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (h *CommunityStatHistory) applyDeltaFrom(previous CommunityStatHistory) {
 	h.DeltaUsers = h.TotalUsers - previous.TotalUsers
 	h.DeltaBoards = h.TotalBoards - previous.TotalBoards

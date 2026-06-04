@@ -2096,6 +2096,60 @@ func TestStatsPeriodHistorySystemPosts(t *testing.T) {
 	}
 }
 
+func TestRecordLoginTracksHourlyStats(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	for _, ts := range []time.Time{
+		time.Date(2026, time.August, 15, 5, 12, 0, 0, time.UTC),
+		time.Date(2026, time.August, 15, 5, 45, 0, 0, time.UTC),
+		time.Date(2026, time.August, 15, 23, 1, 0, 0, time.UTC),
+	} {
+		if err := projections.RecordLoginAt(c.DB, bob.ID, ts.UnixMilli()); err != nil {
+			t.Fatalf("record login at %s: %v", ts, err)
+		}
+	}
+
+	stats, err := c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalLogins != 3 {
+		t.Fatalf("expected cumulative logins to track hourly samples, got %+v", stats)
+	}
+	hourly, err := projections.ListLoginHourlyStats(c.DB, "2026-08-15")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hourly) != 24 || hourly[5].LoginCount != 2 || hourly[23].LoginCount != 1 || hourly[4].LoginCount != 0 {
+		t.Fatalf("expected 24 hourly login buckets with recorded samples, got %+v", hourly)
+	}
+}
+
+func TestStatsLoginHistoryHourlyHistogramSystemPost(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	insertLoginHourlyStat(t, c.DB, "2026-08-15", 5, 42)
+	insertLoginHourlyStat(t, c.DB, "2026-08-15", 23, 17)
+
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-08-15"})
+	posts, err := c.ListPosts("bbslists_countlogins_20260815", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected one generated login-history post, got %+v", posts)
+	}
+	for _, want := range []string{"Hourly login histogram", "Day login samples: 59", "Peak hour: 05:00 UTC (42 logins)", "| 05:00 | 42 |", "| 23:00 | 17 |"} {
+		if !strings.Contains(posts[0].Body, want) {
+			t.Fatalf("expected generated login-history post to contain %q, got:\n%s", want, posts[0].Body)
+		}
+	}
+}
+
 func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
@@ -2220,6 +2274,22 @@ func insertCommunityStatHistory(t *testing.T, db *sql.DB, day string, users, boa
 		max_online_guests_at, head_seq
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		day, at.UnixMilli(), users, boards, threads, posts, reactions, 0, 0, logins, onlineSeconds, 0, 0, users, at.UnixMilli(), 0, int64(0), posts,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertLoginHourlyStat(t *testing.T, db *sql.DB, day string, hour, loginCount int) {
+	t.Helper()
+	at, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO login_hourly_stats (day, hour, login_count, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(day, hour)
+		DO UPDATE SET login_count=excluded.login_count, updated_at=excluded.updated_at`,
+		day, hour, loginCount, at.Add(time.Duration(hour)*time.Hour).UnixMilli(),
 	); err != nil {
 		t.Fatal(err)
 	}

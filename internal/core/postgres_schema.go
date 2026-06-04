@@ -544,6 +544,16 @@ CREATE TABLE IF NOT EXISTS community_stat_history (
 CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
     ON community_stat_history(snapshot_at DESC, day DESC);
 
+CREATE TABLE IF NOT EXISTS login_hourly_stats (
+    day         TEXT NOT NULL,
+    hour        INTEGER NOT NULL CHECK(hour >= 0 AND hour <= 23),
+    login_count INTEGER NOT NULL DEFAULT 0,
+    updated_at  BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, hour)
+);
+CREATE INDEX IF NOT EXISTS idx_login_hourly_stats_updated
+    ON login_hourly_stats(updated_at DESC, day DESC, hour);
+
 CREATE TABLE IF NOT EXISTS board_read_markers (
     user_id      TEXT   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     board_id     TEXT   NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
@@ -1705,6 +1715,25 @@ ALTER TABLE board_settings
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (37, 'postgres-board-settings-stats-excluded', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 38,
+			Name:    "postgres-login-hourly-stats",
+			SQL: `
+CREATE TABLE IF NOT EXISTS login_hourly_stats (
+    day         TEXT NOT NULL,
+    hour        INTEGER NOT NULL CHECK(hour >= 0 AND hour <= 23),
+    login_count INTEGER NOT NULL DEFAULT 0,
+    updated_at  BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, hour)
+);
+CREATE INDEX IF NOT EXISTS idx_login_hourly_stats_updated
+    ON login_hourly_stats(updated_at DESC, day DESC, hour);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (38, 'postgres-login-hourly-stats', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

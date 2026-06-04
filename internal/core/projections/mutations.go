@@ -2085,14 +2085,42 @@ func EnsureActivity(db *sql.DB, userID string) error {
 }
 
 func RecordLogin(db *sql.DB, userID string) error {
-	_, err := QExec(db,
+	return RecordLoginAt(db, userID, NowMS())
+}
+
+func RecordLoginAt(db *sql.DB, userID string, ts int64) error {
+	if ts <= 0 {
+		ts = NowMS()
+	}
+	day := time.UnixMilli(ts).UTC()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := QExec(tx,
 		`INSERT INTO user_activity (user_id, login_count)
 		 VALUES (?, 1)
 		 ON CONFLICT(user_id)
 		 DO UPDATE SET login_count=login_count + 1`,
 		userID,
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	if _, err := QExec(tx,
+		`INSERT INTO login_hourly_stats (day, hour, login_count, updated_at)
+		 VALUES (?, ?, 1, ?)
+		 ON CONFLICT(day, hour)
+		 DO UPDATE SET
+		    login_count=login_hourly_stats.login_count + excluded.login_count,
+		    updated_at=excluded.updated_at`,
+		day.Format("2006-01-02"),
+		day.Hour(),
+		ts,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func RecordOnlineSeconds(db *sql.DB, userID string, seconds int64) error {

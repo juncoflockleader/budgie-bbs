@@ -1244,7 +1244,11 @@ func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, date
 	if err != nil {
 		return "", 0, err
 	}
-	body := formatStatsLoginHistoryBody(dateLabel, stats, history)
+	hourly, err := projections.ListLoginHourlyStats(h.db, dateLabel)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsLoginHistoryBody(dateLabel, stats, history, hourly)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Login count history "+dateLabel, body, ts)
 }
 
@@ -1586,7 +1590,7 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 	return b.String()
 }
 
-func formatStatsLoginHistoryBody(dateLabel string, stats *projections.CommunityStats, history []projections.CommunityStatHistory) string {
+func formatStatsLoginHistoryBody(dateLabel string, stats *projections.CommunityStats, history []projections.CommunityStatHistory, hourly []projections.LoginHourlyStat) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Login count history %s\n\n", dateLabel)
 	fmt.Fprintf(&b, "- Total logins: %d\n", stats.TotalLogins)
@@ -1620,7 +1624,45 @@ func formatStatsLoginHistoryBody(dateLabel string, stats *projections.CommunityS
 			formatStatsDuration(day.TotalOnlineSeconds),
 			formatStatsDurationDelta(day.DeltaOnlineSeconds))
 	}
+	b.WriteString("\n## Hourly login histogram\n")
+	peakHour, peakCount, total := statsLoginHourlySummary(hourly)
+	if total == 0 {
+		b.WriteString("- No hourly login samples for this day yet.\n")
+		return b.String()
+	}
+	fmt.Fprintf(&b, "- Day login samples: %d\n", total)
+	fmt.Fprintf(&b, "- Peak hour: %02d:00 UTC (%s)\n\n", peakHour, formatStatsCount(peakCount, "login", "logins"))
+	b.WriteString("| Hour | Logins | Bar |\n")
+	b.WriteString("| --- | ---: | --- |\n")
+	for _, hour := range hourly {
+		fmt.Fprintf(&b, "| %02d:00 | %d | %s |\n", hour.Hour, hour.LoginCount, formatStatsHistogramBar(hour.LoginCount, peakCount))
+	}
 	return b.String()
+}
+
+func statsLoginHourlySummary(hourly []projections.LoginHourlyStat) (peakHour, peakCount, total int) {
+	for _, hour := range hourly {
+		total += hour.LoginCount
+		if hour.LoginCount > peakCount {
+			peakHour = hour.Hour
+			peakCount = hour.LoginCount
+		}
+	}
+	return peakHour, peakCount, total
+}
+
+func formatStatsHistogramBar(count, peak int) string {
+	if count <= 0 || peak <= 0 {
+		return ""
+	}
+	width := (count * 20) / peak
+	if (count*20)%peak != 0 {
+		width++
+	}
+	if width < 1 {
+		width = 1
+	}
+	return strings.Repeat("#", width)
 }
 
 func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, history []projections.CommunityStatHistory) string {

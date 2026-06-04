@@ -105,6 +105,7 @@ func MigrateSQLiteToPostgres(ctx context.Context, sqlitePath, pgDSN string) erro
 		{src: "digest_directories", dst: "digest_directories", cols: []string{"id", "board_id", "kind", "path", "created_by", "created_at", "updated_at"}},
 		{src: "user_activity", dst: "user_activity", cols: []string{"user_id", "login_count", "posts_created", "days_visited", "last_visit_day", "reactions_recv", "total_online_seconds", "trust_level"}},
 		{src: "community_stat_history", dst: "community_stat_history", cols: []string{"day", "snapshot_at", "total_users", "total_boards", "total_threads", "total_posts", "total_reactions", "total_mail", "total_direct_messages", "total_logins", "total_online_seconds", "online_users", "online_guests", "max_online_users", "max_online_at", "max_online_guests", "max_online_guests_at", "head_seq"}},
+		{src: "login_hourly_stats", dst: "login_hourly_stats", cols: []string{"day", "hour", "login_count", "updated_at"}},
 		{src: "moderation_reviews", dst: "moderation_reviews", cols: []string{"id", "kind", "status", "target_id", "target_kind", "reporter", "reason", "resolution", "actor", "created_at", "updated_at"}},
 		{src: "outbox_jobs", dst: "outbox_jobs", cols: []string{"id", "kind", "payload", "status", "attempts", "next_run_at", "last_error", "created_at", "updated_at"}},
 		{src: "relay_deliveries", dst: "relay_deliveries", cols: []string{"id", "board_id", "thread_id", "post_id", "author_id", "author_name", "title", "body", "status", "last_error", "created_at", "updated_at", "seq"}},

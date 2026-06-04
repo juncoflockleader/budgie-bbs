@@ -103,6 +103,13 @@ type CommunityStatHistory struct {
 	DeltaGuests         int    `json:"deltaGuests"`
 }
 
+type LoginHourlyStat struct {
+	Day        string `json:"day"`
+	Hour       int    `json:"hour"`
+	LoginCount int    `json:"loginCount"`
+	UpdatedAt  int64  `json:"updatedAt"`
+}
+
 type ContentFilter struct {
 	ID        string `json:"id"`
 	Pattern   string `json:"pattern"`

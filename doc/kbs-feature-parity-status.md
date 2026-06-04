@@ -108,6 +108,8 @@ ranking surface:
   the current UTC day has deterministic `BBSLists` snapshot, login-count
   history, board-activity history, hot-topic history, and completed
   week/month/year period-summary threads.
+- Login recording maintains UTC day/hour login buckets for KBS `static.c` /
+  `countlogins`-style hourly login distribution charts.
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters, max-online users/time, and
   day-over-day deltas for user, board, thread, post, reaction, mail, direct
@@ -132,7 +134,8 @@ ranking surface:
   public-safe board, thread, latest-reply, user, blessing, and archive rankings.
 - Stat snapshots also create deterministic daily KBS `countlogins`-style
   `BBSLists` login-count history threads showing total logins, user totals,
-  online users, anonymous guests, online time, and recent daily deltas.
+  online users, anonymous guests, online time, recent daily deltas, and a
+  24-hour login histogram for the snapshot date.
 - Stat snapshots also create deterministic daily KBS-style `BBSLists`
   board-activity history threads showing total board/thread/post counts, top
   public board rankings, last public board activity times, and recent
@@ -855,8 +858,9 @@ social graph:
   distinct-participant hot-topic scoring, top-poster rankings, latest-reply
   rankings, blessing rankings/rituals, archive-path rankings, automatic
   `BBSLists` generated stat snapshots and login-count, board-activity, and
-  hot-topic history posts plus completed week/month/year period summaries, and
-  a web `Rankings` surface with selectable 30-day history charts.
+  hot-topic history posts, 24-hour login histograms, plus completed
+  week/month/year period summaries, and a web `Rankings` surface with
+  selectable 30-day history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

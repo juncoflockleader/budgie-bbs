@@ -155,6 +155,18 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot ON community_stat_history(snapshot_at DESC, day DESC)`); err != nil {
 		return fmt.Errorf("ensure community stat history index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS login_hourly_stats (
+		    day         TEXT    NOT NULL,
+		    hour        INTEGER NOT NULL CHECK(hour >= 0 AND hour <= 23),
+		    login_count INTEGER NOT NULL DEFAULT 0,
+		    updated_at  INTEGER NOT NULL DEFAULT 0,
+		    PRIMARY KEY (day, hour)
+		)`); err != nil {
+		return fmt.Errorf("ensure login hourly stats table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_login_hourly_stats_updated ON login_hourly_stats(updated_at DESC, day DESC, hour)`); err != nil {
+		return fmt.Errorf("ensure login hourly stats index: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS content_filters (
 		    id         TEXT PRIMARY KEY,
 		    pattern    TEXT NOT NULL DEFAULT '',
