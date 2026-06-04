@@ -1335,14 +1335,15 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads status: %d", status)
 	}
-	if len(systemThreads.Threads) != 4 {
-		t.Fatalf("expected generated stats, login-history, board-activity, and hot-topic threads, got %+v", systemThreads.Threads)
+	if len(systemThreads.Threads) != 5 {
+		t.Fatalf("expected generated stats, login-history, board-activity, new-board, and hot-topic threads, got %+v", systemThreads.Threads)
 	}
 	if !hasHTTPThreadSummary(systemThreads, snapshot.Result.ID, "2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") ||
+		!hasHTTPThreadSummary(systemThreads, "bbslists_newboards_20260604", "New board list 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_toplog_20260604", "Hot topic history 2026-06-04") {
-		t.Fatalf("expected generated stats, login-history, board-activity, and hot-topic threads, got %+v", systemThreads.Threads)
+		t.Fatalf("expected generated stats, login-history, board-activity, new-board, and hot-topic threads, got %+v", systemThreads.Threads)
 	}
 	systemPosts := listPostsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+snapshot.Result.ID+"/posts", aliceToken, nil, &systemPosts); status != http.StatusOK {
@@ -1383,6 +1384,19 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 			t.Fatalf("expected board-activity body to contain %q, got:\n%s", want, boardLogBody)
 		}
 	}
+	newBoardPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_newboards_20260604/posts", aliceToken, nil, &newBoardPosts); status != http.StatusOK {
+		t.Fatalf("list BBSLists new-board posts status: %d", status)
+	}
+	if len(newBoardPosts.Posts) != 1 {
+		t.Fatalf("expected one generated new-board post, got %+v", newBoardPosts.Posts)
+	}
+	newBoardBody := newBoardPosts.Posts[0].Body
+	for _, want := range []string{"New board list 2026-06-04", "Window: 2026-05-06 to 2026-06-04 UTC", "New public boards: 2", "tech (tech)", "life (life)"} {
+		if !strings.Contains(newBoardBody, want) {
+			t.Fatalf("expected new-board body to contain %q, got:\n%s", want, newBoardBody)
+		}
+	}
 	topLogPosts := listPostsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_toplog_20260604/posts", aliceToken, nil, &topLogPosts); status != http.StatusOK {
 		t.Fatalf("list BBSLists hot-topic posts status: %d", status)
@@ -1406,6 +1420,9 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		if strings.Contains(topLogBody, forbidden) {
 			t.Fatalf("expected hot-topic body to hide private %q, got:\n%s", forbidden, topLogBody)
 		}
+		if strings.Contains(newBoardBody, forbidden) {
+			t.Fatalf("expected new-board body to hide private %q, got:\n%s", forbidden, newBoardBody)
+		}
 	}
 	again := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
@@ -1420,7 +1437,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads after repeat status: %d", status)
 	}
-	if len(systemThreads.Threads) != 4 {
+	if len(systemThreads.Threads) != 5 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads.Threads)
 	}
 }
@@ -1543,7 +1560,7 @@ func TestHTTPStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	}, &snapshot); status != http.StatusCreated {
 		t.Fatalf("publish stats snapshot status: %d error=%+v", status, snapshot.Error)
 	}
-	for _, threadID := range []string{snapshot.Result.ID, "bbslists_boardlog_20260607", "bbslists_toplog_20260607"} {
+	for _, threadID := range []string{snapshot.Result.ID, "bbslists_boardlog_20260607", "bbslists_newboards_20260607", "bbslists_toplog_20260607"} {
 		posts := listPostsResponse{}
 		if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
 			t.Fatalf("list generated posts for %s status: %d", threadID, status)

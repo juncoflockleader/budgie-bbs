@@ -1729,14 +1729,15 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 4 {
-		t.Fatalf("expected generated stats, login-history, board-activity, and hot-topic threads, got %+v", systemThreads)
+	if len(systemThreads) != 5 {
+		t.Fatalf("expected generated stats, login-history, board-activity, new-board, and hot-topic threads, got %+v", systemThreads)
 	}
 	if !hasThreadSummary(systemThreads, snapshot.ID, "2026-06-04") ||
 		!hasThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") ||
 		!hasThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") ||
+		!hasThreadSummary(systemThreads, "bbslists_newboards_20260604", "New board list 2026-06-04") ||
 		!hasThreadSummary(systemThreads, "bbslists_toplog_20260604", "Hot topic history 2026-06-04") {
-		t.Fatalf("expected generated stats, login-history, board-activity, and hot-topic threads, got %+v", systemThreads)
+		t.Fatalf("expected generated stats, login-history, board-activity, new-board, and hot-topic threads, got %+v", systemThreads)
 	}
 	systemPosts, err := c.ListPosts(snapshot.ID, 10, 0)
 	if err != nil {
@@ -1777,6 +1778,19 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 			t.Fatalf("expected board-activity body to contain %q, got:\n%s", want, boardLogBody)
 		}
 	}
+	newBoardPosts, err := c.ListPosts("bbslists_newboards_20260604", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newBoardPosts) != 1 {
+		t.Fatalf("expected one generated new-board post, got %+v", newBoardPosts)
+	}
+	newBoardBody := newBoardPosts[0].Body
+	for _, want := range []string{"New board list 2026-06-04", "Window: 2026-05-06 to 2026-06-04 UTC", "New public boards: 2", "Tech (tech)", "Life (life)"} {
+		if !strings.Contains(newBoardBody, want) {
+			t.Fatalf("expected new-board body to contain %q, got:\n%s", want, newBoardBody)
+		}
+	}
 	topLogPosts, err := c.ListPosts("bbslists_toplog_20260604", 10, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -1800,6 +1814,9 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		if strings.Contains(topLogBody, forbidden) {
 			t.Fatalf("expected hot-topic body to hide private %q, got:\n%s", forbidden, topLogBody)
 		}
+		if strings.Contains(newBoardBody, forbidden) {
+			t.Fatalf("expected new-board body to hide private %q, got:\n%s", forbidden, newBoardBody)
+		}
 	}
 	again := exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
 		Date: "2026-06-04",
@@ -1811,7 +1828,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 4 {
+	if len(systemThreads) != 5 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads)
 	}
 }
@@ -2018,7 +2035,7 @@ func TestStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	snapshot := exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
 		Date: "2026-06-07",
 	})
-	for _, threadID := range []string{snapshot.ID, "bbslists_boardlog_20260607", "bbslists_toplog_20260607"} {
+	for _, threadID := range []string{snapshot.ID, "bbslists_boardlog_20260607", "bbslists_newboards_20260607", "bbslists_toplog_20260607"} {
 		posts, err := c.ListPosts(threadID, 10, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -2290,8 +2307,8 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 8 {
-		t.Fatalf("expected stats, login-history, board-activity, and hot-topic threads for two days, got %+v", systemThreads)
+	if len(systemThreads) != 10 {
+		t.Fatalf("expected stats, login-history, board-activity, new-board, and hot-topic threads for two days, got %+v", systemThreads)
 	}
 	for _, want := range []struct {
 		id    string
@@ -2300,10 +2317,12 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 		{"bbslists_stats_20260605", "Community stats 2026-06-05"},
 		{"bbslists_countlogins_20260605", "Login count history 2026-06-05"},
 		{"bbslists_boardlog_20260605", "Board activity history 2026-06-05"},
+		{"bbslists_newboards_20260605", "New board list 2026-06-05"},
 		{"bbslists_toplog_20260605", "Hot topic history 2026-06-05"},
 		{"bbslists_stats_20260606", "Community stats 2026-06-06"},
 		{"bbslists_countlogins_20260606", "Login count history 2026-06-06"},
 		{"bbslists_boardlog_20260606", "Board activity history 2026-06-06"},
+		{"bbslists_newboards_20260606", "New board list 2026-06-06"},
 		{"bbslists_toplog_20260606", "Hot topic history 2026-06-06"},
 	} {
 		if !hasThreadSummary(systemThreads, want.id, want.title) {

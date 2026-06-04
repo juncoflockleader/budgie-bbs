@@ -1138,6 +1138,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsNewBoardListSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsHotTopicHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1287,6 +1290,37 @@ func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLab
 	}
 	body := formatStatsBoardActivityHistoryBody(dateLabel, stats, boards, history)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Board activity history "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsNewBoardListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_newboards_" + dateID
+	postID := "bbslists_newboards_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	end, err := time.Parse("2006-01-02", dateLabel)
+	if err != nil {
+		return "", 0, err
+	}
+	endAt := end.UTC().AddDate(0, 0, 1).Add(-time.Millisecond).UnixMilli()
+	startAt := end.UTC().AddDate(0, 0, -29).UnixMilli()
+	boards, err := projections.ListRecentPublicBoards(h.db, startAt, endAt, 100)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsNewBoardListBody(dateLabel, boards, startAt, endAt)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "New board list "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -1800,6 +1834,42 @@ func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.Co
 			formatStatsDelta(day.DeltaPosts),
 			day.TotalReactions,
 			formatStatsDelta(day.DeltaReactions))
+	}
+	return b.String()
+}
+
+func formatStatsNewBoardListBody(dateLabel string, boards []projections.BoardSummary, startAt, endAt int64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# New board list %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Window: %s to %s UTC\n", time.UnixMilli(startAt).UTC().Format("2006-01-02"), time.UnixMilli(endAt).UTC().Format("2006-01-02"))
+	fmt.Fprintf(&b, "- New public boards: %d\n\n", len(boards))
+
+	if len(boards) == 0 {
+		b.WriteString("- No public boards opened in this 30-day window.\n")
+		return b.String()
+	}
+	b.WriteString("## Newly opened public boards\n")
+	for i, board := range boards {
+		created := "unknown"
+		if board.CreatedAt > 0 {
+			created = time.UnixMilli(board.CreatedAt).UTC().Format("2006-01-02")
+		}
+		lastActivity := "no posts yet"
+		if board.LastSeq > 0 {
+			lastActivity = fmt.Sprintf("event seq %d", board.LastSeq)
+		}
+		fmt.Fprintf(&b, "%d. %s (%s): opened %s, %d threads, %d posts, %d moderators, %s\n",
+			i+1,
+			board.Name,
+			board.ID,
+			created,
+			board.ThreadCount,
+			board.PostCount,
+			board.ModeratorCount,
+			lastActivity)
+		if strings.TrimSpace(board.Description) != "" {
+			fmt.Fprintf(&b, "   - %s\n", board.Description)
+		}
 	}
 	return b.String()
 }

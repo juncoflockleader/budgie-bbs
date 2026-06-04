@@ -106,8 +106,8 @@ ranking surface:
   /api/v1/stats/community/snapshot`.
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has deterministic `BBSLists` snapshot, login-count
-  history, board-activity history, hot-topic history, and completed
-  week/month/year period-summary and hot-topic list threads.
+  history, board-activity history, new-board list, hot-topic history, and
+  completed week/month/year period-summary and hot-topic list threads.
 - Login recording maintains UTC day/hour login buckets for KBS `static.c` /
   `countlogins`-style hourly login distribution charts.
 - Presence changes and stat snapshots maintain a projection-backed daily
@@ -140,6 +140,9 @@ ranking surface:
   board-activity history threads showing total board/thread/post counts, top
   public board rankings, last public board activity times, and recent
   board/thread/post/reaction deltas.
+- Stat snapshots also create deterministic daily KBS `gennewboard`-style
+  `BBSLists` new-board list threads for public boards opened in the last 30
+  days, excluding member-read and `statsExcluded` boards.
 - Stat snapshots also create deterministic daily KBS `toplog`-style
   `BBSLists` hot-topic history threads showing ranked public hot topics,
   distinct participant counts, post/reaction counts, decayed score, and last
@@ -164,7 +167,7 @@ ranking surface:
 
 This does not yet implement every historical/stat-log board from KBS local
 utilities beyond the generated `BBSLists` snapshot, login-history, and
-board-activity/hot-topic/period-summary history threads.
+board-activity/new-board/hot-topic/period-summary history threads.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -363,7 +366,7 @@ enforced version:
     created on that board.
   - `statsExcluded` keeps otherwise readable/postable boards out of public
     board/thread/reply/user/archive rankings and generated `BBSLists`
-    snapshot, board-activity, and hot-topic stat logs.
+    snapshot, board-activity, new-board, and hot-topic stat logs.
   - Board membership applications enforce `maxMembers`, minimum login count,
     minimum post count, minimum trust level, board-local post count,
     board-local original-thread count, board-local digest count, global reaction
@@ -480,7 +483,7 @@ archive areas. Budgie now has the first durable curation layer:
   system board and a deterministic generated thread/post in it. Member-read
   recommendations stay digest-only to avoid exposing private content.
 - Admin-triggered and automatic stat snapshots lazily create the `BBSLists`
-  system board and deterministic generated daily stat/ranking threads.
+  system board and deterministic generated daily stat/ranking/list threads.
 - Public blessing rituals lazily create the `Blessing` system board and
   generated public blessing threads/posts.
 - Public poll result publishing lazily creates the `vote` system board and
@@ -861,10 +864,11 @@ social graph:
   time and anonymous guest counters, active-board rankings, hot-thread rankings,
   distinct-participant hot-topic scoring, top-poster rankings, latest-reply
   rankings, blessing rankings/rituals, archive-path rankings, automatic
-  `BBSLists` generated stat snapshots and login-count, board-activity, and
-  hot-topic history posts, category/section hot-topic groups, 24-hour login
-  histograms, plus completed week/month/year activity and hot-topic summaries,
-  and a web `Rankings` surface with selectable 30-day history charts.
+  `BBSLists` generated stat snapshots and login-count, board-activity,
+  new-board, and hot-topic history posts, category/section hot-topic groups,
+  24-hour login histograms, plus completed week/month/year activity and
+  hot-topic summaries, and a web `Rankings` surface with selectable 30-day
+  history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

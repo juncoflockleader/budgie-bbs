@@ -355,6 +355,49 @@ func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, 
 	return out, rows.Err()
 }
 
+func ListRecentPublicBoards(db *sql.DB, startAt, endAt int64, limit int) ([]BoardSummary, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := QQuery(db,
+		`SELECT b.id, b.name, b.description,
+		        COALESCE((SELECT COUNT(*) FROM threads t WHERE t.board=b.id), 0) AS thread_count,
+		        COALESCE((SELECT COUNT(*)
+		                    FROM posts p
+		                    JOIN threads t ON t.id=p.thread
+		                   WHERE t.board=b.id AND p.redacted=0), 0) AS post_count,
+		        COALESCE((SELECT MAX(t.last_seq) FROM threads t WHERE t.board=b.id), 0) AS last_seq,
+		        COALESCE(c.created_at, 0) AS created_at,
+		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0) AS moderator_count
+		   FROM boards b
+		   JOIN categories c ON c.id=b.id
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE b.id NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(c.created_at, 0) >= ?
+		    AND COALESCE(c.created_at, 0) <= ?
+		    AND COALESCE(c.visibility, 'public')='public'
+		    AND COALESCE(s.member_read_mode, 0)=0
+		    AND COALESCE(s.stats_excluded, 0)=0
+		  ORDER BY c.created_at DESC, LOWER(b.name), LOWER(b.id)
+		  LIMIT ?`,
+		startAt, endAt, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BoardSummary{}
+	for rows.Next() {
+		var board BoardSummary
+		if err := rows.Scan(&board.ID, &board.Name, &board.Description, &board.ThreadCount, &board.PostCount, &board.LastSeq, &board.CreatedAt, &board.ModeratorCount); err != nil {
+			return nil, err
+		}
+		board.NewBoard = true
+		out = append(out, board)
+	}
+	return out, rows.Err()
+}
+
 func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardID string, limit, offset int) ([]ThreadRanking, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
