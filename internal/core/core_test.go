@@ -338,7 +338,7 @@ func TestPollCreationSupportsExpiry(t *testing.T) {
 	alice := registerAndGetUser(t, c, "alice", "pw")
 	setTrustLevel(t, c, alice.ID, 2)
 
-	expiresAt := time.Now().Add(3 * time.Minute).UTC()
+	expiresAt := time.Now().Add(3 * time.Minute).UTC().Truncate(time.Second)
 	expiresRaw := expiresAt.Format(time.RFC3339)
 	threadBody := "[poll expires=" + expiresRaw + "]\nQuestion?\nOption A\nOption B\n[/poll]"
 	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
@@ -363,6 +363,55 @@ func TestPollCreationSupportsExpiry(t *testing.T) {
 
 	if poll.ExpiresAt != expiresAt.UnixMilli() {
 		t.Fatalf("expected expiresAt=%d, got %d", expiresAt.UnixMilli(), poll.ExpiresAt)
+	}
+}
+
+func TestPollCreationSupportsExpiryOnReply(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	base := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Base", Body: "before",
+	})
+
+	expiresAt := time.Now().Add(9 * time.Minute).UTC().Truncate(time.Second)
+	threadBody := "[poll expires=" + expiresAt.Format(time.RFC3339) + "]\nQuestion?\nOption A\nOption B\n[/poll]"
+	replyRes := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID,
+		Body:   threadBody,
+	})
+
+	posts, err := c.ListPosts(base.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts, got %d", len(posts))
+	}
+
+	var reply *core.Post
+	for i := range posts {
+		if posts[i].ID == replyRes.ID {
+			reply = &posts[i]
+			break
+		}
+	}
+	if reply == nil {
+		t.Fatal("reply post not found")
+	}
+
+	poll, err := c.GetPollByPostID(reply.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for timed reply")
+	}
+	if poll.ExpiresAt != expiresAt.UnixMilli() {
+		t.Fatalf("expected reply poll expiresAt=%d, got %d", expiresAt.UnixMilli(), poll.ExpiresAt)
 	}
 }
 
