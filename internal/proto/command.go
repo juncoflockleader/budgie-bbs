@@ -124,6 +124,7 @@ type SetBoardMemberPayload struct {
 	CanModeratePosts    *bool  `json:"canModeratePosts,omitempty"`
 	CanModerateThreads  *bool  `json:"canModerateThreads,omitempty"`
 	CanAnnounce         *bool  `json:"canAnnounce,omitempty"`
+	CanManagePolls      *bool  `json:"canManagePolls,omitempty"`
 	CanSetBoardSettings *bool  `json:"canSetBoardSettings,omitempty"`
 }
 

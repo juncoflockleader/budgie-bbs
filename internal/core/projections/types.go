@@ -48,7 +48,25 @@ type CommunityStats struct {
 	TotalMail           int   `json:"totalMail"`
 	TotalDirectMessages int   `json:"totalDirectMessages"`
 	OnlineUsers         int   `json:"onlineUsers"`
+	MaxOnlineUsers      int   `json:"maxOnlineUsers"`
+	MaxOnlineAt         int64 `json:"maxOnlineAt"`
 	HeadSeq             int64 `json:"headSeq"`
+}
+
+type CommunityStatHistory struct {
+	Day                 string `json:"day"`
+	SnapshotAt          int64  `json:"snapshotAt"`
+	TotalUsers          int    `json:"totalUsers"`
+	TotalBoards         int    `json:"totalBoards"`
+	TotalThreads        int    `json:"totalThreads"`
+	TotalPosts          int    `json:"totalPosts"`
+	TotalReactions      int    `json:"totalReactions"`
+	TotalMail           int    `json:"totalMail"`
+	TotalDirectMessages int    `json:"totalDirectMessages"`
+	OnlineUsers         int    `json:"onlineUsers"`
+	MaxOnlineUsers      int    `json:"maxOnlineUsers"`
+	MaxOnlineAt         int64  `json:"maxOnlineAt"`
+	HeadSeq             int64  `json:"headSeq"`
 }
 
 type ContentFilter struct {
@@ -193,6 +211,7 @@ type BoardMember struct {
 	CanModeratePosts    bool   `json:"canModeratePosts"`
 	CanModerateThreads  bool   `json:"canModerateThreads"`
 	CanAnnounce         bool   `json:"canAnnounce"`
+	CanManagePolls      bool   `json:"canManagePolls"`
 	CanSetBoardSettings bool   `json:"canSetBoardSettings"`
 	CreatedAt           int64  `json:"createdAt"`
 	UpdatedAt           int64  `json:"updatedAt"`
@@ -206,6 +225,7 @@ type BoardMemberPatch struct {
 	CanModeratePosts    *bool
 	CanModerateThreads  *bool
 	CanAnnounce         *bool
+	CanManagePolls      *bool
 	CanSetBoardSettings *bool
 }
 

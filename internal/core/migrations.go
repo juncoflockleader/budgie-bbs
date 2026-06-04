@@ -55,6 +55,7 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"board_members", "can_moderate_posts", "can_moderate_posts INTEGER NOT NULL DEFAULT 0"},
 		{"board_members", "can_moderate_threads", "can_moderate_threads INTEGER NOT NULL DEFAULT 0"},
 		{"board_members", "can_announce", "can_announce INTEGER NOT NULL DEFAULT 0"},
+		{"board_members", "can_manage_polls", "can_manage_polls INTEGER NOT NULL DEFAULT 0"},
 		{"board_members", "can_set_board_settings", "can_set_board_settings INTEGER NOT NULL DEFAULT 0"},
 		{"board_members", "position", "position INTEGER NOT NULL DEFAULT 0"},
 		{"digest_entries", "body", "body TEXT NOT NULL DEFAULT ''"},
@@ -96,6 +97,26 @@ func applySQLiteMigrations(db *sql.DB) error {
 	}
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen ON user_presence_sessions(board_id, last_seen DESC)`); err != nil {
 		return fmt.Errorf("ensure user presence sessions board index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS community_stat_history (
+		    day                   TEXT    PRIMARY KEY,
+		    snapshot_at           INTEGER NOT NULL DEFAULT 0,
+		    total_users           INTEGER NOT NULL DEFAULT 0,
+		    total_boards          INTEGER NOT NULL DEFAULT 0,
+		    total_threads         INTEGER NOT NULL DEFAULT 0,
+		    total_posts           INTEGER NOT NULL DEFAULT 0,
+		    total_reactions       INTEGER NOT NULL DEFAULT 0,
+		    total_mail            INTEGER NOT NULL DEFAULT 0,
+		    total_direct_messages INTEGER NOT NULL DEFAULT 0,
+		    online_users          INTEGER NOT NULL DEFAULT 0,
+		    max_online_users      INTEGER NOT NULL DEFAULT 0,
+		    max_online_at         INTEGER NOT NULL DEFAULT 0,
+		    head_seq              INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure community stat history table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot ON community_stat_history(snapshot_at DESC, day DESC)`); err != nil {
+		return fmt.Errorf("ensure community stat history index: %w", err)
 	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS content_filters (
 		    id         TEXT PRIMARY KEY,

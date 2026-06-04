@@ -1407,6 +1407,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		Path:   "private",
 	})
 	exec(t, c, alice, proto.CmdSetPresence, proto.SetPresencePayload{Status: "active"})
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{Status: "active"})
 	if err := c.RecordLogin(bob.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1415,11 +1416,26 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 4 || stats.TotalReactions != 1 || stats.OnlineUsers != 1 {
+	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 4 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("unexpected community stats: %+v", stats)
 	}
 	if stats.HeadSeq == 0 {
 		t.Fatalf("expected head seq in community stats, got %+v", stats)
+	}
+	exec(t, c, bob, proto.CmdSetPresence, proto.SetPresencePayload{Status: "offline"})
+	stats, err = c.GetCommunityStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.OnlineUsers != 1 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
+		t.Fatalf("expected max-online history to preserve peak after offline, got %+v", stats)
+	}
+	history, err := c.ListCommunityStatHistory(7, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].OnlineUsers != 1 || history[0].MaxOnlineUsers != 2 || history[0].MaxOnlineAt == 0 || history[0].TotalPosts != 4 {
+		t.Fatalf("expected daily stat history with preserved max-online peak, got %+v", history)
 	}
 
 	boards, err := c.ListBoardRankings(alice, 10, 0)
@@ -1533,7 +1549,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
 	}
 	body := systemPosts[0].Body
-	for _, want := range []string{"Total users: 3", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Max online users: 2", "Recent daily history", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
@@ -2198,6 +2214,7 @@ func TestDelegatedBoardMemberPermissions(t *testing.T) {
 		CanCurate:           boolPtr(true),
 		CanModeratePosts:    boolPtr(true),
 		CanModerateThreads:  boolPtr(true),
+		CanManagePolls:      boolPtr(true),
 		CanSetBoardSettings: boolPtr(true),
 	})
 
@@ -2210,6 +2227,7 @@ func TestDelegatedBoardMemberPermissions(t *testing.T) {
 		!members[0].CanCurate ||
 		!members[0].CanModeratePosts ||
 		!members[0].CanModerateThreads ||
+		!members[0].CanManagePolls ||
 		!members[0].CanSetBoardSettings {
 		t.Fatalf("expected alice delegated permissions, got %+v", members)
 	}
@@ -3429,6 +3447,52 @@ func TestSysopMailAll(t *testing.T) {
 	}
 	if len(adminSent) != 1 || adminSent[0].ID != broadcast.ID || !adminSent[0].Read {
 		t.Fatalf("expected sysop sent copy, got %+v", adminSent)
+	}
+
+	sysmail, err := c.GetBoard("sysmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sysmail == nil || sysmail.Name != "sysmail" || !sysmail.ReadOnly || !sysmail.NoReply || !sysmail.MemberReadMode || !sysmail.MemberPostMode {
+		t.Fatalf("expected restricted sysmail board, got %+v", sysmail)
+	}
+	sysmailThreads, err := c.ListThreads("sysmail", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedThreadID := "sysmail_thr_" + broadcast.ID
+	if len(sysmailThreads) != 1 || sysmailThreads[0].ID != expectedThreadID || sysmailThreads[0].Title != "Sysop mail: Campus bulletin" {
+		t.Fatalf("expected generated sysmail thread, got %+v", sysmailThreads)
+	}
+	sysmailPosts, err := c.ListPosts(expectedThreadID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sysmailPosts) != 1 || sysmailPosts[0].Author != "admin" {
+		t.Fatalf("expected one admin-authored sysmail post, got %+v", sysmailPosts)
+	}
+	for _, want := range []string{"# Sysop mail: Campus bulletin", "From: admin", "Recipients: 3 users", "Source: admin mail-all broadcast", "Maintenance at midnight.", "Generated restricted sysop mail record"} {
+		if !strings.Contains(sysmailPosts[0].Body, want) {
+			t.Fatalf("expected sysmail post body to contain %q, got:\n%s", want, sysmailPosts[0].Body)
+		}
+	}
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatal(err)
+	}
+	sysmail, err = c.GetBoard("sysmail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sysmail == nil || !sysmail.ReadOnly || !sysmail.NoReply || !sysmail.MemberReadMode || !sysmail.MemberPostMode {
+		t.Fatalf("expected rebuild to preserve restricted sysmail board, got %+v", sysmail)
+	}
+	sysmailThreads, err = c.ListThreads("sysmail", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sysmailThreads) != 1 || sysmailThreads[0].ID != expectedThreadID {
+		t.Fatalf("expected rebuild to preserve generated sysmail thread, got %+v", sysmailThreads)
 	}
 }
 
@@ -5066,6 +5130,7 @@ func TestPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
 
 	alice := registerAndGetUser(t, c, "alice", "pw")
 	bob := registerAndGetUser(t, c, "bob", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw")
 	setTrustLevel(t, c, alice.ID, 2)
 
 	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
@@ -5091,7 +5156,13 @@ func TestPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
 	execExpectErr(t, c, bob, proto.CmdPublishPollResult, proto.PublishPollResultPayload{
 		Poll: poll.ID,
 	}, proto.ErrForbidden)
-	result := exec(t, c, alice, proto.CmdPublishPollResult, proto.PublishPollResultPayload{
+	exec(t, c, alice, proto.CmdSetBoardMember, proto.SetBoardMemberPayload{
+		Board:          "general",
+		User:           "carol",
+		Member:         true,
+		CanManagePolls: boolPtr(true),
+	})
+	result := exec(t, c, carol, proto.CmdPublishPollResult, proto.PublishPollResultPayload{
 		Poll: poll.ID,
 	})
 	if result.ID == "" {
@@ -5123,7 +5194,7 @@ func TestPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
 			t.Fatalf("expected vote result body to contain %q, got:\n%s", want, posts[0].Body)
 		}
 	}
-	again := exec(t, c, alice, proto.CmdPublishPollResult, proto.PublishPollResultPayload{Poll: poll.ID})
+	again := exec(t, c, carol, proto.CmdPublishPollResult, proto.PublishPollResultPayload{Poll: poll.ID})
 	if again.ID != result.ID {
 		t.Fatalf("expected repeated result publish to reuse %q, got %+v", result.ID, again)
 	}

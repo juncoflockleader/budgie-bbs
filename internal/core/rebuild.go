@@ -9,6 +9,8 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
+const sysmailSystemBoardID = "sysmail"
+
 func rebuildProjectionsFromEventLog(db *sql.DB, fromSeq int64) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -245,6 +247,11 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 		if err := upsertBoardProjection(tx, evt.ID, evt.Name, evt.Description, evt.ParentID, evt.Position, evt.TS); err != nil {
 			return err
 		}
+		if evt.ID == sysmailSystemBoardID {
+			if err := ensureSysmailBoardSettingsProjection(tx, evt.TS); err != nil {
+				return err
+			}
+		}
 	case *proto.MailSentPayload:
 		if err := insertMailMessage(tx, evt.ID, evt.FromUserID, evt.Subject, evt.Body, evt.ParentID, evt.TS, seq); err != nil {
 			return err
@@ -262,6 +269,7 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 				return err
 			}
 		}
+
 		for _, userID := range evt.ToUserIDs {
 			if strings.TrimSpace(userID) == "" {
 				continue
@@ -451,6 +459,29 @@ func loadUserIDByName(tx *sql.Tx, name string) string {
 		return ""
 	}
 	return strings.TrimSpace(userID)
+}
+
+func ensureSysmailBoardSettingsProjection(tx *sql.Tx, ts int64) error {
+	_, err := qExec(tx,
+		`INSERT INTO board_settings (
+		    board_id, anonymous_allowed, read_only, no_reply, attachments_allowed,
+		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, updated_at
+		 ) VALUES (?, 0, 1, 1, 0, 0, 0, 1, 1, ?)
+		 ON CONFLICT(board_id)
+		 DO UPDATE SET
+		    anonymous_allowed=0,
+		    read_only=1,
+		    no_reply=1,
+		    attachments_allowed=0,
+		    mail_in_allowed=0,
+		    relay_enabled=0,
+		    member_read_mode=1,
+		    member_post_mode=1,
+		    updated_at=excluded.updated_at`,
+		sysmailSystemBoardID,
+		ts,
+	)
+	return err
 }
 
 func recordReactionReceivedTx(tx *sql.Tx, postAuthorID string) error {

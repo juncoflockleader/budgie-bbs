@@ -237,6 +237,7 @@ func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Rep
 		CanModeratePosts:    p.CanModeratePosts,
 		CanModerateThreads:  p.CanModerateThreads,
 		CanAnnounce:         p.CanAnnounce,
+		CanManagePolls:      p.CanManagePolls,
 		CanSetBoardSettings: p.CanSetBoardSettings,
 	}
 	if err := setBoardMember(h.db, p.Board, userID, p.Member, patch); err != nil {
@@ -1122,12 +1123,18 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 	var existingSeq int64
 	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
 	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
 		return threadID, existingSeq, nil
 	}
 	if err != sql.ErrNoRows {
 		return "", 0, err
 	}
 
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
 		return "", 0, err
@@ -1152,7 +1159,11 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 	if err != nil {
 		return "", 0, err
 	}
-	body := formatStatsSnapshotBody(dateLabel, stats, boards, threads, users, archives, blessings)
+	history, err := projections.ListCommunityStatHistory(h.db, 7, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsSnapshotBody(dateLabel, stats, boards, threads, users, archives, blessings, history)
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -1239,7 +1250,7 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 	return threadID, pseq, nil
 }
 
-func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, threads []projections.ThreadRanking, users []projections.UserRanking, archives []projections.ArchiveRanking, blessings []projections.BlessingRanking) string {
+func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, threads []projections.ThreadRanking, users []projections.UserRanking, archives []projections.ArchiveRanking, blessings []projections.BlessingRanking, history []projections.CommunityStatHistory) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Community stats %s\n\n", dateLabel)
 	fmt.Fprintf(&b, "- Total users: %d\n", stats.TotalUsers)
@@ -1250,7 +1261,26 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 	fmt.Fprintf(&b, "- Total mail messages: %d\n", stats.TotalMail)
 	fmt.Fprintf(&b, "- Total direct messages: %d\n", stats.TotalDirectMessages)
 	fmt.Fprintf(&b, "- Online users: %d\n", stats.OnlineUsers)
+	fmt.Fprintf(&b, "- Max online users: %d", stats.MaxOnlineUsers)
+	if stats.MaxOnlineAt > 0 {
+		fmt.Fprintf(&b, " at %s UTC", time.UnixMilli(stats.MaxOnlineAt).UTC().Format("2006-01-02 15:04"))
+	}
+	b.WriteByte('\n')
 	fmt.Fprintf(&b, "- Event head: %d\n\n", stats.HeadSeq)
+
+	b.WriteString("## Recent daily history\n")
+	if len(history) == 0 {
+		b.WriteString("- No daily stat history yet.\n")
+	}
+	for _, day := range history {
+		maxAt := "n/a"
+		if day.MaxOnlineAt > 0 {
+			maxAt = time.UnixMilli(day.MaxOnlineAt).UTC().Format("2006-01-02 15:04")
+		}
+		fmt.Fprintf(&b, "- %s: %d users, %d posts, %d online now, max %d online at %s UTC\n",
+			day.Day, day.TotalUsers, day.TotalPosts, day.OnlineUsers, day.MaxOnlineUsers, maxAt)
+	}
+	b.WriteByte('\n')
 
 	b.WriteString("## Active boards\n")
 	if len(boards) == 0 {
@@ -1725,6 +1755,13 @@ func (h *Handler) actorCanAnnounceBoard(actor *User, boardID string) bool {
 	return h.actorHasBoardMemberPermission(actor, boardID, "can_announce")
 }
 
+func (h *Handler) actorCanManageBoardPolls(actor *User, boardID string) bool {
+	if h.actorCanModerateBoard(actor, boardID) {
+		return true
+	}
+	return h.actorHasBoardMemberPermission(actor, boardID, "can_manage_polls")
+}
+
 func (h *Handler) actorCanCurateBoardKind(actor *User, boardID, kind string) bool {
 	if kind == "announcement" {
 		return h.actorCanCurateBoard(actor, boardID) || h.actorCanAnnounceBoard(actor, boardID)
@@ -1737,7 +1774,7 @@ func (h *Handler) actorHasBoardMemberPermission(actor *User, boardID, column str
 		return false
 	}
 	switch column {
-	case "can_manage_members", "can_curate", "can_moderate_posts", "can_moderate_threads", "can_announce", "can_set_board_settings":
+	case "can_manage_members", "can_curate", "can_moderate_posts", "can_moderate_threads", "can_announce", "can_manage_polls", "can_set_board_settings":
 	default:
 		return false
 	}
@@ -1819,6 +1856,7 @@ func boardMemberPermissionsChanged(p proto.SetBoardMemberPayload) bool {
 		p.CanModeratePosts != nil ||
 		p.CanModerateThreads != nil ||
 		p.CanAnnounce != nil ||
+		p.CanManagePolls != nil ||
 		p.CanSetBoardSettings != nil
 }
 

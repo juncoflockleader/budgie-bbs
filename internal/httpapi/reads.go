@@ -27,6 +27,16 @@ func (s *Server) handleGetCommunityStats(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, stats)
 }
 
+func (s *Server) handleListCommunityStatHistory(w http.ResponseWriter, r *http.Request) {
+	limit, offset := paginate(r)
+	history, err := s.core.ListCommunityStatHistory(limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"days": history})
+}
+
 func (s *Server) handleGetAccountRegistrationSettings(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	if !actor.IsAdmin() {

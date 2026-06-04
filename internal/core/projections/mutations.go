@@ -649,13 +649,14 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 	canModeratePosts := 0
 	canModerateThreads := 0
 	canAnnounce := 0
+	canManagePolls := 0
 	canSetBoardSettings := 0
 	position := 0
 	err := QQueryRow(db,
-		`SELECT can_manage_members, can_curate, can_moderate_posts, can_moderate_threads, can_announce, can_set_board_settings, COALESCE(position, 0)
+		`SELECT can_manage_members, can_curate, can_moderate_posts, can_moderate_threads, can_announce, can_manage_polls, can_set_board_settings, COALESCE(position, 0)
 		   FROM board_members WHERE board_id=? AND user_id=?`,
 		boardID, userID,
-	).Scan(&canManageMembers, &canCurate, &canModeratePosts, &canModerateThreads, &canAnnounce, &canSetBoardSettings, &position)
+	).Scan(&canManageMembers, &canCurate, &canModeratePosts, &canModerateThreads, &canAnnounce, &canManagePolls, &canSetBoardSettings, &position)
 	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
@@ -692,6 +693,11 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 	} else if patch.CanAnnounce != nil {
 		canAnnounce = 0
 	}
+	if patch.CanManagePolls != nil && *patch.CanManagePolls {
+		canManagePolls = 1
+	} else if patch.CanManagePolls != nil {
+		canManagePolls = 0
+	}
 	if patch.CanSetBoardSettings != nil && *patch.CanSetBoardSettings {
 		canSetBoardSettings = 1
 	} else if patch.CanSetBoardSettings != nil {
@@ -701,10 +707,10 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 	_, err = QExec(db,
 		`INSERT INTO board_members (
 		    board_id, user_id, title, position, can_manage_members, can_curate,
-		    can_moderate_posts, can_moderate_threads, can_announce, can_set_board_settings,
+		    can_moderate_posts, can_moderate_threads, can_announce, can_manage_polls, can_set_board_settings,
 		    created_at, updated_at
 		 )
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(board_id, user_id)
 		 DO UPDATE SET
 		    title=excluded.title,
@@ -714,6 +720,7 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 		    can_moderate_posts=excluded.can_moderate_posts,
 		    can_moderate_threads=excluded.can_moderate_threads,
 		    can_announce=excluded.can_announce,
+		    can_manage_polls=excluded.can_manage_polls,
 		    can_set_board_settings=excluded.can_set_board_settings,
 		    updated_at=excluded.updated_at`,
 		boardID,
@@ -725,6 +732,7 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 		canModeratePosts,
 		canModerateThreads,
 		canAnnounce,
+		canManagePolls,
 		canSetBoardSettings,
 		ts,
 		ts,
@@ -1404,7 +1412,66 @@ func SetUserPresence(db *sql.DB, userID, sessionID, status, mode, boardID, threa
 	if err != nil {
 		return err
 	}
-	return refreshUserPresenceSummary(db, userID)
+	if err := refreshUserPresenceSummary(db, userID); err != nil {
+		return err
+	}
+	return UpsertCommunityStatHistoryFromCurrent(db, ts)
+}
+
+func UpsertCommunityStatHistoryFromCurrent(db *sql.DB, ts int64) error {
+	if ts <= 0 {
+		ts = NowMS()
+	}
+	stats, err := getCommunityStatsCurrent(db)
+	if err != nil {
+		return err
+	}
+	day := time.UnixMilli(ts).UTC().Format("2006-01-02")
+	maxOnlineAt := int64(0)
+	if stats.OnlineUsers > 0 {
+		maxOnlineAt = ts
+	}
+	_, err = QExec(db,
+		`INSERT INTO community_stat_history (
+		    day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+		    total_reactions, total_mail, total_direct_messages, online_users,
+		    max_online_users, max_online_at, head_seq
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(day)
+		 DO UPDATE SET
+		    snapshot_at=excluded.snapshot_at,
+		    total_users=excluded.total_users,
+		    total_boards=excluded.total_boards,
+		    total_threads=excluded.total_threads,
+		    total_posts=excluded.total_posts,
+		    total_reactions=excluded.total_reactions,
+		    total_mail=excluded.total_mail,
+		    total_direct_messages=excluded.total_direct_messages,
+		    online_users=excluded.online_users,
+		    max_online_users=CASE
+		      WHEN excluded.online_users > community_stat_history.max_online_users THEN excluded.online_users
+		      ELSE community_stat_history.max_online_users
+		    END,
+		    max_online_at=CASE
+		      WHEN excluded.online_users > community_stat_history.max_online_users THEN excluded.max_online_at
+		      ELSE community_stat_history.max_online_at
+		    END,
+		    head_seq=excluded.head_seq`,
+		day,
+		ts,
+		stats.TotalUsers,
+		stats.TotalBoards,
+		stats.TotalThreads,
+		stats.TotalPosts,
+		stats.TotalReactions,
+		stats.TotalMail,
+		stats.TotalDirectMessages,
+		stats.OnlineUsers,
+		stats.OnlineUsers,
+		maxOnlineAt,
+		stats.HeadSeq,
+	)
+	return err
 }
 
 func refreshUserPresenceSummary(db *sql.DB, userID string) error {

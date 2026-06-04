@@ -41,6 +41,24 @@ export interface CommunityStats {
   totalMail: number
   totalDirectMessages: number
   onlineUsers: number
+  maxOnlineUsers: number
+  maxOnlineAt: number
+  headSeq: number
+}
+
+export interface CommunityStatHistory {
+  day: string
+  snapshotAt: number
+  totalUsers: number
+  totalBoards: number
+  totalThreads: number
+  totalPosts: number
+  totalReactions: number
+  totalMail: number
+  totalDirectMessages: number
+  onlineUsers: number
+  maxOnlineUsers: number
+  maxOnlineAt: number
   headSeq: number
 }
 
@@ -128,6 +146,7 @@ export interface BoardMember {
   canModeratePosts: boolean
   canModerateThreads: boolean
   canAnnounce: boolean
+  canManagePolls: boolean
   canSetBoardSettings: boolean
   createdAt: number
   updatedAt: number

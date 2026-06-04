@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import * as api from '../api/client'
-import type { ArchiveRanking, BlessingRanking, Board, BoardRanking, CommunityStats, Thread, ThreadRanking, UserRanking } from '../api/types'
+import type { ArchiveRanking, BlessingRanking, Board, BoardRanking, CommunityStatHistory, CommunityStats, Thread, ThreadRanking, UserRanking } from '../api/types'
 import { Spinner } from '../components/Spinner'
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
 
 export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props) {
   const [stats, setStats] = useState<CommunityStats | null>(null)
+  const [history, setHistory] = useState<CommunityStatHistory[]>([])
   const [boards, setBoards] = useState<BoardRanking[]>([])
   const [threads, setThreads] = useState<ThreadRanking[]>([])
   const [users, setUsers] = useState<UserRanking[]>([])
@@ -26,20 +27,22 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
     setError(null)
     Promise.all([
       api.getCommunityStats(token),
+      api.listCommunityStatHistory(token, 7),
       api.listBoardRankings(token, 12),
       api.listThreadRankings(token, 12),
       api.listUserRankings(token, 12),
       api.listBlessingRankings(token, 12),
       api.listArchiveRankings(token, 12),
-    ]).then(([statsRes, boardRes, threadRes, userRes, blessingRes, archiveRes]) => {
+    ]).then(([statsRes, historyRes, boardRes, threadRes, userRes, blessingRes, archiveRes]) => {
       if (cancelled) return
       setLoading(false)
-      const failure = statsRes.error ?? boardRes.error ?? threadRes.error ?? userRes.error ?? blessingRes.error ?? archiveRes.error
+      const failure = statsRes.error ?? historyRes.error ?? boardRes.error ?? threadRes.error ?? userRes.error ?? blessingRes.error ?? archiveRes.error
       if (failure) {
         setError(failure.message)
         return
       }
       setStats(statsRes.data ?? null)
+      setHistory(historyRes.data ?? [])
       setBoards(boardRes.data ?? [])
       setThreads(threadRes.data ?? [])
       setUsers(userRes.data ?? [])
@@ -68,8 +71,24 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
           <Stat label="Posts" value={stats.totalPosts} />
           <Stat label="Reactions" value={stats.totalReactions} />
           <Stat label="Online" value={stats.onlineUsers} />
+          <Stat label="Max Online" value={stats.maxOnlineUsers ?? 0} />
         </section>
       )}
+      <RankingPanel title="Daily History">
+        {history.length === 0 && <p className="muted empty-state">No daily stat history yet.</p>}
+        {history.map((day, index) => (
+          <div key={day.day} className="ranking-row">
+            <span className="ranking-index">{index + 1}</span>
+            <span className="ranking-main">
+              <span className="item-title">{day.day}</span>
+              <span className="item-meta muted">
+                {day.totalUsers} users / {day.totalPosts} posts / max {day.maxOnlineUsers} online {formatDateTime(day.maxOnlineAt)}
+              </span>
+            </span>
+            <span className="ranking-score">{day.onlineUsers}</span>
+          </div>
+        ))}
+      </RankingPanel>
       <section className="rankings-grid">
         <RankingPanel title="Active Boards">
           {boards.map((board, index) => (
@@ -170,6 +189,11 @@ function Stat({ label, value }: { label: string; value: number }) {
 function formatDate(ts: number) {
   if (!ts) return 'never'
   return new Date(ts).toLocaleDateString()
+}
+
+function formatDateTime(ts: number) {
+  if (!ts) return 'never'
+  return new Date(ts).toLocaleString()
 }
 
 function rankingToThread(thread: ThreadRanking): Thread {

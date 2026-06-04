@@ -4,10 +4,12 @@ import type { Poll } from '../api/types'
 interface Props {
   poll: Poll
   onVote: (optionId: string) => Promise<void>
+  onPublishResult?: () => Promise<void>
 }
 
-export function PollWidget({ poll, onVote }: Props) {
+export function PollWidget({ poll, onVote, onPublishResult }: Props) {
   const [voting, setVoting] = useState<string | null>(null)
+  const [publishing, setPublishing] = useState(false)
 
   const expired = poll.expiresAt ? poll.expiresAt < Date.now() : false
   const totalVotes = poll.options.reduce((s, o) => s + o.voteCount, 0)
@@ -20,6 +22,16 @@ export function PollWidget({ poll, onVote }: Props) {
       await onVote(optionId)
     } finally {
       setVoting(null)
+    }
+  }
+
+  async function handlePublishResult() {
+    if (!onPublishResult) return
+    setPublishing(true)
+    try {
+      await onPublishResult()
+    } finally {
+      setPublishing(false)
     }
   }
 
@@ -54,9 +66,16 @@ export function PollWidget({ poll, onVote }: Props) {
         })}
       </div>
       <div className="poll-footer muted">
-        {totalVotes} vote{totalVotes !== 1 ? 's' : ''}
-        {expired && ' · Closed'}
-        {poll.expiresAt && !expired && ` · Closes ${new Date(poll.expiresAt).toLocaleString()}`}
+        <span>
+          {totalVotes} vote{totalVotes !== 1 ? 's' : ''}
+          {expired && ' · Closed'}
+          {poll.expiresAt && !expired && ` · Closes ${new Date(poll.expiresAt).toLocaleString()}`}
+        </span>
+        {onPublishResult && (
+          <button type="button" className="link-btn" onClick={handlePublishResult} disabled={publishing}>
+            {publishing ? 'Publishing...' : 'Publish result'}
+          </button>
+        )}
       </div>
     </div>
   )

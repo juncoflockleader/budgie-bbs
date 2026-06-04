@@ -919,9 +919,16 @@ func (c *Core) GetCommunityStats() (*CommunityStats, error) {
 	return getCommunityStats(c.DB)
 }
 
+func (c *Core) ListCommunityStatHistory(limit, offset int) ([]CommunityStatHistory, error) {
+	return listCommunityStatHistory(c.DB, limit, offset)
+}
+
 func (c *Core) PublishDailyStatsSnapshot(ctx context.Context, at time.Time) (*proto.AckResult, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(c.DB, at.UTC().UnixMilli()); err != nil {
+		return nil, err
 	}
 	day := at.UTC().Format("2006-01-02")
 	raw, err := json.Marshal(proto.PublishStatsSnapshotPayload{Date: day})

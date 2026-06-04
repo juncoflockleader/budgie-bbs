@@ -13,6 +13,7 @@ import type {
   BlessingRanking,
   ArchiveRanking,
   Category,
+  CommunityStatHistory,
   CommunityStats,
   DirectMessage,
   DirectMessageConversation,
@@ -100,6 +101,14 @@ export async function listBoards(token: string): Promise<ApiResponse<Board[]>> {
 export async function getCommunityStats(token: string): Promise<ApiResponse<CommunityStats>> {
   const res = await fetch(`${BASE}/stats/community`, { headers: authHeaders(token) })
   return json<CommunityStats>(res)
+}
+
+export async function listCommunityStatHistory(token: string, limit = 30): Promise<ApiResponse<CommunityStatHistory[]>> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  const res = await fetch(`${BASE}/stats/community/history?${params}`, { headers: authHeaders(token) })
+  const r = await json<{ days: CommunityStatHistory[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.days ?? [] }
 }
 
 export async function publishStatsSnapshot(token: string, date?: string): Promise<ApiResponse<AckResult>> {
@@ -413,6 +422,7 @@ export async function setBoardMember(
     canModeratePosts?: boolean
     canModerateThreads?: boolean
     canAnnounce?: boolean
+    canManagePolls?: boolean
     canSetBoardSettings?: boolean
   } = {},
 ): Promise<ApiResponse<AckResult>> {

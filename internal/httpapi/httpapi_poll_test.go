@@ -1453,6 +1453,7 @@ func TestHTTPPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
 
 	adminToken := registerUser(t, handler, "admin")
 	bobToken := registerUser(t, handler, "bob")
+	carolToken := registerUser(t, handler, "carol")
 
 	createThreadAck := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
@@ -1489,8 +1490,13 @@ func TestHTTPPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", bobToken, nil, &forbidden); status != http.StatusForbidden {
 		t.Fatalf("expected non-author poll result publish forbidden, got %d error=%+v", status, forbidden.Error)
 	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/general/members/carol", adminToken, map[string]bool{
+		"canManagePolls": true,
+	}, &vote); status != http.StatusCreated {
+		t.Fatalf("grant carol poll manager permission status: %d error=%+v", status, vote.Error)
+	}
 	result := ackResponse{}
-	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", adminToken, nil, &result); status != http.StatusCreated {
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", carolToken, nil, &result); status != http.StatusCreated {
 		t.Fatalf("publish poll result status: %d error=%+v", status, result.Error)
 	}
 	if result.Result == nil || result.Result.ID == "" {
@@ -1516,7 +1522,7 @@ func TestHTTPPublishPollResultCreatesVoteBoardRecord(t *testing.T) {
 		}
 	}
 	again := ackResponse{}
-	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", adminToken, nil, &again); status != http.StatusCreated {
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/publish-result", carolToken, nil, &again); status != http.StatusCreated {
 		t.Fatalf("repeat poll result publish status: %d error=%+v", status, again.Error)
 	}
 	if again.Result == nil || again.Result.ID != result.Result.ID {

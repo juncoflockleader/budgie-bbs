@@ -9,7 +9,7 @@ import (
 )
 
 const DefaultMailQuotaBytes int64 = 10 << 20
-const generatedSystemBoardSQLList = "'0announce','0moderation','BBSLists','Blessing','Filter','Goodbye','GiveupNotice','Registry','bbsnet','denypost','newcomers','notepad','reject_registry','syssecurity','undenypost','vote'"
+const generatedSystemBoardSQLList = "'0announce','0moderation','BBSLists','Blessing','Filter','Goodbye','GiveupNotice','Registry','bbsnet','denypost','newcomers','notepad','reject_registry','sysmail','syssecurity','undenypost','vote'"
 
 // --- Readers ---
 
@@ -66,6 +66,17 @@ func ListBoards(db *sql.DB) ([]Board, error) {
 }
 
 func GetCommunityStats(db *sql.DB) (*CommunityStats, error) {
+	stats, err := getCommunityStatsCurrent(db)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyCommunityStatsMaxOnline(db, stats); err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
+func getCommunityStatsCurrent(db *sql.DB) (*CommunityStats, error) {
 	cutoff := NowMS() - 5*60*1000
 	stats := &CommunityStats{}
 	err := QQueryRow(db,
@@ -102,6 +113,60 @@ func GetCommunityStats(db *sql.DB) (*CommunityStats, error) {
 		return nil, err
 	}
 	return stats, nil
+}
+
+func applyCommunityStatsMaxOnline(db *sql.DB, stats *CommunityStats) error {
+	var maxOnline int
+	var maxAt int64
+	err := QQueryRow(db,
+		`SELECT max_online_users, max_online_at
+		   FROM community_stat_history
+		  ORDER BY max_online_users DESC, max_online_at DESC
+		  LIMIT 1`,
+	).Scan(&maxOnline, &maxAt)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	stats.MaxOnlineUsers = maxOnline
+	stats.MaxOnlineAt = maxAt
+	if stats.OnlineUsers > stats.MaxOnlineUsers {
+		stats.MaxOnlineUsers = stats.OnlineUsers
+		if stats.MaxOnlineAt == 0 {
+			stats.MaxOnlineAt = NowMS()
+		}
+	}
+	return nil
+}
+
+func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHistory, error) {
+	if limit <= 0 || limit > 365 {
+		limit = 30
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+		        total_reactions, total_mail, total_direct_messages, online_users,
+		        max_online_users, max_online_at, head_seq
+		   FROM community_stat_history
+		  ORDER BY day DESC
+		  LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CommunityStatHistory{}
+	for rows.Next() {
+		var h CommunityStatHistory
+		if err := rows.Scan(&h.Day, &h.SnapshotAt, &h.TotalUsers, &h.TotalBoards, &h.TotalThreads, &h.TotalPosts, &h.TotalReactions, &h.TotalMail, &h.TotalDirectMessages, &h.OnlineUsers, &h.MaxOnlineUsers, &h.MaxOnlineAt, &h.HeadSeq); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]BoardRanking, error) {
@@ -455,7 +520,8 @@ func ListBoardMembers(db *sql.DB, boardID string) ([]BoardMember, error) {
 		`SELECT bm.user_id, u.name, bm.title, COALESCE(bm.position, 0),
 		        COALESCE(bm.can_manage_members, 0), COALESCE(bm.can_curate, 0),
 		        COALESCE(bm.can_moderate_posts, 0), COALESCE(bm.can_moderate_threads, 0),
-		        COALESCE(bm.can_announce, 0), COALESCE(bm.can_set_board_settings, 0),
+		        COALESCE(bm.can_announce, 0), COALESCE(bm.can_manage_polls, 0),
+		        COALESCE(bm.can_set_board_settings, 0),
 		        bm.created_at, bm.updated_at
 		   FROM board_members bm
 		   JOIN users u ON u.id = bm.user_id
@@ -470,7 +536,7 @@ func ListBoardMembers(db *sql.DB, boardID string) ([]BoardMember, error) {
 	out := []BoardMember{}
 	for rows.Next() {
 		var m BoardMember
-		var canManageMembers, canCurate, canModeratePosts, canModerateThreads, canAnnounce, canSetBoardSettings int
+		var canManageMembers, canCurate, canModeratePosts, canModerateThreads, canAnnounce, canManagePolls, canSetBoardSettings int
 		if err := rows.Scan(
 			&m.UserID,
 			&m.Name,
@@ -481,6 +547,7 @@ func ListBoardMembers(db *sql.DB, boardID string) ([]BoardMember, error) {
 			&canModeratePosts,
 			&canModerateThreads,
 			&canAnnounce,
+			&canManagePolls,
 			&canSetBoardSettings,
 			&m.CreatedAt,
 			&m.UpdatedAt,
@@ -492,6 +559,7 @@ func ListBoardMembers(db *sql.DB, boardID string) ([]BoardMember, error) {
 		m.CanModeratePosts = canModeratePosts != 0
 		m.CanModerateThreads = canModerateThreads != 0
 		m.CanAnnounce = canAnnounce != 0
+		m.CanManagePolls = canManagePolls != 0
 		m.CanSetBoardSettings = canSetBoardSettings != 0
 		out = append(out, m)
 	}

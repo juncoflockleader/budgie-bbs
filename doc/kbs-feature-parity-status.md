@@ -83,6 +83,7 @@ counters, and generated list boards. Budgie now has the first projection-backed
 ranking surface:
 
 - Authenticated community counters: `GET /api/v1/stats/community`.
+- Authenticated daily stat history: `GET /api/v1/stats/community/history`.
 - Authenticated active-board rankings: `GET /api/v1/rankings/boards`.
 - Authenticated hot-thread rankings: `GET /api/v1/rankings/threads`.
 - Authenticated top-poster rankings: `GET /api/v1/rankings/users`.
@@ -92,19 +93,23 @@ ranking surface:
   /api/v1/stats/community/snapshot`.
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has a deterministic `BBSLists` snapshot thread.
+- Presence changes and stat snapshots maintain a projection-backed daily
+  `community_stat_history` row with current counters and max-online users/time.
 - Hot-thread scores combine visible post count and reaction count.
 - Board, thread, and archive rankings hide member-read boards from users who
   cannot read those boards; direct thread-ranking queries for inaccessible
   boards are rejected.
 - Stat snapshots lazily create a KBS-style `BBSLists` system board and
-  deterministic daily generated thread/posts containing community counters plus
-  public-safe board, thread, user, blessing, and archive rankings.
-- Web `Rankings` page shows community counters, active boards, hot threads, top
-  posters, blessing counts, and archive paths, with board/thread/archive rows
-  opening the relevant reading surface.
+  deterministic daily generated thread/posts containing community counters,
+  max-online history, recent daily stat-history rows, plus public-safe board,
+  thread, user, blessing, and archive rankings.
+- Web `Rankings` page shows community counters, max-online peaks, recent daily
+  stat history, active boards, hot threads, top posters, blessing counts, and
+  archive paths, with board/thread/archive rows opening the relevant reading
+  surface.
 
-This does not yet implement blessing-specific rituals, max-online history,
-guest counters, or richer topic-decay algorithms.
+This does not yet implement guest counters, deeper historical charting, or
+richer topic-decay algorithms.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -261,6 +266,7 @@ enforced version:
   - Curate announcement entries with `canAnnounce`.
   - Redact and restore board posts with `canModeratePosts`.
   - Lock and move threads with `canModerateThreads`.
+  - Publish public poll-result records with `canManagePolls`.
   - Edit board policy flags and member admission requirements with
     `canSetBoardSettings`.
 - Web thread lists expose board policy badges, settings toggles, moderator
@@ -346,7 +352,9 @@ archive areas. Budgie now has the first durable curation layer:
 - Public blessing rituals lazily create the `Blessing` system board and
   generated public blessing threads/posts.
 - Public poll result publishing lazily creates the `vote` system board and
-  deterministic generated result threads/posts. Member-read poll results remain
+  deterministic generated result threads/posts. Poll/thread authors, board
+  moderators, site moderators/admins, and delegated board members with
+  `canManagePolls` can publish those records. Member-read poll results remain
   only on the source board.
 - Admin-managed content filters create open moderation reviews when new threads
   or replies match active global/board-scoped patterns. Public-board matches
@@ -374,8 +382,8 @@ archive areas. Budgie now has the first durable curation layer:
 - Web thread readers expose moderator/curator curation actions for threads and
   posts.
 
-This still does not implement every KBS forum-board workflow such as restricted
-`sysmail` or richer stat-history boards.
+This still does not implement every KBS forum-board workflow such as richer
+stat-history boards.
 
 ### Profiles, Signatures, And Password Changes
 
@@ -530,6 +538,9 @@ split:
 - Admin-only sysop mail-all uses the same durable mail path to address every
   other user, bypassing personal ignore rows while still enforcing mailbox
   quota and creating the sender's sent copy.
+- Admin-only sysop mail-all also mirrors into the KBS-style restricted
+  `sysmail` generated board as an operator-visible thread/post, with the board
+  forced into member-read, member-post, read-only, and no-reply mode.
 - Mail compose can include attachment metadata, sender-owned mail can receive
   uploaded binary files, and recipients with a visible mail copy can download
   stored mail attachments.
@@ -678,7 +689,8 @@ social graph:
 - Authenticated inbound board mail posting for mail-in-enabled boards.
 - Pending outbound relay delivery queue for relay-enabled boards.
 - Durable private mail with inbox/sent/trash/kept mailbox workflows.
-- Admin-only sysop mail-all broadcast through durable private mail.
+- Admin-only sysop mail-all broadcast through durable private mail and
+  restricted `sysmail` generated board records.
 - Built-in friend-list mail group expansion.
 - Short direct messages with conversation reads and unread counts.
 - Friends/fans/ignore lists, online-friend reads, global and board-scoped
@@ -711,8 +723,6 @@ social graph:
 
 - KBS member-manager edge permissions not yet modeled as Budgie forum
   workflows.
-- Broader generated system-board publishing for restricted sysmail and richer
-  stat-history workflows.
 - Remaining special system boards, historical/stat-log boards, and richer
   community statistics.
 - Richer article metadata beyond attachment listings and signatures.
@@ -720,6 +730,6 @@ social graph:
 
 ## Suggested Next Slices
 
-1. Restricted `sysmail` as a forum-visible operator mailbox/work queue.
-2. Richer historical/stat-log boards and max-online/history surfaces.
+1. KBS member-manager edge permissions not yet modeled in Budgie.
+2. Richer article metadata beyond attachment listings and signatures.
 3. Remaining BBS social utilities and games.

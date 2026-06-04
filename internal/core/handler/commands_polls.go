@@ -93,8 +93,8 @@ func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayloa
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
-	if !actor.IsMod() && !h.actorCanModerateBoard(actor, thread.Board) && post.AuthorID != actor.ID && thread.AuthorID != actor.ID {
-		return Reply{Err: errDetail(proto.ErrForbidden, "poll author or moderator required", false)}
+	if !h.actorCanManageBoardPolls(actor, thread.Board) && post.AuthorID != actor.ID && thread.AuthorID != actor.ID {
+		return Reply{Err: errDetail(proto.ErrForbidden, "poll author or board poll manager required", false)}
 	}
 	settings, err := getBoardSettings(h.db, thread.Board)
 	if err != nil {

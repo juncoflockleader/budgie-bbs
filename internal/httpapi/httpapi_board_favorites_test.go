@@ -73,6 +73,7 @@ type boardInfoResponse struct {
 		CanModeratePosts    bool   `json:"canModeratePosts"`
 		CanModerateThreads  bool   `json:"canModerateThreads"`
 		CanAnnounce         bool   `json:"canAnnounce"`
+		CanManagePolls      bool   `json:"canManagePolls"`
 		CanSetBoardSettings bool   `json:"canSetBoardSettings"`
 	} `json:"members"`
 }
@@ -115,7 +116,27 @@ type communityStatsResponse struct {
 	TotalMail           int   `json:"totalMail"`
 	TotalDirectMessages int   `json:"totalDirectMessages"`
 	OnlineUsers         int   `json:"onlineUsers"`
+	MaxOnlineUsers      int   `json:"maxOnlineUsers"`
+	MaxOnlineAt         int64 `json:"maxOnlineAt"`
 	HeadSeq             int64 `json:"headSeq"`
+}
+
+type communityStatHistoryResponse struct {
+	Days []struct {
+		Day                 string `json:"day"`
+		SnapshotAt          int64  `json:"snapshotAt"`
+		TotalUsers          int    `json:"totalUsers"`
+		TotalPosts          int    `json:"totalPosts"`
+		OnlineUsers         int    `json:"onlineUsers"`
+		MaxOnlineUsers      int    `json:"maxOnlineUsers"`
+		MaxOnlineAt         int64  `json:"maxOnlineAt"`
+		HeadSeq             int64  `json:"headSeq"`
+		TotalBoards         int    `json:"totalBoards"`
+		TotalThreads        int    `json:"totalThreads"`
+		TotalReactions      int    `json:"totalReactions"`
+		TotalMail           int    `json:"totalMail"`
+		TotalDirectMessages int    `json:"totalDirectMessages"`
+	} `json:"days"`
 }
 
 type boardRankingsResponse struct {
@@ -819,13 +840,37 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	}, &ack); status != http.StatusOK {
 		t.Fatalf("set presence status: %d error=%+v", status, ack.Error)
 	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/presence", bobToken, map[string]string{
+		"status": "active",
+	}, &ack); status != http.StatusOK {
+		t.Fatalf("set bob presence status: %d error=%+v", status, ack.Error)
+	}
 
 	stats := communityStatsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community", aliceToken, nil, &stats); status != http.StatusOK {
 		t.Fatalf("community stats status: %d", status)
 	}
-	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 4 || stats.TotalReactions != 1 || stats.OnlineUsers != 1 || stats.HeadSeq == 0 {
+	if stats.TotalUsers != 3 || stats.TotalBoards != 4 || stats.TotalThreads != 3 || stats.TotalPosts != 4 || stats.TotalReactions != 1 || stats.OnlineUsers != 2 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 || stats.HeadSeq == 0 {
 		t.Fatalf("unexpected community stats: %+v", stats)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/presence", bobToken, map[string]string{
+		"status": "offline",
+	}, &ack); status != http.StatusOK {
+		t.Fatalf("set bob offline presence status: %d error=%+v", status, ack.Error)
+	}
+	stats = communityStatsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community", aliceToken, nil, &stats); status != http.StatusOK {
+		t.Fatalf("community stats after offline status: %d", status)
+	}
+	if stats.OnlineUsers != 1 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
+		t.Fatalf("expected max-online history to preserve peak after offline, got %+v", stats)
+	}
+	history := communityStatHistoryResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community/history?limit=7", aliceToken, nil, &history); status != http.StatusOK {
+		t.Fatalf("community stat history status: %d", status)
+	}
+	if len(history.Days) != 1 || history.Days[0].OnlineUsers != 1 || history.Days[0].MaxOnlineUsers != 2 || history.Days[0].MaxOnlineAt == 0 || history.Days[0].TotalPosts != 4 {
+		t.Fatalf("expected daily stat history with preserved max-online peak, got %+v", history)
 	}
 
 	boards := boardRankingsResponse{}
@@ -943,7 +988,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts.Posts)
 	}
 	body := systemPosts.Posts[0].Body
-	for _, want := range []string{"Total users: 3", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Max online users: 2", "Recent daily history", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
@@ -1975,6 +2020,7 @@ func TestHTTPDelegatedBoardMemberPermissions(t *testing.T) {
 		"canCurate":           true,
 		"canModeratePosts":    true,
 		"canModerateThreads":  true,
+		"canManagePolls":      true,
 		"canSetBoardSettings": true,
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("grant delegated member permissions status: %d error=%+v", status, ack.Error)
@@ -1989,6 +2035,7 @@ func TestHTTPDelegatedBoardMemberPermissions(t *testing.T) {
 		!info.Members[0].CanCurate ||
 		!info.Members[0].CanModeratePosts ||
 		!info.Members[0].CanModerateThreads ||
+		!info.Members[0].CanManagePolls ||
 		!info.Members[0].CanSetBoardSettings {
 		t.Fatalf("expected alice delegated permissions, got %+v", info.Members)
 	}
@@ -3305,6 +3352,43 @@ func TestHTTPSysopMailAll(t *testing.T) {
 	}
 	if len(adminSent.Mail) != 1 || adminSent.Mail[0].ID != broadcast.Result.ID || !adminSent.Mail[0].Read {
 		t.Fatalf("expected sysop sent copy, got %+v", adminSent)
+	}
+
+	forbiddenThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/sysmail/threads", aliceToken, nil, &forbiddenThreads); status != http.StatusForbidden {
+		t.Fatalf("expected sysmail thread list to be staff-only, got %d %+v", status, forbiddenThreads)
+	}
+	sysmailInfo := boardInfoResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/sysmail", adminToken, nil, &sysmailInfo); status != http.StatusOK {
+		t.Fatalf("get sysmail board status: %d", status)
+	}
+	if sysmailInfo.Board.ID != "sysmail" || !sysmailInfo.Settings.ReadOnly || !sysmailInfo.Settings.NoReply || !sysmailInfo.Settings.MemberReadMode || !sysmailInfo.Settings.MemberPostMode {
+		t.Fatalf("expected restricted sysmail settings, got %+v", sysmailInfo)
+	}
+
+	sysmailThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/sysmail/threads", adminToken, nil, &sysmailThreads); status != http.StatusOK {
+		t.Fatalf("list sysmail threads status: %d", status)
+	}
+	expectedThreadID := "sysmail_thr_" + broadcast.Result.ID
+	if len(sysmailThreads.Threads) != 1 || sysmailThreads.Threads[0].ID != expectedThreadID || sysmailThreads.Threads[0].Title != "Sysop mail: Campus bulletin" {
+		t.Fatalf("expected generated sysmail thread, got %+v", sysmailThreads.Threads)
+	}
+	sysmailPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+expectedThreadID+"/posts", adminToken, nil, &sysmailPosts); status != http.StatusOK {
+		t.Fatalf("list sysmail posts status: %d", status)
+	}
+	if len(sysmailPosts.Posts) != 1 || sysmailPosts.Posts[0].Author != "admin" {
+		t.Fatalf("expected one admin-authored sysmail post, got %+v", sysmailPosts.Posts)
+	}
+	for _, want := range []string{"# Sysop mail: Campus bulletin", "From: admin", "Recipients: 3 users", "Source: admin mail-all broadcast", "Maintenance at midnight.", "Generated restricted sysop mail record"} {
+		if !strings.Contains(sysmailPosts.Posts[0].Body, want) {
+			t.Fatalf("expected sysmail body to contain %q, got:\n%s", want, sysmailPosts.Posts[0].Body)
+		}
+	}
+	forbiddenPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+expectedThreadID+"/posts", bobToken, nil, &forbiddenPosts); status != http.StatusForbidden {
+		t.Fatalf("expected sysmail posts to be staff-only, got %d %+v", status, forbiddenPosts)
 	}
 }
 

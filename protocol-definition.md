@@ -257,6 +257,7 @@ For clients that just want state (a fresh web load, a poller building a view):
 GET /api/v1/boards
 GET /api/v1/categories
 GET /api/v1/stats/community
+GET /api/v1/stats/community/history?limit=&offset=
 GET /api/v1/rankings/boards?limit=&offset=
 GET /api/v1/rankings/threads?board=&limit=&offset=
 GET /api/v1/rankings/users?limit=&offset=
@@ -317,11 +318,13 @@ counters, active boards, hot threads, top posters, blessing rituals, and active
 archive paths.
 Board/thread/archive rankings hide member-read boards unless the viewer can read
 them; direct thread ranking queries scoped to an inaccessible board are
-rejected. Generated system boards such as `newcomers`, `BBSLists`, `Registry`,
-`reject_registry`, `syssecurity`, `Goodbye`, `Blessing`, `GiveupNotice`, `bbsnet`,
-`notepad`, `Filter`, `denypost`, `undenypost`, `vote`, `0announce`, and `0moderation`
-remain directly readable boards but are excluded from community counters and
-ranking surfaces so generated logs do not masquerade as organic activity.
+rejected. Public generated system boards such as `newcomers`, `BBSLists`,
+`Registry`, `reject_registry`, `syssecurity`, `Goodbye`, `Blessing`,
+`GiveupNotice`, `bbsnet`, `notepad`, `Filter`, `denypost`, `undenypost`, `vote`,
+`0announce`, and `0moderation` remain directly readable boards but are excluded
+from community counters and ranking surfaces so generated logs do not masquerade
+as organic activity. Restricted generated boards such as `sysmail` use normal
+member-read policy and are also excluded from community counters and rankings.
 
 ### Writes — uniform command endpoint
 
@@ -512,7 +515,8 @@ setBoardMember { board*, user*, member*, title?,
                  position?,
                  canManageMembers?, canCurate?,
                  canModeratePosts?, canModerateThreads?,
-                 canAnnounce?, canSetBoardSettings? }        -> ack only
+                 canAnnounce?, canManagePolls?,
+                 canSetBoardSettings? }                      -> ack only
 applyBoardMembership { board*, note }                         -> ack id=application
 reviewBoardMembership { application*, status*, title, note }   -> ack only
 leaveBoardMembership { board* }                               -> ack only
@@ -617,11 +621,15 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   mirrored into a public system board.
 - `publishStatsSnapshot` is admin-only. It creates the `BBSLists` system board
   if needed and writes a deterministic daily generated thread/post containing
-  community counters plus public-safe board, thread, user, blessing, and archive
-  rankings.
+  community counters, max-online history, recent daily stat-history rows, plus
+  public-safe board, thread, user, blessing, and archive rankings.
   `date` is optional `YYYY-MM-DD` and defaults to the current UTC day; publishing
   the same date again returns the existing generated thread instead of
   duplicating it.
+- Presence changes and stats snapshots upsert `community_stat_history` rows.
+  `GET /api/v1/stats/community` exposes current `onlineUsers` plus historical
+  `maxOnlineUsers` and `maxOnlineAt`; `GET /api/v1/stats/community/history`
+  returns daily stat-log rows ordered newest first.
 - The `budgied` server also runs an automatic stat publisher by default
   (`-auto-stats=true`). On startup and hourly thereafter it ensures the current
   UTC day has the same deterministic `BBSLists` snapshot, authored by the
@@ -632,10 +640,10 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   remain directly readable like normal boards but are excluded from community
   counters and organic ranking lists.
 - `publishPollResult` can be run by the poll/thread author, board moderators,
-  or site moderators/admins. It lazily creates the KBS-style `vote` system board
-  and a deterministic public poll-result thread/post. Polls from member-read
-  boards are not mirrored into `vote`; their live results remain on the source
-  thread only.
+  delegated board members with `canManagePolls`, or site moderators/admins. It
+  lazily creates the KBS-style `vote` system board and a deterministic public
+  poll-result thread/post. Polls from member-read boards are not mirrored into
+  `vote`; their live results remain on the source thread only.
 - Board-scoped `sanctionUser` posting mutes/bans on public boards lazily create
   sanitized KBS-style `denypost` records, and `clearUserSanction` creates
   matching `undenypost` restoration records. Global sanctions and member-read
@@ -665,8 +673,10 @@ deleteDirectMessage { message* }                               -> ack only
   the built-in dynamic group `friends` expands to the actor's current friend
   list. `toFriends` expands to the same friend list. Recipients are
   deduplicated. `toAll` is admin-only sysop mail-all; it addresses every other
-  user and bypasses personal ignore rows. `saveSent` defaults to true.
-  `replyTo` must be a mail item visible to the actor.
+  user, bypasses personal ignore rows, and mirrors the broadcast into a
+  restricted `sysmail` generated board/thread/post for operator review.
+  `saveSent` defaults to true. `replyTo` must be a mail item visible to the
+  actor.
 - Mail groups are user-owned mailing lists. `members` accepts usernames or user
   ids and is stored with stable ordering.
 - `attachments` on `sendMail` stores URL/metadata attachments. Binary mail file

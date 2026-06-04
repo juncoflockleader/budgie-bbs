@@ -33,6 +33,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   const [memberCanModeratePosts, setMemberCanModeratePosts] = useState(false)
   const [memberCanModerateThreads, setMemberCanModerateThreads] = useState(false)
   const [memberCanAnnounce, setMemberCanAnnounce] = useState(false)
+  const [memberCanManagePolls, setMemberCanManagePolls] = useState(false)
   const [memberCanSetBoardSettings, setMemberCanSetBoardSettings] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -221,6 +222,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
           canModeratePosts: memberCanModeratePosts,
           canModerateThreads: memberCanModerateThreads,
           canAnnounce: memberCanAnnounce,
+          canManagePolls: memberCanManagePolls,
           canSetBoardSettings: memberCanSetBoardSettings,
         }
       : {}
@@ -236,6 +238,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
     setMemberCanModeratePosts(false)
     setMemberCanModerateThreads(false)
     setMemberCanAnnounce(false)
+    setMemberCanManagePolls(false)
     setMemberCanSetBoardSettings(false)
     const refreshed = await api.getBoardInfo(token, board.id)
     if (refreshed.error) setError(refreshed.error.message)
@@ -263,6 +266,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       canModeratePosts: boolean
       canModerateThreads: boolean
       canAnnounce: boolean
+      canManagePolls: boolean
       canSetBoardSettings: boolean
     },
   ) {
@@ -290,6 +294,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       canModeratePosts: member.canModeratePosts,
       canModerateThreads: member.canModerateThreads,
       canAnnounce: member.canAnnounce,
+      canManagePolls: member.canManagePolls,
       canSetBoardSettings: member.canSetBoardSettings,
     })
     if (res.error) {
@@ -534,6 +539,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                 {member.canModeratePosts && <span className="member-role-badge">posts</span>}
                 {member.canModerateThreads && <span className="member-role-badge">threads</span>}
                 {member.canAnnounce && <span className="member-role-badge">announce</span>}
+                {member.canManagePolls && <span className="member-role-badge">polls</span>}
                 {member.canSetBoardSettings && <span className="member-role-badge">settings</span>}
                 {canManageBoard && (
                   <>
@@ -583,6 +589,12 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                     </button>
                     <button
                       className="link-btn"
+                      onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canManagePolls: !member.canManagePolls })}
+                    >
+                      {member.canManagePolls ? 'Polls off' : 'Polls on'}
+                    </button>
+                    <button
+                      className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canSetBoardSettings: !member.canSetBoardSettings })}
                     >
                       {member.canSetBoardSettings ? 'Settings off' : 'Settings on'}
@@ -625,6 +637,10 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanAnnounce} onChange={e => setMemberCanAnnounce(e.target.checked)} />
                   Announce
+                </label>
+                <label className="inline-toggle">
+                  <input type="checkbox" checked={memberCanManagePolls} onChange={e => setMemberCanManagePolls(e.target.checked)} />
+                  Polls
                 </label>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanSetBoardSettings} onChange={e => setMemberCanSetBoardSettings(e.target.checked)} />

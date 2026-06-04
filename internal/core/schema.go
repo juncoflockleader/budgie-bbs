@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS board_members (
     can_moderate_posts INTEGER NOT NULL DEFAULT 0,
     can_moderate_threads INTEGER NOT NULL DEFAULT 0,
     can_announce       INTEGER NOT NULL DEFAULT 0,
+    can_manage_polls   INTEGER NOT NULL DEFAULT 0,
     can_set_board_settings INTEGER NOT NULL DEFAULT 0,
     created_at         INTEGER NOT NULL DEFAULT 0,
     updated_at         INTEGER NOT NULL DEFAULT 0,
@@ -371,6 +372,24 @@ CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_last_seen
     ON user_presence_sessions(last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen
     ON user_presence_sessions(board_id, last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS community_stat_history (
+    day                   TEXT    PRIMARY KEY,
+    snapshot_at           INTEGER NOT NULL DEFAULT 0,
+    total_users           INTEGER NOT NULL DEFAULT 0,
+    total_boards          INTEGER NOT NULL DEFAULT 0,
+    total_threads         INTEGER NOT NULL DEFAULT 0,
+    total_posts           INTEGER NOT NULL DEFAULT 0,
+    total_reactions       INTEGER NOT NULL DEFAULT 0,
+    total_mail            INTEGER NOT NULL DEFAULT 0,
+    total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    online_users          INTEGER NOT NULL DEFAULT 0,
+    max_online_users      INTEGER NOT NULL DEFAULT 0,
+    max_online_at         INTEGER NOT NULL DEFAULT 0,
+    head_seq              INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
+    ON community_stat_history(snapshot_at DESC, day DESC);
 
 -- Per-board read markers power the BBS "unread boards" workflow. previous_seq
 -- supports restoring the last marker after an accidental mark-read.

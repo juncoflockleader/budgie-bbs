@@ -1407,7 +1407,7 @@ button.ranking-row:hover {
 .poll-option-text { position: relative; z-index: 1; flex: 1 }
 .poll-option-pct { position: relative; z-index: 1; font-size: 0.8em; white-space: nowrap }
 .poll-option-spinner { font-size: 0.8em }
-.poll-footer { font-size: 0.8em; margin-top: 0.5rem }
+.poll-footer { align-items: center; display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.8em; margin-top: 0.5rem }
 
 /* ── Responsive tweaks ─────────────────────────────────────────────────── */
 @media (max-width: 500px) {

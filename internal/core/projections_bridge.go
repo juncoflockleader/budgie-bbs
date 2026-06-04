@@ -222,6 +222,10 @@ func getCommunityStats(db *sql.DB) (*CommunityStats, error) {
 	return projections.GetCommunityStats(db)
 }
 
+func listCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHistory, error) {
+	return projections.ListCommunityStatHistory(db, limit, offset)
+}
+
 func listBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]BoardRanking, error) {
 	return projections.ListBoardRankings(db, viewerID, includePrivate, limit, offset)
 }

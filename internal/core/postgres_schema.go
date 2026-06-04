@@ -277,6 +277,7 @@ CREATE TABLE IF NOT EXISTS board_members (
     can_moderate_posts INTEGER NOT NULL DEFAULT 0,
     can_moderate_threads INTEGER NOT NULL DEFAULT 0,
     can_announce       INTEGER NOT NULL DEFAULT 0,
+    can_manage_polls   INTEGER NOT NULL DEFAULT 0,
     can_set_board_settings INTEGER NOT NULL DEFAULT 0,
     created_at         BIGINT NOT NULL DEFAULT 0,
     updated_at         BIGINT NOT NULL DEFAULT 0,
@@ -506,6 +507,24 @@ CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_last_seen
     ON user_presence_sessions(last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_user_presence_sessions_board_last_seen
     ON user_presence_sessions(board_id, last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS community_stat_history (
+    day                   TEXT PRIMARY KEY,
+    snapshot_at           BIGINT NOT NULL DEFAULT 0,
+    total_users           INTEGER NOT NULL DEFAULT 0,
+    total_boards          INTEGER NOT NULL DEFAULT 0,
+    total_threads         INTEGER NOT NULL DEFAULT 0,
+    total_posts           INTEGER NOT NULL DEFAULT 0,
+    total_reactions       INTEGER NOT NULL DEFAULT 0,
+    total_mail            INTEGER NOT NULL DEFAULT 0,
+    total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    online_users          INTEGER NOT NULL DEFAULT 0,
+    max_online_users      INTEGER NOT NULL DEFAULT 0,
+    max_online_at         BIGINT NOT NULL DEFAULT 0,
+    head_seq              BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
+    ON community_stat_history(snapshot_at DESC, day DESC);
 
 CREATE TABLE IF NOT EXISTS board_read_markers (
     user_id      TEXT   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -756,6 +775,7 @@ CREATE TABLE IF NOT EXISTS board_members (
     can_moderate_posts INTEGER NOT NULL DEFAULT 0,
     can_moderate_threads INTEGER NOT NULL DEFAULT 0,
     can_announce       INTEGER NOT NULL DEFAULT 0,
+    can_manage_polls   INTEGER NOT NULL DEFAULT 0,
     can_set_board_settings INTEGER NOT NULL DEFAULT 0,
     created_at         BIGINT NOT NULL DEFAULT 0,
     updated_at         BIGINT NOT NULL DEFAULT 0,
@@ -986,6 +1006,7 @@ CREATE TABLE IF NOT EXISTS board_members (
     can_moderate_posts INTEGER NOT NULL DEFAULT 0,
     can_moderate_threads INTEGER NOT NULL DEFAULT 0,
     can_announce       INTEGER NOT NULL DEFAULT 0,
+    can_manage_polls   INTEGER NOT NULL DEFAULT 0,
     can_set_board_settings INTEGER NOT NULL DEFAULT 0,
     created_at         BIGINT NOT NULL DEFAULT 0,
     updated_at         BIGINT NOT NULL DEFAULT 0,
@@ -1179,6 +1200,8 @@ ALTER TABLE board_members
     ADD COLUMN IF NOT EXISTS can_moderate_threads INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE board_members
     ADD COLUMN IF NOT EXISTS can_announce INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE board_members
+    ADD COLUMN IF NOT EXISTS can_manage_polls INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE board_members
     ADD COLUMN IF NOT EXISTS can_set_board_settings INTEGER NOT NULL DEFAULT 0;
 
@@ -1489,6 +1512,33 @@ CREATE INDEX IF NOT EXISTS idx_blessings_from_created
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (28, 'postgres-blessings', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 29,
+			Name:    "postgres-community-stat-history",
+			SQL: `
+CREATE TABLE IF NOT EXISTS community_stat_history (
+    day                   TEXT PRIMARY KEY,
+    snapshot_at           BIGINT NOT NULL DEFAULT 0,
+    total_users           INTEGER NOT NULL DEFAULT 0,
+    total_boards          INTEGER NOT NULL DEFAULT 0,
+    total_threads         INTEGER NOT NULL DEFAULT 0,
+    total_posts           INTEGER NOT NULL DEFAULT 0,
+    total_reactions       INTEGER NOT NULL DEFAULT 0,
+    total_mail            INTEGER NOT NULL DEFAULT 0,
+    total_direct_messages INTEGER NOT NULL DEFAULT 0,
+    online_users          INTEGER NOT NULL DEFAULT 0,
+    max_online_users      INTEGER NOT NULL DEFAULT 0,
+    max_online_at         BIGINT NOT NULL DEFAULT 0,
+    head_seq              BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_community_stat_history_snapshot
+    ON community_stat_history(snapshot_at DESC, day DESC);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (29, 'postgres-community-stat-history', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

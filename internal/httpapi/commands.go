@@ -435,6 +435,7 @@ func (s *Server) handleSetBoardMember(w http.ResponseWriter, r *http.Request) {
 			CanModeratePosts    *bool  `json:"canModeratePosts"`
 			CanModerateThreads  *bool  `json:"canModerateThreads"`
 			CanAnnounce         *bool  `json:"canAnnounce"`
+			CanManagePolls      *bool  `json:"canManagePolls"`
 			CanSetBoardSettings *bool  `json:"canSetBoardSettings"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
@@ -445,6 +446,7 @@ func (s *Server) handleSetBoardMember(w http.ResponseWriter, r *http.Request) {
 			p.CanModeratePosts = body.CanModeratePosts
 			p.CanModerateThreads = body.CanModerateThreads
 			p.CanAnnounce = body.CanAnnounce
+			p.CanManagePolls = body.CanManagePolls
 			p.CanSetBoardSettings = body.CanSetBoardSettings
 		}
 	}

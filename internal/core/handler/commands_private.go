@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -123,12 +124,20 @@ func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 			return internalErr(err)
 		}
 	}
+	generatedEvents := []*proto.Event{}
+	if p.ToAll {
+		generatedEvents, err = h.appendSysmailSystemPostTx(tx, actor, id, subject, body, len(toNames), ts)
+		if err != nil {
+			return internalErr(err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtMailSent, Seq: seq, Scopes: scopes,
 		Payload: &proto.MailSentPayload{ID: id, FromUserID: actor.ID, From: actor.Name, ToUserIDs: toIDs, To: toNames, Subject: subject, Body: body, ParentID: parentID, SaveSent: saveSent, Attachments: attachments, TS: ts}, TS: ts})
+	h.publishGeneratedEvents(generatedEvents)
 	return Reply{Result: &proto.AckResult{ID: id, Seq: seq}}
 }
 
@@ -168,6 +177,136 @@ func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPa
 		Body:      body,
 		SaveSent:  p.SaveSent,
 	})
+}
+
+const sysmailSystemBoardID = "sysmail"
+
+func (h *Handler) appendSysmailSystemPostTx(tx *sql.Tx, actor *User, mailID, subject, mailBody string, recipientCount int, ts int64) ([]*proto.Event, error) {
+	threadID := "sysmail_thr_" + mailID
+	postID := "sysmail_pst_" + mailID
+	var exists int
+	err := qQueryRow(tx, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
+	if err == nil {
+		return nil, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	out := []*proto.Event{}
+	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, sysmailSystemBoardID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		position, err := boardCategoryPosition(tx, "", nil)
+		if err != nil {
+			return nil, err
+		}
+		boardScopes := []string{"board:" + sysmailSystemBoardID}
+		boardSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
+			ID:          sysmailSystemBoardID,
+			Name:        "sysmail",
+			Description: "Generated restricted sysop mail log",
+			Position:    position,
+			By:          actor.ID,
+			TS:          ts,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := insertBoard(tx, sysmailSystemBoardID, "sysmail", "Generated restricted sysop mail log", "", position); err != nil {
+			return nil, err
+		}
+		out = append(out, &proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: boardScopes,
+			Payload: &proto.BoardCreatedPayload{ID: sysmailSystemBoardID, Name: "sysmail", Description: "Generated restricted sysop mail log", By: actor.Name, TS: ts}, TS: ts})
+	} else if err != nil {
+		return nil, err
+	}
+	if err := ensureSysmailBoardSettingsTx(tx, ts); err != nil {
+		return nil, err
+	}
+
+	title := "Sysop mail: " + subject
+	body := formatSysmailSystemBody(mailID, subject, mailBody, actor.Name, recipientCount)
+	scopes := []string{"board:" + sysmailSystemBoardID}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: sysmailSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	threadScopes := append(scopes, "thread:"+threadID)
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: sysmailSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return nil, err
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
+		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return nil, err
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return nil, err
+	}
+	if err := ftsInsertPost(tx, postID, threadID, sysmailSystemBoardID, actor.Name, body); err != nil {
+		return nil, err
+	}
+	out = append(out,
+		&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+			Payload: &proto.ThreadNewPayload{ID: threadID, Board: sysmailSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts},
+		&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
+			Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts},
+	)
+	return out, nil
+}
+
+func ensureSysmailBoardSettingsTx(tx *sql.Tx, ts int64) error {
+	_, err := projections.QExec(tx,
+		`INSERT INTO board_settings (
+		    board_id, anonymous_allowed, read_only, no_reply, attachments_allowed,
+		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, updated_at
+		 ) VALUES (?, 0, 1, 1, 0, 0, 0, 1, 1, ?)
+		 ON CONFLICT(board_id)
+		 DO UPDATE SET
+		    anonymous_allowed=0,
+		    read_only=1,
+		    no_reply=1,
+		    attachments_allowed=0,
+		    mail_in_allowed=0,
+		    relay_enabled=0,
+		    member_read_mode=1,
+		    member_post_mode=1,
+		    updated_at=excluded.updated_at`,
+		sysmailSystemBoardID,
+		ts,
+	)
+	return err
+}
+
+func formatSysmailSystemBody(mailID, subject, mailBody, actorName string, recipientCount int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Sysop mail: %s\n\n", subject)
+	fmt.Fprintf(&b, "- Mail: %s\n", mailID)
+	fmt.Fprintf(&b, "- From: %s\n", actorName)
+	if recipientCount == 1 {
+		b.WriteString("- Recipients: 1 user\n")
+	} else {
+		fmt.Fprintf(&b, "- Recipients: %d users\n", recipientCount)
+	}
+	b.WriteString("- Source: admin mail-all broadcast\n\n")
+	b.WriteString(mailBody)
+	if !strings.HasSuffix(mailBody, "\n") {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\nGenerated restricted sysop mail record.\n")
+	return b.String()
 }
 
 func (h *Handler) setMailGroup(actor *User, p proto.SetMailGroupPayload) Reply {

@@ -437,6 +437,15 @@ export function ThreadPage({
     void refreshPoll(pollId)
   }
 
+  async function handlePublishPollResult(pollId: string) {
+    const res = await api.publishPollResult(token, pollId)
+    if (res.error) {
+      alert(res.error.message)
+      return
+    }
+    alert('Poll result published.')
+  }
+
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
 
@@ -457,6 +466,7 @@ export function ThreadPage({
   const curationDefaultKind = canCurateBoard ? 'digest' : 'announcement'
   const canModeratePosts = canManageBoard || Boolean(currentMember?.canModeratePosts)
   const canModerateThreads = canManageBoard || Boolean(currentMember?.canModerateThreads)
+  const canManagePolls = canManageBoard || Boolean(currentMember?.canManagePolls)
   const boardBlocksReplies = Boolean(boardInfo?.settings.readOnly || boardInfo?.settings.noReply)
   const canReplyInBoard = !threadLocked && (!boardBlocksReplies || canManageBoard)
   const canAttach = Boolean(boardInfo?.settings.attachmentsAllowed || canManageBoard)
@@ -685,6 +695,7 @@ export function ThreadPage({
           const poll = polls[post.id] // null = loading, Poll = loaded, undefined = none
           const tl = trustLevels[post.author]
           const createdAt = post.createdAt ?? post.createdSeq
+          const canPublishPollResult = canManagePolls || post.authorId === currentUserId || thread.authorId === currentUserId
 
           return (
             <div
@@ -798,6 +809,7 @@ export function ThreadPage({
                 <PollWidget
                   poll={poll}
                   onVote={optionId => handleVotePoll(poll.id, optionId)}
+                  onPublishResult={canPublishPollResult ? () => handlePublishPollResult(poll.id) : undefined}
                 />
               )}
             </div>
