@@ -67,6 +67,13 @@ type CommunityStatHistory struct {
 	MaxOnlineUsers      int    `json:"maxOnlineUsers"`
 	MaxOnlineAt         int64  `json:"maxOnlineAt"`
 	HeadSeq             int64  `json:"headSeq"`
+	DeltaUsers          int    `json:"deltaUsers"`
+	DeltaBoards         int    `json:"deltaBoards"`
+	DeltaThreads        int    `json:"deltaThreads"`
+	DeltaPosts          int    `json:"deltaPosts"`
+	DeltaReactions      int    `json:"deltaReactions"`
+	DeltaMail           int    `json:"deltaMail"`
+	DeltaDirectMessages int    `json:"deltaDirectMessages"`
 }
 
 type ContentFilter struct {

@@ -60,6 +60,13 @@ export interface CommunityStatHistory {
   maxOnlineUsers: number
   maxOnlineAt: number
   headSeq: number
+  deltaUsers: number
+  deltaBoards: number
+  deltaThreads: number
+  deltaPosts: number
+  deltaReactions: number
+  deltaMail: number
+  deltaDirectMessages: number
 }
 
 export interface BoardRanking {

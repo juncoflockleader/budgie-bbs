@@ -83,7 +83,8 @@ counters, and generated list boards. Budgie now has the first projection-backed
 ranking surface:
 
 - Authenticated community counters: `GET /api/v1/stats/community`.
-- Authenticated daily stat history: `GET /api/v1/stats/community/history`.
+- Authenticated daily stat history with derived trend deltas: `GET
+  /api/v1/stats/community/history`.
 - Authenticated active-board rankings: `GET /api/v1/rankings/boards`.
 - Authenticated hot-thread rankings: `GET /api/v1/rankings/threads`.
 - Authenticated latest-reply rankings: `GET /api/v1/rankings/replies`.
@@ -95,7 +96,9 @@ ranking surface:
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has a deterministic `BBSLists` snapshot thread.
 - Presence changes and stat snapshots maintain a projection-backed daily
-  `community_stat_history` row with current counters and max-online users/time.
+  `community_stat_history` row with current counters, max-online users/time, and
+  day-over-day deltas for user, board, thread, post, reaction, mail, and direct
+  message totals.
 - Hot-thread scores combine visible post count, reaction count, and a 48-hour
   recency half-life so stale activity decays behind fresh conversation.
 - Board, thread, reply, and archive rankings hide member-read boards from users
@@ -103,14 +106,15 @@ ranking surface:
   boards are rejected.
 - Stat snapshots lazily create a KBS-style `BBSLists` system board and
   deterministic daily generated thread/posts containing community counters,
-  max-online history, recent daily stat-history rows, plus public-safe board,
-  thread, latest-reply, user, blessing, and archive rankings.
+  max-online history, recent daily stat-history rows with trend deltas, plus
+  public-safe board, thread, latest-reply, user, blessing, and archive rankings.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
-  stat history, active boards, hot threads, latest replies, top posters,
-  blessing counts, and archive paths, with board/thread/reply/archive rows
-  opening the relevant reading surface.
+  stat history with trend deltas, active boards, hot threads, latest replies,
+  top posters, blessing counts, and archive paths, with board/thread/reply/archive
+  rows opening the relevant reading surface.
 
-This does not yet implement guest counters or deeper historical charting.
+This does not yet implement guest counters or richer historical visualization
+beyond daily trend rows.
 
 ### Board-Level Unread Workflow And Read Markers
 

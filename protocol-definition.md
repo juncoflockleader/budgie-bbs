@@ -660,7 +660,9 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
 - Presence changes and stats snapshots upsert `community_stat_history` rows.
   `GET /api/v1/stats/community` exposes current `onlineUsers` plus historical
   `maxOnlineUsers` and `maxOnlineAt`; `GET /api/v1/stats/community/history`
-  returns daily stat-log rows ordered newest first.
+  returns daily stat-log rows ordered newest first with derived `deltaUsers`,
+  `deltaBoards`, `deltaThreads`, `deltaPosts`, `deltaReactions`, `deltaMail`,
+  and `deltaDirectMessages` fields compared to the next older fetched row.
 - The `budgied` server also runs an automatic stat publisher by default
   (`-auto-stats=true`). On startup and hourly thereafter it ensures the current
   UTC day has the same deterministic `BBSLists` snapshot, authored by the

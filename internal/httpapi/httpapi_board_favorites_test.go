@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type boardsResponse struct {
@@ -136,6 +137,13 @@ type communityStatHistoryResponse struct {
 		TotalReactions      int    `json:"totalReactions"`
 		TotalMail           int    `json:"totalMail"`
 		TotalDirectMessages int    `json:"totalDirectMessages"`
+		DeltaUsers          int    `json:"deltaUsers"`
+		DeltaBoards         int    `json:"deltaBoards"`
+		DeltaThreads        int    `json:"deltaThreads"`
+		DeltaPosts          int    `json:"deltaPosts"`
+		DeltaReactions      int    `json:"deltaReactions"`
+		DeltaMail           int    `json:"deltaMail"`
+		DeltaDirectMessages int    `json:"deltaDirectMessages"`
 	} `json:"days"`
 }
 
@@ -772,7 +780,7 @@ func TestHTTPFavoriteTreeImportExportAndFolderReadMarkers(t *testing.T) {
 }
 
 func TestHTTPCommunityRankingsAndStats(t *testing.T) {
-	_, handler := setupHTTPTestServer(t)
+	c, handler := setupHTTPTestServer(t)
 
 	adminToken := registerUser(t, handler, "admin")
 	aliceToken := registerUser(t, handler, "alice")
@@ -896,12 +904,29 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if stats.OnlineUsers != 1 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("expected max-online history to preserve peak after offline, got %+v", stats)
 	}
+	previousAt := time.Now().UTC().Add(-24 * time.Hour)
+	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
+		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
+		total_reactions, total_mail, total_direct_messages, online_users,
+		max_online_users, max_online_at, head_seq
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
+		2, 3, 1, 2, 0, 0, 0, 0, 1, previousAt.UnixMilli(), 1,
+	); err != nil {
+		t.Fatal(err)
+	}
 	history := communityStatHistoryResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/stats/community/history?limit=7", aliceToken, nil, &history); status != http.StatusOK {
 		t.Fatalf("community stat history status: %d", status)
 	}
-	if len(history.Days) != 1 || history.Days[0].OnlineUsers != 1 || history.Days[0].MaxOnlineUsers != 2 || history.Days[0].MaxOnlineAt == 0 || history.Days[0].TotalPosts != 5 {
+	if len(history.Days) != 2 || history.Days[0].OnlineUsers != 1 || history.Days[0].MaxOnlineUsers != 2 || history.Days[0].MaxOnlineAt == 0 || history.Days[0].TotalPosts != 5 {
 		t.Fatalf("expected daily stat history with preserved max-online peak, got %+v", history)
+	}
+	if history.Days[0].DeltaUsers != 1 || history.Days[0].DeltaBoards != 1 || history.Days[0].DeltaThreads != 2 || history.Days[0].DeltaPosts != 3 || history.Days[0].DeltaReactions != 1 || history.Days[0].DeltaMail != 0 || history.Days[0].DeltaDirectMessages != 0 {
+		t.Fatalf("expected newest daily stat history row to include deltas, got %+v", history.Days[0])
+	}
+	if history.Days[1].DeltaUsers != 0 || history.Days[1].DeltaPosts != 0 || history.Days[1].DeltaReactions != 0 {
+		t.Fatalf("expected oldest fetched daily stat history row to have zero deltas without an older comparison row, got %+v", history.Days[1])
 	}
 
 	boards := boardRankingsResponse{}
@@ -1034,7 +1059,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts.Posts)
 	}
 	body := systemPosts.Posts[0].Body
-	for _, want := range []string{"Total users: 3", "Total posts: 5", "Max online users: 2", "Recent daily history", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total posts: 5", "Max online users: 2", "Recent daily history", "3 users (+1)", "5 posts (+3)", "1 reactions (+1)", "max 2 online", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}

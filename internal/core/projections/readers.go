@@ -145,6 +145,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 	if offset < 0 {
 		offset = 0
 	}
+	fetchLimit := limit + 1
 	rows, err := QQuery(db,
 		`SELECT day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 		        total_reactions, total_mail, total_direct_messages, online_users,
@@ -152,7 +153,7 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 		   FROM community_stat_history
 		  ORDER BY day DESC
 		  LIMIT ? OFFSET ?`,
-		limit, offset,
+		fetchLimit, offset,
 	)
 	if err != nil {
 		return nil, err
@@ -166,7 +167,29 @@ func ListCommunityStatHistory(db *sql.DB, limit, offset int) ([]CommunityStatHis
 		}
 		out = append(out, h)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if i+1 >= len(out) {
+			continue
+		}
+		out[i].applyDeltaFrom(out[i+1])
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (h *CommunityStatHistory) applyDeltaFrom(previous CommunityStatHistory) {
+	h.DeltaUsers = h.TotalUsers - previous.TotalUsers
+	h.DeltaBoards = h.TotalBoards - previous.TotalBoards
+	h.DeltaThreads = h.TotalThreads - previous.TotalThreads
+	h.DeltaPosts = h.TotalPosts - previous.TotalPosts
+	h.DeltaReactions = h.TotalReactions - previous.TotalReactions
+	h.DeltaMail = h.TotalMail - previous.TotalMail
+	h.DeltaDirectMessages = h.TotalDirectMessages - previous.TotalDirectMessages
 }
 
 func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]BoardRanking, error) {

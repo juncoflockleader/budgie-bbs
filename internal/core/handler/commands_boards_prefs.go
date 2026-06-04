@@ -1312,8 +1312,17 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 		if day.MaxOnlineAt > 0 {
 			maxAt = time.UnixMilli(day.MaxOnlineAt).UTC().Format("2006-01-02 15:04")
 		}
-		fmt.Fprintf(&b, "- %s: %d users, %d posts, %d online now, max %d online at %s UTC\n",
-			day.Day, day.TotalUsers, day.TotalPosts, day.OnlineUsers, day.MaxOnlineUsers, maxAt)
+		fmt.Fprintf(&b, "- %s: %d users%s, %d posts%s, %d reactions%s, %d online now, max %d online at %s UTC\n",
+			day.Day,
+			day.TotalUsers,
+			formatStatsDelta(day.DeltaUsers),
+			day.TotalPosts,
+			formatStatsDelta(day.DeltaPosts),
+			day.TotalReactions,
+			formatStatsDelta(day.DeltaReactions),
+			day.OnlineUsers,
+			day.MaxOnlineUsers,
+			maxAt)
 	}
 	b.WriteByte('\n')
 
@@ -1360,6 +1369,13 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 		fmt.Fprintf(&b, "%d. %s / %s / %s: %d entries\n", i+1, archive.BoardName, archive.Kind, archive.Path, archive.EntryCount)
 	}
 	return b.String()
+}
+
+func formatStatsDelta(value int) string {
+	if value == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (%+d)", value)
 }
 
 type digestMirrorSystemBoard struct {

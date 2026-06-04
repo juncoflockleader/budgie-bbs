@@ -85,7 +85,10 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
             <span className="ranking-main">
               <span className="item-title">{day.day}</span>
               <span className="item-meta muted">
-                {day.totalUsers} users / {day.totalPosts} posts / max {day.maxOnlineUsers} online {formatDateTime(day.maxOnlineAt)}
+                {day.totalUsers} users {formatDelta(day.deltaUsers)} / {day.totalPosts} posts {formatDelta(day.deltaPosts)} / {day.totalReactions} reactions {formatDelta(day.deltaReactions)}
+              </span>
+              <span className="item-meta muted">
+                max {day.maxOnlineUsers} online {formatDateTime(day.maxOnlineAt)}
               </span>
             </span>
             <span className="ranking-score">{day.onlineUsers}</span>
@@ -216,6 +219,11 @@ function formatDate(ts: number) {
 function formatDateTime(ts: number) {
   if (!ts) return 'never'
   return new Date(ts).toLocaleString()
+}
+
+function formatDelta(value: number) {
+  if (!value) return ''
+  return `(${value > 0 ? '+' : ''}${value})`
 }
 
 function rankingToThread(thread: ThreadRanking): Thread {
