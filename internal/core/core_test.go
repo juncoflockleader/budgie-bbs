@@ -363,6 +363,95 @@ func TestPollCreationPreservesBodyAroundMarkup(t *testing.T) {
 	}
 }
 
+func TestPollVoteReplacesPriorVote(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Voting poll", Body: "[poll]\nQuestion?\nOption A\nOption B\n[/poll]",
+	})
+	threadPosts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threadPosts) != 1 {
+		t.Fatalf("expected 1 post in new poll thread, got %d", len(threadPosts))
+	}
+
+	poll, err := c.GetPollByPostID(threadPosts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatalf("expected poll row for thread post")
+	}
+
+	initialPoll := func() *core.Poll {
+		pollState, err := c.GetPoll(poll.ID, bob.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pollState
+	}
+	pollState := initialPoll()
+
+	optionAID := ""
+	optionBID := ""
+	for _, opt := range pollState.Options {
+		switch opt.Text {
+		case "Option A":
+			optionAID = opt.ID
+		case "Option B":
+			optionBID = opt.ID
+		}
+	}
+	if optionAID == "" || optionBID == "" {
+		t.Fatalf("missing poll options in projection")
+	}
+
+	exec(t, c, bob, proto.CmdVotePoll, proto.VotePollPayload{Poll: poll.ID, Option: optionAID})
+	pollState = initialPoll()
+	if pollState.Voted != optionAID {
+		t.Fatalf("expected voter option %q after first vote, got %q", optionAID, pollState.Voted)
+	}
+	votesA := 0
+	votesB := 0
+	for _, opt := range pollState.Options {
+		switch opt.ID {
+		case optionAID:
+			votesA = opt.VoteCount
+		case optionBID:
+			votesB = opt.VoteCount
+		}
+	}
+	if votesA != 1 || votesB != 0 {
+		t.Fatalf("expected Option A=1 and Option B=0 after first vote, got %d/%d", votesA, votesB)
+	}
+
+	exec(t, c, bob, proto.CmdVotePoll, proto.VotePollPayload{Poll: poll.ID, Option: optionBID})
+	pollState = initialPoll()
+	if pollState.Voted != optionBID {
+		t.Fatalf("expected voter option %q after replacement vote, got %q", optionBID, pollState.Voted)
+	}
+	votesA = 0
+	votesB = 0
+	for _, opt := range pollState.Options {
+		switch opt.ID {
+		case optionAID:
+			votesA = opt.VoteCount
+		case optionBID:
+			votesB = opt.VoteCount
+		}
+	}
+	if votesA != 0 || votesB != 1 {
+		t.Fatalf("expected Option A=0 and Option B=1 after replacement vote, got %d/%d", votesA, votesB)
+	}
+}
+
 type forumSnapshot struct {
 	thread          *core.Thread
 	posts           []core.Post
