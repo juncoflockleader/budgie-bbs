@@ -103,12 +103,21 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 				authorID = u
 			}
 		}
+		sourceBody := evt.Body
+		if strings.TrimSpace(evt.RawBody) != "" {
+			sourceBody = evt.RawBody
+		}
+		postBody := evt.Body
+		pollBlock, cleanBody := extractPoll(sourceBody)
+		if pollBlock != nil && cleanBody != sourceBody {
+			postBody = cleanBody
+		}
 		if err := insertPost(tx, &Post{
 			ID:          evt.ID,
 			Thread:      evt.Thread,
 			Author:      evt.Author,
 			AuthorID:    authorID,
-			Body:        evt.Body,
+			Body:        postBody,
 			ContentType: evt.ContentType,
 			ReplyTo:     evt.ReplyTo,
 			CreatedSeq:  seq,
@@ -126,10 +135,10 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 		if thread, err := getThreadTx(tx, evt.Thread); err == nil && thread != nil {
 			boardID = thread.Board
 		}
-		if err := ftsInsertPost(tx, evt.ID, evt.Thread, boardID, evt.Author, evt.Body); err != nil {
+		if err := ftsInsertPost(tx, evt.ID, evt.Thread, boardID, evt.Author, postBody); err != nil {
 			return err
 		}
-		if err := rebuildPollForPost(tx, evt.ID, evt.Body, evt.TS); err != nil {
+		if err := rebuildPollForPost(tx, evt.ID, sourceBody, evt.TS); err != nil {
 			return err
 		}
 		if err := recordPostActivityFromEvent(tx, evt.AuthorID, seq, evt.TS); err != nil {

@@ -1166,6 +1166,20 @@ func trustInfo(db *sql.DB, userID string) (*TrustLevelInfo, error) {
 	return t, err
 }
 
+// userTrustLevel returns the trust level for a user ID.
+// Missing rows default to 0.
+func userTrustLevel(db *sql.DB, userID string) (int, error) {
+	var level int
+	err := qQueryRow(db, `SELECT trust_level FROM user_activity WHERE user_id=?`, userID).Scan(&level)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return level, nil
+}
+
 // nowDay returns today's date string 'YYYY-MM-DD'.
 func nowDay() string {
 	return time.Now().UTC().Format("2006-01-02")

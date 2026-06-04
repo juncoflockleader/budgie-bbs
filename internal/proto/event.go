@@ -84,6 +84,7 @@ type PostAppendedPayload struct {
 	Author      string `json:"author"`
 	AuthorID    string `json:"authorId,omitempty"`
 	Body        string `json:"body"`
+	RawBody     string `json:"rawBody,omitempty"`
 	ContentType string `json:"contentType"`
 	ReplyTo     string `json:"replyTo,omitempty"`
 	TS          int64  `json:"ts"`

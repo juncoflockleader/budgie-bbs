@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
@@ -257,6 +258,76 @@ func TestIdempotency(t *testing.T) {
 	if len(threads) != 1 {
 		t.Errorf("expected 1 thread after idempotent create, got %d", len(threads))
 	}
+}
+
+// --- M11 trust / poll feature checks ---
+
+func setTrustLevel(t *testing.T, c *core.Core, userID string, trustLevel int) {
+	t.Helper()
+	_, err := c.DB.Exec(
+		`INSERT INTO user_activity (user_id, posts_created, days_visited, last_visit_day, reactions_recv, trust_level)
+		 VALUES (?, ?, 1, ?, 0, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET trust_level=excluded.trust_level`,
+		userID, 0, "1970-01-01", trustLevel,
+	)
+	if err != nil {
+		t.Fatalf("seed trust level: %v", err)
+	}
+}
+
+func TestPollCreationRespectsTrustLevel(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	threadBody := "[poll]\nQuestion?\nOption A\nOption B\n[/poll]"
+	// Low-trust user cannot create polls.
+	execExpectErr(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Blocked poll", Body: threadBody,
+	}, proto.ErrForbidden)
+
+	setTrustLevel(t, c, alice.ID, 2)
+	// Trust level 2 can create a poll in a thread body.
+	raw, err := json.Marshal(proto.CreateThreadPayload{
+		Board: "general", Title: "Allowed poll", Body: threadBody,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := c.ExecCmd(context.Background(), alice, proto.CmdCreateThread, raw, "")
+	if create.Err != nil {
+		t.Fatalf("trusted user should create poll thread: %s (%s)", create.Err.Message, create.Err.Code)
+	}
+	threadID := create.Result.ID
+
+	threadPosts, err := c.ListPosts(threadID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threadPosts) != 1 {
+		t.Fatalf("expected 1 post in new thread, got %d", len(threadPosts))
+	}
+	if strings.Contains(threadPosts[0].Body, "[poll]") {
+		t.Fatalf("expected stored post body to strip poll block, got %q", threadPosts[0].Body)
+	}
+
+	poll, err := c.GetPollByPostID(threadPosts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatalf("expected poll row for thread post body")
+	}
+
+	// Trusted creation of poll is fine, but low-trust reply-polls are still blocked.
+	base := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "base", Body: "No poll here",
+	})
+	execExpectErr(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID, Body: threadBody,
+	}, proto.ErrForbidden)
 }
 
 type forumSnapshot struct {

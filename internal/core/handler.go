@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -276,6 +277,12 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if p.Board == "" || p.Title == "" || p.Body == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "board, title, and body are required", false)}
 	}
+	pollBlock, cleanBody := extractPoll(p.Body)
+	if pollBlock != nil && cleanBody != p.Body {
+		if errReply := h.requireMinTrustForPoll(actor, 2, "create thread"); errReply.Err != nil {
+			return errReply
+		}
+	}
 
 	// Sanction check.
 	if kind, ok := activeSanction(h.db, actor.ID, p.Board); ok {
@@ -319,7 +326,8 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Append post.appended (the first post in the thread)
 	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: p.Body,
+		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: cleanBody,
+		RawBody:     p.Body,
 		ContentType: ct, TS: ts,
 	})
 	if err != nil {
@@ -335,19 +343,31 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 	if err := insertPost(tx, &Post{
 		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
-		Body: p.Body, ContentType: ct, CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+		Body: cleanBody, ContentType: ct, CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
 	if err := bumpThread(tx, threadID, pseq); err != nil {
 		return internalErr(err)
 	}
-	if err := ftsInsertPost(tx, postID, threadID, p.Board, actor.Name, p.Body); err != nil {
+	if err := ftsInsertPost(tx, postID, threadID, p.Board, actor.Name, cleanBody); err != nil {
 		return internalErr(err)
+	}
+	if pollBlock != nil && cleanBody != p.Body {
+		pollID := newID("pol_")
+		if err := insertPoll(tx, pollID, postID, pollBlock.question, 0, ts); err != nil {
+			return internalErr(err)
+		}
+		for i, opt := range pollBlock.options {
+			optID := newID("opt_")
+			if err := insertPollOption(tx, optID, pollID, opt, i); err != nil {
+				return internalErr(err)
+			}
+		}
 	}
 	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
 		ActorID: actor.ID, ActorName: actor.Name, PostID: postID, ThreadID: threadID,
-		BoardID: p.Board, Body: p.Body, TS: ts, Seq: pseq,
+		BoardID: p.Board, Body: cleanBody, TS: ts, Seq: pseq,
 	}, ts); err != nil {
 		return internalErr(err)
 	}
@@ -360,7 +380,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
 		Payload: &proto.ThreadNewPayload{ID: threadID, Board: p.Board, Author: actor.Name, AuthorID: actor.ID, Title: p.Title, TS: ts}, TS: ts})
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: p.Body, ContentType: ct, TS: ts}, TS: ts})
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: cleanBody, RawBody: p.Body, ContentType: ct, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }
@@ -368,6 +388,12 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if p.Thread == "" || p.Body == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread and body are required", false)}
+	}
+	pollBlock, cleanBody := extractPoll(p.Body)
+	if pollBlock != nil && cleanBody != p.Body {
+		if errReply := h.requireMinTrustForPoll(actor, 2, "reply"); errReply.Err != nil {
+			return errReply
+		}
 	}
 	ct := contentType(p.ContentType)
 	ts := nowMS()
@@ -418,7 +444,8 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID, Body: p.Body,
+		ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID, Body: cleanBody,
+		RawBody:     p.Body,
 		ContentType: ct, ReplyTo: p.ReplyTo, TS: ts,
 	})
 	if err != nil {
@@ -426,22 +453,17 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 	if err := insertPost(tx, &Post{
 		ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID,
-		Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, CreatedSeq: seq, CreatedAt: ts, UpdatedAt: ts,
+		Body: cleanBody, ContentType: ct, ReplyTo: p.ReplyTo, CreatedSeq: seq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
 	if err := bumpThread(tx, p.Thread, seq); err != nil {
 		return internalErr(err)
 	}
-	if err := ftsInsertPost(tx, postID, p.Thread, thread.Board, actor.Name, p.Body); err != nil {
+	if err := ftsInsertPost(tx, postID, p.Thread, thread.Board, actor.Name, cleanBody); err != nil {
 		return internalErr(err)
 	}
-	// Parse [poll] block from post body (if present) — before commit.
-	pollBlock, cleanBody := extractPoll(p.Body)
 	if pollBlock != nil && cleanBody != p.Body {
-		// Update the body stored in the event and projection to the cleaned version.
-		// (We already wrote the event and post with p.Body above; redo both.)
-		// Simplest approach: just store poll metadata — body stays as-is for now.
 		// Create poll rows within the same TX.
 		pollID := newID("pol_")
 		if err := insertPoll(tx, pollID, postID, pollBlock.question, 0, ts); err != nil {
@@ -456,7 +478,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
 		ActorID: actor.ID, ActorName: actor.Name, PostID: postID, ThreadID: p.Thread,
-		BoardID: thread.Board, Body: p.Body, ReplyTo: p.ReplyTo, TS: ts, Seq: seq,
+		BoardID: thread.Board, Body: cleanBody, ReplyTo: p.ReplyTo, TS: ts, Seq: seq,
 	}, ts); err != nil {
 		return internalErr(err)
 	}
@@ -466,7 +488,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID, Body: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, TS: ts}, TS: ts})
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: actor.Name, AuthorID: actor.ID, Body: cleanBody, RawBody: p.Body, ContentType: ct, ReplyTo: p.ReplyTo, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
 }
@@ -1446,6 +1468,22 @@ func badPayload() Reply {
 
 func internalErr(err error) Reply {
 	return Reply{Err: errDetail("internal_error", err.Error(), true)}
+}
+
+// requireMinTrustForPoll blocks poll creation for actors below the requested
+// trust level. Mod/admin actors bypass this gate.
+func (h *Handler) requireMinTrustForPoll(actor *User, minLevel int, action string) Reply {
+	if actor.IsMod() {
+		return Reply{}
+	}
+	trustLevel, err := userTrustLevel(h.db, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if trustLevel < minLevel {
+		return Reply{Err: errDetail(proto.ErrForbidden, action+" with poll requires trust level "+strconv.Itoa(minLevel), false)}
+	}
+	return Reply{}
 }
 
 // isValidSlug returns true if s is a non-empty lowercase alphanumeric / hyphen / underscore
