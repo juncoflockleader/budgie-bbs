@@ -898,6 +898,190 @@ func TestHTTPPollVoteEndpointPayloadMismatch(t *testing.T) {
 	}
 }
 
+func TestHTTPPollVoteEndpointReplacesExistingVote(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	createThreadAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Vote replacement base",
+			"body":  "[poll]\nReplace?\nYes\nNo\n[/poll]",
+		},
+	}, &createThreadAck); status != http.StatusCreated || !createThreadAck.OK || createThreadAck.Result == nil {
+		t.Fatalf("create thread for replacement test failed: status=%d ok=%v err=%+v", status, createThreadAck.OK, createThreadAck.Error)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createThreadAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 1 {
+		t.Fatalf("expected one poll for vote replacement, got %d", len(threadPolls.Polls))
+	}
+	var pollID string
+	for _, poll := range threadPolls.Polls {
+		if poll != nil {
+			pollID = poll.ID
+			break
+		}
+	}
+	if pollID == "" {
+		t.Fatal("expected poll id for replacement test")
+	}
+
+	var optionIDs []string
+	for _, poll := range threadPolls.Polls {
+		if poll == nil {
+			continue
+		}
+		for _, opt := range poll.Options {
+			optionIDs = append(optionIDs, opt.ID)
+		}
+		break
+	}
+	if len(optionIDs) != 2 {
+		t.Fatalf("expected 2 poll options for replacement test, got %d", len(optionIDs))
+	}
+
+	first := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+pollID+"/vote", adminToken, map[string]string{
+		"option": optionIDs[0],
+	}, &first); status != http.StatusCreated || !first.OK {
+		t.Fatalf("expected first vote success, got status=%d ok=%v err=%+v", status, first.OK, first.Error)
+	}
+
+	second := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+pollID+"/vote", adminToken, map[string]string{
+		"option": optionIDs[1],
+	}, &second); status != http.StatusCreated || !second.OK {
+		t.Fatalf("expected replacement vote success, got status=%d ok=%v err=%+v", status, second.OK, second.Error)
+	}
+	if second.Result == nil {
+		t.Fatalf("replacement vote should return ack result")
+	}
+
+	poll := pollPayload{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/polls/"+pollID, adminToken, nil, &poll); status != http.StatusOK {
+		t.Fatalf("get poll after replacement vote failed: %d", status)
+	}
+	if poll.Voted != optionIDs[1] {
+		t.Fatalf("expected voted option %q after replacement, got %q", optionIDs[1], poll.Voted)
+	}
+	if len(poll.Options) != 2 {
+		t.Fatalf("expected two options in poll projection, got %d", len(poll.Options))
+	}
+	for _, option := range poll.Options {
+		switch option.ID {
+		case optionIDs[0]:
+			if option.VoteCount != 0 {
+				t.Fatalf("expected first option vote count to move off first option, got %d", option.VoteCount)
+			}
+		case optionIDs[1]:
+			if option.VoteCount != 1 {
+				t.Fatalf("expected second option vote count to receive replacement vote, got %d", option.VoteCount)
+			}
+		}
+	}
+}
+
+func TestHTTPCommandEndpointPollVoteIdempotencyAndMismatch(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	commandCreate := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Poll vote command idempotency base",
+			"body":  "[poll]\nVote?\nYes\nNo\n[/poll]",
+		},
+	}
+
+	createAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandCreate, &createAck); status != http.StatusCreated || !createAck.OK || createAck.Result == nil {
+		t.Fatalf("create thread for command vote idempotency failed: status=%d ok=%v err=%+v", status, createAck.OK, createAck.Error)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 1 {
+		t.Fatalf("expected one poll for command vote idempotency, got %d", len(threadPolls.Polls))
+	}
+	var pollID string
+	var optionID string
+	for _, poll := range threadPolls.Polls {
+		if poll == nil || len(poll.Options) == 0 {
+			continue
+		}
+		pollID = poll.ID
+		optionID = poll.Options[0].ID
+		break
+	}
+	if pollID == "" || optionID == "" {
+		t.Fatal("expected poll and option for command vote idempotency")
+	}
+
+	cmdID := "poll-command-vote-idempotent-1"
+	votePayload := map[string]any{
+		"command": "votePoll",
+		"payload": map[string]any{
+			"poll":   pollID,
+			"option": optionID,
+		},
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, votePayload, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first command vote failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+
+	second := ackResponse{}
+	secondStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, votePayload, &second, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if secondStatus != http.StatusCreated {
+		t.Fatalf("expected idempotent command vote replay status 201, got %d", secondStatus)
+	}
+	if second.Result == nil || second.Result.ID != first.Result.ID {
+		t.Fatalf("expected same id from idempotent command vote replay, got %s and %s", valueOrEmpty(first.Result), valueOrEmpty(second.Result))
+	}
+	if second.Result.Seq != first.Result.Seq {
+		t.Fatalf("expected same seq from idempotent command vote replay, got %d and %d", first.Result.Seq, second.Result.Seq)
+	}
+
+	if !second.OK {
+		t.Fatalf("expected replayed command vote to be ok: %+v", second.Error)
+	}
+
+	conflictPayload := map[string]any{
+		"command": "votePoll",
+		"payload": map[string]any{
+			"poll":   pollID,
+			"option": "opt-mismatch",
+		},
+	}
+	conflict := ackResponse{}
+	conflictStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, conflictPayload, &conflict, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if conflictStatus != http.StatusConflict {
+		t.Fatalf("expected 409 for mismatched command vote payload replay, got %d", conflictStatus)
+	}
+	if conflict.Error == nil || conflict.Error.Code != "conflict" {
+		t.Fatalf("expected conflict code for mismatched command vote payload replay, got %+v", conflict.Error)
+	}
+}
+
 func TestHTTPPollVoteEndpointValidationAndErrors(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
