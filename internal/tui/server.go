@@ -95,8 +95,16 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 		height = 24
 	}
 
-	m := newModel(s.core, user, width, height)
-	return m, []tea.ProgramOption{tea.WithAltScreen()}
+	caps := terminalProfileFromEnviron(sess.Environ())
+	m := newModel(s.core, user, width, height, caps.supportsANSI)
+	opts := []tea.ProgramOption{
+		tea.WithAltScreen(),
+		tea.WithEnvironment(sess.Environ()),
+	}
+	if caps.baudDelay > 0 {
+		opts = append(opts, tea.WithOutput(newBaudWriter(sess, caps.baudDelay)))
+	}
+	return m, opts
 }
 
 type userKey struct{}

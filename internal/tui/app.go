@@ -91,6 +91,7 @@ type model struct {
 	// Notifications tracked in the current actor session.
 	notifications []core.Notification
 	unreadNotifs  int
+	supportsANSI  bool
 }
 
 type chatLine struct {
@@ -111,7 +112,21 @@ var (
 	styleChatUser = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("178"))
 )
 
-func newModel(c *core.Core, actor *core.User, width, height int) model {
+func (m *model) styled(style lipgloss.Style, value string) string {
+	if m == nil || m.supportsANSI {
+		return style.Render(value)
+	}
+	return value
+}
+
+func (m *model) postSepLine() string {
+	if m == nil || m.supportsANSI {
+		return stylePostSep.String()
+	}
+	return strings.Repeat("─", 80)
+}
+
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool) model {
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
 	sub := c.Subscribe(scopes)
 
@@ -130,6 +145,7 @@ func newModel(c *core.Core, actor *core.User, width, height int) model {
 		selectedPost:  -1,
 		postReactions: make(map[string]bool),
 		postPolls:     make(map[string]*core.Poll),
+		supportsANSI:  supportsANSI,
 	}
 
 	m.list = list.New(nil, list.NewDefaultDelegate(), width, height-3)
@@ -331,7 +347,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "/":
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
-			m.vp.SetContent(styleDim.Render("Type your query and press Enter to search…"))
+			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
@@ -359,7 +375,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "/":
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
-			m.vp.SetContent(styleDim.Render("Type your query and press Enter to search…"))
+			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
 		case "esc", "left":
 			m.popPage()
 			m.rebuildList()
@@ -499,14 +515,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "backspace":
 			if len(m.searchQuery) > 0 {
 				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
-				m.vp.SetContent(styleTitle.Render("Search: ") + m.searchQuery + "▌")
+				m.vp.SetContent(m.styled(styleTitle, "Search: ") + m.searchQuery + "▌")
 			}
 		case "esc", "left":
 			m.popPage()
 		default:
 			if len(msg.String()) == 1 {
 				m.searchQuery += msg.String()
-				m.vp.SetContent(styleTitle.Render("Search: ") + m.searchQuery + "▌")
+				m.vp.SetContent(m.styled(styleTitle, "Search: ") + m.searchQuery + "▌")
 			}
 		}
 	case pageNotifications:
@@ -715,8 +731,8 @@ func (m model) View() string {
 	if m.unreadNotifs > 0 {
 		headerLabel += fmt.Sprintf(" ● %d unread", m.unreadNotifs)
 	}
-	header := styleHeader.Render(headerLabel)
-	status := styleDim.Render(m.statusMsg)
+	header := m.styled(styleHeader, headerLabel)
+	status := m.styled(styleDim, m.statusMsg)
 
 	var body string
 	switch m.page {
@@ -725,17 +741,17 @@ func (m model) View() string {
 	case pageThreadList:
 		body = m.list.View()
 	case pageNotifications:
-		body = m.list.View() + "\n" + styleDim.Render("enter=mark read  a=mark all read  esc/←=back")
+		body = m.list.View() + "\n" + m.styled(styleDim, "enter=mark read  a=mark all read  esc/←=back")
 	case pageThread:
 		help := "n=reply  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		if m.actor.IsMod() {
 			help = "n=reply  L=lock/unlock  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		}
-		body = m.vp.View() + "\n" + styleDim.Render(help)
+		body = m.vp.View() + "\n" + m.styled(styleDim, help)
 	case pagePoll:
 		poll := m.currentPollData()
 		if poll == nil {
-			body = styleDim.Render("No poll loaded")
+			body = m.styled(styleDim, "No poll loaded")
 		} else {
 			help := "1-9 vote · esc/←=back"
 			if poll.ExpiresAt > 0 && poll.ExpiresAt < time.Now().UnixMilli() {
@@ -749,9 +765,9 @@ func (m model) View() string {
 				total += opt.VoteCount
 			}
 			var b strings.Builder
-			b.WriteString(styleTitle.Render("Poll") + "\n\n")
+			b.WriteString(m.styled(styleTitle, "Poll") + "\n\n")
 			if poll.Question != "" {
-				b.WriteString(styleTitle.Render(poll.Question) + "\n\n")
+				b.WriteString(m.styled(styleTitle, poll.Question) + "\n\n")
 			}
 			for i, option := range poll.Options {
 				if i >= 9 {
@@ -779,35 +795,35 @@ func (m model) View() string {
 					expires = "closes " + time.UnixMilli(poll.ExpiresAt).Format("2006-01-02 15:04")
 				}
 			}
-			b.WriteString("\n" + styleDim.Render(fmt.Sprintf("%d vote%s · %s", total, func() string {
+			b.WriteString("\n" + m.styled(styleDim, fmt.Sprintf("%d vote%s · %s", total, func() string {
 				if total == 1 {
 					return ""
 				}
 				return "s"
 			}(), expires)) + "\n")
-			body = b.String() + "\n" + styleDim.Render(help)
+			body = b.String() + "\n" + m.styled(styleDim, help)
 		}
 		if body == "" {
-			body = styleDim.Render("No poll loaded")
+			body = m.styled(styleDim, "No poll loaded")
 		}
 	case pageCompose:
 		if m.composingNewThread {
-			titleSection := styleTitle.Render("New thread") + "\n\n" +
-				styleDim.Render("Title: ") + m.titleInput.View() + "\n\n"
+			titleSection := m.styled(styleTitle, "New thread") + "\n\n" +
+				m.styled(styleDim, "Title: ") + m.titleInput.View() + "\n\n"
 			if m.titleInput.Focused() {
-				body = titleSection + styleDim.Render("Enter/Tab=next field  Esc=cancel")
+				body = titleSection + m.styled(styleDim, "Enter/Tab=next field  Esc=cancel")
 			} else {
 				body = titleSection + m.compose.View() + "\n" +
-					styleDim.Render("Ctrl+S=submit  Esc=cancel")
+					m.styled(styleDim, "Ctrl+S=submit  Esc=cancel")
 			}
 		} else {
-			body = styleTitle.Render("New reply") + "\n\n" + m.compose.View() +
-				"\n" + styleDim.Render("Ctrl+S=submit  Esc=cancel")
+			body = m.styled(styleTitle, "New reply") + "\n\n" + m.compose.View() +
+				"\n" + m.styled(styleDim, "Ctrl+S=submit  Esc=cancel")
 		}
 	case pageChat:
-		body = m.vp.View() + "\n" + styleDim.Render("esc/←=back")
+		body = m.vp.View() + "\n" + m.styled(styleDim, "esc/←=back")
 	case pageSearch:
-		body = m.vp.View() + "\n" + styleDim.Render("type query  enter=search  esc/←=back")
+		body = m.vp.View() + "\n" + m.styled(styleDim, "type query  enter=search  esc/←=back")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
@@ -971,7 +987,7 @@ func (m *model) rebuildPostView() {
 	for i, p := range m.posts {
 		marker := "  "
 		if i == m.selectedPost {
-			marker = styleDim.Render("→ ")
+			marker = m.styled(styleDim, "→ ")
 		}
 		createdAt := p.CreatedAt
 		if createdAt == 0 {
@@ -981,34 +997,34 @@ func (m *model) rebuildPostView() {
 		if createdAt > 1_000_000_000_000 {
 			ts = time.UnixMilli(createdAt).Format("2006-01-02 15:04")
 		}
-		author := styleAuthor.Render(p.Author)
+		author := m.styled(styleAuthor, p.Author)
 		reactions := ""
 		if p.ReactionCount > 0 {
 			reactions = fmt.Sprintf("  ♥ %d", p.ReactionCount)
 		}
-		b.WriteString(fmt.Sprintf("%s%s  %s  #%d%s", marker, author, styleDim.Render(ts), i+1, reactions))
+		b.WriteString(fmt.Sprintf("%s%s  %s  #%d%s", marker, author, m.styled(styleDim, ts), i+1, reactions))
 		if p.Version > 1 {
-			b.WriteString(styleDim.Render(" (edited)"))
+			b.WriteString(m.styled(styleDim, " (edited)"))
 		}
 		b.WriteString("\n")
 		if p.Redacted {
-			b.WriteString(styleRedacted.Render("[removed by moderator]"))
+			b.WriteString(m.styled(styleRedacted, "[removed by moderator]"))
 		} else {
-			b.WriteString(renderMarkup(p.Body))
+			b.WriteString(m.renderMarkup(p.Body))
 		}
-		b.WriteString("\n" + stylePostSep.String() + "\n")
+		b.WriteString("\n" + m.postSepLine() + "\n")
 	}
 	m.vp.SetContent(b.String())
 }
 
 func (m *model) rebuildChatView() {
 	var b strings.Builder
-	b.WriteString(styleTitle.Render("Live Chat — #lobby") + "\n\n")
+	b.WriteString(m.styled(styleTitle, "Live Chat — #lobby") + "\n\n")
 	for _, line := range m.chat {
 		ts := time.UnixMilli(line.ts).Format("15:04")
 		b.WriteString(fmt.Sprintf("%s %s %s\n",
-			styleDim.Render(ts),
-			styleChatUser.Render(line.user+":"),
+			m.styled(styleDim, ts),
+			m.styled(styleChatUser, line.user+":"),
 			line.text,
 		))
 	}
@@ -1016,7 +1032,7 @@ func (m *model) rebuildChatView() {
 }
 
 // renderMarkup converts the constrained Markdown subset to ANSI-friendly text.
-func renderMarkup(body string) string {
+func (m *model) renderMarkup(body string) string {
 	boldStyle := lipgloss.NewStyle().Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
@@ -1025,11 +1041,11 @@ func renderMarkup(body string) string {
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if strings.HasPrefix(line, "> ") {
-			out = append(out, dimStyle.Render("│ "+line[2:]))
+			out = append(out, m.styled(dimStyle, "│ "+line[2:]))
 			continue
 		}
-		line = replaceInline(line, "**", func(s string) string { return boldStyle.Render(s) })
-		line = replaceInline(line, "`", func(s string) string { return codeStyle.Render(s) })
+		line = replaceInline(line, "**", func(s string) string { return m.styled(boldStyle, s) })
+		line = replaceInline(line, "`", func(s string) string { return m.styled(codeStyle, s) })
 		out = append(out, line)
 	}
 	return strings.Join(out, "\n")
@@ -1252,15 +1268,15 @@ func (m model) fetchNotificationStatus() tea.Cmd {
 
 func (m *model) rebuildSearchView(posts []core.Post) {
 	var b strings.Builder
-	b.WriteString(styleTitle.Render(fmt.Sprintf("Search results (%d)", len(posts))) + "\n\n")
+	b.WriteString(m.styled(styleTitle, fmt.Sprintf("Search results (%d)", len(posts))) + "\n\n")
 	if len(posts) == 0 {
-		b.WriteString(styleDim.Render("No results found."))
+		b.WriteString(m.styled(styleDim, "No results found."))
 	}
 	for _, p := range posts {
-		author := styleAuthor.Render(p.Author)
-		b.WriteString(fmt.Sprintf("%s in thread %s\n", author, styleDim.Render(p.Thread)))
-		b.WriteString(renderMarkup(p.Body))
-		b.WriteString("\n" + stylePostSep.String() + "\n")
+		author := m.styled(styleAuthor, p.Author)
+		b.WriteString(fmt.Sprintf("%s in thread %s\n", author, m.styled(styleDim, p.Thread)))
+		b.WriteString(m.renderMarkup(p.Body))
+		b.WriteString("\n" + m.postSepLine() + "\n")
 	}
 	m.vp.SetContent(b.String())
 	m.vp.GotoTop()
