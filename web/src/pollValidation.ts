@@ -13,7 +13,7 @@ function looksLikeValidExpires(raw: string): boolean {
   if (/^\d+$/.test(value)) {
     return value !== '0'
   }
-  const duration = /^\d+(\.\d+)?[smhd]$/i.test(value)
+  const duration = /^\d+(\.\d+)?[smhdw]$/i.test(value)
   if (duration) return true
   return !Number.isNaN(Date.parse(value))
 }

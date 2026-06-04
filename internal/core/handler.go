@@ -1474,6 +1474,14 @@ func parsePollExpires(raw string) (int64, error) {
 		}
 	}
 
+	if strings.HasSuffix(rawLower, "w") {
+		weeksRaw := strings.TrimSuffix(rawLower, "w")
+		weeks, err := strconv.ParseFloat(weeksRaw, 64)
+		if err == nil && weeks > 0 {
+			return time.Now().Add(time.Duration(weeks*24*7) * time.Hour).UnixMilli(), nil
+		}
+	}
+
 	layouts := []string{
 		time.RFC3339,
 		time.RFC3339Nano,

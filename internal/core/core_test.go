@@ -437,6 +437,76 @@ func TestPollCreationSupportsExpiryDuration(t *testing.T) {
 	}
 }
 
+func TestPollCreationSupportsExpiryWeek(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll expires=1w]\nQuestion?\nOption A\nOption B\n[/poll]"
+	start := time.Now().UTC().Truncate(time.Second)
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Week expiry poll", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for week expiry poll")
+	}
+
+	end := start.Add(7 * 24 * time.Hour).UnixMilli()
+	if poll.ExpiresAt < end-10_000 || poll.ExpiresAt > end+10_000 {
+		t.Fatalf("expected approx %d, got %d", end, poll.ExpiresAt)
+	}
+}
+
+func TestPollCreationSupportsExpiryUppercaseWeek(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll expires=1W]\nQuestion?\nOption A\nOption B\n[/poll]"
+	start := time.Now().UTC().Truncate(time.Second)
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Week expiry poll uppercase", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for uppercase week expiry poll")
+	}
+
+	end := start.Add(7 * 24 * time.Hour).UnixMilli()
+	if poll.ExpiresAt < end-10_000 || poll.ExpiresAt > end+10_000 {
+		t.Fatalf("expected approx %d, got %d", end, poll.ExpiresAt)
+	}
+}
+
 func TestPollCreationSupportsExpiryUppercaseDuration(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
