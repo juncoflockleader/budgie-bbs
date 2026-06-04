@@ -827,6 +827,119 @@ func TestHTTPCommandEndpointPollCreateIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointReplyPollCreateIsIdempotent(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Base for reply poll",
+			"body":  "base body",
+		},
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || !threadAck.OK || threadAck.Result == nil {
+		t.Fatalf("command create base thread failed: status=%d ok=%v err=%+v", threadStatus, threadAck.OK, threadAck.Error)
+	}
+	threadID := threadAck.Result.ID
+
+	cmdID := "poll-reply-idempotent-1"
+	replyPollBody := "[poll]\nPick one\nOption A\nOption B\n[/poll]"
+	replyPayload := map[string]any{
+		"command": "appendPost",
+		"payload": map[string]any{
+			"thread": threadID,
+			"body":   replyPollBody,
+		},
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, replyPayload, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first command reply poll failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+	if countThreadPosts(t, handler, adminToken, threadID) != 2 {
+		t.Fatalf("expected one reply post after first command")
+	}
+
+	second := ackResponse{}
+	secondStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, replyPayload, &second, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if secondStatus != http.StatusCreated {
+		t.Fatalf("expected idempotent replay status 201, got %d", secondStatus)
+	}
+	if second.Result == nil || second.Result.ID != first.Result.ID {
+		t.Fatalf("expected same reply id from idempotent replay, got %s and %s", valueOrEmpty(first.Result), valueOrEmpty(second.Result))
+	}
+	if !second.OK {
+		t.Fatalf("expected replayed command to be ok: %+v", second.Error)
+	}
+	if countThreadPosts(t, handler, adminToken, threadID) != 2 {
+		t.Fatalf("expected no duplicate posts from reply idempotent replay")
+	}
+}
+
+func TestHTTPCommandEndpointReplyPollCreatePayloadMismatch(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Base for reply mismatch",
+			"body":  "base body",
+		},
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || !threadAck.OK || threadAck.Result == nil {
+		t.Fatalf("command create base thread failed: status=%d ok=%v err=%+v", threadStatus, threadAck.OK, threadAck.Error)
+	}
+	threadID := threadAck.Result.ID
+
+	cmdID := "poll-reply-mismatch-1"
+	firstPayload := map[string]any{
+		"command": "appendPost",
+		"payload": map[string]any{
+			"thread": threadID,
+			"body":   "[poll]\nChoose first\nA\nB\n[/poll]",
+		},
+	}
+	secondPayload := map[string]any{
+		"command": "appendPost",
+		"payload": map[string]any{
+			"thread": threadID,
+			"body":   "[poll]\nChoose second\nX\nY\n[/poll]",
+		},
+	}
+
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, firstPayload, &first, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first command reply poll failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+
+	second := ackResponse{}
+	secondStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, secondPayload, &second, map[string]string{
+		"X-Command-Id": cmdID,
+	})
+	if secondStatus != http.StatusConflict {
+		t.Fatalf("expected 409 for mismatched command payload replay, got %d", secondStatus)
+	}
+	if second.Error == nil || second.Error.Code != "conflict" {
+		t.Fatalf("expected conflict code for mismatched reply command payload, got %+v", second.Error)
+	}
+}
+
 func valueOrEmpty(r *ackResult) string {
 	if r == nil {
 		return ""
