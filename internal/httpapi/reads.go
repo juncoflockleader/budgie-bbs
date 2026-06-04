@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -161,6 +162,32 @@ func (s *Server) handleGetPollByPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, fullPoll)
+}
+
+// GET /api/v1/threads/{thread}/polls
+func (s *Server) handleListThreadPolls(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	threadID := r.PathValue("thread")
+	limit, offset := paginate(r)
+
+	posts, err := s.core.ListPosts(threadID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	postIDs := make([]string, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+	}
+	pollsByPost, err := s.core.PollsForPosts(postIDs, actor.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	if pollsByPost == nil {
+		pollsByPost = map[string]*core.Poll{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"polls": pollsByPost})
 }
 
 // GET /api/v1/users/{name}/trust

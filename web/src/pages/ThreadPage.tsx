@@ -59,8 +59,8 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
   }
 
   // Fetch poll for a post if not already loading/loaded
-  async function loadPollForPost(postId: string, body: string) {
-    if (!hasPollBlock(body)) return
+  async function loadPollForPost(postId: string, body = '') {
+    if (body && !hasPollBlock(body)) return
     setPolls(prev => {
       if (prev[postId] !== undefined) return prev // already loading or loaded
       return { ...prev, [postId]: null } // mark as loading
@@ -76,24 +76,36 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
   }
 
   useEffect(() => {
-    setLoading(true)
-    api.listPosts(token, thread.id).then(res => {
+    ;(async () => {
+      setLoading(true)
+      const [postsRes, pollsRes] = await Promise.all([
+        api.listPosts(token, thread.id),
+        api.listThreadPolls(token, thread.id),
+      ])
       setLoading(false)
-      if (res.error) { setError(res.error.message); return }
-      const loadedPosts = res.data ?? []
+
+      if (postsRes.error) {
+        setError(postsRes.error.message)
+        return
+      }
+
+      const loadedPosts = postsRes.data ?? []
       setPosts(loadedPosts)
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+
+      if (pollsRes.data) {
+        setPolls(pollsRes.data)
+      }
 
       // Init reaction state (count=0 until server pushes updates)
       const rxMap: Record<string, ReactionState> = {}
       loadedPosts.forEach(p => { rxMap[p.id] = { count: p.reactionCount, reacted: false } })
       setReactions(rxMap)
 
-      // Lazily load trust levels and polls
+      // Lazily load trust levels
       const uniqueAuthors = [...new Set(loadedPosts.map(p => p.author))]
       uniqueAuthors.forEach(a => loadTrust(a))
-      loadedPosts.forEach(p => { if (hasPollBlock(p.body)) loadPollForPost(p.id, p.body) })
-    })
+    })()
   }, [token, thread.id])
 
   const onEvent = useCallback((evt: BudgieEvent) => {
@@ -115,7 +127,7 @@ export function ThreadPage({ token, thread, currentUserId, currentUserRole, onBa
       setReactions(prev => ({ ...prev, [p.id]: { count: 0, reacted: false } }))
       // Load trust + poll for the new post
       loadTrust(p.author)
-      if (hasPollBlock(p.body)) loadPollForPost(p.id, p.body)
+      loadPollForPost(p.id, p.rawBody || p.body)
     } else if (evt.event === 'post.edited') {
       const p = evt.payload as PostEditedPayload
       setPosts(prev => prev.map(post =>

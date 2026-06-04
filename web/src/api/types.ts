@@ -112,7 +112,7 @@ export interface ThreadNewPayload {
   id: string; board: string; author: string; authorId?: string; title: string; ts: number
 }
 export interface PostAppendedPayload {
-  id: string; thread: string; author: string; body: string
+  id: string; thread: string; author: string; body: string; rawBody?: string
   authorId?: string; contentType: string; replyTo?: string; ts: number
 }
 export interface PostEditedPayload {
@@ -175,6 +175,7 @@ export interface Poll {
   options: PollOption[]
   voted?: string // option id the viewer voted for
 }
+export type PollMap = Record<string, Poll>
 export interface PollVotedPayload {
   poll: string; option: string; user: string; ts: number
 }

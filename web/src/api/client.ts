@@ -11,6 +11,7 @@ import type {
   Thread,
   UserProfile,
   ModerationReview,
+  PollMap,
 } from './types'
 
 const BASE = '/api/v1'
@@ -72,6 +73,20 @@ export async function listPosts(token: string, thread: string, limit = 50, offse
   const r = await json<{ posts: Post[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.posts ?? [] }
+}
+
+export async function listThreadPolls(
+  token: string,
+  thread: string,
+  limit = 50,
+  offset = 0,
+): Promise<ApiResponse<PollMap>> {
+  const res = await fetch(`${BASE}/threads/${thread}/polls?limit=${limit}&offset=${offset}`, {
+    headers: authHeaders(token),
+  })
+  const r = await json<{ polls: PollMap }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.polls ?? {} }
 }
 
 export async function listCategories(token: string): Promise<ApiResponse<Category[]>> {

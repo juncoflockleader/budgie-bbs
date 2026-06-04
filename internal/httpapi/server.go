@@ -46,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/boards/{board}/threads", auth(http.HandlerFunc(s.handleListThreads)))
 	mux.Handle("GET /api/v1/threads/{thread}", auth(http.HandlerFunc(s.handleGetThread)))
 	mux.Handle("GET /api/v1/threads/{thread}/posts", auth(http.HandlerFunc(s.handleListPosts)))
+	mux.Handle("GET /api/v1/threads/{thread}/polls", auth(http.HandlerFunc(s.handleListThreadPolls)))
 	mux.Handle("GET /api/v1/search", auth(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /api/v1/audit", auth(http.HandlerFunc(s.handleAuditLog)))
 	mux.Handle("GET /api/v1/notifications", auth(http.HandlerFunc(s.handleListNotifications)))
