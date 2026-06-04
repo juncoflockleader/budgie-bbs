@@ -543,6 +543,49 @@ func TestHTTPCommandEndpointMalformedExpiryPollDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointUppercasePollTags(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Uppercase poll command",
+			"body":  "[POLL]\nQuestion?\nOption A\nOption B\n[/POLL]",
+		},
+	}
+
+	commandAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &commandAck); status != http.StatusCreated || !commandAck.OK || commandAck.Result == nil {
+		t.Fatalf("expected command create uppercase poll to succeed: status=%d ok=%v err=%+v", status, commandAck.OK, commandAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected 1 post in uppercase poll command thread, got %d", len(posts.Posts))
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	poll := threadPolls.Polls[posts.Posts[0].ID]
+	if poll == nil {
+		t.Fatalf("expected poll projection for uppercase command poll")
+	}
+	if poll.Question != "Question?" {
+		t.Fatalf("expected question %q, got %q", "Question?", poll.Question)
+	}
+	if len(poll.Options) != 2 {
+		t.Fatalf("expected 2 options for uppercase command poll, got %d", len(poll.Options))
+	}
+}
+
 func TestHTTPCommandEndpointVotePollLifecycleAndErrors(t *testing.T) {
 	c, handler := setupHTTPTestServer(t)
 
