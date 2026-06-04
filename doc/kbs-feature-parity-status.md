@@ -607,6 +607,7 @@ split:
   - `GET /api/v1/messages/settings`
   - `GET /api/v1/messages/{user}`
 - REST aliases:
+  - `POST /api/v1/posts/{post}/mail`
   - `POST /api/v1/mail`
   - `POST /api/v1/mail/groups`
   - `PUT/PATCH /api/v1/mail/groups/{group}`
@@ -619,6 +620,7 @@ split:
   - `POST /api/v1/messages/{message}/read`
   - `DELETE /api/v1/messages/{message}`
 - Uniform commands:
+  - `mailPostAuthor`
   - `sendMail`
   - `setMailGroup`
   - `deleteMailGroup`
@@ -633,6 +635,8 @@ split:
   and the sender's friend list, with duplicate recipient suppression.
 - The built-in dynamic `friends` mail group is returned by the mail-group API
   and can be used anywhere a named/id mail group is accepted.
+- Thread readers can mail a visible non-anonymous article author with article
+  context; the flow uses durable private mail, not an external email bridge.
 - Admin-only sysop mail-all uses the same durable mail path to address every
   other user, bypassing personal ignore rows while still enforcing mailbox
   quota and creating the sender's sent copy.
@@ -646,7 +650,8 @@ split:
   quota before adding visible non-trash mail space.
 - Short direct messages respect ignore rows and per-recipient policy:
   all users, friends only, or no messages.
-- Web `Inbox` surface with mailboxes, unread badges, mail compose/reply,
+- Web thread readers expose a Mail action for visible non-anonymous article
+  authors. Web `Inbox` surface with mailboxes, unread badges, mail compose/reply,
   read/keep/move/trash actions, mail-group management, group/friend-list
   sending, used/quota display, direct-message conversations, receive-policy
   control, replies, and per-user message deletion.
@@ -752,6 +757,9 @@ social graph:
   edit window, and board thread moderators can rename later.
 - KBS-style article flags for marked, recommended, no-reply, TeX, and
   mail-back articles, with mail-back replies bridged into private mail.
+- KBS-style mail-author-from-article action via `mailPostAuthor` and
+  `POST /api/v1/posts/{post}/mail`, adding article context to durable private
+  mail while rejecting anonymous or redacted articles.
 - Cross-post/repost article creation with source post/thread/board/author
   lineage.
 - Board policy flags, board detail reads, board-local moderator lists, and

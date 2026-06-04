@@ -3788,6 +3788,83 @@ func TestPrivateMailAndDirectMessagesLifecycle(t *testing.T) {
 	}, proto.ErrForbidden)
 }
 
+func TestMailPostAuthorFromArticle(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	thread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Reading actions",
+		Body:  "Original article body",
+	})
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected root post, got %+v", posts)
+	}
+
+	mail := exec(t, c, bob, proto.CmdMailPostAuthor, proto.MailPostAuthorPayload{
+		Post:    posts[0].ID,
+		Subject: "Question from reading",
+		Body:    "Can you say more?",
+	})
+	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceInbox) != 1 || aliceInbox[0].ID != mail.ID || aliceInbox[0].FromName != "bob" || aliceInbox[0].Subject != "Question from reading" {
+		t.Fatalf("expected article-author mail in alice inbox, got %+v", aliceInbox)
+	}
+	aliceMail, err := c.GetMail(alice.ID, mail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Can you say more?", "Board: general", "Thread: Reading actions", "Original article body"} {
+		if aliceMail == nil || !strings.Contains(aliceMail.Body, want) {
+			t.Fatalf("expected mail body to contain %q, got %+v", want, aliceMail)
+		}
+	}
+	bobSent, err := c.ListMail(bob.ID, "sent", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobSent) != 1 || bobSent[0].ID != mail.ID {
+		t.Fatalf("expected sent copy for article-author mail, got %+v", bobSent)
+	}
+
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:            "general",
+		AnonymousAllowed: boolPtr(true),
+	})
+	anonymous := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board:     "general",
+		Title:     "Anonymous article",
+		Body:      "no author mail target",
+		Anonymous: true,
+	})
+	anonPosts, err := c.ListPosts(anonymous.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execExpectErr(t, c, bob, proto.CmdMailPostAuthor, proto.MailPostAuthorPayload{
+		Post: anonPosts[0].ID,
+		Body: "who wrote this?",
+	}, proto.ErrValidationFailed)
+	exec(t, c, alice, proto.CmdRedactPost, proto.RedactPostPayload{
+		Post: posts[0].ID,
+	})
+	execExpectErr(t, c, bob, proto.CmdMailPostAuthor, proto.MailPostAuthorPayload{
+		Post: posts[0].ID,
+		Body: "still there?",
+	}, proto.ErrConflict)
+}
+
 func TestSysopMailAll(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

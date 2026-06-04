@@ -245,6 +245,23 @@ func (s *Server) handleRestorePost(w http.ResponseWriter, r *http.Request) {
 	writeAck(w, cid, reply)
 }
 
+func (s *Server) handleMailPostAuthor(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	postID := r.PathValue("post")
+
+	var p proto.MailPostAuthorPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Post = postID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdMailPostAuthor, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 func (s *Server) handleSetThreadTitle(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	threadID := r.PathValue("thread")

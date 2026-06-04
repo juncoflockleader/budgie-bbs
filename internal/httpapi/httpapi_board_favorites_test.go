@@ -2614,6 +2614,51 @@ func TestHTTPPostTeXAndMailBackFlags(t *testing.T) {
 	}
 }
 
+func TestHTTPMailPostAuthorFromArticle(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", aliceToken, map[string]string{
+		"title": "Mail author action",
+		"body":  "Article context body",
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("create thread status: %d error=%+v", status, thread.Error)
+	}
+	posts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", bobToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected root post, got %+v", posts.Posts)
+	}
+	mailAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/posts/"+posts.Posts[0].ID+"/mail", bobToken, map[string]string{
+		"subject": "Question from HTTP reader",
+		"body":    "Can you expand this?",
+	}, &mailAck); status != http.StatusCreated {
+		t.Fatalf("mail post author status: %d error=%+v", status, mailAck.Error)
+	}
+	aliceInbox := mailListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail", aliceToken, nil, &aliceInbox); status != http.StatusOK {
+		t.Fatalf("list alice inbox status: %d", status)
+	}
+	if aliceInbox.UnreadCount != 1 || len(aliceInbox.Mail) != 1 || aliceInbox.Mail[0].ID != mailAck.Result.ID || aliceInbox.Mail[0].FromName != "bob" || aliceInbox.Mail[0].Subject != "Question from HTTP reader" {
+		t.Fatalf("expected article-author mail in alice inbox, got %+v", aliceInbox)
+	}
+	aliceMail := mailItemResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail/"+mailAck.Result.ID, aliceToken, nil, &aliceMail); status != http.StatusOK {
+		t.Fatalf("get alice article mail status: %d", status)
+	}
+	for _, want := range []string{"Can you expand this?", "Thread: Mail author action", "Article context body"} {
+		if !strings.Contains(aliceMail.Body, want) {
+			t.Fatalf("expected article mail body to contain %q, got %q", want, aliceMail.Body)
+		}
+	}
+}
+
 func TestHTTPRepostPostCreatesLineage(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 

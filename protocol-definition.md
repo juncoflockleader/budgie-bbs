@@ -393,6 +393,7 @@ Returns: the ack envelope.
 | `PUT /api/v1/digest/{id}/body` | `setDigestEntryBody` |
 | `DELETE /api/v1/digest/{id}/body` | `setDigestEntryBody` |
 | `DELETE /api/v1/digest/{id}` | `removeDigestEntry` |
+| `POST /api/v1/posts/{id}/mail` | `mailPostAuthor` |
 | `POST /api/v1/mail` | `sendMail` |
 | `POST /api/v1/mail/groups` | `setMailGroup` |
 | `PUT /api/v1/mail/groups/{id}` | `setMailGroup` |
@@ -718,6 +719,7 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
 ### Private communication
 
 ```
+mailPostAuthor { post*, subject?, body*, saveSent? }         -> mail.sent
 sendMail       { to[], toGroups[], toFriends, toAll, subject, body*, replyTo, saveSent, attachments[] } -> mail.sent
 setMailGroup   { group?, name*, members[] }                    -> ack only
 deleteMailGroup { group* }                                     -> ack only
@@ -733,6 +735,11 @@ deleteDirectMessage { message* }                               -> ack only
   exposed as per-user `mail_copies`, allowing inbox, sent, trash, kept/custom
   mailboxes, read state, and reply threading without duplicating message body
   storage.
+- `mailPostAuthor` is the KBS-style article-reader action for mailing the
+  source article author through internal private mail. It requires read access
+  to the source board, rejects redacted and anonymous posts, adds board/thread/
+  post context plus a short article excerpt to the body, and then follows the
+  same quota, ignore, sent-copy, and `mail.sent` path as `sendMail`.
 - `to` accepts usernames or user ids. Entries prefixed with `group:` resolve
   against the actor's mail groups. `toGroups` accepts group ids or names, and
   the built-in dynamic group `friends` expands to the actor's current friend

@@ -179,6 +179,85 @@ func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPa
 	})
 }
 
+func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Reply {
+	if actor == nil {
+		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
+	}
+	postID := strings.TrimSpace(p.Post)
+	if postID == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	}
+	body := strings.TrimSpace(p.Body)
+	if body == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "body is required", false)}
+	}
+	post, err := getPost(h.db, postID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+	if post.Redacted {
+		return Reply{Err: errDetail(proto.ErrConflict, "cannot mail author from a redacted post", false)}
+	}
+	thread, err := getThread(h.db, post.Thread)
+	if err != nil {
+		return internalErr(err)
+	}
+	if thread == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+	}
+	settings, err := getBoardSettings(h.db, thread.Board)
+	if err != nil {
+		return internalErr(err)
+	}
+	if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, thread.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
+	}
+	recipient := strings.TrimSpace(post.AuthorID)
+	if recipient == "" {
+		recipient = strings.TrimSpace(post.Author)
+	}
+	if recipient == "" || strings.EqualFold(strings.TrimSpace(post.Author), "anonymous") {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "anonymous article author cannot receive mail", false)}
+	}
+	subject := strings.TrimSpace(p.Subject)
+	if subject == "" {
+		subject = "Re: " + thread.Title
+	}
+	return h.sendMail(actor, proto.SendMailPayload{
+		To:       []string{recipient},
+		Subject:  subject,
+		Body:     formatPostAuthorMailBody(thread, post, actor.Name, body),
+		SaveSent: p.SaveSent,
+	})
+}
+
+func formatPostAuthorMailBody(thread *Thread, post *Post, senderName, note string) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(note))
+	b.WriteString("\n\n---\n")
+	b.WriteString("Sent from article reading context.\n")
+	fmt.Fprintf(&b, "Board: %s\n", thread.Board)
+	fmt.Fprintf(&b, "Thread: %s\n", thread.Title)
+	fmt.Fprintf(&b, "Post: #%d (%s)\n", post.CreatedSeq, post.ID)
+	fmt.Fprintf(&b, "Article author: %s\n", post.Author)
+	fmt.Fprintf(&b, "Mail author: %s\n\n", senderName)
+	b.WriteString("Article excerpt:\n")
+	b.WriteString(articleMailExcerpt(post.Body, 1200))
+	return strings.TrimSpace(b.String())
+}
+
+func articleMailExcerpt(body string, max int) string {
+	body = strings.TrimSpace(body)
+	runes := []rune(body)
+	if max <= 0 || len(runes) <= max {
+		return body
+	}
+	return strings.TrimSpace(string(runes[:max])) + "..."
+}
+
 const sysmailSystemBoardID = "sysmail"
 
 func (h *Handler) appendSysmailSystemPostTx(tx *sql.Tx, actor *User, mailID, subject, mailBody string, recipientCount int, ts int64) ([]*proto.Event, error) {

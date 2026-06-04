@@ -182,6 +182,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/posts/{post}/flag", auth(http.HandlerFunc(s.handleFlagPost)))
 	mux.Handle("POST /api/v1/posts/{post}/read", auth(http.HandlerFunc(s.handleMarkPostRead)))
 	mux.Handle("POST /api/v1/posts/{post}/digest", auth(http.HandlerFunc(s.handleCuratePost)))
+	mux.Handle("POST /api/v1/posts/{post}/mail", auth(http.HandlerFunc(s.handleMailPostAuthor)))
 	mux.Handle("POST /api/v1/posts/{post}/attachments", auth(http.HandlerFunc(s.handleUploadPostAttachment)))
 	mux.Handle("POST /api/v1/posts/{post}/react", auth(http.HandlerFunc(s.handleReactPost)))
 	mux.Handle("DELETE /api/v1/posts/{post}/react", auth(http.HandlerFunc(s.handleUnreactPost)))

@@ -43,6 +43,7 @@ const (
 	CmdCopyDigestPath             CommandName = "copyDigestPath"
 	CmdDeleteDigestPath           CommandName = "deleteDigestPath"
 	CmdSendDigestEntryMail        CommandName = "sendDigestEntryMail"
+	CmdMailPostAuthor             CommandName = "mailPostAuthor"
 	CmdSendMail                   CommandName = "sendMail"
 	CmdSetMailGroup               CommandName = "setMailGroup"
 	CmdDeleteMailGroup            CommandName = "deleteMailGroup"
@@ -236,6 +237,13 @@ type SendDigestEntryMailPayload struct {
 	Subject   string   `json:"subject,omitempty"`
 	Note      string   `json:"note,omitempty"`
 	SaveSent  *bool    `json:"saveSent,omitempty"`
+}
+
+type MailPostAuthorPayload struct {
+	Post     string `json:"post"`
+	Subject  string `json:"subject,omitempty"`
+	Body     string `json:"body"`
+	SaveSent *bool  `json:"saveSent,omitempty"`
 }
 
 type SendMailPayload struct {

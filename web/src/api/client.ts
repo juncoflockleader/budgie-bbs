@@ -738,6 +738,19 @@ export async function sendDigestEntryMail(
   return json<AckResult>(res)
 }
 
+export async function mailPostAuthor(
+  token: string,
+  post: string,
+  payload: { subject?: string; body: string; saveSent?: boolean },
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/posts/${post}/mail`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return json<AckResult>(res)
+}
+
 export async function listMail(
   token: string,
   mailbox = 'inbox',
@@ -1667,7 +1680,7 @@ export type CommandName =
   | 'setBoardMember' | 'applyBoardMembership' | 'reviewBoardMembership' | 'leaveBoardMembership'
   | 'curatePost' | 'curateThread' | 'removeDigestEntry' | 'updateDigestEntry' | 'setDigestEntryBody' | 'createDigestDirectory'
   | 'moveDigestPath' | 'copyDigestPath' | 'deleteDigestPath' | 'sendDigestEntryMail'
-  | 'sendMail' | 'setMailGroup' | 'deleteMailGroup' | 'attachMail' | 'updateMail' | 'deleteMail'
+  | 'mailPostAuthor' | 'sendMail' | 'setMailGroup' | 'deleteMailGroup' | 'attachMail' | 'updateMail' | 'deleteMail'
   | 'sendDirectMessage' | 'setDirectMessageSettings' | 'markDirectMessageRead' | 'deleteDirectMessage'
   | 'setUserRelationship' | 'setLoginWatch'
   | 'setBoardFavorite' | 'createFavoriteFolder' | 'updateFavoriteFolder'

@@ -682,6 +682,22 @@ export function ThreadPage({
     alert(`Reposted as thread ${res.data?.id ?? ''}`.trim())
   }
 
+  async function mailPostAuthor(post: Post) {
+    const subject = prompt('Mail subject:', `Re: ${threadTitle} #${post.createdSeq}`)
+    if (subject === null) return
+    const body = prompt('Mail body:', '')
+    if (body === null) return
+    const res = await api.mailPostAuthor(token, post.id, {
+      subject: subject.trim(),
+      body: body.trim(),
+    })
+    if (res.error) {
+      alert(res.error.message)
+      return
+    }
+    alert('Mail sent.')
+  }
+
   async function setAuthorRelationship(post: Post, kind: 'friend' | 'ignore') {
     const note = kind === 'friend' ? prompt('Friend note:', '') ?? '' : ''
     const res = await api.setUserRelationship(token, post.author, kind, true, note)
@@ -805,6 +821,7 @@ export function ThreadPage({
           const canPublishPollResult = canManagePolls || post.authorId === currentUserId || thread.authorId === currentUserId
           const canReplyToPost = canReplyInBoard && (!threadStarterNoReply || canModerateThreads) && (!post.noReply || canModerateThreads)
           const canSetArticleMetadata = post.authorId === currentUserId || canModerateThreads
+          const canMailAuthor = post.author !== 'Anonymous' && (post.authorId ? post.authorId !== currentUserId : post.author !== currentUsername)
 
           return (
             <div
@@ -852,6 +869,9 @@ export function ThreadPage({
                       <button className="link-btn" onClick={() => setAuthorRelationship(post, 'friend')}>Friend</button>
                       <button className="link-btn danger" onClick={() => setAuthorRelationship(post, 'ignore')}>Ignore</button>
                     </>
+                  )}
+                  {!post.redacted && canMailAuthor && (
+                    <button className="link-btn" onClick={() => mailPostAuthor(post)}>Mail</button>
                   )}
                   {canUseCurationAction && !post.redacted && (
                     <button className="link-btn" onClick={() => curatePostDigest(post)}>Digest</button>

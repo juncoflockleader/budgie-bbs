@@ -314,6 +314,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.sendDigestEntryMail(actor, p)
 
+	case proto.CmdMailPostAuthor:
+		var p proto.MailPostAuthorPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.mailPostAuthor(actor, p)
+
 	case proto.CmdSendMail:
 		var p proto.SendMailPayload
 		if err := json.Unmarshal(payload, &p); err != nil {
