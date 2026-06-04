@@ -155,8 +155,8 @@ func markPostPurged(tx *sql.Tx, postID string, seq int64) error {
 	return currentRuntime().MarkPostPurged(tx, postID, seq)
 }
 
-func setPostFlags(tx *sql.Tx, postID string, marked, recommended, noReply bool, seq int64) error {
-	return currentRuntime().SetPostFlags(tx, postID, marked, recommended, noReply, seq)
+func setPostFlags(tx *sql.Tx, postID string, marked, recommended, noReply, tex, mailBack bool, seq int64) error {
+	return currentRuntime().SetPostFlags(tx, postID, marked, recommended, noReply, tex, mailBack, seq)
 }
 
 func setThreadLocked(tx *sql.Tx, threadID string, locked bool) error {

@@ -1517,7 +1517,7 @@ export async function flagPost(token: string, postId: string, reason = ''): Prom
 export async function setPostFlag(
   token: string,
   postId: string,
-  payload: { marked?: boolean; recommended?: boolean; noReply?: boolean },
+  payload: { marked?: boolean; recommended?: boolean; noReply?: boolean; tex?: boolean; mailBack?: boolean },
 ): Promise<ApiResponse<AckResult>> {
   const res = await fetch(`${BASE}/posts/${postId}/flags`, {
     method: 'PATCH',

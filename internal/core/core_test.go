@@ -5287,6 +5287,84 @@ func TestPostArticleFlagsAndNoReply(t *testing.T) {
 	}
 }
 
+func TestPostTeXAndMailBackFlags(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "TeX mail-back", Body: "root post",
+	})
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected root post, got %+v", posts)
+	}
+	rootPostID := posts[0].ID
+
+	execExpectErr(t, c, bob, proto.CmdSetPostFlag, proto.SetPostFlagPayload{
+		Post: rootPostID,
+		TeX:  boolPtr(true),
+	}, proto.ErrForbidden)
+	exec(t, c, alice, proto.CmdSetPostFlag, proto.SetPostFlagPayload{
+		Post:     rootPostID,
+		TeX:      boolPtr(true),
+		MailBack: boolPtr(true),
+	})
+	root, err := c.GetPost(rootPostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root == nil || !root.TeX || !root.MailBack {
+		t.Fatalf("expected tex/mail-back flags, got %+v", root)
+	}
+
+	reply := exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread:  threadRes.ID,
+		ReplyTo: rootPostID,
+		Body:    "mail me back",
+	})
+	if reply.ID == "" {
+		t.Fatalf("expected reply id, got %+v", reply)
+	}
+	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceInbox) != 1 || aliceInbox[0].FromName != "bob" || !strings.Contains(aliceInbox[0].Subject, "TeX mail-back") || !strings.Contains(aliceInbox[0].Body, "mail me back") || !strings.Contains(aliceInbox[0].Body, rootPostID) {
+		t.Fatalf("expected article mail-back in alice inbox, got %+v", aliceInbox)
+	}
+	bobSent, err := c.ListMail(bob.ID, "sent", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bobSent) != 0 {
+		t.Fatalf("expected automatic mail-back not to create sent copy, got %+v", bobSent)
+	}
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatal(err)
+	}
+	root, err = c.GetPost(rootPostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root == nil || !root.TeX || !root.MailBack {
+		t.Fatalf("expected rebuild to preserve tex/mail-back flags, got %+v", root)
+	}
+	aliceInbox, err = c.ListMail(alice.ID, "inbox", 10, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(aliceInbox) != 1 || !strings.Contains(aliceInbox[0].Body, "mail me back") {
+		t.Fatalf("expected rebuild to preserve article mail-back, got %+v", aliceInbox)
+	}
+}
+
 func TestRepostPostCreatesThreadWithLineage(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

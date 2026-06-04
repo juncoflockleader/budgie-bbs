@@ -248,6 +248,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
 	}
 
+	var mailBackTarget *Post
 	// Threading depth cap: max 1 level. If replyTo is itself a reply, flatten.
 	if p.ReplyTo != "" {
 		parent, err := getPost(h.db, p.ReplyTo)
@@ -263,9 +264,20 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		if parent.NoReply && !canModerateThread {
 			return Reply{Err: errDetail(proto.ErrForbidden, "article is not accepting replies", false)}
 		}
+		if parent.MailBack {
+			mailBackTarget = parent
+		}
 		if parent.ReplyTo != "" {
 			// Already depth-1 reply — flatten to grandparent.
 			p.ReplyTo = parent.ReplyTo
+		}
+	} else {
+		root, err := threadRootPost(h.db, thread.ID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if root != nil && root.MailBack {
+			mailBackTarget = root
 		}
 	}
 
@@ -313,6 +325,10 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 			return internalErr(err)
 		}
 	}
+	mailBackEvent, err := h.appendArticleMailBackTx(tx, actor, authorName, authorID, mailBackTarget, thread, postID, cleanBody, ts)
+	if err != nil {
+		return internalErr(err)
+	}
 	if pollBlock != nil && cleanBody != p.Body {
 		// Create poll rows within the same TX.
 		pollID := newID("pol_")
@@ -341,6 +357,9 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID, Body: cleanBody, RawBody: p.Body, Signature: signature, ContentType: ct, ReplyTo: p.ReplyTo, Attachments: attachments, TS: ts}, TS: ts})
 	if filterEvent != nil {
 		h.bus.Publish(filterEvent)
+	}
+	if mailBackEvent != nil {
+		h.bus.Publish(mailBackEvent)
 	}
 	h.publishGeneratedEvents(filterGeneratedEvents)
 
@@ -545,6 +564,83 @@ func threadRootPostNoReply(db *sql.DB, threadID string) (bool, error) {
 		return false, nil
 	}
 	return noReply != 0, err
+}
+
+func threadRootPost(db *sql.DB, threadID string) (*Post, error) {
+	var postID string
+	err := qQueryRow(db,
+		`SELECT id FROM posts WHERE thread=? ORDER BY created_seq LIMIT 1`,
+		threadID,
+	).Scan(&postID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return getPost(db, postID)
+}
+
+func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, authorID string, target *Post, thread *Thread, replyPostID, replyBody string, ts int64) (*proto.Event, error) {
+	if actor == nil || target == nil || !target.MailBack || target.Redacted {
+		return nil, nil
+	}
+	authorID = strings.TrimSpace(authorID)
+	if authorID == "" || strings.TrimSpace(target.AuthorID) == "" || target.AuthorID == authorID {
+		return nil, nil
+	}
+	recipient, err := findUserRefTx(tx, target.AuthorID)
+	if err != nil {
+		return nil, err
+	}
+	if recipient == nil {
+		return nil, nil
+	}
+	ignored, err := relationshipExistsTx(tx, recipient.ID, actor.ID, "ignore")
+	if err != nil {
+		return nil, err
+	}
+	if ignored {
+		return nil, nil
+	}
+
+	subject := "Article reply: " + thread.Title
+	body := formatArticleMailBackBody(thread, target, replyPostID, authorName, replyBody)
+	if errReply := ensureMailQuotaTx(tx, map[string]int{recipient.ID: 1}, mailMessageSize(subject, body, nil)); errReply.Err != nil {
+		if errReply.Err.Code != proto.ErrValidationFailed {
+			return nil, fmt.Errorf("article mail-back quota check: %s", errReply.Err.Message)
+		}
+		return nil, nil
+	}
+	mailID := newID("mail_")
+	scopes := []string{"account:" + actor.ID, "account:" + recipient.ID}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtMailSent, scopes, &proto.MailSentPayload{
+		ID: mailID, FromUserID: authorID, From: authorName, ToUserIDs: []string{recipient.ID}, To: []string{recipient.Name},
+		Subject: subject, Body: body, SaveSent: false, TS: ts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := insertMailMessage(tx, mailID, authorID, subject, body, "", ts, seq); err != nil {
+		return nil, err
+	}
+	if err := insertMailCopy(tx, mailID, recipient.ID, "recipient", "inbox", false, false, ts); err != nil {
+		return nil, err
+	}
+	return &proto.Event{Kind: proto.EvtMailSent, Seq: seq, Scopes: scopes,
+		Payload: &proto.MailSentPayload{ID: mailID, FromUserID: authorID, From: authorName, ToUserIDs: []string{recipient.ID}, To: []string{recipient.Name}, Subject: subject, Body: body, SaveSent: false, TS: ts}, TS: ts}, nil
+}
+
+func formatArticleMailBackBody(thread *Thread, target *Post, replyPostID, authorName, replyBody string) string {
+	return strings.TrimSpace(fmt.Sprintf(
+		"Article reply mail-back\n\nBoard: %s\nThread: %s\nOriginal post: %s\nReply post: %s\nReply author: %s\n\n%s",
+		thread.Board,
+		thread.Title,
+		target.ID,
+		replyPostID,
+		authorName,
+		replyBody,
+	))
 }
 
 func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply {
@@ -854,7 +950,7 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	if p.Post == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
 	}
-	if p.Marked == nil && p.Recommended == nil && p.NoReply == nil {
+	if p.Marked == nil && p.Recommended == nil && p.NoReply == nil && p.TeX == nil && p.MailBack == nil {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "at least one article flag is required", false)}
 	}
 	post, err := getPost(h.db, p.Post)
@@ -875,8 +971,11 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	marked := post.Marked
 	recommended := post.Recommended
 	noReply := post.NoReply
+	tex := post.TeX
+	mailBack := post.MailBack
 	curatorChange := false
 	threadModerationChange := false
+	authorMetadataChange := false
 	if p.Marked != nil {
 		curatorChange = curatorChange || *p.Marked != post.Marked
 		marked = *p.Marked
@@ -889,13 +988,24 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 		threadModerationChange = *p.NoReply != post.NoReply
 		noReply = *p.NoReply
 	}
+	if p.TeX != nil {
+		authorMetadataChange = authorMetadataChange || *p.TeX != post.TeX
+		tex = *p.TeX
+	}
+	if p.MailBack != nil {
+		authorMetadataChange = authorMetadataChange || *p.MailBack != post.MailBack
+		mailBack = *p.MailBack
+	}
 	if curatorChange && !h.actorCanCurateBoard(actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board curator permission required", false)}
 	}
 	if threadModerationChange && !h.actorCanModerateBoardThreads(actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
 	}
-	if !curatorChange && !threadModerationChange {
+	if authorMetadataChange && (actor == nil || (actor.ID != post.AuthorID && !h.actorCanModerateBoardThreads(actor, thread.Board))) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "post author or board thread moderation permission required", false)}
+	}
+	if !curatorChange && !threadModerationChange && !authorMetadataChange {
 		return Reply{Result: &proto.AckResult{ID: post.ID}}
 	}
 
@@ -908,12 +1018,12 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 
 	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagsSet, scopes, &proto.PostFlagsSetPayload{
-		ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, By: actor.ID, TS: ts,
+		ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, TeX: tex, MailBack: mailBack, By: actor.ID, TS: ts,
 	})
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := setPostFlags(tx, post.ID, marked, recommended, noReply, seq); err != nil {
+	if err := setPostFlags(tx, post.ID, marked, recommended, noReply, tex, mailBack, seq); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -921,7 +1031,7 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostFlagsSet, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostFlagsSetPayload{ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, By: actor.Name, TS: ts}, TS: ts})
+		Payload: &proto.PostFlagsSetPayload{ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, TeX: tex, MailBack: mailBack, By: actor.Name, TS: ts}, TS: ts})
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 

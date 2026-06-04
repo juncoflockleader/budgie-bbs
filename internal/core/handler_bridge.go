@@ -181,17 +181,17 @@ func getThreadTx(tx *sql.Tx, id string) (*Thread, error) {
 
 func getPostTx(tx *sql.Tx, id string) (*Post, error) {
 	p := &Post{}
-	var redacted, marked, recommended, noReply int
+	var redacted, marked, recommended, noReply, tex, mailBack int
 	err := qQueryRow(tx,
 		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version,
-		        redacted, marked, recommended, no_reply,
+		        redacted, marked, recommended, no_reply, tex, mail_back,
 		        COALESCE(source_post,''), COALESCE(source_thread,''), COALESCE(source_board,''),
 		        COALESCE(source_author,''), COALESCE(source_author_id,''), COALESCE(source_title,''),
 		        created_seq, updated_seq, created_at, updated_at
 		   FROM posts WHERE id=?`, id,
 	).Scan(
 		&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType, &p.ReplyTo, &p.Version,
-		&redacted, &marked, &recommended, &noReply,
+		&redacted, &marked, &recommended, &noReply, &tex, &mailBack,
 		&p.SourcePost, &p.SourceThread, &p.SourceBoard, &p.SourceAuthor, &p.SourceAuthorID, &p.SourceTitle,
 		&p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt,
 	)
@@ -211,5 +211,7 @@ func getPostTx(tx *sql.Tx, id string) (*Post, error) {
 	p.Marked = marked != 0
 	p.Recommended = recommended != 0
 	p.NoReply = noReply != 0
+	p.TeX = tex != 0
+	p.MailBack = mailBack != 0
 	return p, nil
 }

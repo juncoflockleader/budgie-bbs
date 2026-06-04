@@ -2376,12 +2376,12 @@ func attachPostAttachments(db *sql.DB, posts []Post) ([]Post, error) {
 }
 
 func hydratePostMetadata(db *sql.DB, post *Post) error {
-	var marked, recommended, noReply int
-	err := QQueryRow(db, `SELECT marked, recommended, no_reply,
+	var marked, recommended, noReply, tex, mailBack int
+	err := QQueryRow(db, `SELECT marked, recommended, no_reply, tex, mail_back,
 	        COALESCE(source_post,''), COALESCE(source_thread,''), COALESCE(source_board,''),
 	        COALESCE(source_author,''), COALESCE(source_author_id,''), COALESCE(source_title,'')
 	    FROM posts WHERE id=?`, post.ID).Scan(
-		&marked, &recommended, &noReply,
+		&marked, &recommended, &noReply, &tex, &mailBack,
 		&post.SourcePost, &post.SourceThread, &post.SourceBoard,
 		&post.SourceAuthor, &post.SourceAuthorID, &post.SourceTitle,
 	)
@@ -2394,6 +2394,8 @@ func hydratePostMetadata(db *sql.DB, post *Post) error {
 	post.Marked = marked != 0
 	post.Recommended = recommended != 0
 	post.NoReply = noReply != 0
+	post.TeX = tex != 0
+	post.MailBack = mailBack != 0
 	return nil
 }
 

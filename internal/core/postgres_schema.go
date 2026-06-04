@@ -571,6 +571,8 @@ CREATE TABLE IF NOT EXISTS posts (
     marked       BOOLEAN NOT NULL DEFAULT FALSE,
     recommended  BOOLEAN NOT NULL DEFAULT FALSE,
     no_reply     BOOLEAN NOT NULL DEFAULT FALSE,
+    tex          BOOLEAN NOT NULL DEFAULT FALSE,
+    mail_back    BOOLEAN NOT NULL DEFAULT FALSE,
     source_post  TEXT NOT NULL DEFAULT '',
     source_thread TEXT NOT NULL DEFAULT '',
     source_board TEXT NOT NULL DEFAULT '',
@@ -1586,6 +1588,20 @@ ALTER TABLE posts
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (31, 'postgres-post-source-lineage', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 32,
+			Name:    "postgres-post-tex-mailback-flags",
+			SQL: `
+ALTER TABLE posts
+    ADD COLUMN IF NOT EXISTS tex BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE posts
+    ADD COLUMN IF NOT EXISTS mail_back BOOLEAN NOT NULL DEFAULT FALSE;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (32, 'postgres-post-tex-mailback-flags', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

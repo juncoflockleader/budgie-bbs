@@ -456,7 +456,7 @@ repostPost     { post*, board*, title? }                    -> thread.new (+ sou
 postBoardMail  { board, thread, subject, body*, contentType, attachments[] } -> thread.new or post.appended
 attachPost     { post*, filename*, contentType, sizeBytes } -> post.attachment_added
 editPost       { post*, body* }                             -> post.edited
-setPostFlag    { post*, marked?, recommended?, noReply? }   -> post.flags_set
+setPostFlag    { post*, marked?, recommended?, noReply?, tex?, mailBack? } -> post.flags_set
 redactPost     { post*, reason }                            -> post.redacted
 restorePost    { post* }                                    -> post.restored
 flagPost       { post*, reason }                             -> post.flagged
@@ -490,9 +490,13 @@ flagPost       { post*, reason }                             -> post.flagged
 - `replyTo`: optional parent post id for shallow threading. Depth is capped server-side (open question #1 in Decisions doc); over-deep replies are flattened, not rejected.
 - `setPostFlag` stores KBS-style article metadata. `marked` and `recommended`
   require board curation permission; `noReply` requires board thread-moderation
-  permission. A `noReply` thread starter blocks ordinary replies to the thread,
-  and a `noReply` parent article blocks ordinary direct replies to that article;
-  board thread moderators may bypass those article-local reply stops.
+  permission. `tex` and `mailBack` may be set by the post author or a board
+  thread moderator. A `noReply` thread starter blocks ordinary replies to the
+  thread, and a `noReply` parent article blocks ordinary direct replies to that
+  article; board thread moderators may bypass those article-local reply stops.
+  Replies to a non-anonymous article with `mailBack` enabled create a private
+  `mail.sent` copy to the article author when delivery is allowed by mail
+  quotas and ignore relationships.
 - `repostPost` creates a new thread on the destination board from an existing
   readable source article. The actor must be able to read the source board and
   post to the destination board. The first destination post carries source
@@ -878,9 +882,9 @@ unsubscribe    { scopes* }                                  -> ack only
 ```
 board.created   { id, name, description, parentId, position, by, ts }
 thread.new      { id, board, author, title, ts }
-post.appended   { id, thread, author, body, signature, contentType, replyTo, sourcePost, sourceThread, sourceBoard, sourceAuthor, sourceAuthorId, sourceTitle, ts }
+post.appended   { id, thread, author, body, signature, contentType, replyTo, tex, mailBack, sourcePost, sourceThread, sourceBoard, sourceAuthor, sourceAuthorId, sourceTitle, ts }
 post.edited     { id, thread, newBody, version, ts }
-post.flags_set  { id, thread, marked, recommended, noReply, by, ts }
+post.flags_set  { id, thread, marked, recommended, noReply, tex, mailBack, by, ts }
 post.redacted   { id, thread, by, reason, ts }        // body NOT included
 post.restored   { id, thread, by, ts }
 thread.locked   { thread, locked, by, ts }

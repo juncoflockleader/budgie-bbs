@@ -132,6 +132,8 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			Signature:      strings.TrimSpace(evt.Signature),
 			ContentType:    evt.ContentType,
 			ReplyTo:        evt.ReplyTo,
+			TeX:            evt.TeX,
+			MailBack:       evt.MailBack,
 			SourcePost:     strings.TrimSpace(evt.SourcePost),
 			SourceThread:   strings.TrimSpace(evt.SourceThread),
 			SourceBoard:    strings.TrimSpace(evt.SourceBoard),
@@ -202,9 +204,17 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 		if evt.NoReply {
 			noReply = 1
 		}
+		tex := 0
+		if evt.TeX {
+			tex = 1
+		}
+		mailBack := 0
+		if evt.MailBack {
+			mailBack = 1
+		}
 		if _, err := qExec(tx,
-			`UPDATE posts SET marked=?, recommended=?, no_reply=?, updated_seq=?, updated_at=? WHERE id=?`,
-			marked, recommended, noReply, seq, evt.TS, evt.ID,
+			`UPDATE posts SET marked=?, recommended=?, no_reply=?, tex=?, mail_back=?, updated_seq=?, updated_at=? WHERE id=?`,
+			marked, recommended, noReply, tex, mailBack, seq, evt.TS, evt.ID,
 		); err != nil {
 			return err
 		}

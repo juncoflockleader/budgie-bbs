@@ -179,19 +179,25 @@ thread. Budgie now has the first thread-level version:
 KBS articles carried local metadata flags beyond the body text. Budgie now has
 the first article-flag workflow:
 
-- Posts carry KBS-style `marked`, `recommended`, and `noReply` metadata.
+- Posts carry KBS-style `marked`, `recommended`, `noReply`, `tex`, and
+  `mailBack` metadata.
 - Uniform command:
   - `setPostFlag`
 - REST alias:
   - `PATCH /api/v1/posts/{post}/flags`
 - `marked` and `recommended` require board curation permission.
 - `noReply` requires board thread-moderation permission.
+- `tex` and `mailBack` can be set by the article author or a board
+  thread-moderator.
 - A no-reply thread starter blocks ordinary replies to the thread.
 - A no-reply parent article blocks ordinary direct replies to that article.
 - Board thread moderators and delegated `canModerateThreads` members can
   bypass article-local reply stops.
-- Web thread readers show article flag badges and expose mark/recommend/no-reply
-  controls to users with the corresponding board permissions.
+- Replies to a non-anonymous `mailBack` article generate a durable private-mail
+  copy to the opted-in article author when mail quota and ignore relationships
+  allow delivery.
+- Web thread readers show article flag badges and expose mark/recommend/no-reply,
+  TeX, and mail-back controls to users with the corresponding permissions.
 
 ### Cross-Post And Repost Lineage
 
@@ -696,7 +702,8 @@ social graph:
 - First/last post jumps, same-author trails inside a loaded thread, and
   cross-board same-author reading through authenticated author-post streams.
 - Reply-tree-specific traversal inside a loaded thread.
-- KBS-style article flags for marked, recommended, and no-reply articles.
+- KBS-style article flags for marked, recommended, no-reply, TeX, and
+  mail-back articles, with mail-back replies bridged into private mail.
 - Cross-post/repost article creation with source post/thread/board/author
   lineage.
 - Board policy flags, board detail reads, board-local moderator lists, and
@@ -776,11 +783,9 @@ social graph:
   workflows.
 - Remaining special system boards, historical/stat-log boards, and richer
   community statistics.
-- Further article metadata such as TeX flags and mail-back reply flags.
 - Optional social/services layer: games and campus utilities.
 
 ## Suggested Next Slices
 
 1. KBS member-manager edge permissions not yet modeled in Budgie.
-2. Further article metadata such as TeX flags and mail-back reply flags.
-3. Remaining BBS social utilities and games.
+2. Remaining BBS social utilities and games.

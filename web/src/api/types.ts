@@ -402,6 +402,8 @@ export interface Post {
   marked: boolean
   recommended: boolean
   noReply: boolean
+  tex: boolean
+  mailBack: boolean
   sourcePost?: string
   sourceThread?: string
   sourceBoard?: string
@@ -505,6 +507,7 @@ export interface ThreadNewPayload {
 export interface PostAppendedPayload {
   id: string; thread: string; author: string; body: string; rawBody?: string
   authorId?: string; signature?: string; contentType: string; replyTo?: string
+  tex?: boolean; mailBack?: boolean
   sourcePost?: string; sourceThread?: string; sourceBoard?: string; sourceAuthor?: string; sourceAuthorId?: string; sourceTitle?: string
   attachments?: AttachmentPayload[]; ts: number
 }
@@ -516,7 +519,7 @@ export interface PostEditedPayload {
   id: string; thread: string; newBody: string; version: number; ts: number
 }
 export interface PostFlagsSetPayload {
-  id: string; thread: string; marked: boolean; recommended: boolean; noReply: boolean; by: string; ts: number
+  id: string; thread: string; marked: boolean; recommended: boolean; noReply: boolean; tex?: boolean; mailBack?: boolean; by: string; ts: number
 }
 export interface PostRedactedPayload {
   id: string; thread: string; by: string; reason?: string; ts: number

@@ -448,6 +448,8 @@ type SetPostFlagPayload struct {
 	Marked      *bool  `json:"marked,omitempty"`
 	Recommended *bool  `json:"recommended,omitempty"`
 	NoReply     *bool  `json:"noReply,omitempty"`
+	TeX         *bool  `json:"tex,omitempty"`
+	MailBack    *bool  `json:"mailBack,omitempty"`
 }
 
 type RedactPostPayload struct {

@@ -432,6 +432,8 @@ CREATE TABLE IF NOT EXISTS posts (
     marked       INTEGER NOT NULL DEFAULT 0,
     recommended  INTEGER NOT NULL DEFAULT 0,
     no_reply     INTEGER NOT NULL DEFAULT 0,
+    tex          INTEGER NOT NULL DEFAULT 0,
+    mail_back    INTEGER NOT NULL DEFAULT 0,
     source_post  TEXT NOT NULL DEFAULT '',
     source_thread TEXT NOT NULL DEFAULT '',
     source_board TEXT NOT NULL DEFAULT '',

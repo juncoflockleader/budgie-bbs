@@ -91,7 +91,7 @@ func MigrateSQLiteToPostgres(ctx context.Context, sqlitePath, pgDSN string) erro
 		{src: "direct_message_settings", dst: "direct_message_settings", cols: []string{"user_id", "policy", "updated_at"}},
 		{src: "direct_messages", dst: "direct_messages", cols: []string{"id", "conversation_id", "from_user_id", "to_user_id", "body", "read_at", "sender_deleted", "recipient_deleted", "created_at", "seq"}},
 		{src: "threads", dst: "threads", cols: []string{"id", "board", "author", "author_id", "title", "locked", "post_count", "last_seq", "created_ts", "created_at", "updated_at"}},
-		{src: "posts", dst: "posts", cols: []string{"id", "thread", "author", "author_id", "body", "signature", "content_type", "reply_to", "version", "redacted", "created_seq", "updated_seq", "created_at", "updated_at"}},
+		{src: "posts", dst: "posts", cols: []string{"id", "thread", "author", "author_id", "body", "signature", "content_type", "reply_to", "version", "redacted", "marked", "recommended", "no_reply", "tex", "mail_back", "source_post", "source_thread", "source_board", "source_author", "source_author_id", "source_title", "created_seq", "updated_seq", "created_at", "updated_at"}},
 		{src: "user_sanctions", dst: "user_sanctions", cols: []string{"id", "user_id", "kind", "scope", "expires_at", "by", "reason", "seq"}},
 		{src: "content_filters", dst: "content_filters", cols: []string{"id", "pattern", "scope", "active", "created_by", "created_at", "updated_at"}},
 		{src: "thread_prefs", dst: "thread_prefs", cols: []string{"user_id", "thread_id", "level"}},

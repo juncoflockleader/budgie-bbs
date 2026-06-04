@@ -97,6 +97,8 @@ type PostAppendedPayload struct {
 	Signature      string              `json:"signature,omitempty"`
 	ContentType    string              `json:"contentType"`
 	ReplyTo        string              `json:"replyTo,omitempty"`
+	TeX            bool                `json:"tex,omitempty"`
+	MailBack       bool                `json:"mailBack,omitempty"`
 	SourcePost     string              `json:"sourcePost,omitempty"`
 	SourceThread   string              `json:"sourceThread,omitempty"`
 	SourceBoard    string              `json:"sourceBoard,omitempty"`
@@ -132,6 +134,8 @@ type PostFlagsSetPayload struct {
 	Marked      bool   `json:"marked"`
 	Recommended bool   `json:"recommended"`
 	NoReply     bool   `json:"noReply"`
+	TeX         bool   `json:"tex"`
+	MailBack    bool   `json:"mailBack"`
 	By          string `json:"by"`
 	TS          int64  `json:"ts"`
 }

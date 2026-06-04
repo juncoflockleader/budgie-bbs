@@ -32,6 +32,8 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"posts", "marked", "marked INTEGER NOT NULL DEFAULT 0"},
 		{"posts", "recommended", "recommended INTEGER NOT NULL DEFAULT 0"},
 		{"posts", "no_reply", "no_reply INTEGER NOT NULL DEFAULT 0"},
+		{"posts", "tex", "tex INTEGER NOT NULL DEFAULT 0"},
+		{"posts", "mail_back", "mail_back INTEGER NOT NULL DEFAULT 0"},
 		{"posts", "source_post", "source_post TEXT NOT NULL DEFAULT ''"},
 		{"posts", "source_thread", "source_thread TEXT NOT NULL DEFAULT ''"},
 		{"posts", "source_board", "source_board TEXT NOT NULL DEFAULT ''"},

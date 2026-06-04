@@ -174,6 +174,8 @@ type postsResponse struct {
 		Marked       bool   `json:"marked"`
 		Recommended  bool   `json:"recommended"`
 		NoReply      bool   `json:"noReply"`
+		TeX          bool   `json:"tex"`
+		MailBack     bool   `json:"mailBack"`
 		SourcePost   string `json:"sourcePost"`
 		SourceThread string `json:"sourceThread"`
 		SourceBoard  string `json:"sourceBoard"`
@@ -2221,6 +2223,77 @@ func TestHTTPPostArticleFlagsAndNoReply(t *testing.T) {
 		"body": "thread manager reply",
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("expected thread manager to bypass article no-reply, got %d error=%+v", status, ack.Error)
+	}
+}
+
+func TestHTTPPostTeXAndMailBackFlags(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", aliceToken, map[string]string{
+		"title": "TeX mail-back",
+		"body":  "root post",
+	}, &ack); status != http.StatusCreated || ack.Result == nil {
+		t.Fatalf("create tex/mail-back thread status: %d error=%+v", status, ack.Error)
+	}
+	threadID := ack.Result.ID
+	posts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list tex/mail-back posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected root post, got %+v", posts.Posts)
+	}
+	rootPostID := posts.Posts[0].ID
+
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/posts/"+rootPostID+"/flags", bobToken, map[string]bool{
+		"tex": true,
+	}, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected ordinary user cannot set author article metadata, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/posts/"+rootPostID+"/flags", aliceToken, map[string]bool{
+		"tex":      true,
+		"mailBack": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("alice set tex/mail-back status: %d error=%+v", status, ack.Error)
+	}
+	posts = postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list flagged tex/mail-back posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 || !posts.Posts[0].TeX || !posts.Posts[0].MailBack {
+		t.Fatalf("expected tex/mail-back flags in response, got %+v", posts.Posts)
+	}
+
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", bobToken, map[string]string{
+		"replyTo": rootPostID,
+		"body":    "mail me back",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("bob reply with mail-back status: %d error=%+v", status, ack.Error)
+	}
+	aliceInbox := mailListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail", aliceToken, nil, &aliceInbox); status != http.StatusOK {
+		t.Fatalf("list alice mail-back inbox status: %d", status)
+	}
+	if aliceInbox.UnreadCount != 1 || len(aliceInbox.Mail) != 1 || aliceInbox.Mail[0].FromName != "bob" || !strings.Contains(aliceInbox.Mail[0].Subject, "TeX mail-back") {
+		t.Fatalf("expected article mail-back in alice inbox, got %+v", aliceInbox)
+	}
+	mail := mailItemResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail/"+aliceInbox.Mail[0].ID, aliceToken, nil, &mail); status != http.StatusOK {
+		t.Fatalf("get article mail-back status: %d", status)
+	}
+	if !strings.Contains(mail.Body, "mail me back") || !strings.Contains(mail.Body, rootPostID) {
+		t.Fatalf("expected article mail-back body context, got %+v", mail)
+	}
+	bobSent := mailListResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/mail?mailbox=sent", bobToken, nil, &bobSent); status != http.StatusOK {
+		t.Fatalf("list bob sent mail-back status: %d", status)
+	}
+	if len(bobSent.Mail) != 0 {
+		t.Fatalf("expected automatic mail-back not to create sent copy, got %+v", bobSent)
 	}
 }
 

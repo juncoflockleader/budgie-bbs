@@ -507,6 +507,8 @@ type Post struct {
 	Marked         bool             `json:"marked"`
 	Recommended    bool             `json:"recommended"`
 	NoReply        bool             `json:"noReply"`
+	TeX            bool             `json:"tex"`
+	MailBack       bool             `json:"mailBack"`
 	SourcePost     string           `json:"sourcePost,omitempty"`
 	SourceThread   string           `json:"sourceThread,omitempty"`
 	SourceBoard    string           `json:"sourceBoard,omitempty"`

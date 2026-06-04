@@ -240,6 +240,8 @@ export function ThreadPage({
         marked: false,
         recommended: false,
         noReply: false,
+        tex: Boolean(p.tex),
+        mailBack: Boolean(p.mailBack),
         sourcePost: p.sourcePost,
         sourceThread: p.sourceThread,
         sourceBoard: p.sourceBoard,
@@ -304,10 +306,10 @@ export function ThreadPage({
     } else if (evt.event === 'post.flags_set') {
       const p = evt.payload as PostFlagsSetPayload
       setPosts(prev => prev.map(post =>
-        post.id === p.id ? { ...post, marked: p.marked, recommended: p.recommended, noReply: p.noReply } : post
+        post.id === p.id ? { ...post, marked: p.marked, recommended: p.recommended, noReply: p.noReply, tex: Boolean(p.tex), mailBack: Boolean(p.mailBack) } : post
       ))
       setReplyTreePosts(prev => prev?.map(post =>
-        post.id === p.id ? { ...post, marked: p.marked, recommended: p.recommended, noReply: p.noReply } : post
+        post.id === p.id ? { ...post, marked: p.marked, recommended: p.recommended, noReply: p.noReply, tex: Boolean(p.tex), mailBack: Boolean(p.mailBack) } : post
       ) ?? prev)
     } else if (evt.event === 'post.redacted') {
       const p = evt.payload as PostRedactedPayload
@@ -468,7 +470,7 @@ export function ThreadPage({
     setReplyTreePosts(prev => prev?.map(post => post.id === postId ? { ...post, ...patch } : post) ?? prev)
   }
 
-  async function setArticleFlag(post: Post, patch: { marked?: boolean; recommended?: boolean; noReply?: boolean }) {
+  async function setArticleFlag(post: Post, patch: { marked?: boolean; recommended?: boolean; noReply?: boolean; tex?: boolean; mailBack?: boolean }) {
     const res = await api.setPostFlag(token, post.id, patch)
     if (res.error) {
       alert(res.error.message)
@@ -745,6 +747,7 @@ export function ThreadPage({
           const createdAt = post.createdAt ?? post.createdSeq
           const canPublishPollResult = canManagePolls || post.authorId === currentUserId || thread.authorId === currentUserId
           const canReplyToPost = canReplyInBoard && (!threadStarterNoReply || canModerateThreads) && (!post.noReply || canModerateThreads)
+          const canSetArticleMetadata = post.authorId === currentUserId || canModerateThreads
 
           return (
             <div
@@ -771,6 +774,8 @@ export function ThreadPage({
                 {!post.redacted && post.marked && <span className="post-flag-badge">Marked</span>}
                 {!post.redacted && post.recommended && <span className="post-flag-badge">Recommended</span>}
                 {!post.redacted && post.noReply && <span className="post-flag-badge">No replies</span>}
+                {!post.redacted && post.tex && <span className="post-flag-badge">TeX</span>}
+                {!post.redacted && post.mailBack && <span className="post-flag-badge">Mail-back</span>}
                 {!post.redacted && post.sourcePost && <span className="post-flag-badge">Repost</span>}
                 <span className="post-actions">
                   {post.createdSeq > readSeq && !post.redacted && (
@@ -805,6 +810,12 @@ export function ThreadPage({
                   )}
                   {canModerateThreads && !post.redacted && (
                     <button className="link-btn" onClick={() => setArticleFlag(post, { noReply: !post.noReply })}>{post.noReply ? 'Allow replies' : 'No replies'}</button>
+                  )}
+                  {canSetArticleMetadata && !post.redacted && (
+                    <>
+                      <button className="link-btn" onClick={() => setArticleFlag(post, { tex: !post.tex })}>{post.tex ? 'Plain text' : 'TeX'}</button>
+                      <button className="link-btn" onClick={() => setArticleFlag(post, { mailBack: !post.mailBack })}>{post.mailBack ? 'Stop mail-back' : 'Mail-back'}</button>
+                    </>
                   )}
                   {canAttach && !post.redacted && (canManageBoard || post.authorId === currentUserId) && (
                     <button className="link-btn" onClick={() => uploadAttachment(post)}>Upload file</button>

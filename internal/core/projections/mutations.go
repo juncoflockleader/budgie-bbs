@@ -24,10 +24,12 @@ func InsertThread(tx *sql.Tx, t *Thread) error {
 func InsertPost(tx *sql.Tx, p *Post) error {
 	_, err := QExec(tx,
 		`INSERT INTO posts (id, thread, author, author_id, body, signature, content_type, reply_to, version, redacted,
+		        tex, mail_back,
 		        source_post, source_thread, source_board, source_author, source_author_id, source_title,
 		        created_seq, updated_seq, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,1,0,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,1,0,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		p.ID, p.Thread, p.Author, p.AuthorID, p.Body, p.Signature, p.ContentType, NullStr(p.ReplyTo),
+		boolInt(p.TeX), boolInt(p.MailBack),
 		p.SourcePost, p.SourceThread, p.SourceBoard, p.SourceAuthor, p.SourceAuthorID, p.SourceTitle,
 		p.CreatedSeq, p.CreatedSeq, p.CreatedAt, p.UpdatedAt,
 	)
@@ -117,10 +119,10 @@ func MarkPostPurged(tx *sql.Tx, postID string, seq int64) error {
 	return err
 }
 
-func SetPostFlags(tx *sql.Tx, postID string, marked, recommended, noReply bool, seq int64) error {
+func SetPostFlags(tx *sql.Tx, postID string, marked, recommended, noReply, tex, mailBack bool, seq int64) error {
 	_, err := QExec(tx,
-		`UPDATE posts SET marked=?, recommended=?, no_reply=?, updated_seq=?, updated_at=? WHERE id=?`,
-		boolInt(marked), boolInt(recommended), boolInt(noReply), seq, NowMS(), postID,
+		`UPDATE posts SET marked=?, recommended=?, no_reply=?, tex=?, mail_back=?, updated_seq=?, updated_at=? WHERE id=?`,
+		boolInt(marked), boolInt(recommended), boolInt(noReply), boolInt(tex), boolInt(mailBack), seq, NowMS(), postID,
 	)
 	return err
 }
