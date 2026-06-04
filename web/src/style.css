@@ -315,6 +315,12 @@ label {
   flex-direction: column;
   gap: 0.35rem;
 }
+.poll-composer-quick-times {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
 .poll-composer-option-row { display: flex; gap: 0.35rem }
 .poll-composer-option-row input { flex: 1 }
 

@@ -52,7 +52,7 @@ export function validatePollMarkup(body: string): PollValidation {
     return {
       hasPollTag: true,
       valid: false,
-      message: 'Poll closing time is invalid. Use a timestamp like 2026-06-15T14:30 or UNIX ms.',
+      message: 'Poll closing time is invalid. Use like 2026-06-15T14:30, 2h, 3d, or UNIX ms.',
     }
   }
 

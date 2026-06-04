@@ -16,6 +16,11 @@ function normalizeOptions(values: string[]) {
   return values.map(v => v.trim())
 }
 
+function toDatetimeLocalOffset(date: Date): string {
+  const pad2 = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
 export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
@@ -93,6 +98,20 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
             onChange={e => setExpiresAt(e.target.value)}
             title={expiresAt ? `Closes at ${new Date(expiresAt).toLocaleString()}` : 'Leave blank for no close time'}
           />
+          <div className="poll-composer-quick-times">
+            <button type="button" className="link-btn" onClick={() => setExpiresAt(toDatetimeLocalOffset(new Date(Date.now() + 60 * 60 * 1000)))}>
+              +1h
+            </button>
+            <button type="button" className="link-btn" onClick={() => setExpiresAt(toDatetimeLocalOffset(new Date(Date.now() + 24 * 60 * 60 * 1000)))}>
+              +1d
+            </button>
+            <button type="button" className="link-btn" onClick={() => setExpiresAt(toDatetimeLocalOffset(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)))}>
+              +1w
+            </button>
+            <button type="button" className="link-btn" onClick={() => setExpiresAt('')}>
+              clear
+            </button>
+          </div>
         </label>
       </div>
       <div className="compose-field">
