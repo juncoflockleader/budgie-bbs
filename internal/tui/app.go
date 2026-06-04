@@ -52,6 +52,10 @@ type (
 	}
 	notificationStatusMsg struct{ unread int }
 	disconnectMsg         struct{}
+	pollPermissionMsg     struct {
+		canCreatePoll bool
+		err           error
+	}
 )
 
 // model is the root bubbletea model.
@@ -88,6 +92,8 @@ type model struct {
 	postPolls     map[string]*core.Poll
 	currentPoll   string // postID currently shown in pagePoll
 	chat          []chatLine
+	canCreatePoll bool
+	trustLoaded   bool
 	// Notifications tracked in the current actor session.
 	notifications []core.Notification
 	unreadNotifs  int
@@ -183,6 +189,7 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		m.fetchBoards(),
 		m.fetchNotificationStatus(),
+		m.fetchPollPermission(),
 		m.awaitEvent(),
 	)
 }
@@ -261,6 +268,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.statusMsg = "error: " + msg.err.Error()
+
+	case pollPermissionMsg:
+		if msg.err != nil {
+			m.statusMsg = "error: " + msg.err.Error()
+			m.canCreatePoll = false
+			m.trustLoaded = true
+			return m, nil
+		}
+		m.canCreatePoll = msg.canCreatePoll
+		m.trustLoaded = true
 
 	case tea.KeyMsg:
 		// Capture the page BEFORE handleKey might change it, so the component
@@ -460,6 +477,21 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case pageCompose:
 		switch msg.String() {
+		case "ctrl+p":
+			if !m.canCreatePoll {
+				if m.trustLoaded {
+					m.statusMsg = "polls require trust level 2+"
+				} else {
+					m.statusMsg = "checking poll permission…"
+				}
+				return nil
+			}
+			if m.composingNewThread && m.titleInput.Focused() {
+				m.statusMsg = "focus body first"
+				return nil
+			}
+			m.insertPollTemplate()
+			return nil
 		case "ctrl+s":
 			if m.composingNewThread {
 				// If title field still focused, move to body first.
@@ -814,11 +846,11 @@ func (m model) View() string {
 				body = titleSection + m.styled(styleDim, "Enter/Tab=next field  Esc=cancel")
 			} else {
 				body = titleSection + m.compose.View() + "\n" +
-					m.styled(styleDim, "Ctrl+S=submit  Esc=cancel")
+					m.styled(styleDim, composeHelpLine(m.canCreatePoll, m.trustLoaded))
 			}
 		} else {
 			body = m.styled(styleTitle, "New reply") + "\n\n" + m.compose.View() +
-				"\n" + m.styled(styleDim, "Ctrl+S=submit  Esc=cancel")
+				"\n" + m.styled(styleDim, composeHelpLine(m.canCreatePoll, m.trustLoaded))
 		}
 	case pageChat:
 		body = m.vp.View() + "\n" + m.styled(styleDim, "esc/←=back")
@@ -1152,6 +1184,49 @@ func (m model) submitNewThread() tea.Cmd {
 			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
 		}
 		return nil
+	}
+}
+
+func (m *model) insertPollTemplate() {
+	template := "[poll]\nQuestion\nOption 1\nOption 2\n[/poll]"
+	value := m.compose.Value()
+	body := strings.TrimRight(value, "\n")
+	if body == "" {
+		m.compose.SetValue(template)
+		return
+	}
+
+	if strings.HasSuffix(value, "\n") {
+		m.compose.InsertString("\n" + template)
+		return
+	}
+	m.compose.InsertString("\n\n" + template)
+}
+
+func composeHelpLine(canCreatePoll, trustLoaded bool) string {
+	base := "Ctrl+S=submit  Esc=cancel"
+	if canCreatePoll {
+		return base + "  Ctrl+P=add poll template"
+	}
+	if trustLoaded {
+		return base + "  Ctrl+P=add poll template (trust level 2+ required)"
+	}
+	return base + "  Ctrl+P=add poll template (checking permission…)"
+}
+
+func (m model) fetchPollPermission() tea.Cmd {
+	return func() tea.Msg {
+		if m.actor.IsMod() {
+			return pollPermissionMsg{canCreatePoll: true}
+		}
+		trust, err := m.c.TrustInfo(m.actor.ID)
+		if err != nil {
+			return pollPermissionMsg{err: err}
+		}
+		if trust == nil {
+			return pollPermissionMsg{}
+		}
+		return pollPermissionMsg{canCreatePoll: trust.TrustLevel >= 2}
 	}
 }
 
