@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"time"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
@@ -454,5 +455,87 @@ func TestHTTPMalformedReplyPollDoesNotCreatePoll(t *testing.T) {
 	}
 	if got, ok := threadPolls.Polls[replyPostID]; ok && got != nil {
 		t.Fatalf("expected malformed reply poll to produce no poll projection, got %+v", got)
+	}
+}
+
+func TestHTTPPollVoteLifecycleAndErrors(t *testing.T) {
+	core, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	createThreadAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Vote path",
+		"body":  "[poll]\nChoose?\nLeft\nRight\n[/poll]",
+	}, &createThreadAck); status != http.StatusCreated {
+		t.Fatalf("create thread status: %d", status)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createThreadAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 1 {
+		t.Fatalf("expected 1 poll for thread, got %d", len(threadPolls.Polls))
+	}
+
+	var postID string
+	for id := range threadPolls.Polls {
+		postID = id
+		break
+	}
+	poll := threadPolls.Polls[postID]
+	if poll == nil {
+		t.Fatal("expected poll for created thread")
+	}
+
+	// Unknown poll ID should return not_found.
+	missing := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/pol_missing/vote", adminToken, map[string]string{
+		"option": poll.Options[0].ID,
+	}, &missing); status != http.StatusNotFound {
+		t.Fatalf("expected 404 when voting unknown poll, got %d", status)
+	}
+
+	// Unknown option should return not_found.
+	missingOpt := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/vote", adminToken, map[string]string{
+		"option": "opt_missing",
+	}, &missingOpt); status != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown option, got %d", status)
+	}
+
+	// Expired poll should reject voting with conflict.
+	if _, err := core.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), poll.ID); err != nil {
+		t.Fatalf("expire poll in DB: %v", err)
+	}
+
+	expired := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/vote", adminToken, map[string]string{
+		"option": poll.Options[0].ID,
+	}, &expired); status != http.StatusConflict {
+		t.Fatalf("expected 409 for expired poll, got %d", status)
+	}
+	if expired.Error == nil || expired.Error.Code != "conflict" {
+		t.Fatalf("expected conflict error payload, got %+v", expired.Error)
+	}
+
+	// Missing auth should return unauthenticated.
+	unauth := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/vote", "", map[string]string{
+		"option": poll.Options[0].ID,
+	}, &unauth); status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated vote, got %d", status)
+	}
+
+	// Restore poll to valid expiry to prove happy path still works for this poll after recovery.
+	if _, err := core.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, 0, poll.ID); err != nil {
+		t.Fatalf("restore poll expiry: %v", err)
+	}
+	vote := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/polls/"+poll.ID+"/vote", adminToken, map[string]string{
+		"option": poll.Options[0].ID,
+	}, &vote); status != http.StatusCreated || !vote.OK {
+		t.Fatalf("expected success vote after restore: status=%d ok=%v err=%+v", status, vote.OK, vote.Error)
 	}
 }
