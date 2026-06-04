@@ -34,12 +34,17 @@ const (
 
 // msg types for the bubbletea update cycle.
 type (
-	eventMsg   struct{ evt *proto.Event }
-	errMsg     struct{ err error }
-	boardsMsg  struct{ boards []core.Board }
-	threadsMsg struct{ threads []core.Thread }
-	postsMsg   struct{ posts []core.Post }
-	pollMsg    struct {
+	eventMsg     struct{ evt *proto.Event }
+	errMsg       struct{ err error }
+	boardsMsg    struct{ boards []core.Board }
+	threadsMsg   struct{ threads []core.Thread }
+	postsMsg     struct{ posts []core.Post }
+	postPollsMsg struct {
+		thread string
+		polls  map[string]*core.Poll
+		err    error
+	}
+	pollMsg struct {
 		postID string
 		poll   *core.Poll
 		open   bool
@@ -227,6 +232,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedPost = -1
 		} else {
 			m.selectedPost = len(m.posts) - 1
+		}
+		m.rebuildPostView()
+		if len(m.posts) > 0 {
+			cmds = append(cmds, m.fetchPollsForPosts(m.posts))
+		}
+		cmds = append(cmds, m.fetchNotificationStatus())
+
+	case postPollsMsg:
+		if msg.err != nil {
+			m.statusMsg = "error: " + msg.err.Error()
+			return m, nil
+		}
+		if msg.thread != m.currentThread {
+			return m, nil
+		}
+		m.postPolls = msg.polls
+		if m.postPolls == nil {
+			m.postPolls = make(map[string]*core.Poll)
 		}
 		m.rebuildPostView()
 
@@ -670,6 +693,7 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			m.selectedPost = len(m.posts) - 1
 			m.rebuildPostView()
 			m.vp.GotoBottom()
+			cmds = append(cmds, m.fetchPollsForPosts([]core.Post{{ID: p.ID}}))
 		}
 		for i, t := range m.threads {
 			if t.ID == p.Thread {
@@ -1066,6 +1090,10 @@ func (m *model) rebuildPostView() {
 		if i == m.selectedPost {
 			marker = m.styled(styleDim, "→ ")
 		}
+		pollTag := ""
+		if _, ok := m.postPolls[p.ID]; ok {
+			pollTag = m.styled(styleDim, "  [poll]")
+		}
 		createdAt := p.CreatedAt
 		if createdAt == 0 {
 			createdAt = p.CreatedSeq
@@ -1079,7 +1107,7 @@ func (m *model) rebuildPostView() {
 		if p.ReactionCount > 0 {
 			reactions = fmt.Sprintf("  ♥ %d", p.ReactionCount)
 		}
-		b.WriteString(fmt.Sprintf("%s%s  %s  #%d%s", marker, author, m.styled(styleDim, ts), i+1, reactions))
+		b.WriteString(fmt.Sprintf("%s%s  %s  #%d%s%s", marker, author, m.styled(styleDim, ts), i+1, reactions, pollTag))
 		if p.Version > 1 {
 			b.WriteString(m.styled(styleDim, " (edited)"))
 		}
@@ -1183,6 +1211,24 @@ func (m model) fetchPosts(thread string) tea.Cmd {
 			return errMsg{err}
 		}
 		return postsMsg{posts}
+	}
+}
+
+func (m model) fetchPollsForPosts(posts []core.Post) tea.Cmd {
+	thread := m.currentThread
+	postIDs := make([]string, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+	}
+	return func() tea.Msg {
+		if len(postIDs) == 0 {
+			return postPollsMsg{thread: thread, polls: map[string]*core.Poll{}}
+		}
+		polls, err := m.c.PollsForPosts(postIDs, m.actor.ID)
+		if err != nil {
+			return postPollsMsg{thread: thread, err: err}
+		}
+		return postPollsMsg{thread: thread, polls: polls}
 	}
 }
 
