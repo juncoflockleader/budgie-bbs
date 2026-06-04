@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../api/client'
 import type { AttachmentPayload, BoardInfo, Thread, ThreadSummary, Post, Poll, BudgieEvent, PostAttachment } from '../api/types'
 import type {
@@ -10,6 +10,7 @@ import { Spinner } from '../components/Spinner'
 import { PollComposer } from '../components/PollComposer'
 import { AttachmentComposer } from '../components/AttachmentComposer'
 import { PollWidget } from '../components/PollWidget'
+import { hasComposeDraft, loadComposeDraft, removeComposeDraft, saveComposeDraft } from '../draftStorage'
 import { validatePollMarkup } from '../pollValidation'
 import { useStream } from '../hooks/useStream'
 
@@ -108,6 +109,9 @@ export function ThreadPage({
   const [draftAttachments, setDraftAttachments] = useState<AttachmentPayload[]>([])
   const [replyAnonymous, setReplyAnonymous] = useState(false)
   const [replyTo, setReplyTo] = useState<string | undefined>(undefined)
+  const [draftPreviewOpen, setDraftPreviewOpen] = useState(false)
+  const [draftFullScreen, setDraftFullScreen] = useState(false)
+  const [loadedDraftKey, setLoadedDraftKey] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [composeError, setComposeError] = useState<string | null>(null)
   // postId → reaction state
@@ -130,10 +134,50 @@ export function ThreadPage({
   const postRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const isAdmin = currentUserRole === 'admin'
   const draftPollValidation = useMemo(() => validatePollMarkup(draftBody), [draftBody])
+  const draftKey = useMemo(() => `budgie:compose:reply:${currentUsername}:${thread.id}`, [currentUsername, thread.id])
+  const hasReplyDraft = hasComposeDraft({ title: '', body: draftBody, anonymous: replyAnonymous, replyTo, attachments: draftAttachments })
 
   useEffect(() => {
     setThreadTitle(thread.title)
   }, [thread.id, thread.title])
+
+  useLayoutEffect(() => {
+    const draft = loadComposeDraft(draftKey)
+    if (draft && hasComposeDraft(draft)) {
+      setDraftBody(draft.body)
+      setDraftAttachments(draft.attachments)
+      setReplyAnonymous(draft.anonymous)
+      setReplyTo(draft.replyTo)
+      setComposing(true)
+    } else {
+      setDraftBody('')
+      setDraftAttachments([])
+      setReplyAnonymous(false)
+      setReplyTo(undefined)
+      setComposing(false)
+    }
+    setDraftPreviewOpen(false)
+    setDraftFullScreen(false)
+    setComposeError(null)
+    setLoadedDraftKey(draftKey)
+  }, [draftKey])
+
+  useLayoutEffect(() => {
+    if (loadedDraftKey !== draftKey) return
+    const draft = {
+      title: '',
+      body: draftBody,
+      anonymous: replyAnonymous,
+      replyTo,
+      attachments: draftAttachments,
+      updatedAt: Date.now(),
+    }
+    if (hasComposeDraft(draft)) {
+      saveComposeDraft(draftKey, draft)
+    } else {
+      removeComposeDraft(draftKey)
+    }
+  }, [loadedDraftKey, draftKey, draftBody, replyAnonymous, replyTo, draftAttachments])
 
   // Fetch trust level for an author if not already loaded
   async function loadTrust(author: string) {
@@ -402,7 +446,7 @@ export function ThreadPage({
       thread: thread.id,
       body: draftBody,
       replyTo,
-      anonymous: replyAnonymous,
+      anonymous: boardInfo?.settings.anonymousAllowed ? replyAnonymous : false,
       attachments: cleanAttachments(draftAttachments),
     })
     setSubmitting(false)
@@ -416,7 +460,22 @@ export function ThreadPage({
       setReplyTo(undefined)
       setComposing(false)
       setComposeError(null)
+      setDraftPreviewOpen(false)
+      setDraftFullScreen(false)
+      removeComposeDraft(draftKey)
     }
+  }
+
+  function discardReplyDraft() {
+    setDraftBody('')
+    setDraftAttachments([])
+    setReplyAnonymous(false)
+    setReplyTo(undefined)
+    setComposing(false)
+    setComposeError(null)
+    setDraftPreviewOpen(false)
+    setDraftFullScreen(false)
+    removeComposeDraft(draftKey)
   }
 
   function startReply(post: Post, quoted = false) {
@@ -986,27 +1045,34 @@ export function ThreadPage({
 
       {canReplyInBoard && (
         composing ? (
-          <div className="compose-box">
+          <div className={`compose-box${draftFullScreen ? ' compose-fullscreen' : ''}`}>
             {replyToPost && (
               <div className="compose-reply-to muted">
                 Replying to {replyToPost.author}:
                 <button className="link-btn" onClick={() => setReplyTo(undefined)}>× clear</button>
               </div>
             )}
-            <textarea
-              autoFocus
-              className="compose-textarea"
-              value={draftBody}
-              onChange={e => {
-                setDraftBody(e.target.value)
-                if (composeError) setComposeError(null)
-              }}
-              placeholder="Write your reply…"
-              rows={6}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitPost()
-              }}
-            />
+            <div className={draftPreviewOpen ? 'compose-layout' : undefined}>
+              <textarea
+                autoFocus
+                className="compose-textarea"
+                value={draftBody}
+                onChange={e => {
+                  setDraftBody(e.target.value)
+                  if (composeError) setComposeError(null)
+                }}
+                placeholder="Write your reply…"
+                rows={6}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) submitPost()
+                }}
+              />
+              {draftPreviewOpen && (
+                <section className="compose-preview" aria-label="Preview">
+                  <Markup body={draftBody} />
+                </section>
+              )}
+            </div>
             {draftPollValidation.hasPollTag && !draftPollValidation.valid && (
               <p className="error">{draftPollValidation.message}</p>
             )}
@@ -1020,6 +1086,12 @@ export function ThreadPage({
                 disabled={!isTrustLoaded || !canCreatePoll}
                 disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
               />
+              <button className="link-btn" onClick={() => setDraftPreviewOpen(open => !open)} disabled={!draftBody.trim()}>
+                {draftPreviewOpen ? 'Hide preview' : 'Preview'}
+              </button>
+              <button className="link-btn" onClick={() => setDraftFullScreen(open => !open)}>
+                {draftFullScreen ? 'Exit full screen' : 'Full screen'}
+              </button>
               {boardInfo?.settings.anonymousAllowed && (
                 <label className="inline-toggle">
                   <input type="checkbox" checked={replyAnonymous} onChange={e => setReplyAnonymous(e.target.checked)} />
@@ -1029,9 +1101,8 @@ export function ThreadPage({
               <button onClick={submitPost} disabled={submitting || !draftBody.trim()}>
                 {submitting ? '…' : 'Post reply'}
               </button>
-              <button className="link-btn" onClick={() => { setComposing(false); setDraftBody(''); setDraftAttachments([]); setReplyAnonymous(false); setReplyTo(undefined) }}>
-                Cancel
-              </button>
+              {hasReplyDraft && <button className="link-btn danger" onClick={discardReplyDraft}>Discard draft</button>}
+              <button className="link-btn" onClick={() => { setComposing(false); setDraftFullScreen(false) }}>Close</button>
               <span className="muted compose-hint">Ctrl+Enter to submit</span>
             </div>
           </div>

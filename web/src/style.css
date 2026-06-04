@@ -777,6 +777,45 @@ label {
 .compose-hint { font-size: 0.8em }
 .compose-reply-to { font-size: 0.85em; display: flex; align-items: center; gap: 0.4rem }
 .compose-trigger { margin-top: 1rem }
+.compose-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: stretch;
+}
+.compose-layout > label { min-width: 0 }
+.compose-layout textarea { min-height: 14rem }
+.compose-preview {
+  min-height: 100%;
+  max-height: 28rem;
+  overflow: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  padding: 0.75rem;
+}
+.compose-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow: auto;
+  background: var(--c-bg);
+  padding: 1rem;
+}
+.compose-box.compose-fullscreen { margin-top: 0 }
+.compose-fullscreen .new-thread-form {
+  max-width: 68rem;
+  margin: 0 auto;
+}
+.compose-fullscreen .compose-layout textarea,
+.compose-fullscreen .compose-preview {
+  min-height: 52vh;
+  max-height: none;
+}
+@media (max-width: 760px) {
+  .compose-layout { grid-template-columns: minmax(0, 1fr) }
+  .compose-fullscreen { padding: 0.75rem }
+}
 
 /* ── Poll composer ─────────────────────────────────────────────────────── */
 .poll-composer {

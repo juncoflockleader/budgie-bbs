@@ -1,8 +1,10 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
 import type { AttachmentPayload, Board } from '../api/types'
 import { AttachmentComposer } from '../components/AttachmentComposer'
+import { Markup } from '../components/Markup'
 import { PollComposer } from '../components/PollComposer'
+import { hasComposeDraft, loadComposeDraft, removeComposeDraft, saveComposeDraft } from '../draftStorage'
 import { validatePollMarkup } from '../pollValidation'
 
 interface Props {
@@ -20,9 +22,14 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [fullScreen, setFullScreen] = useState(false)
+  const [loadedDraftKey, setLoadedDraftKey] = useState('')
   const [isTrustLoaded, setIsTrustLoaded] = useState(false)
   const [canCreatePoll, setCanCreatePoll] = useState(false)
   const pollValidation = useMemo(() => validatePollMarkup(body), [body])
+  const draftKey = useMemo(() => `budgie:compose:new:${currentUsername}:${board.id}`, [currentUsername, board.id])
+  const hasDraft = hasComposeDraft({ title, body, anonymous, attachments })
 
   function appendPoll(markup: string) {
     setBody(prev => {
@@ -44,6 +51,37 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
     })()
   }, [token, currentUsername])
 
+  useLayoutEffect(() => {
+    const draft = loadComposeDraft(draftKey)
+    setTitle(draft?.title ?? '')
+    setBody(draft?.body ?? '')
+    setAnonymous(board.anonymousAllowed ? (draft?.anonymous ?? false) : false)
+    setAttachments(draft?.attachments ?? [])
+    setError(null)
+    setPreviewOpen(false)
+    setFullScreen(false)
+    setLoadedDraftKey(draftKey)
+  }, [draftKey, board.anonymousAllowed])
+
+  useLayoutEffect(() => {
+    if (loadedDraftKey !== draftKey) return
+    const draft = { title, body, anonymous, attachments, updatedAt: Date.now() }
+    if (hasComposeDraft(draft)) {
+      saveComposeDraft(draftKey, draft)
+    } else {
+      removeComposeDraft(draftKey)
+    }
+  }, [loadedDraftKey, draftKey, title, body, anonymous, attachments])
+
+  function discardDraft() {
+    setTitle('')
+    setBody('')
+    setAnonymous(false)
+    setAttachments([])
+    setPreviewOpen(false)
+    removeComposeDraft(draftKey)
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
@@ -57,19 +95,20 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
       board: board.id,
       title,
       body,
-      anonymous,
+      anonymous: board.anonymousAllowed ? anonymous : false,
       attachments: cleanAttachments(attachments),
     })
     setBusy(false)
     if (res.error) {
       setError(res.error.message)
     } else {
+      removeComposeDraft(draftKey)
       onCreated(res.data?.id ?? '')
     }
   }
 
   return (
-    <div className="new-thread-page">
+    <div className={`new-thread-page${fullScreen ? ' compose-fullscreen' : ''}`}>
       <div className="page-header">
         <button className="back-btn" onClick={onBack}>← {board.name}</button>
         <h2>New thread</h2>
@@ -85,19 +124,26 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
             maxLength={200}
           />
         </label>
-        <label>
-          Body
-          <textarea
-            value={body}
-            onChange={e => {
-              setBody(e.target.value)
-              if (error) setError(null)
-            }}
-            required
-            rows={8}
-            placeholder="Markdown-light markup: **bold**, `code`, > quote"
-          />
-        </label>
+        <div className={previewOpen ? 'compose-layout' : undefined}>
+          <label>
+            Body
+            <textarea
+              value={body}
+              onChange={e => {
+                setBody(e.target.value)
+                if (error) setError(null)
+              }}
+              required
+              rows={8}
+              placeholder="Markdown-light markup: **bold**, `code`, > quote"
+            />
+          </label>
+          {previewOpen && (
+            <section className="compose-preview" aria-label="Preview">
+              <Markup body={body} />
+            </section>
+          )}
+        </div>
         {pollValidation.hasPollTag && !pollValidation.valid && (
           <p className="error">{pollValidation.message}</p>
         )}
@@ -107,6 +153,13 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
             disabled={!isTrustLoaded || !canCreatePoll}
             disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
           />
+          <button type="button" className="link-btn" onClick={() => setPreviewOpen(open => !open)} disabled={!body.trim()}>
+            {previewOpen ? 'Hide preview' : 'Preview'}
+          </button>
+          <button type="button" className="link-btn" onClick={() => setFullScreen(open => !open)}>
+            {fullScreen ? 'Exit full screen' : 'Full screen'}
+          </button>
+          {hasDraft && <button type="button" className="link-btn danger" onClick={discardDraft}>Discard draft</button>}
           {board.anonymousAllowed && (
             <label className="inline-toggle">
               <input type="checkbox" checked={anonymous} onChange={e => setAnonymous(e.target.checked)} />

@@ -372,6 +372,9 @@ enforced version:
 - Web new-thread and reply composers expose anonymous posting when enabled.
 - Web new-thread and reply composers expose attachment metadata controls when
   enabled, and thread readers show attachment chips on posts.
+- Web new-thread and reply composers preserve local drafts, keep failed
+  submissions editable, expose rendered previews, and provide a full-screen
+  compose mode for longer text-heavy posts.
 - Web thread readers expose title rename, post-level file upload, and
   authenticated download for stored attachments.
 - Web board lists expose a membership application action for member-mode boards.
@@ -763,6 +766,7 @@ social graph:
 - KBS-style mail-author-from-article action via `mailPostAuthor` and
   `POST /api/v1/posts/{post}/mail`, adding article context to durable private
   mail while rejecting anonymous or redacted articles.
+- KBS-style compose recovery and preview for new threads and replies.
 - Cross-post/repost article creation with source post/thread/board/author
   lineage.
 - Board policy flags, board detail reads, board-local moderator lists, and
@@ -849,7 +853,9 @@ social graph:
 
 - Remaining special system boards, historical/stat-log boards, and richer
   community statistics.
-- Optional social/services layer: games and campus utilities.
+- Explicitly out of the current BBS/forum parity goal: POP3/SMTP bridges,
+  blog/personal corpus, legacy transfer protocols, SMS/pager layers, sysop
+  import/repair tooling, and optional campus utilities/games.
 
 ## Suggested Next Slices
 
