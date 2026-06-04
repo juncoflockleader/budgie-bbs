@@ -1458,6 +1458,21 @@ func parsePollExpires(raw string) (int64, error) {
 		return rawInt, nil
 	}
 
+	if dur, err := time.ParseDuration(raw); err == nil {
+		if dur <= 0 {
+			return 0, nil
+		}
+		return time.Now().Add(dur).UnixMilli(), nil
+	}
+
+	if strings.HasSuffix(strings.ToLower(raw), "d") {
+		daysRaw := strings.TrimSuffix(strings.ToLower(raw), "d")
+		days, err := strconv.ParseFloat(daysRaw, 64)
+		if err == nil && days > 0 {
+			return time.Now().Add(time.Duration(days*24) * time.Hour).UnixMilli(), nil
+		}
+	}
+
 	layouts := []string{
 		time.RFC3339,
 		time.RFC3339Nano,
