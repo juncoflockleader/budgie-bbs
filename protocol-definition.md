@@ -401,6 +401,7 @@ Returns: the ack envelope.
 | `POST /api/v1/posts/{id}/mail` | `mailPostAuthor` |
 | `POST /api/v1/mail` | `sendMail` |
 | `POST /api/v1/mail/{id}/forward` | `forwardMail` |
+| `POST /api/v1/mail/{id}/board` | `postMailToBoard` |
 | `POST /api/v1/mail/range-delete` | `deleteMailRange` |
 | `POST /api/v1/mail/groups` | `setMailGroup` |
 | `PUT /api/v1/mail/groups/{id}` | `setMailGroup` |
@@ -739,6 +740,7 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
 mailPostAuthor { post*, subject?, body*, saveSent? }         -> mail.sent
 sendMail       { to[], toGroups[], toFriends, toAll, subject, body*, replyTo, saveSent, attachments[] } -> mail.sent
 forwardMail    { mail*, to[], toGroups[], toFriends, toAll, subject?, note?, saveSent? } -> mail.sent
+postMailToBoard { mail*, board?, thread?, subject?, note? }   -> thread.new or post.appended
 setMailGroup   { group?, name*, members[] }                    -> ack only
 deleteMailGroup { group* }                                     -> ack only
 attachMail     { id?, mail*, filename*, contentType?, sizeBytes? } -> mail.attachment_added
@@ -764,6 +766,12 @@ deleteDirectMessage { message* }                               -> ack only
   the same `mail.sent` path as ordinary mail, with an optional sender note and
   a quoted source header/body. Stored binary attachment blobs are not cloned;
   attachment names are included in the forwarded transcript.
+- `postMailToBoard` is the KBS-style private mail-to-board action. The selected
+  source mail must be visible to the actor. With `board`, it creates a normal
+  destination-board thread; with `thread`, it appends a normal reply. It uses
+  ordinary board posting permissions, not the `mailInAllowed` bridge flag.
+  Stored binary attachment blobs are not cloned; attachment names are included
+  in the board transcript.
 - `to` accepts usernames or user ids. Entries prefixed with `group:` resolve
   against the actor's mail groups. `toGroups` accepts group ids or names, and
   the built-in dynamic group `friends` expands to the actor's current friend

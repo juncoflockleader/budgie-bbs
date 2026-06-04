@@ -48,6 +48,12 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   const [replyTo, setReplyTo] = useState<string | undefined>()
   const [forwardSource, setForwardSource] = useState<string | undefined>()
   const [forwardSourceTitle, setForwardSourceTitle] = useState('')
+  const [boardPostSource, setBoardPostSource] = useState<string | undefined>()
+  const [boardPostTitle, setBoardPostTitle] = useState('')
+  const [boardPostBoard, setBoardPostBoard] = useState('')
+  const [boardPostThread, setBoardPostThread] = useState('')
+  const [boardPostSubject, setBoardPostSubject] = useState('')
+  const [boardPostNote, setBoardPostNote] = useState('')
   const [groupName, setGroupName] = useState('')
   const [groupMembers, setGroupMembers] = useState('')
   const [editingGroup, setEditingGroup] = useState<string | undefined>()
@@ -153,6 +159,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     if (!keepRelated) {
       setRelatedMail([])
       setRelatedTitle('')
+      clearBoardPost()
     }
     if (!full.read) {
       await api.updateMail(token, full.id, { read: true })
@@ -188,6 +195,15 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     setForwardSource(undefined)
     setForwardSourceTitle('')
     await Promise.all([loadMail(mailbox), loadMailUsage()])
+  }
+
+  function clearBoardPost() {
+    setBoardPostSource(undefined)
+    setBoardPostTitle('')
+    setBoardPostBoard('')
+    setBoardPostThread('')
+    setBoardPostSubject('')
+    setBoardPostNote('')
   }
 
   function toggleMailGroup(groupID: string) {
@@ -282,6 +298,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
       setSelectedMail(null)
       setRelatedMail([])
       setRelatedTitle('')
+      clearBoardPost()
     }
     await Promise.all([loadMail(mailbox), loadMailUsage()])
   }
@@ -305,6 +322,31 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     setReplyTo(undefined)
     setForwardSource(item.id)
     setForwardSourceTitle(item.subject)
+  }
+
+  function startBoardPost(item: MailItem) {
+    setBoardPostSource(item.id)
+    setBoardPostTitle(item.subject)
+    setBoardPostBoard('')
+    setBoardPostThread('')
+    setBoardPostSubject(item.subject)
+    setBoardPostNote('')
+  }
+
+  async function postMailToBoard(e: FormEvent) {
+    e.preventDefault()
+    if (!boardPostSource) return
+    const res = await api.postMailToBoard(token, boardPostSource, {
+      board: boardPostBoard.trim(),
+      thread: boardPostThread.trim(),
+      subject: boardPostSubject.trim(),
+      note: boardPostNote,
+    })
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    clearBoardPost()
   }
 
   async function loadMailRelation(item: MailItem, mode: 'thread' | 'author') {
@@ -490,6 +532,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                 <div className="private-actions">
                   <button className="link-btn" onClick={() => startReply(selectedMail)}>Reply</button>
                   <button className="link-btn" onClick={() => startForward(selectedMail)}>Forward</button>
+                  <button className="link-btn" onClick={() => startBoardPost(selectedMail)}>To board</button>
                   <button className="link-btn" onClick={() => loadMailRelation(selectedMail, 'thread')}>Thread</button>
                   <button className="link-btn" onClick={() => loadMailRelation(selectedMail, 'author')}>From author</button>
                   {selectedMail.role === 'sender' && <button className="link-btn" onClick={() => uploadMailAttachment(selectedMail)}>Upload file</button>}
@@ -498,6 +541,22 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                   <button className="link-btn" onClick={() => moveMail(selectedMail, 'keep')}>Keep box</button>
                   <button className="link-btn danger" onClick={() => trashMail(selectedMail)}>Trash</button>
                 </div>
+                {boardPostSource && (
+                  <form className="mail-board-form" onSubmit={postMailToBoard}>
+                    <div className="mail-related-header">
+                      <h4>To board</h4>
+                      <button type="button" className="link-btn" onClick={clearBoardPost}>Cancel</button>
+                    </div>
+                    <p className="muted">Posting {boardPostTitle}</p>
+                    <div className="mail-board-grid">
+                      <label>Board<input value={boardPostBoard} onChange={e => setBoardPostBoard(e.target.value)} required={!boardPostThread.trim()} /></label>
+                      <label>Thread<input value={boardPostThread} onChange={e => setBoardPostThread(e.target.value)} /></label>
+                    </div>
+                    <label>Subject<input value={boardPostSubject} onChange={e => setBoardPostSubject(e.target.value)} /></label>
+                    <label>Note<textarea value={boardPostNote} onChange={e => setBoardPostNote(e.target.value)} /></label>
+                    <button type="submit">{boardPostThread.trim() ? 'Append post' : 'Create thread'}</button>
+                  </form>
+                )}
                 {(relatedTitle || relatedLoading) && (
                   <section className="mail-related">
                     <div className="mail-related-header">

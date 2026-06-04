@@ -747,6 +747,7 @@ split:
   - `POST /api/v1/posts/{post}/mail`
   - `POST /api/v1/mail`
   - `POST /api/v1/mail/{mail}/forward`
+  - `POST /api/v1/mail/{mail}/board`
   - `POST /api/v1/mail/groups`
   - `PUT/PATCH /api/v1/mail/groups/{group}`
   - `DELETE /api/v1/mail/groups/{group}`
@@ -762,6 +763,7 @@ split:
   - `mailPostAuthor`
   - `sendMail`
   - `forwardMail`
+  - `postMailToBoard`
   - `setMailGroup`
   - `deleteMailGroup`
   - `attachMail`
@@ -796,6 +798,11 @@ split:
   the normal durable mail path, with optional sender note and quoted source
   transcript. Stored binary attachment blobs are not cloned; attachment names
   are preserved in the forwarded transcript.
+- KBS-style mail-to-board sends a visible source mail back into normal board
+  space as either a new thread or reply, using ordinary board posting
+  permissions rather than the external mail-in bridge flag. Stored binary
+  attachment blobs are not cloned; attachment names are preserved in the board
+  transcript.
 - KBS-style mailbox range-delete accepts selected visible mail ids and
   atomically moves the actor's copies to `trash`; hidden or missing ids abort
   the whole range without partial movement.
@@ -803,10 +810,10 @@ split:
   all users, friends only, or no messages.
 - Web thread readers expose a Mail action for visible non-anonymous article
   authors. Web `Inbox` surface with mailboxes, unread badges, mail compose/reply,
-  read/keep/move/trash/forward/range-trash actions, thread/from-author mail
-  traversal, mail-group management, group/friend-list sending, used/quota
-  display, direct-message conversations, receive-policy control, replies, and
-  per-user message deletion.
+  read/keep/move/trash/forward/range-trash/mail-to-board actions,
+  thread/from-author mail traversal, mail-group management, group/friend-list
+  sending, used/quota display, direct-message conversations, receive-policy
+  control, replies, and per-user message deletion.
 
 POP3/Internet email bridges and SMS are intentionally outside the current
 BBS/forum parity focus; real-time online-user pager shortcuts remain a possible
@@ -1007,8 +1014,6 @@ social graph:
 
 ## Remaining Major KBS Parity Areas
 
-- Private-mail refinements that are still forum-native: cross-post
-  mail-to-board.
 - Board recycle/junk/range-delete workflows for moderator/user-deleted
   articles.
 - Remaining specialized historical/stat-log boards and richer community
@@ -1019,7 +1024,6 @@ social graph:
 
 ## Suggested Next Slices
 
-1. Private-mail mail-to-board workflow.
-2. Board recycle/junk/range-delete workflows.
-3. Remaining specialized historical/stat-log boards and richer community
+1. Board recycle/junk/range-delete workflows.
+2. Remaining specialized historical/stat-log boards and richer community
    statistics.

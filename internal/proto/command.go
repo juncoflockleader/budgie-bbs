@@ -47,6 +47,7 @@ const (
 	CmdMailPostAuthor             CommandName = "mailPostAuthor"
 	CmdSendMail                   CommandName = "sendMail"
 	CmdForwardMail                CommandName = "forwardMail"
+	CmdPostMailToBoard            CommandName = "postMailToBoard"
 	CmdSetMailGroup               CommandName = "setMailGroup"
 	CmdDeleteMailGroup            CommandName = "deleteMailGroup"
 	CmdAttachMail                 CommandName = "attachMail"
@@ -280,6 +281,14 @@ type ForwardMailPayload struct {
 	Subject   string   `json:"subject,omitempty"`
 	Note      string   `json:"note,omitempty"`
 	SaveSent  *bool    `json:"saveSent,omitempty"`
+}
+
+type PostMailToBoardPayload struct {
+	Mail    string `json:"mail"`
+	Board   string `json:"board,omitempty"`
+	Thread  string `json:"thread,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	Note    string `json:"note,omitempty"`
 }
 
 type SetMailGroupPayload struct {

@@ -219,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/mail/groups/{group}", auth(http.HandlerFunc(s.handleDeleteMailGroup)))
 	mux.Handle("POST /api/v1/mail/{mail}/attachments", auth(http.HandlerFunc(s.handleUploadMailAttachment)))
 	mux.Handle("POST /api/v1/mail/{mail}/forward", auth(http.HandlerFunc(s.handleForwardMail)))
+	mux.Handle("POST /api/v1/mail/{mail}/board", auth(http.HandlerFunc(s.handlePostMailToBoard)))
 	mux.Handle("PATCH /api/v1/mail/{mail}", auth(http.HandlerFunc(s.handleUpdateMail)))
 	mux.Handle("DELETE /api/v1/mail/{mail}", auth(http.HandlerFunc(s.handleDeleteMail)))
 	mux.Handle("POST /api/v1/messages", auth(http.HandlerFunc(s.handleSendDirectMessage)))

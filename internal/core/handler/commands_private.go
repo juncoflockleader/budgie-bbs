@@ -206,6 +206,73 @@ func formatForwardMailBody(source *MailItem, note string) string {
 	return b.String()
 }
 
+func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) Reply {
+	if actor == nil {
+		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
+	}
+	mailID := strings.TrimSpace(p.Mail)
+	if mailID == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "mail is required", false)}
+	}
+	source, err := getMail(h.db, actor.ID, mailID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if source == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
+	}
+	body := formatMailBoardBody(source, p.Note)
+	threadID := strings.TrimSpace(p.Thread)
+	if threadID != "" {
+		return h.appendPost(actor, proto.AppendPostPayload{
+			Thread:      threadID,
+			Body:        body,
+			ContentType: "markup",
+		})
+	}
+	boardID := strings.TrimSpace(p.Board)
+	if boardID == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	}
+	title := strings.TrimSpace(p.Subject)
+	if title == "" {
+		title = strings.TrimSpace(source.Subject)
+	}
+	if title == "" {
+		title = "(no subject)"
+	}
+	return h.createThread(actor, proto.CreateThreadPayload{
+		Board:       boardID,
+		Title:       title,
+		Body:        body,
+		ContentType: "markup",
+	})
+}
+
+func formatMailBoardBody(source *MailItem, note string) string {
+	var b strings.Builder
+	if note = strings.TrimSpace(note); note != "" {
+		b.WriteString(note)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Posted from private mail.\n")
+	fmt.Fprintf(&b, "From: %s\n", source.FromName)
+	if len(source.ToNames) > 0 {
+		fmt.Fprintf(&b, "To: %s\n", strings.Join(source.ToNames, ", "))
+	}
+	fmt.Fprintf(&b, "Subject: %s\n", source.Subject)
+	if len(source.Attachments) > 0 {
+		names := make([]string, 0, len(source.Attachments))
+		for _, attachment := range source.Attachments {
+			names = append(names, attachment.Filename)
+		}
+		fmt.Fprintf(&b, "Attachments: %s\n", strings.Join(names, ", "))
+	}
+	b.WriteString("\n")
+	b.WriteString(strings.TrimSpace(source.Body))
+	return b.String()
+}
+
 func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPayload) Reply {
 	entryID := strings.TrimSpace(p.Entry)
 	if entryID == "" {

@@ -227,3 +227,68 @@ func TestHTTPDeletePrivateMailRange(t *testing.T) {
 		t.Fatalf("expected failed range delete to roll back third mail, got %+v", inbox.Mail)
 	}
 }
+
+func TestHTTPPostPrivateMailToBoard(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+	carolToken := registerUser(t, handler, "carol")
+
+	source := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail", bobToken, map[string]any{
+		"to":      []string{"alice"},
+		"subject": "Board-worthy mail",
+		"body":    "Please share this with the board.",
+		"attachments": []map[string]any{{
+			"filename":    "context.txt",
+			"contentType": "text/plain",
+			"sizeBytes":   16,
+			"url":         "https://example.edu/context.txt",
+		}},
+	}, &source); status != http.StatusCreated {
+		t.Fatalf("send source mail status: %d error=%+v", status, source.Error)
+	}
+
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail/"+source.Result.ID+"/board", aliceToken, map[string]any{
+		"board": "general",
+		"note":  "Public follow-up.",
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("post mail to board status: %d error=%+v", status, thread.Error)
+	}
+	posts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", bobToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list mail-to-board posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 || posts.Posts[0].Author != "alice" {
+		t.Fatalf("expected mail-to-board root post, got %+v", posts.Posts)
+	}
+	for _, want := range []string{"Public follow-up.", "Posted from private mail.", "From: bob", "To: alice", "Subject: Board-worthy mail", "Attachments: context.txt", "Please share this with the board."} {
+		if !strings.Contains(posts.Posts[0].Body, want) {
+			t.Fatalf("expected mail-to-board post to contain %q, got %q", want, posts.Posts[0].Body)
+		}
+	}
+
+	reply := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail/"+source.Result.ID+"/board", aliceToken, map[string]any{
+		"thread": thread.Result.ID,
+		"note":   "Thread appendix.",
+	}, &reply); status != http.StatusCreated {
+		t.Fatalf("append mail to board thread status: %d error=%+v", status, reply.Error)
+	}
+	posts = postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list appended mail-to-board posts status: %d", status)
+	}
+	if len(posts.Posts) != 2 || !strings.Contains(posts.Posts[1].Body, "Thread appendix.") {
+		t.Fatalf("expected appended mail-to-board post, got %+v", posts.Posts)
+	}
+
+	hidden := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/mail/"+source.Result.ID+"/board", carolToken, map[string]any{
+		"board": "general",
+	}, &hidden); status != http.StatusNotFound {
+		t.Fatalf("expected hidden mail-to-board source to be not found, got %d error=%+v", status, hidden.Error)
+	}
+}
