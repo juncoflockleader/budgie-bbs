@@ -1451,6 +1451,174 @@ func TestPollCreationOnReplyRequiresQuestionText(t *testing.T) {
 	}
 }
 
+func TestPollCreationWithMultiplePollBlocksUsesFirstBlock(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "intro\n[poll]\nFirst question?\nOption A\nOption B\n[/poll]\nbetween\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]\nafter"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Thread with duplicate poll markup", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post in thread, got %d", len(posts))
+	}
+
+	expectedBody := "intro\nbetween\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]\nafter"
+	if posts[0].Body != expectedBody {
+		t.Fatalf("expected first poll to be stripped and second preserved, got %q", posts[0].Body)
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll for first block only")
+	}
+	if poll.Question != "First question?" {
+		t.Fatalf("expected first poll question %q, got %q", "First question?", poll.Question)
+	}
+}
+
+func TestPollCreationWithMalformedFirstPollLeavesLaterPollUntouched(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll expires=badtime]\nFirst question?\nOption A\nOption B\n[/poll]\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Thread with malformed first poll", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post in thread, got %d", len(posts))
+	}
+	if posts[0].Body != threadBody {
+		t.Fatalf("expected malformed first poll to keep body intact, got %q", posts[0].Body)
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		t.Fatal("expected no poll when first poll block is malformed")
+	}
+}
+
+func TestPollCreationOnReplyWithMultiplePollBlocksUsesFirstBlock(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	base := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Base", Body: "hello",
+	})
+	replyBody := "reply intro\n[poll]\nFirst question?\nOption A\nOption B\n[/poll]\nafter poll\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	reply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID,
+		Body:   replyBody,
+	})
+
+	posts, err := c.ListPosts(base.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts in thread, got %d", len(posts))
+	}
+
+	var replyPost *core.Post
+	for i := range posts {
+		if posts[i].ID == reply.ID {
+			replyPost = &posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatal("reply post not found in thread")
+	}
+
+	expectedBody := "reply intro\nafter poll\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	if replyPost.Body != expectedBody {
+		t.Fatalf("expected first reply poll to be stripped and second preserved, got %q", replyPost.Body)
+	}
+
+	poll, err := c.GetPollByPostID(reply.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll for reply post")
+	}
+	if poll.Question != "First question?" {
+		t.Fatalf("expected first poll question %q, got %q", "First question?", poll.Question)
+	}
+}
+
+func TestPollCreationOnReplyWithMalformedFirstPollLeavesLaterPollUntouched(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	base := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Base", Body: "hello",
+	})
+	replyBody := "[poll expires=badtime]\nFirst question?\nOption A\nOption B\n[/poll]\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	reply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID,
+		Body:   replyBody,
+	})
+
+	posts, err := c.ListPosts(base.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts in thread, got %d", len(posts))
+	}
+
+	var replyPost *core.Post
+	for i := range posts {
+		if posts[i].ID == reply.ID {
+			replyPost = &posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatal("reply post not found in thread")
+	}
+	if replyPost.Body != replyBody {
+		t.Fatalf("expected malformed reply poll body to stay intact, got %q", replyPost.Body)
+	}
+
+	poll, err := c.GetPollByPostID(replyPost.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		t.Fatal("expected no poll when first reply poll block is malformed")
+	}
+}
+
 func TestPollCreationInsertsIntoPollsForPostsMap(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
@@ -1463,11 +1631,11 @@ func TestPollCreationInsertsIntoPollsForPostsMap(t *testing.T) {
 	})
 	replyPoll := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
 		Thread: threadRes.ID,
-		Body:  "[poll]\nQuestion?\nOption A\nOption B\n[/poll]",
+		Body:   "[poll]\nQuestion?\nOption A\nOption B\n[/poll]",
 	})
 	replyNoPoll := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
-		Thread: threadRes.ID,
-		Body:  "plain post",
+		Thread:  threadRes.ID,
+		Body:    "plain post",
 		ReplyTo: replyPoll.ID,
 	})
 

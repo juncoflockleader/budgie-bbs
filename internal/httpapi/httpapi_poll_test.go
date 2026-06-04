@@ -326,6 +326,84 @@ func TestHTTPMalformedPollDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPThreadPollWithMultipleBlocksUsesFirst(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+
+	threadBody := "intro\n[poll]\nFirst question?\nOption A\nOption B\n[/poll]\nbetween\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]\nafter"
+	createAck := ackResponse{}
+	createStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", token, map[string]string{
+		"title": "Duplicate poll blocks",
+		"body":  threadBody,
+	}, &createAck)
+	if createStatus != http.StatusCreated || !createAck.OK || createAck.Result == nil {
+		t.Fatalf("create thread status: %d err=%+v", createStatus, createAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected 1 post in created thread, got %d", len(posts.Posts))
+	}
+	expectedBody := "intro\nbetween\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]\nafter"
+	if posts.Posts[0].Body != expectedBody {
+		t.Fatalf("expected first poll to be stripped and second preserved, got %q", posts.Posts[0].Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/polls", token, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 1 {
+		t.Fatalf("expected exactly one poll projection, got %d", len(threadPolls.Polls))
+	}
+	poll := threadPolls.Polls[posts.Posts[0].ID]
+	if poll == nil {
+		t.Fatalf("expected poll attached to first post %s", posts.Posts[0].ID)
+	}
+	if poll.Question != "First question?" {
+		t.Fatalf("expected first poll question %q, got %q", "First question?", poll.Question)
+	}
+}
+
+func TestHTTPThreadPollWithMalformedFirstBlockSkipsLaterPolls(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+
+	threadBody := "[poll expires=badtime]\nFirst question?\nOption A\nOption B\n[/poll]\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	createAck := ackResponse{}
+	createStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", token, map[string]string{
+		"title": "Malformed first block",
+		"body":  threadBody,
+	}, &createAck)
+	if createStatus != http.StatusCreated || !createAck.OK || createAck.Result == nil {
+		t.Fatalf("create thread status: %d err=%+v", createStatus, createAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected 1 post in malformed thread, got %d", len(posts.Posts))
+	}
+	if posts.Posts[0].Body != threadBody {
+		t.Fatalf("expected malformed first block to remain in body, got %q", posts.Posts[0].Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/polls", token, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected no poll projection after malformed first block")
+	}
+}
+
 func TestHTTPPollCreationMissingCloseTagDoesNotCreatePoll(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
@@ -2270,6 +2348,124 @@ func TestHTTPMalformedReplyPollDoesNotCreatePoll(t *testing.T) {
 	}
 	if got, ok := threadPolls.Polls[replyPostID]; ok && got != nil {
 		t.Fatalf("expected malformed reply poll to produce no poll projection, got %+v", got)
+	}
+}
+
+func TestHTTPReplyPollWithMultipleBlocksUsesFirst(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Multiple reply poll blocks",
+		"body":  "starter body",
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || threadAck.Result == nil {
+		t.Fatalf("create thread status: %d err=%+v", threadStatus, threadAck.Error)
+	}
+	threadID := threadAck.Result.ID
+
+	replyBody := "reply intro\n[poll]\nFirst question?\nOption A\nOption B\n[/poll]\nafter poll\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	replyAck := ackResponse{}
+	replyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, map[string]string{
+		"body": replyBody,
+	}, &replyAck)
+	if replyStatus != http.StatusCreated || replyAck.Result == nil {
+		t.Fatalf("expected reply with multiple polls to be accepted: status=%d err=%+v", replyStatus, replyAck.Error)
+	}
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 2 {
+		t.Fatalf("expected 2 posts after reply, got %d", len(posts.Posts))
+	}
+
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyAck.Result.ID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("reply post %s should be in thread list", replyAck.Result.ID)
+	}
+
+	expectedBody := "reply intro\nafter poll\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	if replyPost.Body != expectedBody {
+		t.Fatalf("expected first reply poll to be stripped, got %q", replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	poll := threadPolls.Polls[replyPost.ID]
+	if poll == nil {
+		t.Fatalf("expected poll attached to reply post %s", replyPost.ID)
+	}
+	if poll.Question != "First question?" {
+		t.Fatalf("expected first poll question %q, got %q", "First question?", poll.Question)
+	}
+}
+
+func TestHTTPReplyPollWithMalformedFirstBlockSkipsLaterPolls(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", adminToken, map[string]string{
+		"title": "Malformed first reply poll block",
+		"body":  "starter body",
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || threadAck.Result == nil {
+		t.Fatalf("create thread status: %d err=%+v", threadStatus, threadAck.Error)
+	}
+	threadID := threadAck.Result.ID
+
+	replyBody := "[poll expires=badtime]\nFirst question?\nOption A\nOption B\n[/poll]\n[poll]\nSecond question?\nOption C\nOption D\n[/poll]"
+	replyAck := ackResponse{}
+	replyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, map[string]string{
+		"body": replyBody,
+	}, &replyAck)
+	if replyStatus != http.StatusCreated || replyAck.Result == nil {
+		t.Fatalf("expected reply post create status: %d err=%+v", replyStatus, replyAck.Error)
+	}
+	replyPostID := replyAck.Result.ID
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 2 {
+		t.Fatalf("expected 2 posts after reply, got %d", len(posts.Posts))
+	}
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyPostID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("reply post %s should be in thread list", replyPostID)
+	}
+	if replyPost.Body != replyBody {
+		t.Fatalf("expected malformed first reply poll block to keep body intact, got %q", replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	if got, ok := threadPolls.Polls[replyPostID]; ok && got != nil {
+		t.Fatalf("expected no poll projection for malformed reply first block, got %+v", got)
 	}
 }
 
