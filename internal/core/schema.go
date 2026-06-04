@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     relay_enabled       INTEGER NOT NULL DEFAULT 0,
     member_read_mode    INTEGER NOT NULL DEFAULT 0,
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
+    stats_excluded      INTEGER NOT NULL DEFAULT 0,
     updated_at          INTEGER NOT NULL DEFAULT 0
 );
 

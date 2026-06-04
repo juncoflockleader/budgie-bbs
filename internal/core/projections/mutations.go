@@ -524,12 +524,15 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 	if patch.MemberPostMode != nil {
 		settings.MemberPostMode = *patch.MemberPostMode
 	}
+	if patch.StatsExcluded != nil {
+		settings.StatsExcluded = *patch.StatsExcluded
+	}
 	ts := NowMS()
 	_, err = QExec(db,
 		`INSERT INTO board_settings (
 		    board_id, anonymous_allowed, read_only, no_reply, attachments_allowed,
-		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, stats_excluded, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(board_id)
 		 DO UPDATE SET
 		    anonymous_allowed=excluded.anonymous_allowed,
@@ -540,6 +543,7 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 		    relay_enabled=excluded.relay_enabled,
 		    member_read_mode=excluded.member_read_mode,
 		    member_post_mode=excluded.member_post_mode,
+		    stats_excluded=excluded.stats_excluded,
 		    updated_at=excluded.updated_at`,
 		boardID,
 		boolInt(settings.AnonymousAllowed),
@@ -550,6 +554,7 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 		boolInt(settings.RelayEnabled),
 		boolInt(settings.MemberReadMode),
 		boolInt(settings.MemberPostMode),
+		boolInt(settings.StatsExcluded),
 		ts,
 	)
 	return err

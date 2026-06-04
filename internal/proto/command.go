@@ -108,6 +108,7 @@ type SetBoardSettingsPayload struct {
 	RelayEnabled       *bool  `json:"relayEnabled,omitempty"`
 	MemberReadMode     *bool  `json:"memberReadMode,omitempty"`
 	MemberPostMode     *bool  `json:"memberPostMode,omitempty"`
+	StatsExcluded      *bool  `json:"statsExcluded,omitempty"`
 }
 
 type SetBoardModeratorPayload struct {

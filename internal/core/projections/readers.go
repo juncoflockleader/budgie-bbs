@@ -15,25 +15,25 @@ const generatedSystemBoardSQLList = "'0announce','0moderation','BBSLists','Bless
 
 func GetBoard(db *sql.DB, id string) (*Board, error) {
 	b := &Board{}
-	var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
+	var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded int
 	err := QQueryRow(db,
 		`SELECT b.id, b.name, b.description,
 		        COALESCE(s.anonymous_allowed, 0), COALESCE(s.read_only, 0), COALESCE(s.no_reply, 0),
 		        COALESCE(s.attachments_allowed, 0), COALESCE(s.mail_in_allowed, 0), COALESCE(s.relay_enabled, 0),
-		        COALESCE(s.member_read_mode, 0), COALESCE(s.member_post_mode, 0),
+		        COALESCE(s.member_read_mode, 0), COALESCE(s.member_post_mode, 0), COALESCE(s.stats_excluded, 0),
 		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0)
 		   FROM boards b
 		   LEFT JOIN board_settings s ON s.board_id=b.id
 		  WHERE b.id=?`,
 		id,
-	).Scan(&b.ID, &b.Name, &b.Description, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount)
+	).Scan(&b.ID, &b.Name, &b.Description, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &statsExcluded, &b.ModeratorCount)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	applyBoardPolicyFlags(b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
+	applyBoardPolicyFlags(b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded)
 	return b, nil
 }
 
@@ -42,7 +42,7 @@ func ListBoards(db *sql.DB) ([]Board, error) {
 		`SELECT b.id, b.name, b.description,
 		        COALESCE(s.anonymous_allowed, 0), COALESCE(s.read_only, 0), COALESCE(s.no_reply, 0),
 		        COALESCE(s.attachments_allowed, 0), COALESCE(s.mail_in_allowed, 0), COALESCE(s.relay_enabled, 0),
-		        COALESCE(s.member_read_mode, 0), COALESCE(s.member_post_mode, 0),
+		        COALESCE(s.member_read_mode, 0), COALESCE(s.member_post_mode, 0), COALESCE(s.stats_excluded, 0),
 		        COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=b.id), 0)
 		   FROM boards b
 		   LEFT JOIN board_settings s ON s.board_id=b.id
@@ -55,11 +55,11 @@ func ListBoards(db *sql.DB) ([]Board, error) {
 	var boards []Board
 	for rows.Next() {
 		var b Board
-		var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
-		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount); err != nil {
+		var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded int
+		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &statsExcluded, &b.ModeratorCount); err != nil {
 			return nil, err
 		}
-		applyBoardPolicyFlags(&b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
+		applyBoardPolicyFlags(&b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded)
 		boards = append(boards, b)
 	}
 	return boards, rows.Err()
@@ -237,6 +237,7 @@ func ListBoardRankings(db *sql.DB, viewerID string, includePrivate bool, limit, 
 		   LEFT JOIN threads t ON t.board=b.id
 		   LEFT JOIN posts p ON p.thread=t.id AND p.redacted=0
 		  WHERE b.id NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(s.stats_excluded, 0)=0
 		    AND (
 		      COALESCE(s.member_read_mode, 0)=0
 		      OR ?=1
@@ -283,6 +284,7 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 		   LEFT JOIN post_reactions pr ON pr.post_id=p.id
 		  WHERE (? = '' OR t.board = ?)
 		    AND t.board NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(s.stats_excluded, 0)=0
 		    AND (
 		      COALESCE(s.member_read_mode, 0)=0
 		      OR ?=1
@@ -364,6 +366,7 @@ func ListReplyRankings(db *sql.DB, viewerID string, includePrivate bool, limit, 
 		  WHERE p.redacted=0
 		    AND p.created_seq > (SELECT MIN(root.created_seq) FROM posts root WHERE root.thread=t.id)
 		    AND t.board NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(s.stats_excluded, 0)=0
 		    AND (
 		      COALESCE(s.member_read_mode, 0)=0
 		      OR ?=1
@@ -418,8 +421,11 @@ func ListUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
 		   LEFT JOIN user_activity ua ON ua.user_id=u.id
 		   LEFT JOIN posts p ON p.author_id=u.id AND p.redacted=0
 		        AND NOT EXISTS (
-		          SELECT 1 FROM threads pt
-		           WHERE pt.id=p.thread AND pt.board IN (`+generatedSystemBoardSQLList+`)
+		          SELECT 1
+		            FROM threads pt
+		            LEFT JOIN board_settings ps ON ps.board_id=pt.board
+		           WHERE pt.id=p.thread
+		             AND (pt.board IN (`+generatedSystemBoardSQLList+`) OR COALESCE(ps.stats_excluded, 0)!=0)
 		        )
 		   LEFT JOIN post_reactions pr ON pr.post_id=p.id
 		  GROUP BY u.id, u.name, u.role, ua.login_count, ua.total_online_seconds, ua.trust_level
@@ -526,6 +532,7 @@ func ListArchiveRankings(db *sql.DB, viewerID string, includePrivate bool, kind 
 		   JOIN boards b ON b.id=d.board_id
 		   LEFT JOIN board_settings s ON s.board_id=b.id
 		  WHERE (? = '' OR d.kind = ?)
+		    AND COALESCE(s.stats_excluded, 0)=0
 		    AND (
 		      COALESCE(s.member_read_mode, 0)=0
 		      OR ?=1
@@ -560,21 +567,21 @@ func GetBoardSettings(db *sql.DB, boardID string) (*BoardSettings, error) {
 		return nil, err
 	}
 	settings := &BoardSettings{BoardID: boardID}
-	var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
+	var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded int
 	err := QQueryRow(db,
 		`SELECT COALESCE(anonymous_allowed, 0), COALESCE(read_only, 0), COALESCE(no_reply, 0),
 		        COALESCE(attachments_allowed, 0), COALESCE(mail_in_allowed, 0), COALESCE(relay_enabled, 0),
-		        COALESCE(member_read_mode, 0), COALESCE(member_post_mode, 0), COALESCE(updated_at, 0)
+		        COALESCE(member_read_mode, 0), COALESCE(member_post_mode, 0), COALESCE(stats_excluded, 0), COALESCE(updated_at, 0)
 		   FROM board_settings WHERE board_id=?`,
 		boardID,
-	).Scan(&anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &settings.UpdatedAt)
+	).Scan(&anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &statsExcluded, &settings.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return settings, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	applySettingsFlags(settings, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
+	applySettingsFlags(settings, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded)
 	return settings, nil
 }
 
@@ -2097,6 +2104,7 @@ func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool, opts ...Boar
 		       COALESCE((SELECT relay_enabled FROM board_settings WHERE board_id=id), 0),
 		       COALESCE((SELECT member_read_mode FROM board_settings WHERE board_id=id), 0),
 		       COALESCE((SELECT member_post_mode FROM board_settings WHERE board_id=id), 0),
+		       COALESCE((SELECT stats_excluded FROM board_settings WHERE board_id=id), 0),
 		       COALESCE((SELECT COUNT(*) FROM board_moderators bm WHERE bm.board_id=id), 0)
 		  FROM board_state
 		 WHERE (? = 0 OR unread_posts > 0)
@@ -2114,13 +2122,13 @@ func ListBoardSummaries(db *sql.DB, userID string, unreadOnly bool, opts ...Boar
 		var b BoardSummary
 		var favorite int
 		var newBoard int
-		var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int
-		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &favorite, &b.UnreadThreads, &b.UnreadPosts, &b.ThreadCount, &b.PostCount, &b.OnlineUsers, &b.LastSeq, &b.ReadSeq, &b.CreatedAt, &newBoard, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &b.ModeratorCount); err != nil {
+		var anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded int
+		if err := rows.Scan(&b.ID, &b.Name, &b.Description, &favorite, &b.UnreadThreads, &b.UnreadPosts, &b.ThreadCount, &b.PostCount, &b.OnlineUsers, &b.LastSeq, &b.ReadSeq, &b.CreatedAt, &newBoard, &anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &statsExcluded, &b.ModeratorCount); err != nil {
 			return nil, err
 		}
 		b.Favorite = favorite != 0
 		b.NewBoard = newBoard != 0
-		applyBoardSummaryPolicyFlags(&b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode)
+		applyBoardSummaryPolicyFlags(&b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded)
 		boards = append(boards, b)
 	}
 	return boards, rows.Err()
@@ -2711,7 +2719,7 @@ func ListReadablePostsByAuthor(db *sql.DB, viewerID string, includePrivate bool,
 	return attachPostAttachments(db, posts)
 }
 
-func applyBoardPolicyFlags(b *Board, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int) {
+func applyBoardPolicyFlags(b *Board, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded int) {
 	b.AnonymousAllowed = anonymousAllowed != 0
 	b.ReadOnly = readOnly != 0
 	b.NoReply = noReply != 0
@@ -2720,9 +2728,10 @@ func applyBoardPolicyFlags(b *Board, anonymousAllowed, readOnly, noReply, attach
 	b.RelayEnabled = relayEnabled != 0
 	b.MemberReadMode = memberReadMode != 0
 	b.MemberPostMode = memberPostMode != 0
+	b.StatsExcluded = statsExcluded != 0
 }
 
-func applyBoardSummaryPolicyFlags(b *BoardSummary, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int) {
+func applyBoardSummaryPolicyFlags(b *BoardSummary, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded int) {
 	b.AnonymousAllowed = anonymousAllowed != 0
 	b.ReadOnly = readOnly != 0
 	b.NoReply = noReply != 0
@@ -2731,9 +2740,10 @@ func applyBoardSummaryPolicyFlags(b *BoardSummary, anonymousAllowed, readOnly, n
 	b.RelayEnabled = relayEnabled != 0
 	b.MemberReadMode = memberReadMode != 0
 	b.MemberPostMode = memberPostMode != 0
+	b.StatsExcluded = statsExcluded != 0
 }
 
-func applySettingsFlags(s *BoardSettings, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode int) {
+func applySettingsFlags(s *BoardSettings, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded int) {
 	s.AnonymousAllowed = anonymousAllowed != 0
 	s.ReadOnly = readOnly != 0
 	s.NoReply = noReply != 0
@@ -2742,6 +2752,7 @@ func applySettingsFlags(s *BoardSettings, anonymousAllowed, readOnly, noReply, a
 	s.RelayEnabled = relayEnabled != 0
 	s.MemberReadMode = memberReadMode != 0
 	s.MemberPostMode = memberPostMode != 0
+	s.StatsExcluded = statsExcluded != 0
 }
 
 func GetPost(db *sql.DB, id string) (*Post, error) {

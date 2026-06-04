@@ -158,7 +158,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   }
 
   function toggleSetting(key: keyof Pick<BoardSettings,
-    'anonymousAllowed' | 'readOnly' | 'noReply' | 'attachmentsAllowed' | 'mailInAllowed' | 'relayEnabled' | 'memberReadMode' | 'memberPostMode'>) {
+    'anonymousAllowed' | 'readOnly' | 'noReply' | 'attachmentsAllowed' | 'mailInAllowed' | 'relayEnabled' | 'memberReadMode' | 'memberPostMode' | 'statsExcluded'>) {
     setSettingsDraft(current => current ? { ...current, [key]: !current[key] } : current)
   }
 
@@ -495,6 +495,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
         {settings?.anonymousAllowed && <span className="policy-badge">Anonymous</span>}
         {settings?.memberReadMode && <span className="policy-badge">Member read</span>}
         {settings?.memberPostMode && <span className="policy-badge">Member post</span>}
+        {settings?.statsExcluded && <span className="policy-badge">Hidden from stats</span>}
         {(settings?.memberReadMode || settings?.memberPostMode) && !currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={applyForMembership}>Apply</button>}
         {currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={leaveMembership}>Leave</button>}
         {canOpenBoardSettings && <button className="link-btn" onClick={() => setSettingsOpen(open => !open)}>Board settings</button>}
@@ -534,6 +535,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                   ['relayEnabled', 'Relay'],
                   ['memberReadMode', 'Member read'],
                   ['memberPostMode', 'Member post'],
+                  ['statsExcluded', 'Hide from stats'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="setting-toggle">
                     <input type="checkbox" checked={settingsDraft[key]} onChange={() => toggleSetting(key)} />

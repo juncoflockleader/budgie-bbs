@@ -509,8 +509,8 @@ func ensureSysmailBoardSettingsProjection(tx *sql.Tx, ts int64) error {
 	_, err := qExec(tx,
 		`INSERT INTO board_settings (
 		    board_id, anonymous_allowed, read_only, no_reply, attachments_allowed,
-		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, updated_at
-		 ) VALUES (?, 0, 1, 1, 0, 0, 0, 1, 1, ?)
+		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, stats_excluded, updated_at
+		 ) VALUES (?, 0, 1, 1, 0, 0, 0, 1, 1, 1, ?)
 		 ON CONFLICT(board_id)
 		 DO UPDATE SET
 		    anonymous_allowed=0,
@@ -521,6 +521,7 @@ func ensureSysmailBoardSettingsProjection(tx *sql.Tx, ts int64) error {
 		    relay_enabled=0,
 		    member_read_mode=1,
 		    member_post_mode=1,
+		    stats_excluded=1,
 		    updated_at=excluded.updated_at`,
 		sysmailSystemBoardID,
 		ts,

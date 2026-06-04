@@ -1924,6 +1924,117 @@ func TestThreadRankingsCountDistinctParticipants(t *testing.T) {
 	}
 }
 
+func TestStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "visible_stats", Name: "Visible Stats"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "hidden_stats", Name: "Hidden Stats"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:         "hidden_stats",
+		StatsExcluded: boolPtr(true),
+	})
+	hiddenInfo, err := c.GetBoardInfo("hidden_stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hiddenInfo == nil || !hiddenInfo.Board.StatsExcluded || !hiddenInfo.Settings.StatsExcluded {
+		t.Fatalf("expected hidden_stats to expose statsExcluded setting, got %+v", hiddenInfo)
+	}
+
+	visibleThread := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "visible_stats",
+		Title: "Visible topic",
+		Body:  "visible root",
+	})
+	exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: visibleThread.ID,
+		Body:   "visible reply",
+	})
+	hiddenThread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "hidden_stats",
+		Title: "Hidden topic",
+		Body:  "hidden root",
+	})
+	exec(t, c, bob, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: hiddenThread.ID,
+		Body:   "hidden reply",
+	})
+	exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: visibleThread.ID,
+		Kind:   "archive",
+		Title:  "Visible archive",
+		Path:   "stats",
+	})
+	exec(t, c, admin, proto.CmdCurateThread, proto.CurateThreadPayload{
+		Thread: hiddenThread.ID,
+		Kind:   "archive",
+		Title:  "Hidden archive",
+		Path:   "stats",
+	})
+
+	boards, err := c.ListBoardRankings(alice, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasBoardRanking(boards, "visible_stats") || hasBoardRanking(boards, "hidden_stats") {
+		t.Fatalf("expected stats-excluded board hidden from board rankings, got %+v", boards)
+	}
+	threads, err := c.ListThreadRankings(alice, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasThreadRanking(threads, visibleThread.ID) || hasThreadRanking(threads, hiddenThread.ID) {
+		t.Fatalf("expected stats-excluded board hidden from thread rankings, got %+v", threads)
+	}
+	replies, err := c.ListReplyRankings(alice, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasReplyRankingThread(replies, visibleThread.ID) || hasReplyRankingThread(replies, hiddenThread.ID) {
+		t.Fatalf("expected stats-excluded board hidden from reply rankings, got %+v", replies)
+	}
+	archives, err := c.ListArchiveRankings(alice, "archive", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasArchiveRankingBoard(archives, "visible_stats") || hasArchiveRankingBoard(archives, "hidden_stats") {
+		t.Fatalf("expected stats-excluded board hidden from archive rankings, got %+v", archives)
+	}
+	users, err := c.ListUserRankings(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if user.Name == "bob" && user.PostsCreated != 0 {
+			t.Fatalf("expected stats-excluded posts omitted from user rankings, got %+v", users)
+		}
+	}
+
+	snapshot := exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
+		Date: "2026-06-07",
+	})
+	for _, threadID := range []string{snapshot.ID, "bbslists_boardlog_20260607", "bbslists_toplog_20260607"} {
+		posts, err := c.ListPosts(threadID, 10, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(posts) != 1 {
+			t.Fatalf("expected one generated post in %s, got %+v", threadID, posts)
+		}
+		if strings.Contains(posts[0].Body, "Hidden") || strings.Contains(posts[0].Body, "hidden_stats") {
+			t.Fatalf("expected generated stats post %s to hide stats-excluded board, got:\n%s", threadID, posts[0].Body)
+		}
+		if !strings.Contains(posts[0].Body, "Visible") && threadID != snapshot.ID {
+			t.Fatalf("expected generated stats post %s to include visible board activity, got:\n%s", threadID, posts[0].Body)
+		}
+	}
+}
+
 func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
@@ -1993,6 +2104,42 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 func hasThreadSummary(threads []core.Thread, id, titlePart string) bool {
 	for _, thread := range threads {
 		if thread.ID == id && strings.Contains(thread.Title, titlePart) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBoardRanking(boards []core.BoardRanking, id string) bool {
+	for _, board := range boards {
+		if board.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasThreadRanking(threads []core.ThreadRanking, id string) bool {
+	for _, thread := range threads {
+		if thread.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasReplyRankingThread(replies []core.ReplyRanking, threadID string) bool {
+	for _, reply := range replies {
+		if reply.ThreadID == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArchiveRankingBoard(archives []core.ArchiveRanking, boardID string) bool {
+	for _, archive := range archives {
+		if archive.BoardID == boardID {
 			return true
 		}
 	}

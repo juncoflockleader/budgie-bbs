@@ -690,6 +690,7 @@ function favoriteEntryToSummary(board: FavoriteBoardEntry): BoardSummary {
     relayEnabled: false,
     memberReadMode: false,
     memberPostMode: false,
+    statsExcluded: false,
     moderatorCount: 0,
   }
 }
@@ -714,6 +715,7 @@ function PolicyBadges({ board }: { board: BoardSummary }) {
     board.relayEnabled && 'Relay',
     board.memberReadMode && 'Member read',
     board.memberPostMode && 'Member post',
+    board.statsExcluded && 'Hidden from stats',
     board.moderatorCount > 0 && `${board.moderatorCount} mod${board.moderatorCount === 1 ? '' : 's'}`,
   ].filter(Boolean)
   if (badges.length === 0) return null

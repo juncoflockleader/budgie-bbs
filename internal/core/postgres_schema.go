@@ -254,6 +254,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     relay_enabled       INTEGER NOT NULL DEFAULT 0,
     member_read_mode    INTEGER NOT NULL DEFAULT 0,
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
+    stats_excluded      INTEGER NOT NULL DEFAULT 0,
     updated_at          BIGINT NOT NULL DEFAULT 0
 );
 
@@ -780,6 +781,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     relay_enabled       INTEGER NOT NULL DEFAULT 0,
     member_read_mode    INTEGER NOT NULL DEFAULT 0,
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
+    stats_excluded      INTEGER NOT NULL DEFAULT 0,
     updated_at          BIGINT NOT NULL DEFAULT 0
 );
 
@@ -1691,6 +1693,18 @@ ALTER TABLE community_stat_history
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (36, 'postgres-community-total-logins', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 37,
+			Name:    "postgres-board-settings-stats-excluded",
+			SQL: `
+ALTER TABLE board_settings
+    ADD COLUMN IF NOT EXISTS stats_excluded INTEGER NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (37, 'postgres-board-settings-stats-excluded', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

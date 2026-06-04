@@ -12,6 +12,7 @@ export interface Board {
   relayEnabled?: boolean
   memberReadMode?: boolean
   memberPostMode?: boolean
+  statsExcluded?: boolean
   moderatorCount?: number
 }
 
@@ -34,6 +35,7 @@ export interface BoardSummary extends Board {
   relayEnabled: boolean
   memberReadMode: boolean
   memberPostMode: boolean
+  statsExcluded: boolean
   moderatorCount: number
 }
 
@@ -165,6 +167,7 @@ export interface BoardSettings {
   relayEnabled: boolean
   memberReadMode: boolean
   memberPostMode: boolean
+  statsExcluded: boolean
   updatedAt: number
 }
 

@@ -119,9 +119,12 @@ ranking surface:
 - Hot-thread rankings expose distinct participant counts. Scores combine
   visible post count, participant count, reaction count, and a 48-hour recency
   half-life so stale activity decays behind fresh conversation.
+- KBS `BOARD_POSTSTAT`-style board policy is available as `statsExcluded`:
+  readable/postable boards can opt out of public ranking and generated
+  stat-log surfaces without becoming private.
 - Board, thread, reply, and archive rankings hide member-read boards from users
-  who cannot read those boards; direct thread-ranking queries for inaccessible
-  boards are rejected.
+  who cannot read those boards and hide `statsExcluded` boards for all users;
+  direct thread-ranking queries for inaccessible boards are rejected.
 - Stat snapshots lazily create a KBS-style `BBSLists` system board and
   deterministic daily generated thread/posts containing community counters,
   max-online history, recent daily stat-history rows with trend deltas, plus
@@ -288,6 +291,7 @@ enforced version:
   - `relayEnabled`
   - `memberReadMode`
   - `memberPostMode`
+  - `statsExcluded`
 - A per-board `board_moderators` projection.
 - A per-board `board_members` projection with optional board-local titles,
   explicit member-roll ordering, and delegated `canManageMembers`,
@@ -345,6 +349,9 @@ enforced version:
     creates new threads or appends replies through the normal posting path.
   - `relayEnabled` queues pending outbound relay delivery records for posts
     created on that board.
+  - `statsExcluded` keeps otherwise readable/postable boards out of public
+    board/thread/reply/user/archive rankings and generated `BBSLists`
+    snapshot, board-activity, and hot-topic stat logs.
   - Board membership applications enforce `maxMembers`, minimum login count,
     minimum post count, minimum trust level, board-local post count,
     board-local original-thread count, board-local digest count, global reaction
@@ -782,7 +789,7 @@ social graph:
 - Cross-post/repost article creation with source post/thread/board/author
   lineage.
 - Board policy flags, board detail reads, board-local moderator lists, and
-  board-local member rolls.
+  board-local member rolls, including KBS-style stats-excluded boards.
 - Enforced read-only, no-reply, anonymous-posting, board-moderator, and
   member-only read/post flows.
 - Board member application, approval/rejection/blacklist, and self-leave flows.

@@ -46,6 +46,7 @@ type boardInfoResponse struct {
 		AnonymousAllowed bool   `json:"anonymousAllowed"`
 		ReadOnly         bool   `json:"readOnly"`
 		NoReply          bool   `json:"noReply"`
+		StatsExcluded    bool   `json:"statsExcluded"`
 		ModeratorCount   int    `json:"moderatorCount"`
 	} `json:"board"`
 	Settings struct {
@@ -54,6 +55,7 @@ type boardInfoResponse struct {
 		NoReply          bool `json:"noReply"`
 		MemberReadMode   bool `json:"memberReadMode"`
 		MemberPostMode   bool `json:"memberPostMode"`
+		StatsExcluded    bool `json:"statsExcluded"`
 	} `json:"settings"`
 	Requirements struct {
 		MinLoginCount             int    `json:"minLoginCount"`
@@ -446,6 +448,42 @@ type threadSummariesResponse struct {
 func hasHTTPThreadSummary(resp threadSummariesResponse, id, titlePart string) bool {
 	for _, thread := range resp.Threads {
 		if thread.ID == id && strings.Contains(thread.Title, titlePart) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHTTPBoardRanking(resp boardRankingsResponse, id string) bool {
+	for _, board := range resp.Boards {
+		if board.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHTTPThreadRanking(resp threadRankingsResponse, id string) bool {
+	for _, thread := range resp.Threads {
+		if thread.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHTTPReplyRankingThread(resp replyRankingsResponse, threadID string) bool {
+	for _, reply := range resp.Replies {
+		if reply.ThreadID == threadID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHTTPArchiveRankingBoard(resp archiveRankingsResponse, boardID string) bool {
+	for _, archive := range resp.Archives {
+		if archive.BoardID == boardID {
 			return true
 		}
 	}
@@ -1384,6 +1422,138 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	}
 	if len(systemThreads.Threads) != 4 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads.Threads)
+	}
+}
+
+func TestHTTPStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	ack := ackResponse{}
+	for _, board := range []struct {
+		id   string
+		name string
+	}{
+		{"visible_stats", "Visible Stats"},
+		{"hidden_stats", "Hidden Stats"},
+	} {
+		if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+			"id":   board.id,
+			"name": board.name,
+		}, &ack); status != http.StatusCreated {
+			t.Fatalf("create %s board status: %d error=%+v", board.id, status, ack.Error)
+		}
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/boards/hidden_stats/settings", adminToken, map[string]bool{
+		"statsExcluded": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("set hidden stats-excluded status: %d error=%+v", status, ack.Error)
+	}
+	info := boardInfoResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/hidden_stats", aliceToken, nil, &info); status != http.StatusOK {
+		t.Fatalf("get hidden board info status: %d", status)
+	}
+	if !info.Board.StatsExcluded || !info.Settings.StatsExcluded {
+		t.Fatalf("expected hidden board to expose statsExcluded, got %+v", info)
+	}
+
+	visible := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/visible_stats/threads", aliceToken, map[string]string{
+		"title": "Visible topic",
+		"body":  "visible root",
+	}, &visible); status != http.StatusCreated {
+		t.Fatalf("create visible topic status: %d error=%+v", status, visible.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+visible.Result.ID+"/posts", aliceToken, map[string]string{
+		"body": "visible reply",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("reply visible topic status: %d error=%+v", status, ack.Error)
+	}
+	hidden := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/hidden_stats/threads", bobToken, map[string]string{
+		"title": "Hidden topic",
+		"body":  "hidden root",
+	}, &hidden); status != http.StatusCreated {
+		t.Fatalf("create hidden topic status: %d error=%+v", status, hidden.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+hidden.Result.ID+"/posts", bobToken, map[string]string{
+		"body": "hidden reply",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("reply hidden topic status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+visible.Result.ID+"/digest", adminToken, map[string]string{
+		"kind":  "archive",
+		"title": "Visible archive",
+		"path":  "stats",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("curate visible archive status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+hidden.Result.ID+"/digest", adminToken, map[string]string{
+		"kind":  "archive",
+		"title": "Hidden archive",
+		"path":  "stats",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("curate hidden archive status: %d error=%+v", status, ack.Error)
+	}
+
+	boards := boardRankingsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/boards", aliceToken, nil, &boards); status != http.StatusOK {
+		t.Fatalf("board rankings status: %d", status)
+	}
+	if !hasHTTPBoardRanking(boards, "visible_stats") || hasHTTPBoardRanking(boards, "hidden_stats") {
+		t.Fatalf("expected stats-excluded board hidden from board rankings, got %+v", boards.Boards)
+	}
+	threads := threadRankingsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/threads", aliceToken, nil, &threads); status != http.StatusOK {
+		t.Fatalf("thread rankings status: %d", status)
+	}
+	if !hasHTTPThreadRanking(threads, visible.Result.ID) || hasHTTPThreadRanking(threads, hidden.Result.ID) {
+		t.Fatalf("expected stats-excluded board hidden from thread rankings, got %+v", threads.Threads)
+	}
+	replies := replyRankingsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/replies", aliceToken, nil, &replies); status != http.StatusOK {
+		t.Fatalf("reply rankings status: %d", status)
+	}
+	if !hasHTTPReplyRankingThread(replies, visible.Result.ID) || hasHTTPReplyRankingThread(replies, hidden.Result.ID) {
+		t.Fatalf("expected stats-excluded board hidden from reply rankings, got %+v", replies.Replies)
+	}
+	archives := archiveRankingsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/archive?kind=archive", aliceToken, nil, &archives); status != http.StatusOK {
+		t.Fatalf("archive rankings status: %d", status)
+	}
+	if !hasHTTPArchiveRankingBoard(archives, "visible_stats") || hasHTTPArchiveRankingBoard(archives, "hidden_stats") {
+		t.Fatalf("expected stats-excluded board hidden from archive rankings, got %+v", archives.Archives)
+	}
+	users := userRankingsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/users", aliceToken, nil, &users); status != http.StatusOK {
+		t.Fatalf("user rankings status: %d", status)
+	}
+	for _, user := range users.Users {
+		if user.Name == "bob" && user.PostsCreated != 0 {
+			t.Fatalf("expected hidden board posts omitted from user rankings, got %+v", users.Users)
+		}
+	}
+
+	snapshot := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
+		"date": "2026-06-07",
+	}, &snapshot); status != http.StatusCreated {
+		t.Fatalf("publish stats snapshot status: %d error=%+v", status, snapshot.Error)
+	}
+	for _, threadID := range []string{snapshot.Result.ID, "bbslists_boardlog_20260607", "bbslists_toplog_20260607"} {
+		posts := listPostsResponse{}
+		if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
+			t.Fatalf("list generated posts for %s status: %d", threadID, status)
+		}
+		if len(posts.Posts) != 1 {
+			t.Fatalf("expected one generated post in %s, got %+v", threadID, posts.Posts)
+		}
+		if strings.Contains(posts.Posts[0].Body, "Hidden") || strings.Contains(posts.Posts[0].Body, "hidden_stats") {
+			t.Fatalf("expected generated stats post %s to hide stats-excluded board, got:\n%s", threadID, posts.Posts[0].Body)
+		}
 	}
 }
 

@@ -153,6 +153,7 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 		RelayEnabled:       p.RelayEnabled,
 		MemberReadMode:     p.MemberReadMode,
 		MemberPostMode:     p.MemberPostMode,
+		StatsExcluded:      p.StatsExcluded,
 	}
 	if err := setBoardSettings(h.db, p.Board, patch); err != nil {
 		return internalErr(err)
@@ -2270,6 +2271,7 @@ func boardSettingsAuditLines(p proto.SetBoardSettingsPayload) []string {
 		{"relayEnabled", p.RelayEnabled},
 		{"memberReadMode", p.MemberReadMode},
 		{"memberPostMode", p.MemberPostMode},
+		{"statsExcluded", p.StatsExcluded},
 	}
 	out := []string{}
 	for _, field := range fields {

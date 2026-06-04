@@ -16,6 +16,7 @@ type Board struct {
 	RelayEnabled       bool   `json:"relayEnabled"`
 	MemberReadMode     bool   `json:"memberReadMode"`
 	MemberPostMode     bool   `json:"memberPostMode"`
+	StatsExcluded      bool   `json:"statsExcluded"`
 	ModeratorCount     int    `json:"moderatorCount"`
 }
 
@@ -41,6 +42,7 @@ type BoardSummary struct {
 	RelayEnabled       bool   `json:"relayEnabled"`
 	MemberReadMode     bool   `json:"memberReadMode"`
 	MemberPostMode     bool   `json:"memberPostMode"`
+	StatsExcluded      bool   `json:"statsExcluded"`
 	ModeratorCount     int    `json:"moderatorCount"`
 }
 
@@ -226,6 +228,7 @@ type BoardSettings struct {
 	RelayEnabled       bool   `json:"relayEnabled"`
 	MemberReadMode     bool   `json:"memberReadMode"`
 	MemberPostMode     bool   `json:"memberPostMode"`
+	StatsExcluded      bool   `json:"statsExcluded"`
 	UpdatedAt          int64  `json:"updatedAt"`
 }
 
@@ -238,6 +241,7 @@ type BoardSettingsPatch struct {
 	RelayEnabled       *bool
 	MemberReadMode     *bool
 	MemberPostMode     *bool
+	StatsExcluded      *bool
 }
 
 type BoardModerator struct {
