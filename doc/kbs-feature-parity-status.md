@@ -106,8 +106,9 @@ ranking surface:
   /api/v1/stats/community/snapshot`.
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has deterministic `BBSLists` snapshot, login-count
-  history, board-activity history, new-board list, hot-topic history, and
-  completed week/month/year period-summary and hot-topic list threads.
+  history, board-activity history, new-board list, hot-topic history, daily
+  blessing list, and completed week/month/year period-summary and hot-topic
+  list threads.
 - Login recording maintains UTC day/hour login buckets for KBS `static.c` /
   `countlogins`-style hourly login distribution charts.
 - Presence changes and stat snapshots maintain a projection-backed daily
@@ -147,6 +148,9 @@ ranking surface:
   `BBSLists` hot-topic history threads showing ranked public hot topics,
   distinct participant counts, post/reaction counts, decayed score, and last
   activity times, with KBS `day_sec*`-style category/section hot-topic groups.
+- Stat snapshots also create deterministic daily KBS `poststat` / `bless.xml`
+  style `BBSLists` blessing-list threads showing top blessed users and recent
+  public blessing messages for the snapshot day.
 - On completed period boundaries, stat snapshots create deterministic KBS
   `poststat`-style `BBSLists` weekly, monthly, and yearly activity-history
   threads from daily stat-history rows, including period totals, ending
@@ -167,7 +171,7 @@ ranking surface:
 
 This does not yet implement every historical/stat-log board from KBS local
 utilities beyond the generated `BBSLists` snapshot, login-history, and
-board-activity/new-board/hot-topic/period-summary history threads.
+board-activity/new-board/hot-topic/blessing/period-summary history threads.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -865,8 +869,8 @@ social graph:
   distinct-participant hot-topic scoring, top-poster rankings, latest-reply
   rankings, blessing rankings/rituals, archive-path rankings, automatic
   `BBSLists` generated stat snapshots and login-count, board-activity,
-  new-board, and hot-topic history posts, category/section hot-topic groups,
-  24-hour login histograms, plus completed week/month/year activity and
+  new-board, hot-topic, and blessing history posts, category/section hot-topic
+  groups, 24-hour login histograms, plus completed week/month/year activity and
   hot-topic summaries, and a web `Rankings` surface with selectable 30-day
   history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and

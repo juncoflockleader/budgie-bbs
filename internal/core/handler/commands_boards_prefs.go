@@ -1144,6 +1144,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsHotTopicHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsBlessingListSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	day, err := time.Parse("2006-01-02", dateLabel)
 	if err != nil {
 		return internalErr(err)
@@ -1354,6 +1357,39 @@ func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, d
 	}
 	body := formatStatsHotTopicHistoryBody(dateLabel, stats, threads, categories)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Hot topic history "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsBlessingListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_bless_" + dateID
+	postID := "bbslists_bless_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	startAt, endAt, err := statsPeriodBounds(dateLabel, dateLabel)
+	if err != nil {
+		return "", 0, err
+	}
+	rankings, err := projections.ListBlessingRankingsRange(h.db, startAt, endAt, 10, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	recent, err := projections.ListBlessingsRange(h.db, startAt, endAt, 10, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsBlessingListBody(dateLabel, rankings, recent, startAt, endAt)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Daily blessing list "+dateLabel, body, ts)
 }
 
 type statsPeriodHistorySpec struct {
@@ -1902,6 +1938,43 @@ func formatStatsHotTopicHistoryBody(dateLabel string, stats *projections.Communi
 			lastActivity)
 	}
 	formatStatsCategoryHotTopicGroups(&b, threads, categories, "Category hot topics", 10)
+	return b.String()
+}
+
+func formatStatsBlessingListBody(dateLabel string, rankings []projections.BlessingRanking, recent []projections.Blessing, startAt, endAt int64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Daily blessing list %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Window: %s to %s UTC\n", time.UnixMilli(startAt).UTC().Format("2006-01-02"), time.UnixMilli(endAt).UTC().Format("2006-01-02"))
+	fmt.Fprintf(&b, "- Blessed users: %d\n", len(rankings))
+	fmt.Fprintf(&b, "- Recent blessings: %d\n\n", len(recent))
+
+	b.WriteString("## Top blessed users\n")
+	if len(rankings) == 0 {
+		b.WriteString("- No blessings recorded for this day.\n")
+	}
+	for i, ranking := range rankings {
+		lastBlessed := "unknown"
+		if ranking.LastBlessedAt > 0 {
+			lastBlessed = time.UnixMilli(ranking.LastBlessedAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s: %d blessings, last blessed %s\n", i+1, ranking.Name, ranking.BlessingCount, lastBlessed)
+	}
+
+	b.WriteString("\n## Recent blessing messages\n")
+	if len(recent) == 0 {
+		b.WriteString("- No blessing messages for this day.\n")
+	}
+	for i, blessing := range recent {
+		created := "unknown"
+		if blessing.CreatedAt > 0 {
+			created = time.UnixMilli(blessing.CreatedAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		message := strings.TrimSpace(blessing.Message)
+		if message == "" {
+			message = "public blessing"
+		}
+		fmt.Fprintf(&b, "%d. %s -> %s at %s: %s\n", i+1, blessing.FromName, blessing.ToName, created, message)
+	}
 	return b.String()
 }
 

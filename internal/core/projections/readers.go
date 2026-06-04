@@ -694,6 +694,42 @@ func ListBlessingRankings(db *sql.DB, limit, offset int) ([]BlessingRanking, err
 	return out, rows.Err()
 }
 
+func ListBlessingRankingsRange(db *sql.DB, startAt, endAt int64, limit, offset int) ([]BlessingRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if startAt <= 0 || endAt <= 0 || endAt < startAt {
+		return []BlessingRanking{}, nil
+	}
+	rows, err := QQuery(db,
+		`SELECT u.id, u.name, COUNT(b.id) AS blessing_count, COALESCE(MAX(b.created_at), 0) AS last_blessed_at
+		   FROM blessings b
+		   JOIN users u ON u.id=b.to_user_id
+		  WHERE b.created_at >= ?
+		    AND b.created_at <= ?
+		  GROUP BY u.id, u.name
+		  ORDER BY blessing_count DESC, last_blessed_at DESC, u.name
+		  LIMIT ? OFFSET ?`,
+		startAt, endAt, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BlessingRanking{}
+	for rows.Next() {
+		var rank BlessingRanking
+		if err := rows.Scan(&rank.UserID, &rank.Name, &rank.BlessingCount, &rank.LastBlessedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rank)
+	}
+	return out, rows.Err()
+}
+
 func ListBlessings(db *sql.DB, limit, offset int) ([]Blessing, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -710,6 +746,43 @@ func ListBlessings(db *sql.DB, limit, offset int) ([]Blessing, error) {
 		  ORDER BY b.created_at DESC, b.seq DESC
 		  LIMIT ? OFFSET ?`,
 		limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Blessing{}
+	for rows.Next() {
+		var blessing Blessing
+		if err := rows.Scan(&blessing.ID, &blessing.FromUserID, &blessing.FromName, &blessing.ToUserID, &blessing.ToName, &blessing.Message, &blessing.CreatedAt, &blessing.Seq); err != nil {
+			return nil, err
+		}
+		out = append(out, blessing)
+	}
+	return out, rows.Err()
+}
+
+func ListBlessingsRange(db *sql.DB, startAt, endAt int64, limit, offset int) ([]Blessing, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if startAt <= 0 || endAt <= 0 || endAt < startAt {
+		return []Blessing{}, nil
+	}
+	rows, err := QQuery(db,
+		`SELECT b.id, b.from_user_id, COALESCE(f.name,''), b.to_user_id, COALESCE(t.name,''),
+		        b.message, b.created_at, b.seq
+		   FROM blessings b
+		   LEFT JOIN users f ON f.id=b.from_user_id
+		   LEFT JOIN users t ON t.id=b.to_user_id
+		  WHERE b.created_at >= ?
+		    AND b.created_at <= ?
+		  ORDER BY b.created_at DESC, b.seq DESC
+		  LIMIT ? OFFSET ?`,
+		startAt, endAt, limit, offset,
 	)
 	if err != nil {
 		return nil, err

@@ -1468,10 +1468,14 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	admin := registerAndGetUser(t, c, "admin", "pw")
 	alice := registerAndGetUser(t, c, "alice", "pw")
 	bob := registerAndGetUser(t, c, "bob", "pw")
+	snapshotAt := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC).UnixMilli()
 
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "tech", Name: "Tech"})
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "life", Name: "Life"})
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secret", Name: "Secret"})
+	if _, err := c.DB.Exec(`UPDATE categories SET created_at=? WHERE id IN ('tech','life','secret')`, snapshotAt); err != nil {
+		t.Fatal(err)
+	}
 	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
 		Board:          "secret",
 		MemberReadMode: boolPtr(true),
@@ -1708,6 +1712,24 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if len(users) == 0 || users[0].Name != "bob" || users[0].PostsCreated != 2 || users[0].ReactionsReceived != 1 || users[0].LoginCount != 1 || users[0].TotalOnlineSeconds != 120 {
 		t.Fatalf("expected bob to lead user rankings, got %+v", users)
 	}
+	exec(t, c, alice, proto.CmdBlessUser, proto.BlessUserPayload{
+		User:    "bob",
+		Message: "Good luck on finals.",
+	})
+	exec(t, c, admin, proto.CmdBlessUser, proto.BlessUserPayload{
+		User:    "bob",
+		Message: "Ace the lab.",
+	})
+	if _, err := c.DB.Exec(`UPDATE blessings SET created_at=?`, snapshotAt); err != nil {
+		t.Fatal(err)
+	}
+	blessings, err := c.ListBlessingRankings(10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blessings) == 0 || blessings[0].Name != "bob" || blessings[0].BlessingCount != 2 {
+		t.Fatalf("expected bob to lead blessing rankings, got %+v", blessings)
+	}
 
 	execExpectErr(t, c, alice, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
 		Date: "2026-06-04",
@@ -1725,19 +1747,20 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if systemBoard == nil || systemBoard.Name != "BBSLists" {
 		t.Fatalf("expected generated BBSLists board, got %+v", systemBoard)
 	}
-	systemThreads, err := c.ListThreads("BBSLists", 10, 0)
+	systemThreads, err := c.ListThreads("BBSLists", 20, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 5 {
-		t.Fatalf("expected generated stats, login-history, board-activity, new-board, and hot-topic threads, got %+v", systemThreads)
+	if len(systemThreads) != 6 {
+		t.Fatalf("expected generated stats, login-history, board-activity, new-board, hot-topic, and blessing threads, got %+v", systemThreads)
 	}
 	if !hasThreadSummary(systemThreads, snapshot.ID, "2026-06-04") ||
 		!hasThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") ||
 		!hasThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") ||
 		!hasThreadSummary(systemThreads, "bbslists_newboards_20260604", "New board list 2026-06-04") ||
-		!hasThreadSummary(systemThreads, "bbslists_toplog_20260604", "Hot topic history 2026-06-04") {
-		t.Fatalf("expected generated stats, login-history, board-activity, new-board, and hot-topic threads, got %+v", systemThreads)
+		!hasThreadSummary(systemThreads, "bbslists_toplog_20260604", "Hot topic history 2026-06-04") ||
+		!hasThreadSummary(systemThreads, "bbslists_bless_20260604", "Daily blessing list 2026-06-04") {
+		t.Fatalf("expected generated stats, login-history, board-activity, new-board, hot-topic, and blessing threads, got %+v", systemThreads)
 	}
 	systemPosts, err := c.ListPosts(snapshot.ID, 10, 0)
 	if err != nil {
@@ -1747,7 +1770,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts)
 	}
 	body := systemPosts[0].Body
-	for _, want := range []string{"Total users: 3", "Total logins: 1", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "1 login (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "1 participants", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total logins: 1", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "1 login (+1)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "1 participants", "Latest replies", "second", "Top users", "bob", "Blessings", "bob: 2 blessings", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
@@ -1804,6 +1827,19 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 			t.Fatalf("expected hot-topic body to contain %q, got:\n%s", want, topLogBody)
 		}
 	}
+	blessPosts, err := c.ListPosts("bbslists_bless_20260604", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blessPosts) != 1 {
+		t.Fatalf("expected one generated blessing-list post, got %+v", blessPosts)
+	}
+	blessBody := blessPosts[0].Body
+	for _, want := range []string{"Daily blessing list 2026-06-04", "Window: 2026-06-04 to 2026-06-04 UTC", "Blessed users: 1", "Recent blessings: 2", "bob: 2 blessings", "alice -> bob", "admin -> bob", "Good luck on finals.", "Ace the lab."} {
+		if !strings.Contains(blessBody, want) {
+			t.Fatalf("expected blessing-list body to contain %q, got:\n%s", want, blessBody)
+		}
+	}
 	for _, forbidden := range []string{"Secret", "Private topic", "classified reply", "private"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("expected stats snapshot body to hide private %q, got:\n%s", forbidden, body)
@@ -1828,7 +1864,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 5 {
+	if len(systemThreads) != 6 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads)
 	}
 }
@@ -2303,12 +2339,12 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	if next == nil || next.ID != "bbslists_stats_20260606" {
 		t.Fatalf("expected next-day automatic snapshot, got %+v", next)
 	}
-	systemThreads, err := c.ListThreads("BBSLists", 10, 0)
+	systemThreads, err := c.ListThreads("BBSLists", 20, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(systemThreads) != 10 {
-		t.Fatalf("expected stats, login-history, board-activity, new-board, and hot-topic threads for two days, got %+v", systemThreads)
+	if len(systemThreads) != 12 {
+		t.Fatalf("expected stats, login-history, board-activity, new-board, hot-topic, and blessing threads for two days, got %+v", systemThreads)
 	}
 	for _, want := range []struct {
 		id    string
@@ -2319,11 +2355,13 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 		{"bbslists_boardlog_20260605", "Board activity history 2026-06-05"},
 		{"bbslists_newboards_20260605", "New board list 2026-06-05"},
 		{"bbslists_toplog_20260605", "Hot topic history 2026-06-05"},
+		{"bbslists_bless_20260605", "Daily blessing list 2026-06-05"},
 		{"bbslists_stats_20260606", "Community stats 2026-06-06"},
 		{"bbslists_countlogins_20260606", "Login count history 2026-06-06"},
 		{"bbslists_boardlog_20260606", "Board activity history 2026-06-06"},
 		{"bbslists_newboards_20260606", "New board list 2026-06-06"},
 		{"bbslists_toplog_20260606", "Hot topic history 2026-06-06"},
+		{"bbslists_bless_20260606", "Daily blessing list 2026-06-06"},
 	} {
 		if !hasThreadSummary(systemThreads, want.id, want.title) {
 			t.Fatalf("expected generated thread %s / %s, got %+v", want.id, want.title, systemThreads)
