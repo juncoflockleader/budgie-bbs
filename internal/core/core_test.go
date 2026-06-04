@@ -699,6 +699,29 @@ func TestPollCreationRequiresQuestionText(t *testing.T) {
 	}
 }
 
+func TestPollMarkupCannotBeAddedOnEdit(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "No poll", Body: "hello",
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	execExpectErr(t, c, alice, proto.CmdEditPost, proto.EditPostPayload{
+		Post: posts[0].ID,
+		Body: "edited with poll [poll]\nQuestion?\nOption A\nOption B\n[/poll]",
+	}, proto.ErrValidationFailed)
+}
+
 type forumSnapshot struct {
 	thread          *core.Thread
 	posts           []core.Post

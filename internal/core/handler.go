@@ -497,6 +497,11 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 	if p.Post == "" || p.Body == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "post and body are required", false)}
 	}
+	pollBlock, _ := extractPoll(p.Body)
+	if pollBlock != nil {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "editing posts with poll markup is not supported", false)}
+	}
+
 	ts := nowMS()
 
 	tx, err := h.db.Begin()
