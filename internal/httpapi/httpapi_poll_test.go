@@ -586,6 +586,39 @@ func TestHTTPCommandEndpointUppercasePollTags(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointRejectsUnknownCommand(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "nonExistent",
+		"payload": map[string]any{},
+	}, &ack); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for unknown command, got %d", status)
+	}
+	if ack.Error == nil || ack.Error.Code != "validation_failed" {
+		t.Fatalf("expected validation_failed for unknown command, got %+v", ack.Error)
+	}
+}
+
+func TestHTTPCommandEndpointRejectsMissingPayload(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+	}, &ack); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for missing command payload, got %d", status)
+	}
+	if ack.Error == nil || ack.Error.Code != "validation_failed" {
+		t.Fatalf("expected validation_failed error, got %+v", ack.Error)
+	}
+}
+
 func TestHTTPCommandEndpointVotePollLifecycleAndErrors(t *testing.T) {
 	c, handler := setupHTTPTestServer(t)
 
