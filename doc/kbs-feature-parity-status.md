@@ -107,7 +107,7 @@ ranking surface:
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has deterministic `BBSLists` snapshot, login-count
   history, board-activity history, hot-topic history, and completed
-  week/month/year period-summary threads.
+  week/month/year period-summary and hot-topic list threads.
 - Login recording maintains UTC day/hour login buckets for KBS `static.c` /
   `countlogins`-style hourly login distribution charts.
 - Presence changes and stat snapshots maintain a projection-backed daily
@@ -148,6 +148,9 @@ ranking surface:
   `poststat`-style `BBSLists` weekly, monthly, and yearly activity-history
   threads from daily stat-history rows, including period totals, ending
   counters, max-online peaks, and daily rows.
+- On completed period boundaries, stat snapshots also create KBS `poststat` /
+  `toplog`-style weekly, monthly, and yearly public hot-topic list threads
+  ranked by period posts, distinct participants, and reactions.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
   stat history with trend deltas, cumulative login count, cumulative online/stay
   time, anonymous guest counts, active boards, hot threads, latest replies, top
@@ -859,7 +862,7 @@ social graph:
   rankings, blessing rankings/rituals, archive-path rankings, automatic
   `BBSLists` generated stat snapshots and login-count, board-activity, and
   hot-topic history posts, 24-hour login histograms, plus completed
-  week/month/year period summaries, and a web `Rankings` surface with
+  week/month/year activity and hot-topic summaries, and a web `Rankings` surface with
   selectable 30-day history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.

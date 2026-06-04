@@ -2096,6 +2096,108 @@ func TestStatsPeriodHistorySystemPosts(t *testing.T) {
 	}
 }
 
+func TestStatsHotTopicPeriodHistorySystemPosts(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "period_top", Name: "Tech"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "period_hidden", Name: "Hidden"})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board:         "period_hidden",
+		StatsExcluded: boolPtr(true),
+	})
+	weekly := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "period_top",
+		Title: "Weekly period topic",
+		Body:  "root",
+	})
+	exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: weekly.ID,
+		Body:   "reply",
+	})
+	hidden := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "period_hidden",
+		Title: "Hidden period topic",
+		Body:  "hidden",
+	})
+	old := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "period_top",
+		Title: "Old period topic",
+		Body:  "old",
+	})
+	july := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "period_top",
+		Title: "July period topic",
+		Body:  "july",
+	})
+	year := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "period_top",
+		Title: "Year period topic",
+		Body:  "year",
+	})
+	setThreadPostsCreatedAt(t, c.DB, weekly.ID, time.Date(2026, time.June, 12, 12, 0, 0, 0, time.UTC))
+	setThreadPostsCreatedAt(t, c.DB, hidden.ID, time.Date(2026, time.June, 12, 12, 0, 0, 0, time.UTC))
+	setThreadPostsCreatedAt(t, c.DB, old.ID, time.Date(2026, time.June, 1, 12, 0, 0, 0, time.UTC))
+	setThreadPostsCreatedAt(t, c.DB, july.ID, time.Date(2026, time.July, 31, 12, 0, 0, 0, time.UTC))
+	setThreadPostsCreatedAt(t, c.DB, year.ID, time.Date(2027, time.December, 31, 12, 0, 0, 0, time.UTC))
+
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-06-14"})
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-07-31"})
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2027-12-31"})
+
+	for _, want := range []struct {
+		threadID  string
+		title     string
+		contains  []string
+		forbidden []string
+	}{
+		{
+			threadID:  "bbslists_toplog_week_2026w24",
+			title:     "Weekly hot-topic history 2026-W24",
+			contains:  []string{"Period: 2026-06-08 to 2026-06-14", "Ranked public hot topics: 1", "Tech / Weekly period topic", "2 participants", "2 period posts"},
+			forbidden: []string{"Hidden period topic", "Old period topic"},
+		},
+		{
+			threadID: "bbslists_toplog_month_202607",
+			title:    "Monthly hot-topic history 2026-07",
+			contains: []string{"Period: 2026-07-01 to 2026-07-31", "Ranked public hot topics: 1", "Tech / July period topic", "1 period posts"},
+		},
+		{
+			threadID: "bbslists_toplog_year_2027",
+			title:    "Yearly hot-topic history 2027",
+			contains: []string{"Period: 2027-01-01 to 2027-12-31", "Ranked public hot topics: 1", "Tech / Year period topic", "1 period posts"},
+		},
+	} {
+		threads, err := c.ListThreads("BBSLists", 100, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasThreadSummary(threads, want.threadID, want.title) {
+			t.Fatalf("expected generated period hot-topic thread %s / %s, got %+v", want.threadID, want.title, threads)
+		}
+		posts, err := c.ListPosts(want.threadID, 10, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(posts) != 1 {
+			t.Fatalf("expected one generated period hot-topic post for %s, got %+v", want.threadID, posts)
+		}
+		for _, text := range want.contains {
+			if !strings.Contains(posts[0].Body, text) {
+				t.Fatalf("expected generated period hot-topic post %s to contain %q, got:\n%s", want.threadID, text, posts[0].Body)
+			}
+		}
+		for _, text := range want.forbidden {
+			if strings.Contains(posts[0].Body, text) {
+				t.Fatalf("expected generated period hot-topic post %s to hide %q, got:\n%s", want.threadID, text, posts[0].Body)
+			}
+		}
+	}
+}
+
 func TestRecordLoginTracksHourlyStats(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
@@ -2291,6 +2393,17 @@ func insertLoginHourlyStat(t *testing.T, db *sql.DB, day string, hour, loginCoun
 		DO UPDATE SET login_count=excluded.login_count, updated_at=excluded.updated_at`,
 		day, hour, loginCount, at.Add(time.Duration(hour)*time.Hour).UnixMilli(),
 	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setThreadPostsCreatedAt(t *testing.T, db *sql.DB, threadID string, at time.Time) {
+	t.Helper()
+	ms := at.UTC().UnixMilli()
+	if _, err := db.Exec(`UPDATE posts SET created_at=?, updated_at=? WHERE thread=?`, ms, ms, threadID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, ms, threadID); err != nil {
 		t.Fatal(err)
 	}
 }

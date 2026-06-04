@@ -1680,6 +1680,65 @@ func TestHTTPStatsLoginHistoryHourlyHistogramSystemPost(t *testing.T) {
 	}
 }
 
+func TestHTTPStatsHotTopicPeriodHistorySystemPosts(t *testing.T) {
+	c, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":   "period_top",
+		"name": "Tech",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create period_top board status: %d error=%+v", status, ack.Error)
+	}
+	thread := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/period_top/threads", adminToken, map[string]string{
+		"title": "Weekly period topic",
+		"body":  "root",
+	}, &thread); status != http.StatusCreated {
+		t.Fatalf("create period thread status: %d error=%+v", status, thread.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+thread.Result.ID+"/posts", aliceToken, map[string]string{
+		"body": "reply",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("reply period thread status: %d error=%+v", status, ack.Error)
+	}
+	periodAt := time.Date(2026, time.June, 12, 12, 0, 0, 0, time.UTC).UnixMilli()
+	if _, err := c.DB.Exec(`UPDATE posts SET created_at=?, updated_at=? WHERE thread=?`, periodAt, periodAt, thread.Result.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, periodAt, thread.Result.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
+		"date": "2026-06-14",
+	}, &snapshot); status != http.StatusCreated {
+		t.Fatalf("publish stats snapshot status: %d error=%+v", status, snapshot.Error)
+	}
+	threads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", adminToken, nil, &threads); status != http.StatusOK {
+		t.Fatalf("list BBSLists threads status: %d", status)
+	}
+	if !hasHTTPThreadSummary(threads, "bbslists_toplog_week_2026w24", "Weekly hot-topic history 2026-W24") {
+		t.Fatalf("expected generated weekly period hot-topic thread, got %+v", threads.Threads)
+	}
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_toplog_week_2026w24/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list period hot-topic posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected one generated period hot-topic post, got %+v", posts.Posts)
+	}
+	for _, want := range []string{"Weekly hot-topic history 2026-W24", "Period: 2026-06-08 to 2026-06-14", "Tech / Weekly period topic", "2 participants", "2 period posts"} {
+		if !strings.Contains(posts.Posts[0].Body, want) {
+			t.Fatalf("expected generated period hot-topic post to contain %q, got:\n%s", want, posts.Posts[0].Body)
+		}
+	}
+}
+
 func TestHTTPPublishSystemNoticeCreatesPublicNoticeBoard(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 

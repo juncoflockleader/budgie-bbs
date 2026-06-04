@@ -1147,6 +1147,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if err := h.ensureStatsPeriodHistorySystemPosts(actor, day, ts); err != nil {
 		return internalErr(err)
 	}
+	if err := h.ensureStatsHotTopicPeriodHistorySystemPosts(actor, day, ts); err != nil {
+		return internalErr(err)
+	}
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
@@ -1397,6 +1400,93 @@ func (h *Handler) ensureStatsPeriodHistorySystemPost(actor *User, spec statsPeri
 	}
 	body := formatStatsPeriodHistoryBody(spec, history)
 	return h.ensureStatsSystemPost(actor, spec.ThreadID, spec.PostID, spec.Title, body, ts)
+}
+
+func (h *Handler) ensureStatsHotTopicPeriodHistorySystemPosts(actor *User, day time.Time, ts int64) error {
+	for _, spec := range statsHotTopicPeriodHistorySpecs(day) {
+		if _, _, err := h.ensureStatsHotTopicPeriodHistorySystemPost(actor, spec, ts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func statsHotTopicPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
+	out := []statsPeriodHistorySpec{}
+	for _, spec := range statsPeriodHistorySpecs(day) {
+		switch {
+		case strings.HasPrefix(spec.ThreadID, "bbslists_week_"):
+			id := strings.TrimPrefix(spec.ThreadID, "bbslists_week_")
+			out = append(out, statsPeriodHistorySpec{
+				ThreadID: "bbslists_toplog_week_" + id,
+				PostID:   "bbslists_toplog_week_post_" + id,
+				Title:    "Weekly hot-topic history " + spec.Label,
+				Label:    spec.Label,
+				StartDay: spec.StartDay,
+				EndDay:   spec.EndDay,
+			})
+		case strings.HasPrefix(spec.ThreadID, "bbslists_month_"):
+			id := strings.TrimPrefix(spec.ThreadID, "bbslists_month_")
+			out = append(out, statsPeriodHistorySpec{
+				ThreadID: "bbslists_toplog_month_" + id,
+				PostID:   "bbslists_toplog_month_post_" + id,
+				Title:    "Monthly hot-topic history " + spec.Label,
+				Label:    spec.Label,
+				StartDay: spec.StartDay,
+				EndDay:   spec.EndDay,
+			})
+		case strings.HasPrefix(spec.ThreadID, "bbslists_year_"):
+			id := strings.TrimPrefix(spec.ThreadID, "bbslists_year_")
+			out = append(out, statsPeriodHistorySpec{
+				ThreadID: "bbslists_toplog_year_" + id,
+				PostID:   "bbslists_toplog_year_post_" + id,
+				Title:    "Yearly hot-topic history " + spec.Label,
+				Label:    spec.Label,
+				StartDay: spec.StartDay,
+				EndDay:   spec.EndDay,
+			})
+		}
+	}
+	return out
+}
+
+func (h *Handler) ensureStatsHotTopicPeriodHistorySystemPost(actor *User, spec statsPeriodHistorySpec, ts int64) (string, int64, error) {
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, spec.ThreadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return spec.ThreadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	start, end, err := statsPeriodBounds(spec.StartDay, spec.EndDay)
+	if err != nil {
+		return "", 0, err
+	}
+	threads, err := projections.ListThreadRankingsRange(h.db, "", false, "", start, end, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsHotTopicPeriodHistoryBody(spec, threads)
+	return h.ensureStatsSystemPost(actor, spec.ThreadID, spec.PostID, spec.Title, body, ts)
+}
+
+func statsPeriodBounds(startDay, endDay string) (int64, int64, error) {
+	start, err := time.Parse("2006-01-02", startDay)
+	if err != nil {
+		return 0, 0, err
+	}
+	end, err := time.Parse("2006-01-02", endDay)
+	if err != nil {
+		return 0, 0, err
+	}
+	return start.UTC().UnixMilli(), end.UTC().AddDate(0, 0, 1).Add(-time.Millisecond).UnixMilli(), nil
 }
 
 func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, body string, ts int64) (string, int64, error) {
@@ -1723,6 +1813,34 @@ func formatStatsHotTopicHistoryBody(dateLabel string, stats *projections.Communi
 			lastActivity = time.UnixMilli(thread.UpdatedAt).UTC().Format("2006-01-02 15:04") + " UTC"
 		}
 		fmt.Fprintf(&b, "%d. %s / %s: %d participants, %d posts, %d reactions, score %d, last activity %s\n",
+			i+1,
+			thread.BoardName,
+			thread.Title,
+			thread.ParticipantCount,
+			thread.PostCount,
+			thread.ReactionCount,
+			thread.Score,
+			lastActivity)
+	}
+	return b.String()
+}
+
+func formatStatsHotTopicPeriodHistoryBody(spec statsPeriodHistorySpec, threads []projections.ThreadRanking) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", spec.Title)
+	fmt.Fprintf(&b, "- Period: %s to %s\n", spec.StartDay, spec.EndDay)
+	fmt.Fprintf(&b, "- Ranked public hot topics: %d\n\n", len(threads))
+
+	b.WriteString("## Top public hot topics\n")
+	if len(threads) == 0 {
+		b.WriteString("- No public hot topics were active in this completed period.\n")
+	}
+	for i, thread := range threads {
+		lastActivity := "no period activity"
+		if thread.UpdatedAt > 0 {
+			lastActivity = time.UnixMilli(thread.UpdatedAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s / %s: %d participants, %d period posts, %d reactions, period score %d, last period activity %s\n",
 			i+1,
 			thread.BoardName,
 			thread.Title,

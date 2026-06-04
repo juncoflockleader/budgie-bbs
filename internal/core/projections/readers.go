@@ -422,6 +422,83 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 	return out[offset:end], nil
 }
 
+func ListThreadRankingsRange(db *sql.DB, viewerID string, includePrivate bool, boardID string, startAt, endAt int64, limit, offset int) ([]ThreadRanking, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if startAt <= 0 || endAt <= 0 || endAt < startAt {
+		return []ThreadRanking{}, nil
+	}
+	rows, err := QQuery(db,
+		`SELECT t.id, t.board, b.name, t.title, t.author, COALESCE(t.author_id, ''),
+		        COUNT(DISTINCT p.id) AS post_count,
+		        COUNT(DISTINCT COALESCE(NULLIF(p.author_id, ''), p.author)) AS participant_count,
+		        COUNT(pr.post_id) AS reaction_count,
+		        COALESCE(MAX(p.created_seq), 0) AS last_seq,
+		        t.created_at,
+		        COALESCE(MAX(p.created_at), t.updated_at) AS period_last_activity
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		   JOIN boards b ON b.id=t.board
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		   LEFT JOIN post_reactions pr ON pr.post_id=p.id
+		  WHERE (? = '' OR t.board = ?)
+		    AND p.redacted=0
+		    AND p.created_at >= ?
+		    AND p.created_at <= ?
+		    AND t.board NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(s.stats_excluded, 0)=0
+		    AND (
+		      COALESCE(s.member_read_mode, 0)=0
+		      OR ?=1
+		      OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=b.id AND bm.user_id=?)
+		      OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
+		    )
+		  GROUP BY t.id, t.board, b.name, t.title, t.author, t.author_id, t.created_at, t.updated_at`,
+		boardID, boardID, startAt, endAt, boolInt(includePrivate), viewerID, viewerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ThreadRanking{}
+	for rows.Next() {
+		var rank ThreadRanking
+		if err := rows.Scan(&rank.ID, &rank.Board, &rank.BoardName, &rank.Title, &rank.Author, &rank.AuthorID, &rank.PostCount, &rank.ParticipantCount, &rank.ReactionCount, &rank.LastSeq, &rank.CreatedAt, &rank.UpdatedAt); err != nil {
+			return nil, err
+		}
+		rank.Score = periodThreadScore(rank.PostCount, rank.ParticipantCount, rank.ReactionCount)
+		out = append(out, rank)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		if out[i].LastSeq != out[j].LastSeq {
+			return out[i].LastSeq > out[j].LastSeq
+		}
+		return out[i].Title < out[j].Title
+	})
+	if offset >= len(out) {
+		return []ThreadRanking{}, nil
+	}
+	end := offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return out[offset:end], nil
+}
+
+func periodThreadScore(postCount, participantCount, reactionCount int) int {
+	return postCount*100 + participantCount*150 + reactionCount*200
+}
+
 func hotThreadScore(postCount, participantCount, reactionCount int, updatedAt, now int64) int {
 	base := int64(postCount*100 + participantCount*150 + reactionCount*200)
 	if base <= 0 {
