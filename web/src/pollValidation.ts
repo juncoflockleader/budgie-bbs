@@ -6,6 +6,7 @@ interface PollValidation {
 
 const CLOSE_TAG = '[/poll]'
 const OPEN_TAG_PREFIX = '[poll'
+const LOWER_BODY = (body: string) => body.toLowerCase()
 
 function looksLikeValidExpires(raw: string): boolean {
   const value = raw.trim()
@@ -23,7 +24,8 @@ function trimBullet(line: string): string {
 }
 
 export function validatePollMarkup(body: string): PollValidation {
-  const openIdx = body.indexOf(OPEN_TAG_PREFIX)
+  const lowerBody = LOWER_BODY(body)
+  const openIdx = lowerBody.indexOf(OPEN_TAG_PREFIX)
   if (openIdx < 0) {
     return { hasPollTag: false, valid: true }
   }
@@ -56,7 +58,7 @@ export function validatePollMarkup(body: string): PollValidation {
     }
   }
 
-  const closeIdx = body.indexOf(CLOSE_TAG, closeBracketIdx)
+  const closeIdx = lowerBody.indexOf(CLOSE_TAG, closeBracketIdx)
   if (closeIdx < 0) {
     return {
       hasPollTag: true,

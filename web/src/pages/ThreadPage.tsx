@@ -30,7 +30,7 @@ interface ReactionState {
 const TL_LABEL = ['TL0', 'TL1', 'TL2', 'TL3', 'TL4']
 
 function hasPollBlock(body: string) {
-  return body.includes('[poll')
+  return body.toLowerCase().includes('[poll')
 }
 
 export function ThreadPage({ token, thread, currentUserId, currentUsername, currentUserRole, onBack, onOpenProfile }: Props) {
