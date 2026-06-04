@@ -711,15 +711,15 @@ export function ThreadPage({
     scrollToPost(target.id)
   }
 
-  async function curateThreadDigest() {
-    const payload = promptDigestPayload(threadTitle, curationDefaultKind)
+  async function curateThreadDigest(kind = curationDefaultKind) {
+    const payload = promptDigestPayload(threadTitle, kind)
     if (!payload) return
     const res = await api.curateThread(token, thread.id, payload)
     if (res.error) alert(res.error.message)
   }
 
-  async function curatePostDigest(post: Post) {
-    const payload = promptDigestPayload(`${threadTitle} #${post.createdSeq}`, curationDefaultKind)
+  async function curatePostDigest(post: Post, kind = curationDefaultKind) {
+    const payload = promptDigestPayload(`${threadTitle} #${post.createdSeq}`, kind)
     if (!payload) return
     const res = await api.curatePost(token, post.id, payload)
     if (res.error) alert(res.error.message)
@@ -860,7 +860,12 @@ export function ThreadPage({
           </>
         )}
         {replyTreeLoading && <span className="muted">Loading replies...</span>}
-        {canUseCurationAction && <button className="link-btn" onClick={curateThreadDigest}>Digest thread</button>}
+        {canUseCurationAction && (
+          <>
+            <button className="link-btn" onClick={() => curateThreadDigest()}>Digest thread</button>
+            <button className="link-btn" onClick={() => curateThreadDigest('pinned')}>Pin thread</button>
+          </>
+        )}
         <button className="link-btn" disabled={unreadPosts.length === 0} onClick={markThreadRead}>Mark all read</button>
         {readSeq > 0 && <button className="link-btn" onClick={restoreThreadRead}>Restore marker</button>}
         {canRenameThread && <button className="link-btn" onClick={renameThreadTitle}>Rename</button>}
@@ -933,7 +938,10 @@ export function ThreadPage({
                     <button className="link-btn" onClick={() => mailPostAuthor(post)}>Mail</button>
                   )}
                   {canUseCurationAction && !post.redacted && (
-                    <button className="link-btn" onClick={() => curatePostDigest(post)}>Digest</button>
+                    <>
+                      <button className="link-btn" onClick={() => curatePostDigest(post)}>Digest</button>
+                      <button className="link-btn" onClick={() => curatePostDigest(post, 'pinned')}>Pin</button>
+                    </>
                   )}
                   {!post.redacted && (
                     <button className="link-btn" onClick={() => repostArticle(post)}>Repost</button>

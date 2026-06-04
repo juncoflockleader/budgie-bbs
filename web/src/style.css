@@ -493,6 +493,11 @@ label {
 .digest-row {
   border-color: rgba(110,199,122,0.24);
 }
+.pinned-panel .board-section-title { color: var(--c-accent2) }
+.digest-row--pinned {
+  border-color: rgba(243,195,92,0.42);
+  background: rgba(243,195,92,0.06);
+}
 
 /* ── Thread page ───────────────────────────────────────────────────────── */
 .thread-page { display: flex; flex-direction: column; height: 100% }

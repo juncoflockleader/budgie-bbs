@@ -18,6 +18,7 @@ interface Props {
 
 export function ThreadListPage({ token, board, currentUserId, currentUserRole, onSelect, onBack, onNewThread, onMessageUser }: Props) {
   const [threads, setThreads] = useState<ThreadSummary[]>([])
+  const [pinnedEntries, setPinnedEntries] = useState<DigestEntry[]>([])
   const [digestEntries, setDigestEntries] = useState<DigestEntry[]>([])
   const [onlineUsers, setOnlineUsers] = useState<SocialUser[]>([])
   const [memberApplications, setMemberApplications] = useState<BoardMemberApplication[]>([])
@@ -57,10 +58,11 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
     Promise.all([
       api.listThreads(token, board.id, 30, 0, false, { q: activeTitleQuery, author: activeAuthorQuery }),
       api.getBoardInfo(token, board.id),
+      api.listDigestEntries(token, board.id, 'pinned'),
       api.listDigestEntries(token, board.id),
       api.listBoardMemberApplications(token, board.id, 'pending'),
       api.listBoardOnlineUsers(token, board.id),
-    ]).then(([threadsRes, boardRes, digestRes, applicationsRes, onlineRes]) => {
+    ]).then(([threadsRes, boardRes, pinnedRes, digestRes, applicationsRes, onlineRes]) => {
       setLoading(false)
       if (threadsRes.error) {
         setError(threadsRes.error.message)
@@ -68,6 +70,10 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       }
       if (boardRes.error) {
         setError(boardRes.error.message)
+        return
+      }
+      if (pinnedRes.error) {
+        setError(pinnedRes.error.message)
         return
       }
       if (digestRes.error) {
@@ -78,7 +84,8 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       setBoardInfo(boardRes.data ?? null)
       setSettingsDraft(boardRes.data?.settings ?? null)
       setRequirementsDraft(boardRes.data?.requirements ?? null)
-      setDigestEntries(digestRes.data ?? [])
+      setPinnedEntries(pinnedRes.data ?? [])
+      setDigestEntries((digestRes.data ?? []).filter(entry => entry.kind !== 'pinned'))
       setMemberApplications(applicationsRes.data ?? [])
       setOnlineUsers(onlineRes.data ?? [])
     })
@@ -423,6 +430,27 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       return
     }
     setDigestEntries(current => current.filter(item => item.id !== entry.id))
+    setPinnedEntries(current => current.filter(item => item.id !== entry.id))
+  }
+
+  function renderDigestEntry(entry: DigestEntry, removeTitle: string) {
+    return (
+      <li key={entry.id} className={`item-row digest-row${entry.kind === 'pinned' ? ' digest-row--pinned' : ''}`} onClick={() => openDigestEntry(entry)}>
+        <span className="thread-row-content">
+          <span className="item-title">{entry.title}</span>
+          <span className="item-meta muted">
+            {entry.kind}{entry.path ? ` / ${entry.path}` : ''}{entry.author ? ` · by ${entry.author}` : ''}
+          </span>
+          {entry.note && <span className="item-desc muted">{entry.note}</span>}
+          {entry.excerpt && <span className="item-desc">{entry.excerpt}</span>}
+        </span>
+        {(canCurateBoard || (entry.kind === 'announcement' && canAnnounceBoard)) && (
+          <span className="thread-row-actions">
+            <button className="board-action-btn" onClick={e => removeDigest(entry, e)} title={removeTitle}>×</button>
+          </span>
+        )}
+      </li>
+    )
   }
 
   function markRead(thread: ThreadSummary, e: MouseEvent<HTMLButtonElement>) {
@@ -750,29 +778,23 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
           </div>
         </section>
       )}
+      {pinnedEntries.length > 0 && (
+        <section className="digest-panel pinned-panel">
+          <div className="board-section-heading">
+            <h3 className="board-section-title">Pinned</h3>
+          </div>
+          <ul className="item-list">
+            {pinnedEntries.map(entry => renderDigestEntry(entry, 'Remove from pinned index'))}
+          </ul>
+        </section>
+      )}
       {digestEntries.length > 0 && (
         <section className="digest-panel">
           <div className="board-section-heading">
             <h3 className="board-section-title">Digest</h3>
           </div>
           <ul className="item-list">
-            {digestEntries.map(entry => (
-              <li key={entry.id} className="item-row digest-row" onClick={() => openDigestEntry(entry)}>
-                <span className="thread-row-content">
-                  <span className="item-title">{entry.title}</span>
-                  <span className="item-meta muted">
-                    {entry.kind}{entry.path ? ` / ${entry.path}` : ''}{entry.author ? ` · by ${entry.author}` : ''}
-                  </span>
-                  {entry.note && <span className="item-desc muted">{entry.note}</span>}
-                  {entry.excerpt && <span className="item-desc">{entry.excerpt}</span>}
-                </span>
-                {(canCurateBoard || (entry.kind === 'announcement' && canAnnounceBoard)) && (
-                  <span className="thread-row-actions">
-                    <button className="board-action-btn" onClick={e => removeDigest(entry, e)} title="Remove from digest">×</button>
-                  </span>
-                )}
-              </li>
-            ))}
+            {digestEntries.map(entry => renderDigestEntry(entry, 'Remove from digest'))}
           </ul>
         </section>
       )}

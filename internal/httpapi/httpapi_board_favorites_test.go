@@ -2995,13 +2995,27 @@ func TestHTTPDigestCurationLifecycle(t *testing.T) {
 	}, &threadDigest); status != http.StatusCreated {
 		t.Fatalf("curate thread status: %d error=%+v", status, threadDigest.Error)
 	}
+	pinnedDigest := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/digest", adminToken, map[string]string{
+		"kind":  "pinned",
+		"title": "Pinned topic",
+	}, &pinnedDigest); status != http.StatusCreated {
+		t.Fatalf("curate pinned thread status: %d error=%+v", status, pinnedDigest.Error)
+	}
 
 	entries := digestEntriesResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/digest", bobToken, nil, &entries); status != http.StatusOK {
 		t.Fatalf("list digest status: %d", status)
 	}
-	if len(entries.Entries) != 2 || entries.Entries[0].ID != threadDigest.Result.ID || entries.Entries[1].ID != postDigest.Result.ID {
+	if len(entries.Entries) != 3 || entries.Entries[0].ID != pinnedDigest.Result.ID || entries.Entries[1].ID != threadDigest.Result.ID || entries.Entries[2].ID != postDigest.Result.ID {
 		t.Fatalf("expected thread and post digest entries, got %+v", entries.Entries)
+	}
+	pinnedEntries := digestEntriesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/general/digest?kind=pinned", bobToken, nil, &pinnedEntries); status != http.StatusOK {
+		t.Fatalf("list pinned digest status: %d", status)
+	}
+	if len(pinnedEntries.Entries) != 1 || pinnedEntries.Entries[0].ID != pinnedDigest.Result.ID || pinnedEntries.Entries[0].Kind != "pinned" || pinnedEntries.Entries[0].Title != "Pinned topic" {
+		t.Fatalf("expected filtered pinned entry, got %+v", pinnedEntries.Entries)
 	}
 	recommendThreads := threadSummariesResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/Recommend/threads", bobToken, nil, &recommendThreads); status != http.StatusOK {

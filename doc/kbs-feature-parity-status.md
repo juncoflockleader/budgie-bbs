@@ -481,9 +481,11 @@ archive areas. Budgie now has the first durable curation layer:
   `notepad`, `GiveupNotice`, and `bbsnet` system boards. These generated notice
   boards remain directly readable while staying out of organic community
   counters and ranking surfaces.
-- Web thread lists expose a board digest panel.
-- Web thread readers expose moderator/curator curation actions for threads and
-  posts.
+- Web thread lists expose a KBS-style top/pinned article index above ordinary
+  board digests, with pinned entries sourced from `kind=pinned` digest records.
+- Web thread lists expose a board digest panel for non-pinned curated records.
+- Web thread readers expose moderator/curator digest and pin curation actions
+  for threads and posts.
 
 This still does not implement every KBS forum-board workflow such as richer
 stat-history boards.
@@ -860,4 +862,3 @@ social graph:
 ## Suggested Next Slices
 
 1. Remaining historical/stat-log boards and richer community statistics.
-2. Remaining BBS social utilities and games.
