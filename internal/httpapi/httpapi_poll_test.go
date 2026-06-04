@@ -326,6 +326,88 @@ func TestHTTPMalformedPollDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPPollCreationMissingCloseTagDoesNotCreatePoll(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	token := registerUser(t, handler, "alice")
+
+	body := "before\n[poll]\nQuestion?\nOne\nTwo\nafter"
+	createAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", token, map[string]string{
+		"title": "Unclosed poll",
+		"body":  body,
+	}, &createAck); status != http.StatusCreated {
+		t.Fatalf("create thread status: %d", status)
+	}
+	if createAck.Result == nil {
+		t.Fatalf("thread create missing ack result: %+v", createAck)
+	}
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/posts", token, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected 1 post after unclosed poll create, got %d", len(posts.Posts))
+	}
+	if posts.Posts[0].Body != body {
+		t.Fatalf("expected unclosed poll markup to remain in body, got %q", posts.Posts[0].Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/polls", token, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected no poll projection for missing close tag")
+	}
+
+	pollStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/posts/"+posts.Posts[0].ID+"/poll", token, nil, &pollPayload{})
+	if pollStatus != http.StatusNotFound {
+		t.Fatalf("expected 404 for posts/%s/poll, got %d", posts.Posts[0].ID, pollStatus)
+	}
+}
+
+func TestHTTPCommandEndpointPollMissingCloseTagDoesNotCreatePoll(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	body := "before\n[poll]\nQuestion?\nOne\nTwo\nafter"
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Unclosed poll command",
+			"body":  body,
+		},
+	}
+
+	commandAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &commandAck); status != http.StatusCreated || !commandAck.OK || commandAck.Result == nil {
+		t.Fatalf("expected command create thread status for unclosed poll, got %d ack=%+v", status, commandAck)
+	}
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 1 {
+		t.Fatalf("expected one post, got %d", len(posts.Posts))
+	}
+	if posts.Posts[0].Body != body {
+		t.Fatalf("expected unclosed command poll markup to remain in post body, got %q", posts.Posts[0].Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+commandAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 0 {
+		t.Fatalf("expected no poll projection for command post with missing close tag")
+	}
+}
+
 func TestHTTPCommandEndpointCreatesPoll(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
