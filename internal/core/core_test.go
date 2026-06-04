@@ -1785,7 +1785,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated hot-topic post, got %+v", topLogPosts)
 	}
 	topLogBody := topLogPosts[0].Body
-	for _, want := range []string{"Hot topic history 2026-06-04", "Ranked public hot topics", "Top public hot topics", "Tech / Hot topic", "1 participants", "2 posts", "1 reactions", "score"} {
+	for _, want := range []string{"Hot topic history 2026-06-04", "Ranked public hot topics", "Top public hot topics", "Tech / Hot topic", "1 participants", "2 posts", "1 reactions", "score", "Category hot topics"} {
 		if !strings.Contains(topLogBody, want) {
 			t.Fatalf("expected hot-topic body to contain %q, got:\n%s", want, topLogBody)
 		}
@@ -2103,7 +2103,8 @@ func TestStatsHotTopicPeriodHistorySystemPosts(t *testing.T) {
 	admin := registerAndGetUser(t, c, "admin", "pw")
 	alice := registerAndGetUser(t, c, "alice", "pw")
 
-	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "period_top", Name: "Tech"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "academics", Name: "Academics"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "period_top", Name: "Tech", ParentID: "academics"})
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "period_hidden", Name: "Hidden"})
 	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
 		Board:         "period_hidden",
@@ -2157,7 +2158,7 @@ func TestStatsHotTopicPeriodHistorySystemPosts(t *testing.T) {
 		{
 			threadID:  "bbslists_toplog_week_2026w24",
 			title:     "Weekly hot-topic history 2026-W24",
-			contains:  []string{"Period: 2026-06-08 to 2026-06-14", "Ranked public hot topics: 1", "Tech / Weekly period topic", "2 participants", "2 period posts"},
+			contains:  []string{"Period: 2026-06-08 to 2026-06-14", "Ranked public hot topics: 1", "Tech / Weekly period topic", "2 participants", "2 period posts", "Category period hot topics", "### Academics"},
 			forbidden: []string{"Hidden period topic", "Old period topic"},
 		},
 		{

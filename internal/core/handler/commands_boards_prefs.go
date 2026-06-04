@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1313,7 +1314,11 @@ func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, d
 	if err != nil {
 		return "", 0, err
 	}
-	body := formatStatsHotTopicHistoryBody(dateLabel, stats, threads)
+	categories, err := projections.ListCategories(h.db)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsHotTopicHistoryBody(dateLabel, stats, threads, categories)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Hot topic history "+dateLabel, body, ts)
 }
 
@@ -1473,7 +1478,11 @@ func (h *Handler) ensureStatsHotTopicPeriodHistorySystemPost(actor *User, spec s
 	if err != nil {
 		return "", 0, err
 	}
-	body := formatStatsHotTopicPeriodHistoryBody(spec, threads)
+	categories, err := projections.ListCategories(h.db)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsHotTopicPeriodHistoryBody(spec, threads, categories)
 	return h.ensureStatsSystemPost(actor, spec.ThreadID, spec.PostID, spec.Title, body, ts)
 }
 
@@ -1795,7 +1804,7 @@ func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.Co
 	return b.String()
 }
 
-func formatStatsHotTopicHistoryBody(dateLabel string, stats *projections.CommunityStats, threads []projections.ThreadRanking) string {
+func formatStatsHotTopicHistoryBody(dateLabel string, stats *projections.CommunityStats, threads []projections.ThreadRanking, categories []projections.Category) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Hot topic history %s\n\n", dateLabel)
 	fmt.Fprintf(&b, "- Total threads: %d\n", stats.TotalThreads)
@@ -1822,10 +1831,11 @@ func formatStatsHotTopicHistoryBody(dateLabel string, stats *projections.Communi
 			thread.Score,
 			lastActivity)
 	}
+	formatStatsCategoryHotTopicGroups(&b, threads, categories, "Category hot topics", 10)
 	return b.String()
 }
 
-func formatStatsHotTopicPeriodHistoryBody(spec statsPeriodHistorySpec, threads []projections.ThreadRanking) string {
+func formatStatsHotTopicPeriodHistoryBody(spec statsPeriodHistorySpec, threads []projections.ThreadRanking, categories []projections.Category) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", spec.Title)
 	fmt.Fprintf(&b, "- Period: %s to %s\n", spec.StartDay, spec.EndDay)
@@ -1850,7 +1860,107 @@ func formatStatsHotTopicPeriodHistoryBody(spec statsPeriodHistorySpec, threads [
 			thread.Score,
 			lastActivity)
 	}
+	formatStatsCategoryHotTopicGroups(&b, threads, categories, "Category period hot topics", 10)
 	return b.String()
+}
+
+type statsCategoryHotTopicGroup struct {
+	ID      string
+	Name    string
+	Order   int
+	Threads []projections.ThreadRanking
+}
+
+func formatStatsCategoryHotTopicGroups(b *strings.Builder, threads []projections.ThreadRanking, categories []projections.Category, title string, perCategory int) {
+	groups := statsCategoryHotTopicGroups(threads, categories, perCategory)
+	fmt.Fprintf(b, "\n## %s\n", title)
+	if len(groups) == 0 {
+		b.WriteString("- No category hot topics yet.\n")
+		return
+	}
+	for _, group := range groups {
+		fmt.Fprintf(b, "\n### %s\n", group.Name)
+		for i, thread := range group.Threads {
+			lastActivity := "no activity"
+			if thread.UpdatedAt > 0 {
+				lastActivity = time.UnixMilli(thread.UpdatedAt).UTC().Format("2006-01-02 15:04") + " UTC"
+			}
+			fmt.Fprintf(b, "%d. %s / %s: %d participants, %d posts, %d reactions, score %d, last activity %s\n",
+				i+1,
+				thread.BoardName,
+				thread.Title,
+				thread.ParticipantCount,
+				thread.PostCount,
+				thread.ReactionCount,
+				thread.Score,
+				lastActivity)
+		}
+	}
+}
+
+func statsCategoryHotTopicGroups(threads []projections.ThreadRanking, categories []projections.Category, perCategory int) []statsCategoryHotTopicGroup {
+	if perCategory <= 0 {
+		perCategory = 10
+	}
+	categoryByID := map[string]projections.Category{}
+	categoryOrder := map[string]int{}
+	for i, category := range categories {
+		categoryByID[category.ID] = category
+		categoryOrder[category.ID] = i
+	}
+	groupsByID := map[string]*statsCategoryHotTopicGroup{}
+	for _, thread := range threads {
+		category := statsRootCategoryForBoard(thread.Board, categoryByID)
+		id := category.ID
+		name := category.Name
+		if id == "" {
+			id = thread.Board
+			name = thread.BoardName
+		}
+		if strings.TrimSpace(name) == "" {
+			name = id
+		}
+		group := groupsByID[id]
+		if group == nil {
+			order, ok := categoryOrder[id]
+			if !ok {
+				order = len(categoryOrder) + len(groupsByID)
+			}
+			group = &statsCategoryHotTopicGroup{ID: id, Name: name, Order: order}
+			groupsByID[id] = group
+		}
+		if len(group.Threads) < perCategory {
+			group.Threads = append(group.Threads, thread)
+		}
+	}
+	out := make([]statsCategoryHotTopicGroup, 0, len(groupsByID))
+	for _, group := range groupsByID {
+		out = append(out, *group)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Order != out[j].Order {
+			return out[i].Order < out[j].Order
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func statsRootCategoryForBoard(boardID string, categoryByID map[string]projections.Category) projections.Category {
+	current, ok := categoryByID[boardID]
+	if !ok {
+		return projections.Category{}
+	}
+	seen := map[string]bool{current.ID: true}
+	for strings.TrimSpace(current.ParentID) != "" {
+		parent, ok := categoryByID[current.ParentID]
+		if !ok || seen[parent.ID] {
+			break
+		}
+		current = parent
+		seen[current.ID] = true
+	}
+	return current
 }
 
 func formatStatsPeriodHistoryBody(spec statsPeriodHistorySpec, history []projections.CommunityStatHistory) string {

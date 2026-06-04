@@ -1391,7 +1391,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated hot-topic post, got %+v", topLogPosts.Posts)
 	}
 	topLogBody := topLogPosts.Posts[0].Body
-	for _, want := range []string{"Hot topic history 2026-06-04", "Ranked public hot topics", "Top public hot topics", "tech / Hot topic", "1 participants", "2 posts", "1 reactions", "score"} {
+	for _, want := range []string{"Hot topic history 2026-06-04", "Ranked public hot topics", "Top public hot topics", "tech / Hot topic", "1 participants", "2 posts", "1 reactions", "score", "Category hot topics"} {
 		if !strings.Contains(topLogBody, want) {
 			t.Fatalf("expected hot-topic body to contain %q, got:\n%s", want, topLogBody)
 		}
@@ -1687,8 +1687,15 @@ func TestHTTPStatsHotTopicPeriodHistorySystemPosts(t *testing.T) {
 	aliceToken := registerUser(t, handler, "alice")
 	ack := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
-		"id":   "period_top",
-		"name": "Tech",
+		"id":   "academics",
+		"name": "Academics",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create academics board status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":       "period_top",
+		"name":     "Tech",
+		"parentId": "academics",
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("create period_top board status: %d error=%+v", status, ack.Error)
 	}
@@ -1732,7 +1739,7 @@ func TestHTTPStatsHotTopicPeriodHistorySystemPosts(t *testing.T) {
 	if len(posts.Posts) != 1 {
 		t.Fatalf("expected one generated period hot-topic post, got %+v", posts.Posts)
 	}
-	for _, want := range []string{"Weekly hot-topic history 2026-W24", "Period: 2026-06-08 to 2026-06-14", "Tech / Weekly period topic", "2 participants", "2 period posts"} {
+	for _, want := range []string{"Weekly hot-topic history 2026-W24", "Period: 2026-06-08 to 2026-06-14", "Tech / Weekly period topic", "2 participants", "2 period posts", "Category period hot topics", "### Academics"} {
 		if !strings.Contains(posts.Posts[0].Body, want) {
 			t.Fatalf("expected generated period hot-topic post to contain %q, got:\n%s", want, posts.Posts[0].Body)
 		}
