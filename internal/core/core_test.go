@@ -5287,6 +5287,78 @@ func TestPostArticleFlagsAndNoReply(t *testing.T) {
 	}
 }
 
+func TestRepostPostCreatesThreadWithLineage(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID: "campus", Name: "Campus", Description: "Shared campus notes",
+	})
+	source := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Original article", Body: "source body",
+	})
+	sourcePosts, err := c.ListPosts(source.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sourcePosts) != 1 {
+		t.Fatalf("expected source root post, got %+v", sourcePosts)
+	}
+
+	repost := exec(t, c, bob, proto.CmdRepostPost, proto.RepostPostPayload{
+		Post: sourcePosts[0].ID, Board: "campus", Title: "Shared original article",
+	})
+	repostedPosts, err := c.ListPosts(repost.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repostedPosts) != 1 {
+		t.Fatalf("expected repost root post, got %+v", repostedPosts)
+	}
+	got := repostedPosts[0]
+	if got.Author != "bob" || got.SourcePost != sourcePosts[0].ID || got.SourceThread != source.ID || got.SourceBoard != "general" || got.SourceAuthor != "alice" || got.SourceTitle != "Original article" {
+		t.Fatalf("expected repost lineage, got %+v", got)
+	}
+	if !strings.Contains(got.Body, "source body") || !strings.Contains(got.Body, "Original post: "+sourcePosts[0].ID) {
+		t.Fatalf("expected repost body to include source article context, got %q", got.Body)
+	}
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{
+		ID: "secret", Name: "Secret", Description: "Members only",
+	})
+	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
+		Board: "secret", MemberReadMode: boolPtr(true),
+	})
+	secret := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "secret", Title: "Private article", Body: "hidden source",
+	})
+	secretPosts, err := c.ListPosts(secret.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secretPosts) != 1 {
+		t.Fatalf("expected private source root post, got %+v", secretPosts)
+	}
+	execExpectErr(t, c, bob, proto.CmdRepostPost, proto.RepostPostPayload{
+		Post: secretPosts[0].ID, Board: "campus",
+	}, proto.ErrForbidden)
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatal(err)
+	}
+	repostedPosts, err = c.ListPosts(repost.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repostedPosts) != 1 || repostedPosts[0].SourcePost != sourcePosts[0].ID || repostedPosts[0].SourceBoard != "general" {
+		t.Fatalf("expected rebuild to preserve repost lineage, got %+v", repostedPosts)
+	}
+}
+
 func TestBoardPostingSanctionsCreateDenyPostRecords(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

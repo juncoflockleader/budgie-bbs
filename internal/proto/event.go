@@ -88,17 +88,23 @@ type ThreadNewPayload struct {
 }
 
 type PostAppendedPayload struct {
-	ID          string              `json:"id"`
-	Thread      string              `json:"thread"`
-	Author      string              `json:"author"`
-	AuthorID    string              `json:"authorId,omitempty"`
-	Body        string              `json:"body"`
-	RawBody     string              `json:"rawBody,omitempty"`
-	Signature   string              `json:"signature,omitempty"`
-	ContentType string              `json:"contentType"`
-	ReplyTo     string              `json:"replyTo,omitempty"`
-	Attachments []AttachmentPayload `json:"attachments,omitempty"`
-	TS          int64               `json:"ts"`
+	ID             string              `json:"id"`
+	Thread         string              `json:"thread"`
+	Author         string              `json:"author"`
+	AuthorID       string              `json:"authorId,omitempty"`
+	Body           string              `json:"body"`
+	RawBody        string              `json:"rawBody,omitempty"`
+	Signature      string              `json:"signature,omitempty"`
+	ContentType    string              `json:"contentType"`
+	ReplyTo        string              `json:"replyTo,omitempty"`
+	SourcePost     string              `json:"sourcePost,omitempty"`
+	SourceThread   string              `json:"sourceThread,omitempty"`
+	SourceBoard    string              `json:"sourceBoard,omitempty"`
+	SourceAuthor   string              `json:"sourceAuthor,omitempty"`
+	SourceAuthorID string              `json:"sourceAuthorId,omitempty"`
+	SourceTitle    string              `json:"sourceTitle,omitempty"`
+	Attachments    []AttachmentPayload `json:"attachments,omitempty"`
+	TS             int64               `json:"ts"`
 }
 
 type PostAttachmentAddedPayload struct {

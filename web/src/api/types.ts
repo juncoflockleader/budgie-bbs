@@ -402,6 +402,12 @@ export interface Post {
   marked: boolean
   recommended: boolean
   noReply: boolean
+  sourcePost?: string
+  sourceThread?: string
+  sourceBoard?: string
+  sourceAuthor?: string
+  sourceAuthorId?: string
+  sourceTitle?: string
   attachments?: PostAttachment[]
   createdSeq: number
   updatedSeq: number
@@ -498,7 +504,9 @@ export interface ThreadNewPayload {
 }
 export interface PostAppendedPayload {
   id: string; thread: string; author: string; body: string; rawBody?: string
-  authorId?: string; signature?: string; contentType: string; replyTo?: string; attachments?: AttachmentPayload[]; ts: number
+  authorId?: string; signature?: string; contentType: string; replyTo?: string
+  sourcePost?: string; sourceThread?: string; sourceBoard?: string; sourceAuthor?: string; sourceAuthorId?: string; sourceTitle?: string
+  attachments?: AttachmentPayload[]; ts: number
 }
 export interface PostAttachmentAddedPayload {
   id: string; post: string; thread: string; filename: string

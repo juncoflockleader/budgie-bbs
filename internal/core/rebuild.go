@@ -124,17 +124,23 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			postBody = cleanBody
 		}
 		if err := insertPost(tx, &Post{
-			ID:          evt.ID,
-			Thread:      evt.Thread,
-			Author:      evt.Author,
-			AuthorID:    authorID,
-			Body:        postBody,
-			Signature:   strings.TrimSpace(evt.Signature),
-			ContentType: evt.ContentType,
-			ReplyTo:     evt.ReplyTo,
-			CreatedSeq:  seq,
-			CreatedAt:   evt.TS,
-			UpdatedAt:   evt.TS,
+			ID:             evt.ID,
+			Thread:         evt.Thread,
+			Author:         evt.Author,
+			AuthorID:       authorID,
+			Body:           postBody,
+			Signature:      strings.TrimSpace(evt.Signature),
+			ContentType:    evt.ContentType,
+			ReplyTo:        evt.ReplyTo,
+			SourcePost:     strings.TrimSpace(evt.SourcePost),
+			SourceThread:   strings.TrimSpace(evt.SourceThread),
+			SourceBoard:    strings.TrimSpace(evt.SourceBoard),
+			SourceAuthor:   strings.TrimSpace(evt.SourceAuthor),
+			SourceAuthorID: strings.TrimSpace(evt.SourceAuthorID),
+			SourceTitle:    strings.TrimSpace(evt.SourceTitle),
+			CreatedSeq:     seq,
+			CreatedAt:      evt.TS,
+			UpdatedAt:      evt.TS,
 		}); err != nil {
 			return err
 		}

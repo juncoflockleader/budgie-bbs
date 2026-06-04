@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -344,6 +345,194 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	h.publishGeneratedEvents(filterGeneratedEvents)
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
+}
+
+func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
+	if actor == nil {
+		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
+	}
+	p.Post = strings.TrimSpace(p.Post)
+	p.Board = strings.TrimSpace(p.Board)
+	p.Title = strings.TrimSpace(p.Title)
+	if p.Post == "" || p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "post and board are required", false)}
+	}
+
+	sourcePost, err := getPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if sourcePost == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "source post not found", false)}
+	}
+	if sourcePost.Redacted {
+		return Reply{Err: errDetail(proto.ErrConflict, "cannot repost a redacted post", false)}
+	}
+	sourceThread, err := getThread(h.db, sourcePost.Thread)
+	if err != nil {
+		return internalErr(err)
+	}
+	if sourceThread == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "source thread not found", false)}
+	}
+	sourceSettings, err := getBoardSettings(h.db, sourceThread.Board)
+	if err != nil {
+		return internalErr(err)
+	}
+	if sourceSettings != nil && sourceSettings.MemberReadMode && !h.actorCanUseMemberBoard(actor, sourceThread.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "source board members only", false)}
+	}
+
+	settings, err := getBoardSettings(h.db, p.Board)
+	if err != nil {
+		return internalErr(err)
+	}
+	if settings == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
+	}
+	canModerateBoard := h.actorCanModerateBoard(actor, p.Board)
+	if settings.ReadOnly && !canModerateBoard {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board is read-only", false)}
+	}
+	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, p.Board) {
+		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
+	}
+	if kind, ok := activeSanction(h.db, actor.ID, p.Board); ok {
+		code := proto.ErrMuted
+		if kind == "ban" {
+			code = proto.ErrBanned
+		}
+		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
+	}
+
+	title := p.Title
+	if title == "" {
+		title = sourceThread.Title
+	}
+	body := repostBody(sourcePost, sourceThread)
+	authorName, authorID, errReply := h.postIdentity(actor, settings, false, canModerateBoard)
+	if errReply.Err != nil {
+		return errReply
+	}
+	signature, err := h.currentPostSignature(authorID)
+	if err != nil {
+		return internalErr(err)
+	}
+	contentFilter, err := matchContentFilter(h.db, p.Board, title+"\n"+body)
+	if err != nil {
+		return internalErr(err)
+	}
+
+	ct := contentType(sourcePost.ContentType)
+	ts := nowMS()
+	threadID := newID("thr_")
+	postID := newID("pst_")
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	var boardName string
+	if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, p.Board).Scan(&boardName); err == sql.ErrNoRows {
+		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
+	} else if err != nil {
+		return internalErr(err)
+	}
+
+	scopes := []string{"board:" + p.Board}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+
+	threadScopes := append(scopes, "thread:"+threadID)
+	postPayload := &proto.PostAppendedPayload{
+		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body,
+		RawBody:        body,
+		Signature:      signature,
+		ContentType:    ct,
+		SourcePost:     sourcePost.ID,
+		SourceThread:   sourceThread.ID,
+		SourceBoard:    sourceThread.Board,
+		SourceAuthor:   sourcePost.Author,
+		SourceAuthorID: sourcePost.AuthorID,
+		SourceTitle:    sourceThread.Title,
+		TS:             ts,
+	}
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, postPayload)
+	if err != nil {
+		return internalErr(err)
+	}
+
+	if err := insertThread(tx, &Thread{
+		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title,
+		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return internalErr(err)
+	}
+	if err := insertPost(tx, &Post{
+		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
+		Body: body, Signature: signature, ContentType: ct,
+		SourcePost: sourcePost.ID, SourceThread: sourceThread.ID, SourceBoard: sourceThread.Board,
+		SourceAuthor: sourcePost.Author, SourceAuthorID: sourcePost.AuthorID, SourceTitle: sourceThread.Title,
+		CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+	}); err != nil {
+		return internalErr(err)
+	}
+	if settings.RelayEnabled {
+		if err := insertRelayDelivery(tx, newID("relay_"), p.Board, threadID, postID, authorID, authorName, title, body, ts, pseq); err != nil {
+			return internalErr(err)
+		}
+	}
+	if err := bumpThread(tx, threadID, pseq); err != nil {
+		return internalErr(err)
+	}
+	if err := ftsInsertPost(tx, postID, threadID, p.Board, authorName, body); err != nil {
+		return internalErr(err)
+	}
+	var filterEvent *proto.Event
+	filterGeneratedEvents := []*proto.Event{}
+	if contentFilter != nil {
+		filterEvent, filterGeneratedEvents, err = h.appendContentFilterReviewTx(tx, actor, authorName, contentFilter, postID, threadID, p.Board, !settings.MemberReadMode, ts)
+		if err != nil {
+			return internalErr(err)
+		}
+	}
+	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
+		ActorID: actor.ID, ActorName: authorName, PostID: postID, ThreadID: threadID,
+		BoardID: p.Board, Body: body, TS: ts, Seq: pseq,
+	}, ts); err != nil {
+		return internalErr(err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
+		Payload: &proto.ThreadNewPayload{ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes, Payload: postPayload, TS: ts})
+	if filterEvent != nil {
+		h.bus.Publish(filterEvent)
+	}
+	h.publishGeneratedEvents(filterGeneratedEvents)
+
+	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
+}
+
+func repostBody(sourcePost *Post, sourceThread *Thread) string {
+	return strings.TrimSpace(fmt.Sprintf(
+		"Reposted from %s / %s\nOriginal author: %s\nOriginal post: %s\n\n%s",
+		sourceThread.Board,
+		sourceThread.Title,
+		sourcePost.Author,
+		sourcePost.ID,
+		sourcePost.Body,
+	))
 }
 
 func threadRootPostNoReply(db *sql.DB, threadID string) (bool, error) {

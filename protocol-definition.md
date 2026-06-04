@@ -345,6 +345,7 @@ Returns: the ack envelope.
 | `POST /api/v1/threads/{id}/mail-in` | `postBoardMail` |
 | `POST /api/v1/posts/{id}/attachments` | `attachPost` |
 | `PATCH /api/v1/posts/{id}` | `editPost` |
+| `POST /api/v1/posts/{id}/repost` | `repostPost` |
 | `DELETE /api/v1/posts/{id}` | `redactPost` |
 | `POST /api/v1/posts/{id}/restore` | `restorePost` |
 | `POST /api/v1/threads/{id}/lock` | `lockThread` |
@@ -451,6 +452,7 @@ Payloads are sketches; required fields marked `*`. All commands accept a `cid`. 
 ```
 createThread   { board*, title*, body*, contentType, anonymous, attachments[] } -> thread.new (+ first post.appended)
 appendPost     { thread*, body*, replyTo, contentType, anonymous, attachments[] } -> post.appended
+repostPost     { post*, board*, title? }                    -> thread.new (+ source-linked post.appended)
 postBoardMail  { board, thread, subject, body*, contentType, attachments[] } -> thread.new or post.appended
 attachPost     { post*, filename*, contentType, sizeBytes } -> post.attachment_added
 editPost       { post*, body* }                             -> post.edited
@@ -491,6 +493,12 @@ flagPost       { post*, reason }                             -> post.flagged
   permission. A `noReply` thread starter blocks ordinary replies to the thread,
   and a `noReply` parent article blocks ordinary direct replies to that article;
   board thread moderators may bypass those article-local reply stops.
+- `repostPost` creates a new thread on the destination board from an existing
+  readable source article. The actor must be able to read the source board and
+  post to the destination board. The first destination post carries source
+  lineage in `sourcePost`, `sourceThread`, `sourceBoard`, `sourceAuthor`,
+  `sourceAuthorId`, and `sourceTitle`; attachments are not cloned by this
+  command.
 
 ### Moderation & structure
 
@@ -870,7 +878,7 @@ unsubscribe    { scopes* }                                  -> ack only
 ```
 board.created   { id, name, description, parentId, position, by, ts }
 thread.new      { id, board, author, title, ts }
-post.appended   { id, thread, author, body, signature, contentType, replyTo, ts }
+post.appended   { id, thread, author, body, signature, contentType, replyTo, sourcePost, sourceThread, sourceBoard, sourceAuthor, sourceAuthorId, sourceTitle, ts }
 post.edited     { id, thread, newBody, version, ts }
 post.flags_set  { id, thread, marked, recommended, noReply, by, ts }
 post.redacted   { id, thread, by, reason, ts }        // body NOT included

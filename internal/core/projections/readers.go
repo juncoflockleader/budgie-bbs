@@ -2368,16 +2368,23 @@ func attachPostAttachments(db *sql.DB, posts []Post) ([]Post, error) {
 			return nil, err
 		}
 		posts[i].Attachments = attachments
-		if err := hydratePostFlags(db, &posts[i]); err != nil {
+		if err := hydratePostMetadata(db, &posts[i]); err != nil {
 			return nil, err
 		}
 	}
 	return posts, nil
 }
 
-func hydratePostFlags(db *sql.DB, post *Post) error {
+func hydratePostMetadata(db *sql.DB, post *Post) error {
 	var marked, recommended, noReply int
-	err := QQueryRow(db, `SELECT marked, recommended, no_reply FROM posts WHERE id=?`, post.ID).Scan(&marked, &recommended, &noReply)
+	err := QQueryRow(db, `SELECT marked, recommended, no_reply,
+	        COALESCE(source_post,''), COALESCE(source_thread,''), COALESCE(source_board,''),
+	        COALESCE(source_author,''), COALESCE(source_author_id,''), COALESCE(source_title,'')
+	    FROM posts WHERE id=?`, post.ID).Scan(
+		&marked, &recommended, &noReply,
+		&post.SourcePost, &post.SourceThread, &post.SourceBoard,
+		&post.SourceAuthor, &post.SourceAuthorID, &post.SourceTitle,
+	)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -2558,7 +2565,7 @@ func GetPost(db *sql.DB, id string) (*Post, error) {
 		return nil, err
 	}
 	p.Attachments = attachments
-	if err := hydratePostFlags(db, p); err != nil {
+	if err := hydratePostMetadata(db, p); err != nil {
 		return nil, err
 	}
 	return p, nil

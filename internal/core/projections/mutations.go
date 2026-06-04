@@ -23,9 +23,13 @@ func InsertThread(tx *sql.Tx, t *Thread) error {
 
 func InsertPost(tx *sql.Tx, p *Post) error {
 	_, err := QExec(tx,
-		`INSERT INTO posts (id, thread, author, author_id, body, signature, content_type, reply_to, version, redacted, created_seq, updated_seq, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,1,0,?,?,?,?)`,
-		p.ID, p.Thread, p.Author, p.AuthorID, p.Body, p.Signature, p.ContentType, NullStr(p.ReplyTo), p.CreatedSeq, p.CreatedSeq, p.CreatedAt, p.UpdatedAt,
+		`INSERT INTO posts (id, thread, author, author_id, body, signature, content_type, reply_to, version, redacted,
+		        source_post, source_thread, source_board, source_author, source_author_id, source_title,
+		        created_seq, updated_seq, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,1,0,?,?,?,?,?,?,?,?,?,?)`,
+		p.ID, p.Thread, p.Author, p.AuthorID, p.Body, p.Signature, p.ContentType, NullStr(p.ReplyTo),
+		p.SourcePost, p.SourceThread, p.SourceBoard, p.SourceAuthor, p.SourceAuthorID, p.SourceTitle,
+		p.CreatedSeq, p.CreatedSeq, p.CreatedAt, p.UpdatedAt,
 	)
 	return err
 }

@@ -173,6 +173,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/threads/{thread}/mail-in", auth(http.HandlerFunc(s.handlePostThreadMail)))
 	mux.Handle("PATCH /api/v1/posts/{post}", auth(http.HandlerFunc(s.handleEditPost)))
 	mux.Handle("PATCH /api/v1/posts/{post}/flags", auth(http.HandlerFunc(s.handleSetPostFlag)))
+	mux.Handle("POST /api/v1/posts/{post}/repost", auth(http.HandlerFunc(s.handleRepostPost)))
 	mux.Handle("DELETE /api/v1/posts/{post}", auth(http.HandlerFunc(s.handleRedactPost)))
 	mux.Handle("POST /api/v1/posts/{post}/restore", auth(http.HandlerFunc(s.handleRestorePost)))
 	mux.Handle("POST /api/v1/posts/{post}/purge", auth(http.HandlerFunc(s.handlePurgePost)))

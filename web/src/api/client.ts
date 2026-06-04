@@ -1527,6 +1527,19 @@ export async function setPostFlag(
   return json<AckResult>(res)
 }
 
+export async function repostPost(
+  token: string,
+  postId: string,
+  payload: { board: string; title?: string },
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/posts/${postId}/repost`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return json<AckResult>(res)
+}
+
 export async function listReviewables(
   token: string,
   status = 'open',
@@ -1615,7 +1628,7 @@ export async function clearUserSanction(
 // ── Commands ───────────────────────────────────────────────────────────────
 
 export type CommandName =
-  | 'createThread' | 'appendPost' | 'postBoardMail' | 'editPost' | 'setPostFlag' | 'redactPost' | 'restorePost'
+  | 'createThread' | 'appendPost' | 'repostPost' | 'postBoardMail' | 'editPost' | 'setPostFlag' | 'redactPost' | 'restorePost'
   | 'lockThread' | 'moveThread' | 'sanctionUser' | 'clearUserSanction' | 'setContentFilter' | 'grantRole' | 'revokeRole' | 'publishStatsSnapshot'
   | 'sendChatLine' | 'setPresence' | 'createBoard' | 'purgePost'
   | 'setBoardSettings' | 'setBoardMemberRequirements' | 'setBoardModerator'

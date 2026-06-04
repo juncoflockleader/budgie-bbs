@@ -105,6 +105,23 @@ func (s *Server) handleAppendPost(w http.ResponseWriter, r *http.Request) {
 	writeAck(w, cid, reply)
 }
 
+func (s *Server) handleRepostPost(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	postID := r.PathValue("post")
+
+	var p proto.RepostPostPayload
+	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
+		return
+	}
+	p.Post = postID
+
+	raw, _ := json.Marshal(p)
+	cid := r.Header.Get("X-Command-Id")
+	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdRepostPost, raw, cid)
+	writeAck(w, cid, reply)
+}
+
 func (s *Server) handlePostBoardMail(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")

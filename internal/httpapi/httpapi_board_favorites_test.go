@@ -163,16 +163,22 @@ type threadRankingsResponse struct {
 
 type postsResponse struct {
 	Posts []struct {
-		ID          string `json:"id"`
-		Thread      string `json:"thread"`
-		Board       string `json:"board"`
-		BoardName   string `json:"boardName"`
-		ThreadTitle string `json:"threadTitle"`
-		Author      string `json:"author"`
-		ReplyDepth  int    `json:"replyDepth"`
-		Marked      bool   `json:"marked"`
-		Recommended bool   `json:"recommended"`
-		NoReply     bool   `json:"noReply"`
+		ID           string `json:"id"`
+		Thread       string `json:"thread"`
+		Board        string `json:"board"`
+		BoardName    string `json:"boardName"`
+		ThreadTitle  string `json:"threadTitle"`
+		Author       string `json:"author"`
+		Body         string `json:"body"`
+		ReplyDepth   int    `json:"replyDepth"`
+		Marked       bool   `json:"marked"`
+		Recommended  bool   `json:"recommended"`
+		NoReply      bool   `json:"noReply"`
+		SourcePost   string `json:"sourcePost"`
+		SourceThread string `json:"sourceThread"`
+		SourceBoard  string `json:"sourceBoard"`
+		SourceAuthor string `json:"sourceAuthor"`
+		SourceTitle  string `json:"sourceTitle"`
 	} `json:"posts"`
 }
 
@@ -2215,6 +2221,91 @@ func TestHTTPPostArticleFlagsAndNoReply(t *testing.T) {
 		"body": "thread manager reply",
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("expected thread manager to bypass article no-reply, got %d error=%+v", status, ack.Error)
+	}
+}
+
+func TestHTTPRepostPostCreatesLineage(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+	aliceToken := registerUser(t, handler, "alice")
+	bobToken := registerUser(t, handler, "bob")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":          "campus",
+		"name":        "Campus",
+		"description": "Shared campus notes",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create campus board status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/general/threads", aliceToken, map[string]string{
+		"title": "Original article",
+		"body":  "source body",
+	}, &ack); status != http.StatusCreated || ack.Result == nil {
+		t.Fatalf("create source thread status: %d error=%+v", status, ack.Error)
+	}
+	sourceThreadID := ack.Result.ID
+	sourcePosts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+sourceThreadID+"/posts", aliceToken, nil, &sourcePosts); status != http.StatusOK {
+		t.Fatalf("list source posts status: %d", status)
+	}
+	if len(sourcePosts.Posts) != 1 {
+		t.Fatalf("expected source root post, got %+v", sourcePosts.Posts)
+	}
+	sourcePostID := sourcePosts.Posts[0].ID
+
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/posts/"+sourcePostID+"/repost", bobToken, map[string]string{
+		"board": "campus",
+		"title": "Shared original article",
+	}, &ack); status != http.StatusCreated || ack.Result == nil {
+		t.Fatalf("repost source article status: %d error=%+v", status, ack.Error)
+	}
+	repostThreadID := ack.Result.ID
+	repostedPosts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+repostThreadID+"/posts", bobToken, nil, &repostedPosts); status != http.StatusOK {
+		t.Fatalf("list repost posts status: %d", status)
+	}
+	if len(repostedPosts.Posts) != 1 {
+		t.Fatalf("expected repost root post, got %+v", repostedPosts.Posts)
+	}
+	reposted := repostedPosts.Posts[0]
+	if reposted.SourcePost != sourcePostID || reposted.SourceThread != sourceThreadID || reposted.SourceBoard != "general" || reposted.SourceAuthor != "alice" || reposted.SourceTitle != "Original article" {
+		t.Fatalf("expected repost lineage in HTTP response, got %+v", reposted)
+	}
+	if !strings.Contains(reposted.Body, "source body") {
+		t.Fatalf("expected repost body to include source body, got %q", reposted.Body)
+	}
+
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{
+		"id":          "secret",
+		"name":        "Secret",
+		"description": "Members only",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("create secret board status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/boards/secret/settings", adminToken, map[string]bool{
+		"memberReadMode": true,
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("enable secret member-read status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards/secret/threads", adminToken, map[string]string{
+		"title": "Private article",
+		"body":  "hidden source",
+	}, &ack); status != http.StatusCreated || ack.Result == nil {
+		t.Fatalf("create private source thread status: %d error=%+v", status, ack.Error)
+	}
+	secretPosts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+ack.Result.ID+"/posts", adminToken, nil, &secretPosts); status != http.StatusOK {
+		t.Fatalf("list private source posts status: %d", status)
+	}
+	if len(secretPosts.Posts) != 1 {
+		t.Fatalf("expected private source root post, got %+v", secretPosts.Posts)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/posts/"+secretPosts.Posts[0].ID+"/repost", bobToken, map[string]string{
+		"board": "campus",
+	}, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected member-read source repost to be forbidden, got %d error=%+v", status, ack.Error)
 	}
 }
 

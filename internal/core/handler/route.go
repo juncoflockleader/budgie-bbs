@@ -55,6 +55,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.appendPost(actor, p)
 
+	case proto.CmdRepostPost:
+		var p proto.RepostPostPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.repostPost(actor, p)
+
 	case proto.CmdPostBoardMail:
 		var p proto.PostBoardMailPayload
 		if err := json.Unmarshal(payload, &p); err != nil {

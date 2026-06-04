@@ -6,6 +6,7 @@ type CommandName string
 const (
 	CmdCreateThread               CommandName = "createThread"
 	CmdAppendPost                 CommandName = "appendPost"
+	CmdRepostPost                 CommandName = "repostPost"
 	CmdPostBoardMail              CommandName = "postBoardMail"
 	CmdAttachPost                 CommandName = "attachPost"
 	CmdEditPost                   CommandName = "editPost"
@@ -412,6 +413,12 @@ type AppendPostPayload struct {
 	ContentType string              `json:"contentType,omitempty"`
 	Anonymous   bool                `json:"anonymous,omitempty"`
 	Attachments []AttachmentPayload `json:"attachments,omitempty"`
+}
+
+type RepostPostPayload struct {
+	Post  string `json:"post"`
+	Board string `json:"board"`
+	Title string `json:"title,omitempty"`
 }
 
 type PostBoardMailPayload struct {

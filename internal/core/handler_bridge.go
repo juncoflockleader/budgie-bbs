@@ -183,8 +183,18 @@ func getPostTx(tx *sql.Tx, id string) (*Post, error) {
 	p := &Post{}
 	var redacted, marked, recommended, noReply int
 	err := qQueryRow(tx,
-		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version, redacted, marked, recommended, no_reply, created_seq, updated_seq, created_at, updated_at FROM posts WHERE id=?`, id,
-	).Scan(&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType, &p.ReplyTo, &p.Version, &redacted, &marked, &recommended, &noReply, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version,
+		        redacted, marked, recommended, no_reply,
+		        COALESCE(source_post,''), COALESCE(source_thread,''), COALESCE(source_board,''),
+		        COALESCE(source_author,''), COALESCE(source_author_id,''), COALESCE(source_title,''),
+		        created_seq, updated_seq, created_at, updated_at
+		   FROM posts WHERE id=?`, id,
+	).Scan(
+		&p.ID, &p.Thread, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType, &p.ReplyTo, &p.Version,
+		&redacted, &marked, &recommended, &noReply,
+		&p.SourcePost, &p.SourceThread, &p.SourceBoard, &p.SourceAuthor, &p.SourceAuthorID, &p.SourceTitle,
+		&p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

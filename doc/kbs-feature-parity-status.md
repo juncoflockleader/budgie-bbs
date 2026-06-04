@@ -193,6 +193,33 @@ the first article-flag workflow:
 - Web thread readers show article flag badges and expose mark/recommend/no-reply
   controls to users with the corresponding board permissions.
 
+### Cross-Post And Repost Lineage
+
+KBS readers could cross-post/repost articles while preserving the original
+article context. Budgie now has the first forum-native version:
+
+- Posts can carry source article lineage:
+  - `sourcePost`
+  - `sourceThread`
+  - `sourceBoard`
+  - `sourceAuthor`
+  - `sourceAuthorId`
+  - `sourceTitle`
+- Uniform command:
+  - `repostPost`
+- REST alias:
+  - `POST /api/v1/posts/{post}/repost`
+- Reposting creates a normal new destination-board thread authored by the
+  actor, while the root post records the source article/thread/board/author
+  metadata.
+- The actor must be able to read the source board and post to the destination
+  board. Member-read source boards cannot be reposted by non-members.
+- Repost posts include a visible source attribution block in the article body.
+- Web thread readers show a repost badge/source line and expose a per-article
+  `Repost` action.
+- This slice does not clone attachment blobs; attachment-forwarding remains a
+  possible follow-up.
+
 ### Board Policy Flags And Moderator Lists
 
 KBS boards carry local policy and moderator metadata. Budgie now has the first
@@ -670,6 +697,8 @@ social graph:
   cross-board same-author reading through authenticated author-post streams.
 - Reply-tree-specific traversal inside a loaded thread.
 - KBS-style article flags for marked, recommended, and no-reply articles.
+- Cross-post/repost article creation with source post/thread/board/author
+  lineage.
 - Board policy flags, board detail reads, board-local moderator lists, and
   board-local member rolls.
 - Enforced read-only, no-reply, anonymous-posting, board-moderator, and
@@ -747,13 +776,11 @@ social graph:
   workflows.
 - Remaining special system boards, historical/stat-log boards, and richer
   community statistics.
-- Further article metadata such as original/cross-post lineage, TeX flags, and
-  mail-back reply flags.
+- Further article metadata such as TeX flags and mail-back reply flags.
 - Optional social/services layer: games and campus utilities.
 
 ## Suggested Next Slices
 
 1. KBS member-manager edge permissions not yet modeled in Budgie.
-2. Further article metadata such as original/cross-post lineage and mail-back
-   reply flags.
+2. Further article metadata such as TeX flags and mail-back reply flags.
 3. Remaining BBS social utilities and games.

@@ -240,6 +240,12 @@ export function ThreadPage({
         marked: false,
         recommended: false,
         noReply: false,
+        sourcePost: p.sourcePost,
+        sourceThread: p.sourceThread,
+        sourceBoard: p.sourceBoard,
+        sourceAuthor: p.sourceAuthor,
+        sourceAuthorId: p.sourceAuthorId,
+        sourceTitle: p.sourceTitle,
         attachments: eventAttachments(p),
         createdSeq: evt.seq ?? 0, updatedSeq: evt.seq ?? 0,
       }
@@ -602,6 +608,22 @@ export function ThreadPage({
     if (res.error) alert(res.error.message)
   }
 
+  async function repostArticle(post: Post) {
+    const board = prompt('Repost to board:', thread.board)
+    if (board === null) return
+    const title = prompt('Repost title:', thread.title)
+    if (title === null) return
+    const res = await api.repostPost(token, post.id, {
+      board: board.trim(),
+      title: title.trim(),
+    })
+    if (res.error) {
+      alert(res.error.message)
+      return
+    }
+    alert(`Reposted as thread ${res.data?.id ?? ''}`.trim())
+  }
+
   async function setAuthorRelationship(post: Post, kind: 'friend' | 'ignore') {
     const note = kind === 'friend' ? prompt('Friend note:', '') ?? '' : ''
     const res = await api.setUserRelationship(token, post.author, kind, true, note)
@@ -749,6 +771,7 @@ export function ThreadPage({
                 {!post.redacted && post.marked && <span className="post-flag-badge">Marked</span>}
                 {!post.redacted && post.recommended && <span className="post-flag-badge">Recommended</span>}
                 {!post.redacted && post.noReply && <span className="post-flag-badge">No replies</span>}
+                {!post.redacted && post.sourcePost && <span className="post-flag-badge">Repost</span>}
                 <span className="post-actions">
                   {post.createdSeq > readSeq && !post.redacted && (
                     <button className="link-btn" onClick={() => markPostReadThrough(post)}>Mark to here</button>
@@ -770,6 +793,9 @@ export function ThreadPage({
                   )}
                   {canUseCurationAction && !post.redacted && (
                     <button className="link-btn" onClick={() => curatePostDigest(post)}>Digest</button>
+                  )}
+                  {!post.redacted && (
+                    <button className="link-btn" onClick={() => repostArticle(post)}>Repost</button>
                   )}
                   {canCurateBoard && !post.redacted && (
                     <>
@@ -811,6 +837,19 @@ export function ThreadPage({
               {post.replyTo && (
                 <div className="post-reply-context muted">
                   ↩ replying to #{posts.find(p => p.id === post.replyTo)?.createdSeq ?? post.replyTo}
+                </div>
+              )}
+              {!post.redacted && post.sourcePost && (
+                <div className="post-reply-context muted">
+                  Reposted from {post.sourceBoard || 'source'} / {post.sourceTitle || post.sourceThread || post.sourcePost}
+                  {post.sourceAuthor && post.sourceAuthor !== 'Anonymous' && (
+                    <>
+                      {' by '}
+                      <button className="link-btn" onClick={() => onOpenProfile(post.sourceAuthor!)}>
+                        {post.sourceAuthor}
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
 
