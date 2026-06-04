@@ -273,6 +273,7 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 	rows, err := QQuery(db,
 		`SELECT t.id, t.board, b.name, t.title, t.author, COALESCE(t.author_id, ''),
 		        COUNT(DISTINCT p.id) AS post_count,
+		        COUNT(DISTINCT COALESCE(NULLIF(p.author_id, ''), p.author)) AS participant_count,
 		        COUNT(pr.post_id) AS reaction_count,
 		        t.last_seq, t.created_at, t.updated_at
 		   FROM threads t
@@ -300,10 +301,10 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 	now := time.Now().UnixMilli()
 	for rows.Next() {
 		var rank ThreadRanking
-		if err := rows.Scan(&rank.ID, &rank.Board, &rank.BoardName, &rank.Title, &rank.Author, &rank.AuthorID, &rank.PostCount, &rank.ReactionCount, &rank.LastSeq, &rank.CreatedAt, &rank.UpdatedAt); err != nil {
+		if err := rows.Scan(&rank.ID, &rank.Board, &rank.BoardName, &rank.Title, &rank.Author, &rank.AuthorID, &rank.PostCount, &rank.ParticipantCount, &rank.ReactionCount, &rank.LastSeq, &rank.CreatedAt, &rank.UpdatedAt); err != nil {
 			return nil, err
 		}
-		rank.Score = hotThreadScore(rank.PostCount, rank.ReactionCount, rank.UpdatedAt, now)
+		rank.Score = hotThreadScore(rank.PostCount, rank.ParticipantCount, rank.ReactionCount, rank.UpdatedAt, now)
 		out = append(out, rank)
 	}
 	if err := rows.Err(); err != nil {
@@ -328,8 +329,8 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 	return out[offset:end], nil
 }
 
-func hotThreadScore(postCount, reactionCount int, updatedAt, now int64) int {
-	base := int64(postCount*100 + reactionCount*200)
+func hotThreadScore(postCount, participantCount, reactionCount int, updatedAt, now int64) int {
+	base := int64(postCount*100 + participantCount*150 + reactionCount*200)
 	if base <= 0 {
 		return 0
 	}

@@ -179,13 +179,14 @@ type boardRankingsResponse struct {
 
 type threadRankingsResponse struct {
 	Threads []struct {
-		ID            string `json:"id"`
-		Board         string `json:"board"`
-		BoardName     string `json:"boardName"`
-		Title         string `json:"title"`
-		PostCount     int    `json:"postCount"`
-		ReactionCount int    `json:"reactionCount"`
-		Score         int    `json:"score"`
+		ID               string `json:"id"`
+		Board            string `json:"board"`
+		BoardName        string `json:"boardName"`
+		Title            string `json:"title"`
+		PostCount        int    `json:"postCount"`
+		ParticipantCount int    `json:"participantCount"`
+		ReactionCount    int    `json:"reactionCount"`
+		Score            int    `json:"score"`
 	} `json:"threads"`
 }
 
@@ -1234,7 +1235,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/rankings/threads", aliceToken, nil, &threads); status != http.StatusOK {
 		t.Fatalf("thread rankings status: %d", status)
 	}
-	if len(threads.Threads) == 0 || threads.Threads[0].ID != hot.Result.ID || threads.Threads[0].ReactionCount != 1 {
+	if len(threads.Threads) == 0 || threads.Threads[0].ID != hot.Result.ID || threads.Threads[0].ParticipantCount != 1 || threads.Threads[0].ReactionCount != 1 {
 		t.Fatalf("expected hot topic to lead thread rankings, got %+v", threads.Threads)
 	}
 	for _, thread := range threads.Threads {
@@ -1296,13 +1297,14 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads status: %d", status)
 	}
-	if len(systemThreads.Threads) != 3 {
-		t.Fatalf("expected generated stats, login-history, and board-activity threads, got %+v", systemThreads.Threads)
+	if len(systemThreads.Threads) != 4 {
+		t.Fatalf("expected generated stats, login-history, board-activity, and hot-topic threads, got %+v", systemThreads.Threads)
 	}
 	if !hasHTTPThreadSummary(systemThreads, snapshot.Result.ID, "2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") ||
-		!hasHTTPThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") {
-		t.Fatalf("expected generated stats, login-history, and board-activity threads, got %+v", systemThreads.Threads)
+		!hasHTTPThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") ||
+		!hasHTTPThreadSummary(systemThreads, "bbslists_toplog_20260604", "Hot topic history 2026-06-04") {
+		t.Fatalf("expected generated stats, login-history, board-activity, and hot-topic threads, got %+v", systemThreads.Threads)
 	}
 	systemPosts := listPostsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+snapshot.Result.ID+"/posts", aliceToken, nil, &systemPosts); status != http.StatusOK {
@@ -1312,7 +1314,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated stats post, got %+v", systemPosts.Posts)
 	}
 	body := systemPosts.Posts[0].Body
-	for _, want := range []string{"Total users: 3", "Total logins: 4", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "4 logins (+4)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
+	for _, want := range []string{"Total users: 3", "Total logins: 4", "Total posts: 5", "Total online time: 2m", "Online guests: 1", "Max online users: 2", "Max online guests: 1", "Recent daily history", "3 users (+1)", "4 logins (+4)", "1 guests (+1)", "5 posts (+3)", "1 reactions (+1)", "2m online time (+1m)", "max 2 users", "max 1 guests", "Active boards", "(tech): 2 posts", "Hot threads", "Hot topic", "1 participants", "Latest replies", "second", "Top users", "bob", "Archive paths", "guide"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected stats snapshot body to contain %q, got:\n%s", want, body)
 		}
@@ -1343,12 +1345,28 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 			t.Fatalf("expected board-activity body to contain %q, got:\n%s", want, boardLogBody)
 		}
 	}
+	topLogPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_toplog_20260604/posts", aliceToken, nil, &topLogPosts); status != http.StatusOK {
+		t.Fatalf("list BBSLists hot-topic posts status: %d", status)
+	}
+	if len(topLogPosts.Posts) != 1 {
+		t.Fatalf("expected one generated hot-topic post, got %+v", topLogPosts.Posts)
+	}
+	topLogBody := topLogPosts.Posts[0].Body
+	for _, want := range []string{"Hot topic history 2026-06-04", "Ranked public hot topics", "Top public hot topics", "tech / Hot topic", "1 participants", "2 posts", "1 reactions", "score"} {
+		if !strings.Contains(topLogBody, want) {
+			t.Fatalf("expected hot-topic body to contain %q, got:\n%s", want, topLogBody)
+		}
+	}
 	for _, forbidden := range []string{"Secret", "Private topic", "classified reply", "private"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("expected stats snapshot body to hide private %q, got:\n%s", forbidden, body)
 		}
 		if strings.Contains(boardLogBody, forbidden) {
 			t.Fatalf("expected board-activity body to hide private %q, got:\n%s", forbidden, boardLogBody)
+		}
+		if strings.Contains(topLogBody, forbidden) {
+			t.Fatalf("expected hot-topic body to hide private %q, got:\n%s", forbidden, topLogBody)
 		}
 	}
 	again := ackResponse{}
@@ -1364,7 +1382,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads after repeat status: %d", status)
 	}
-	if len(systemThreads.Threads) != 3 {
+	if len(systemThreads.Threads) != 4 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads.Threads)
 	}
 }

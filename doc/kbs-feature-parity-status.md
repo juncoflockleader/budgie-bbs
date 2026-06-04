@@ -106,7 +106,7 @@ ranking surface:
   /api/v1/stats/community/snapshot`.
 - Automatic daily stat-log publishing runs from the server process and ensures
   the current UTC day has deterministic `BBSLists` snapshot, login-count
-  history, and board-activity history threads.
+  history, board-activity history, and hot-topic history threads.
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters, max-online users/time, and
   day-over-day deltas for user, board, thread, post, reaction, mail, direct
@@ -116,8 +116,9 @@ ranking surface:
 - Public guest-presence pings (`POST /api/v1/presence/guest`) maintain anonymous
   web guest sessions, daily guest deltas, and max guest peaks without granting
   content access.
-- Hot-thread scores combine visible post count, reaction count, and a 48-hour
-  recency half-life so stale activity decays behind fresh conversation.
+- Hot-thread rankings expose distinct participant counts. Scores combine
+  visible post count, participant count, reaction count, and a 48-hour recency
+  half-life so stale activity decays behind fresh conversation.
 - Board, thread, reply, and archive rankings hide member-read boards from users
   who cannot read those boards; direct thread-ranking queries for inaccessible
   boards are rejected.
@@ -132,6 +133,10 @@ ranking surface:
   board-activity history threads showing total board/thread/post counts, top
   public board rankings, last public board activity times, and recent
   board/thread/post/reaction deltas.
+- Stat snapshots also create deterministic daily KBS `toplog`-style
+  `BBSLists` hot-topic history threads showing ranked public hot topics,
+  distinct participant counts, post/reaction counts, decayed score, and last
+  activity times.
 - Web `Rankings` page shows community counters, max-online peaks, recent daily
   stat history with trend deltas, cumulative login count, cumulative online/stay
   time, anonymous guest counts, active boards, hot threads, latest replies, top
@@ -144,7 +149,7 @@ ranking surface:
 
 This does not yet implement every historical/stat-log board from KBS local
 utilities beyond the generated `BBSLists` snapshot, login-history, and
-board-activity history threads.
+board-activity/hot-topic history threads.
 
 ### Board-Level Unread Workflow And Read Markers
 
@@ -835,10 +840,11 @@ social graph:
 - Direct-message shortcuts from online People rows and board online chips.
 - Community counters including cumulative login count, cumulative online/stay
   time and anonymous guest counters, active-board rankings, hot-thread rankings,
-  top-poster rankings, latest-reply rankings, blessing rankings/rituals,
-  archive-path rankings, automatic `BBSLists` generated stat snapshots and
-  login-count and board-activity history posts, and a web `Rankings` surface
-  with selectable 30-day history charts.
+  distinct-participant hot-topic scoring, top-poster rankings, latest-reply
+  rankings, blessing rankings/rituals, archive-path rankings, automatic
+  `BBSLists` generated stat snapshots and login-count, board-activity, and
+  hot-topic history posts, and a web `Rankings` surface with selectable 30-day
+  history charts.
 - Sanitized `0moderation` generated audit posts for public-board flags and
   moderation review resolutions.
 - Admin-managed global/board-scoped content filters, automatic content-filter

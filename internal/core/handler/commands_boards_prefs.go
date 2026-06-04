@@ -1136,6 +1136,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsHotTopicHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
@@ -1268,6 +1271,35 @@ func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLab
 	}
 	body := formatStatsBoardActivityHistoryBody(dateLabel, stats, boards, history)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Board activity history "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_toplog_" + dateID
+	postID := "bbslists_toplog_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	stats, err := projections.GetCommunityStats(h.db)
+	if err != nil {
+		return "", 0, err
+	}
+	threads, err := projections.ListThreadRankings(h.db, "", false, "", 30, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsHotTopicHistoryBody(dateLabel, stats, threads)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Hot topic history "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, body string, ts int64) (string, int64, error) {
@@ -1428,7 +1460,7 @@ func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats
 		b.WriteString("- No public thread activity yet.\n")
 	}
 	for i, thread := range threads {
-		fmt.Fprintf(&b, "%d. %s / %s: %d posts, %d reactions, score %d\n", i+1, thread.BoardName, thread.Title, thread.PostCount, thread.ReactionCount, thread.Score)
+		fmt.Fprintf(&b, "%d. %s / %s: %d participants, %d posts, %d reactions, score %d\n", i+1, thread.BoardName, thread.Title, thread.ParticipantCount, thread.PostCount, thread.ReactionCount, thread.Score)
 	}
 	b.WriteString("\n## Latest replies\n")
 	if len(replies) == 0 {
@@ -1534,6 +1566,36 @@ func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.Co
 			formatStatsDelta(day.DeltaPosts),
 			day.TotalReactions,
 			formatStatsDelta(day.DeltaReactions))
+	}
+	return b.String()
+}
+
+func formatStatsHotTopicHistoryBody(dateLabel string, stats *projections.CommunityStats, threads []projections.ThreadRanking) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Hot topic history %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Total threads: %d\n", stats.TotalThreads)
+	fmt.Fprintf(&b, "- Total posts: %d\n", stats.TotalPosts)
+	fmt.Fprintf(&b, "- Ranked public hot topics: %d\n", len(threads))
+	fmt.Fprintf(&b, "- Event head: %d\n\n", stats.HeadSeq)
+
+	b.WriteString("## Top public hot topics\n")
+	if len(threads) == 0 {
+		b.WriteString("- No public hot topics yet.\n")
+	}
+	for i, thread := range threads {
+		lastActivity := "no posts yet"
+		if thread.UpdatedAt > 0 {
+			lastActivity = time.UnixMilli(thread.UpdatedAt).UTC().Format("2006-01-02 15:04") + " UTC"
+		}
+		fmt.Fprintf(&b, "%d. %s / %s: %d participants, %d posts, %d reactions, score %d, last activity %s\n",
+			i+1,
+			thread.BoardName,
+			thread.Title,
+			thread.ParticipantCount,
+			thread.PostCount,
+			thread.ReactionCount,
+			thread.Score,
+			lastActivity)
 	}
 	return b.String()
 }

@@ -106,6 +106,7 @@ export interface ThreadRanking {
   author: string
   authorId?: string
   postCount: number
+  participantCount: number
   reactionCount: number
   score: number
   lastSeq: number

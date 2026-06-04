@@ -123,18 +123,19 @@ type BoardRanking struct {
 }
 
 type ThreadRanking struct {
-	ID            string `json:"id"`
-	Board         string `json:"board"`
-	BoardName     string `json:"boardName"`
-	Title         string `json:"title"`
-	Author        string `json:"author"`
-	AuthorID      string `json:"authorId,omitempty"`
-	PostCount     int    `json:"postCount"`
-	ReactionCount int    `json:"reactionCount"`
-	Score         int    `json:"score"`
-	LastSeq       int64  `json:"lastSeq"`
-	CreatedAt     int64  `json:"createdAt"`
-	UpdatedAt     int64  `json:"updatedAt"`
+	ID               string `json:"id"`
+	Board            string `json:"board"`
+	BoardName        string `json:"boardName"`
+	Title            string `json:"title"`
+	Author           string `json:"author"`
+	AuthorID         string `json:"authorId,omitempty"`
+	PostCount        int    `json:"postCount"`
+	ParticipantCount int    `json:"participantCount"`
+	ReactionCount    int    `json:"reactionCount"`
+	Score            int    `json:"score"`
+	LastSeq          int64  `json:"lastSeq"`
+	CreatedAt        int64  `json:"createdAt"`
+	UpdatedAt        int64  `json:"updatedAt"`
 }
 
 type ReplyRanking struct {

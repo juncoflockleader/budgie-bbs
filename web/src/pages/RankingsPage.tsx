@@ -168,7 +168,7 @@ export function RankingsPage({ token, onBack, onOpenBoard, onOpenThread }: Props
               <span className="ranking-index">{index + 1}</span>
               <span className="ranking-main">
                 <span className="item-title">{thread.title}</span>
-                <span className="item-meta muted">{thread.boardName} / {thread.postCount} posts / {thread.reactionCount} reactions</span>
+                <span className="item-meta muted">{thread.boardName} / {thread.participantCount} participants / {thread.postCount} posts / {thread.reactionCount} reactions</span>
               </span>
               <span className="ranking-score">{thread.score}</span>
             </button>
