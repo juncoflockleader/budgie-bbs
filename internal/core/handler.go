@@ -501,6 +501,14 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 	if pollBlock != nil {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "editing posts with poll markup is not supported", false)}
 	}
+	var existingPollID string
+	err := qQueryRow(h.db, `SELECT id FROM polls WHERE post_id=?`, p.Post).Scan(&existingPollID)
+	if err == nil {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "editing posts that contain a poll is not supported", false)}
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return internalErr(err)
+	}
 
 	ts := nowMS()
 
