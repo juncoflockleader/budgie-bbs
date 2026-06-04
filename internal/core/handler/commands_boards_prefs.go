@@ -1219,6 +1219,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsLoginHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsUserActivityRankListSystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1353,6 +1356,31 @@ func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, date
 	}
 	body := formatStatsLoginHistoryBody(dateLabel, stats, history, hourly)
 	return h.ensureStatsSystemPost(actor, threadID, postID, "Login count history "+dateLabel, body, ts)
+}
+
+func (h *Handler) ensureStatsUserActivityRankListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_statguy_" + dateID
+	postID := "bbslists_statguy_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	users, err := projections.ListUserRankings(h.db, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsUserActivityRankListBody(dateLabel, users)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "User activity rankings "+dateLabel, body, ts)
 }
 
 func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -2006,6 +2034,140 @@ func formatStatsHistogramBar(count, peak int) string {
 		width = 1
 	}
 	return strings.Repeat("#", width)
+}
+
+func formatStatsUserActivityRankListBody(dateLabel string, users []projections.UserRanking) string {
+	active := activeUserRankings(users)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# User activity rankings %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Ranked active users: %d\n", len(active))
+	totalPosts := 0
+	totalReactions := 0
+	totalLogins := 0
+	var totalOnlineSeconds int64
+	for _, user := range active {
+		totalPosts += user.PostsCreated
+		totalReactions += user.ReactionsReceived
+		totalLogins += user.LoginCount
+		totalOnlineSeconds += user.TotalOnlineSeconds
+	}
+	fmt.Fprintf(&b, "- Ranked posts: %d\n", totalPosts)
+	fmt.Fprintf(&b, "- Ranked reactions received: %d\n", totalReactions)
+	fmt.Fprintf(&b, "- Ranked logins: %d\n", totalLogins)
+	fmt.Fprintf(&b, "- Ranked stay time: %s\n\n", formatStatsDuration(totalOnlineSeconds))
+
+	if len(active) == 0 {
+		b.WriteString("- No user activity yet.\n")
+		return b.String()
+	}
+	formatStatsUserRankingSection(&b, "Top posters", sortUserRankings(active, func(a, b projections.UserRanking) bool {
+		if a.PostsCreated != b.PostsCreated {
+			return a.PostsCreated > b.PostsCreated
+		}
+		if a.ReactionsReceived != b.ReactionsReceived {
+			return a.ReactionsReceived > b.ReactionsReceived
+		}
+		if a.LoginCount != b.LoginCount {
+			return a.LoginCount > b.LoginCount
+		}
+		if a.TotalOnlineSeconds != b.TotalOnlineSeconds {
+			return a.TotalOnlineSeconds > b.TotalOnlineSeconds
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	}), func(user projections.UserRanking) string {
+		return fmt.Sprintf("%d posts, %d reactions received, %s, %s stay time",
+			user.PostsCreated,
+			user.ReactionsReceived,
+			formatStatsCount(user.LoginCount, "login", "logins"),
+			formatStatsDuration(user.TotalOnlineSeconds))
+	})
+	formatStatsUserRankingSection(&b, "Top login counts", sortUserRankings(active, func(a, b projections.UserRanking) bool {
+		if a.LoginCount != b.LoginCount {
+			return a.LoginCount > b.LoginCount
+		}
+		if a.PostsCreated != b.PostsCreated {
+			return a.PostsCreated > b.PostsCreated
+		}
+		if a.TotalOnlineSeconds != b.TotalOnlineSeconds {
+			return a.TotalOnlineSeconds > b.TotalOnlineSeconds
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	}), func(user projections.UserRanking) string {
+		return fmt.Sprintf("%s, %d posts, %s stay time",
+			formatStatsCount(user.LoginCount, "login", "logins"),
+			user.PostsCreated,
+			formatStatsDuration(user.TotalOnlineSeconds))
+	})
+	formatStatsUserRankingSection(&b, "Top stay time", sortUserRankings(active, func(a, b projections.UserRanking) bool {
+		if a.TotalOnlineSeconds != b.TotalOnlineSeconds {
+			return a.TotalOnlineSeconds > b.TotalOnlineSeconds
+		}
+		if a.LoginCount != b.LoginCount {
+			return a.LoginCount > b.LoginCount
+		}
+		if a.PostsCreated != b.PostsCreated {
+			return a.PostsCreated > b.PostsCreated
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	}), func(user projections.UserRanking) string {
+		return fmt.Sprintf("%s stay time, %s, %d posts",
+			formatStatsDuration(user.TotalOnlineSeconds),
+			formatStatsCount(user.LoginCount, "login", "logins"),
+			user.PostsCreated)
+	})
+	formatStatsUserRankingSection(&b, "Top community score", sortUserRankings(active, func(a, b projections.UserRanking) bool {
+		aScore := userActivityScore(a)
+		bScore := userActivityScore(b)
+		if aScore != bScore {
+			return aScore > bScore
+		}
+		if a.PostsCreated != b.PostsCreated {
+			return a.PostsCreated > b.PostsCreated
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	}), func(user projections.UserRanking) string {
+		return fmt.Sprintf("score %d (%d posts, %d reactions received, %s, %s stay time, trust %d)",
+			userActivityScore(user),
+			user.PostsCreated,
+			user.ReactionsReceived,
+			formatStatsCount(user.LoginCount, "login", "logins"),
+			formatStatsDuration(user.TotalOnlineSeconds),
+			user.TrustLevel)
+	})
+	return b.String()
+}
+
+func activeUserRankings(users []projections.UserRanking) []projections.UserRanking {
+	active := make([]projections.UserRanking, 0, len(users))
+	for _, user := range users {
+		if user.PostsCreated > 0 || user.ReactionsReceived > 0 || user.LoginCount > 0 || user.TotalOnlineSeconds > 0 || user.TrustLevel > 0 {
+			active = append(active, user)
+		}
+	}
+	return active
+}
+
+func sortUserRankings(users []projections.UserRanking, less func(a, b projections.UserRanking) bool) []projections.UserRanking {
+	out := append([]projections.UserRanking(nil), users...)
+	sort.SliceStable(out, func(i, j int) bool {
+		return less(out[i], out[j])
+	})
+	if len(out) > 20 {
+		return out[:20]
+	}
+	return out
+}
+
+func formatStatsUserRankingSection(b *strings.Builder, title string, users []projections.UserRanking, detail func(projections.UserRanking) string) {
+	fmt.Fprintf(b, "## %s\n", title)
+	for i, user := range users {
+		fmt.Fprintf(b, "%d. %s: %s\n", i+1, user.Name, detail(user))
+	}
+	b.WriteByte('\n')
+}
+
+func userActivityScore(user projections.UserRanking) int64 {
+	return int64(user.PostsCreated*10+user.ReactionsReceived*3+user.LoginCount+user.TrustLevel*25) + user.TotalOnlineSeconds/3600
 }
 
 func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, history []projections.CommunityStatHistory) string {
