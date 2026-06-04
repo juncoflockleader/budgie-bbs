@@ -350,6 +350,44 @@ func (s *Server) handleGetMail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (s *Server) handleListMailThread(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	mailID := r.PathValue("mail")
+	if item, err := s.core.GetMail(actor.ID, mailID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	} else if item == nil {
+		writeError(w, http.StatusNotFound, "not_found", "mail not found", false)
+		return
+	}
+	limit, offset := paginate(r)
+	items, err := s.core.ListMailThread(actor.ID, mailID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"mail": items})
+}
+
+func (s *Server) handleListMailByAuthor(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	mailID := r.PathValue("mail")
+	if item, err := s.core.GetMail(actor.ID, mailID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	} else if item == nil {
+		writeError(w, http.StatusNotFound, "not_found", "mail not found", false)
+		return
+	}
+	limit, offset := paginate(r)
+	items, err := s.core.ListMailByAuthor(actor.ID, mailID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"mail": items})
+}
+
 func (s *Server) handleListMailGroups(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	groups, err := s.core.ListMailGroups(actor.ID)

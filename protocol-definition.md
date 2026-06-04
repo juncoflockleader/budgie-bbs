@@ -285,6 +285,8 @@ GET /api/v1/mail?mailbox=inbox&unread=1&limit=&offset=
 GET /api/v1/mail/groups
 GET /api/v1/mail/usage
 GET /api/v1/mail/attachments/{id}
+GET /api/v1/mail/thread/{id}?limit=&offset=
+GET /api/v1/mail/author/{id}?limit=&offset=
 GET /api/v1/mail/{id}
 GET /api/v1/relay/deliveries?status=pending&limit=&offset=
 GET /api/v1/messages?limit=&offset=
@@ -774,6 +776,10 @@ deleteDirectMessage { message* }                               -> ack only
   trash are rejected when they would exceed the affected user's quota.
 - `mailbox` may be a built-in mailbox (`inbox`, `sent`, `keep`, `trash`) or a
   lightweight custom mailbox slug.
+- `GET /api/v1/mail/thread/{id}` walks from a visible selected mail item to the
+  root reply chain and returns the actor's visible copies in thread order.
+  `GET /api/v1/mail/author/{id}` returns the actor's visible mail from the same
+  sender as the selected item, newest first.
 - Direct messages are short conversation messages between two users. They are
   account-scoped, support unread counts, read marking, per-user deletion, and
   conversation reads distinct from private mail and notification feeds.

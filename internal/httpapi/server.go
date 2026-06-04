@@ -77,6 +77,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/mail/groups", auth(http.HandlerFunc(s.handleListMailGroups)))
 	mux.Handle("GET /api/v1/mail/usage", auth(http.HandlerFunc(s.handleGetMailUsage)))
 	mux.Handle("GET /api/v1/mail/attachments/{attachment}", auth(http.HandlerFunc(s.handleDownloadMailAttachment)))
+	mux.Handle("GET /api/v1/mail/thread/{mail}", auth(http.HandlerFunc(s.handleListMailThread)))
+	mux.Handle("GET /api/v1/mail/author/{mail}", auth(http.HandlerFunc(s.handleListMailByAuthor)))
 	mux.Handle("GET /api/v1/mail/{mail}", auth(http.HandlerFunc(s.handleGetMail)))
 	mux.Handle("GET /api/v1/digest/{entry}/download", auth(http.HandlerFunc(s.handleDownloadDigestEntry)))
 	mux.Handle("GET /api/v1/relay/deliveries", auth(http.HandlerFunc(s.handleListRelayDeliveries)))

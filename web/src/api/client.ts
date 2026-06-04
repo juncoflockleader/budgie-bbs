@@ -798,6 +798,16 @@ export async function getMail(token: string, mail: string): Promise<ApiResponse<
   return json<MailItem>(res)
 }
 
+export async function listMailThread(token: string, mail: string): Promise<ApiResponse<{ mail: MailItem[] }>> {
+  const res = await fetch(`${BASE}/mail/thread/${mail}`, { headers: authHeaders(token) })
+  return json<{ mail: MailItem[] }>(res)
+}
+
+export async function listMailByAuthor(token: string, mail: string): Promise<ApiResponse<{ mail: MailItem[] }>> {
+  const res = await fetch(`${BASE}/mail/author/${mail}`, { headers: authHeaders(token) })
+  return json<{ mail: MailItem[] }>(res)
+}
+
 export async function sendMail(
   token: string,
   payload: {

@@ -736,6 +736,8 @@ split:
   - `GET /api/v1/mail/groups`
   - `GET /api/v1/mail/usage`
   - `GET /api/v1/mail/attachments/{attachment}`
+  - `GET /api/v1/mail/thread/{mail}`
+  - `GET /api/v1/mail/author/{mail}`
   - `GET /api/v1/mail/{mail}`
 - Authenticated short-message read APIs:
   - `GET /api/v1/messages`
@@ -783,13 +785,17 @@ split:
   stored mail attachments.
 - Mail send, sender upload, and trash-restore flows enforce per-user mailbox
   quota before adding visible non-trash mail space.
+- KBS-style mail traversal reads are available from any visible mail item:
+  same-thread mode walks the reply chain from root through visible descendants,
+  while same-author mode lists visible mail from the selected sender.
 - Short direct messages respect ignore rows and per-recipient policy:
   all users, friends only, or no messages.
 - Web thread readers expose a Mail action for visible non-anonymous article
   authors. Web `Inbox` surface with mailboxes, unread badges, mail compose/reply,
-  read/keep/move/trash actions, mail-group management, group/friend-list
-  sending, used/quota display, direct-message conversations, receive-policy
-  control, replies, and per-user message deletion.
+  read/keep/move/trash actions, thread/from-author mail traversal,
+  mail-group management, group/friend-list sending, used/quota display,
+  direct-message conversations, receive-policy control, replies, and per-user
+  message deletion.
 
 POP3/Internet email bridges and SMS are intentionally outside the current
 BBS/forum parity focus; real-time online-user pager shortcuts remain a possible
@@ -991,7 +997,7 @@ social graph:
 ## Remaining Major KBS Parity Areas
 
 - Private-mail refinements that are still forum-native: forward, range-delete,
-  same-thread/same-author reading modes, and cross-post mail-to-board.
+  and cross-post mail-to-board.
 - Board recycle/junk/range-delete workflows for moderator/user-deleted
   articles.
 - Remaining specialized historical/stat-log boards and richer community
@@ -1002,7 +1008,7 @@ social graph:
 
 ## Suggested Next Slices
 
-1. Private-mail forward/range/traversal workflows.
+1. Private-mail forward/range and mail-to-board workflows.
 2. Board recycle/junk/range-delete workflows.
 3. Remaining specialized historical/stat-log boards and richer community
    statistics.

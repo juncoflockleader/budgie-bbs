@@ -1674,6 +1674,101 @@ func ListMail(db *sql.DB, userID, mailbox string, limit, offset int, unreadOnly 
 	if err != nil {
 		return nil, err
 	}
+	return scanMailRows(db, rows)
+}
+
+func ListMailThread(db *sql.DB, userID, messageID string, limit, offset int) ([]MailItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`WITH RECURSIVE ancestors(id, parent_id, depth) AS (
+		      SELECT m.id, m.parent_id, 0
+		        FROM mail_messages m
+		        JOIN mail_copies c ON c.message_id=m.id
+		       WHERE c.user_id=? AND m.id=?
+		      UNION ALL
+		      SELECT parent.id, parent.parent_id, ancestors.depth+1
+		        FROM mail_messages parent
+		        JOIN ancestors ON ancestors.parent_id=parent.id
+		       WHERE ancestors.depth < 100
+		    ),
+		    root(id) AS (
+		      SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1
+		    ),
+		    thread_ids(id, depth) AS (
+		      SELECT id, 0 FROM root
+		      UNION ALL
+		      SELECT child.id, thread_ids.depth+1
+		        FROM mail_messages child
+		        JOIN thread_ids ON child.parent_id=thread_ids.id
+		       WHERE thread_ids.depth < 100
+		    )
+		  SELECT m.id, m.from_user_id, COALESCE(u.name, ''), m.subject, m.body, m.parent_id,
+		         c.mailbox, c.role, c.read, c.kept, m.created_at, c.updated_at, m.seq
+		    FROM thread_ids
+		    JOIN mail_messages m ON m.id=thread_ids.id
+		    JOIN mail_copies c ON c.message_id=m.id AND c.user_id=?
+		    LEFT JOIN users u ON u.id=m.from_user_id
+		   WHERE NOT EXISTS (
+		         SELECT 1 FROM mail_copies preferred
+		          WHERE preferred.message_id=c.message_id
+		            AND preferred.user_id=c.user_id
+		            AND preferred.role='recipient'
+		            AND c.role<>'recipient'
+		   )
+		   ORDER BY m.created_at, m.seq, m.id
+		   LIMIT ? OFFSET ?`,
+		userID, messageID, userID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanMailRows(db, rows)
+}
+
+func ListMailByAuthor(db *sql.DB, userID, messageID string, limit, offset int) ([]MailItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`WITH selected(from_user_id) AS (
+		      SELECT m.from_user_id
+		        FROM mail_messages m
+		        JOIN mail_copies c ON c.message_id=m.id
+		       WHERE c.user_id=? AND m.id=?
+		       LIMIT 1
+		    )
+		  SELECT m.id, m.from_user_id, COALESCE(u.name, ''), m.subject, m.body, m.parent_id,
+		         c.mailbox, c.role, c.read, c.kept, m.created_at, c.updated_at, m.seq
+		    FROM selected
+		    JOIN mail_messages m ON m.from_user_id=selected.from_user_id
+		    JOIN mail_copies c ON c.message_id=m.id AND c.user_id=?
+		    LEFT JOIN users u ON u.id=m.from_user_id
+		   WHERE NOT EXISTS (
+		         SELECT 1 FROM mail_copies preferred
+		          WHERE preferred.message_id=c.message_id
+		            AND preferred.user_id=c.user_id
+		            AND preferred.role='recipient'
+		            AND c.role<>'recipient'
+		   )
+		   ORDER BY m.created_at DESC, m.seq DESC, m.id DESC
+		   LIMIT ? OFFSET ?`,
+		userID, messageID, userID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanMailRows(db, rows)
+}
+
+func scanMailRows(db *sql.DB, rows *sql.Rows) ([]MailItem, error) {
 	items := []MailItem{}
 	for rows.Next() {
 		var item MailItem

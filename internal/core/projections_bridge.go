@@ -322,6 +322,14 @@ func listMail(db *sql.DB, userID, mailbox string, limit, offset int, unreadOnly 
 	return projections.ListMail(db, userID, mailbox, limit, offset, unreadOnly)
 }
 
+func listMailThread(db *sql.DB, userID, messageID string, limit, offset int) ([]MailItem, error) {
+	return projections.ListMailThread(db, userID, messageID, limit, offset)
+}
+
+func listMailByAuthor(db *sql.DB, userID, messageID string, limit, offset int) ([]MailItem, error) {
+	return projections.ListMailByAuthor(db, userID, messageID, limit, offset)
+}
+
 func getMail(db *sql.DB, userID, messageID string) (*MailItem, error) {
 	return projections.GetMail(db, userID, messageID)
 }

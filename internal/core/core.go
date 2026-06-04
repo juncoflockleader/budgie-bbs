@@ -1029,6 +1029,12 @@ func FormatDigestExportText(export *DigestExport) string {
 func (c *Core) ListMail(userID, mailbox string, limit, offset int, unreadOnly bool) ([]MailItem, error) {
 	return listMail(c.DB, userID, mailbox, limit, offset, unreadOnly)
 }
+func (c *Core) ListMailThread(userID, messageID string, limit, offset int) ([]MailItem, error) {
+	return listMailThread(c.DB, userID, messageID, limit, offset)
+}
+func (c *Core) ListMailByAuthor(userID, messageID string, limit, offset int) ([]MailItem, error) {
+	return listMailByAuthor(c.DB, userID, messageID, limit, offset)
+}
 func (c *Core) GetMail(userID, messageID string) (*MailItem, error) {
 	return getMail(c.DB, userID, messageID)
 }

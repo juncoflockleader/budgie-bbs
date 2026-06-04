@@ -23,6 +23,9 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
   const [mailbox, setMailbox] = useState('inbox')
   const [mail, setMail] = useState<MailItem[]>([])
   const [selectedMail, setSelectedMail] = useState<MailItem | null>(null)
+  const [relatedMail, setRelatedMail] = useState<MailItem[]>([])
+  const [relatedTitle, setRelatedTitle] = useState('')
+  const [relatedLoading, setRelatedLoading] = useState(false)
   const [mailUnread, setMailUnread] = useState(0)
   const [mailGroups, setMailGroups] = useState<MailGroup[]>([])
   const [mailUsage, setMailUsage] = useState<MailUsage | null>(null)
@@ -134,7 +137,7 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     setSelectedConversation(initialMessageTo)
   }, [initialMessageTo])
 
-  async function openMail(item: MailItem) {
+  async function openMail(item: MailItem, keepRelated = false) {
     const res = await api.getMail(token, item.id)
     if (res.error) {
       setError(res.error.message)
@@ -142,6 +145,10 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     }
     const full = res.data ?? item
     setSelectedMail(full)
+    if (!keepRelated) {
+      setRelatedMail([])
+      setRelatedTitle('')
+    }
     if (!full.read) {
       await api.updateMail(token, full.id, { read: true })
       void loadMail(mailbox)
@@ -243,7 +250,11 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
       setError(res.error.message)
       return
     }
-    if (selectedMail?.id === item.id) setSelectedMail(null)
+    if (selectedMail?.id === item.id) {
+      setSelectedMail(null)
+      setRelatedMail([])
+      setRelatedTitle('')
+    }
     await Promise.all([loadMail(mailbox), loadMailUsage()])
   }
 
@@ -252,6 +263,19 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
     setMailTo(item.fromName)
     setMailSubject(item.subject.toLowerCase().startsWith('re:') ? item.subject : `Re: ${item.subject}`)
     setReplyTo(item.id)
+  }
+
+  async function loadMailRelation(item: MailItem, mode: 'thread' | 'author') {
+    setRelatedLoading(true)
+    setError(null)
+    const res = mode === 'thread' ? await api.listMailThread(token, item.id) : await api.listMailByAuthor(token, item.id)
+    setRelatedLoading(false)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    setRelatedTitle(mode === 'thread' ? 'Thread' : `From ${item.fromName || 'author'}`)
+    setRelatedMail(res.data?.mail ?? [])
   }
 
   async function uploadMailAttachment(item: MailItem) {
@@ -412,12 +436,35 @@ export function PrivatePage({ token, onBack, currentUserRole, initialMessageTo =
                 )}
                 <div className="private-actions">
                   <button className="link-btn" onClick={() => startReply(selectedMail)}>Reply</button>
+                  <button className="link-btn" onClick={() => loadMailRelation(selectedMail, 'thread')}>Thread</button>
+                  <button className="link-btn" onClick={() => loadMailRelation(selectedMail, 'author')}>From author</button>
                   {selectedMail.role === 'sender' && <button className="link-btn" onClick={() => uploadMailAttachment(selectedMail)}>Upload file</button>}
                   <button className="link-btn" onClick={() => toggleKept(selectedMail)}>{selectedMail.kept ? 'Unkeep' : 'Keep'}</button>
                   <button className="link-btn" onClick={() => moveMail(selectedMail, 'inbox')}>Inbox</button>
                   <button className="link-btn" onClick={() => moveMail(selectedMail, 'keep')}>Keep box</button>
                   <button className="link-btn danger" onClick={() => trashMail(selectedMail)}>Trash</button>
                 </div>
+                {(relatedTitle || relatedLoading) && (
+                  <section className="mail-related">
+                    <div className="mail-related-header">
+                      <h4>{relatedTitle || 'Mail'}</h4>
+                      {relatedLoading && <span className="muted">Loading...</span>}
+                    </div>
+                    {!relatedLoading && relatedMail.length === 0 ? (
+                      <p className="muted empty-state">No matching mail.</p>
+                    ) : relatedMail.map(item => (
+                      <button
+                        className={`private-list-row${selectedMail.id === item.id ? ' private-list-row--active' : ''}${item.read ? '' : ' private-list-row--unread'}`}
+                        key={`${item.id}-${item.role}`}
+                        onClick={() => openMail(item, true)}
+                      >
+                        <span className="private-row-title">{item.subject}</span>
+                        <span className="private-row-meta">{item.fromName} / {new Date(item.createdAt).toLocaleString()} / {item.mailbox}</span>
+                        <span className="private-row-excerpt">{item.excerpt}</span>
+                      </button>
+                    ))}
+                  </section>
+                )}
               </article>
             ) : (
               <p className="muted empty-state">No message selected.</p>
