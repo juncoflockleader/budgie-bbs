@@ -45,6 +45,8 @@ func newHandler(db *sql.DB, bus Bus) *Handler {
 		UserReacted:                  userReacted,
 		MarkPostRedacted:             markPostRedacted,
 		MarkPostRestored:             markPostRestored,
+		RecordPostDeletion:           recordPostDeletion,
+		ClearPostDeletion:            clearPostDeletion,
 		MarkPostPurged:               markPostPurged,
 		SetPostFlags:                 setPostFlags,
 		SetThreadLocked:              setThreadLocked,

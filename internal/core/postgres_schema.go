@@ -635,6 +635,20 @@ CREATE TABLE IF NOT EXISTS posts (
     updated_at   BIGINT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS post_deletions (
+    post_id         TEXT PRIMARY KEY REFERENCES posts(id) ON DELETE CASCADE,
+    thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    board_id        TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    deleted_by_id   TEXT NOT NULL DEFAULT '',
+    deleted_by_name TEXT NOT NULL DEFAULT '',
+    reason          TEXT NOT NULL DEFAULT '',
+    kind            TEXT NOT NULL CHECK(kind IN ('recycle', 'junk')),
+    deleted_at      BIGINT NOT NULL DEFAULT 0,
+    seq             BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_post_deletions_board_kind
+    ON post_deletions(board_id, kind, deleted_at DESC, seq DESC);
+
 CREATE TABLE IF NOT EXISTS post_attachments (
     id           TEXT PRIMARY KEY,
     post_id      TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
@@ -1799,6 +1813,29 @@ CREATE INDEX IF NOT EXISTS idx_board_zaps_user
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (40, 'postgres-board-zaps', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 41,
+			Name:    "postgres-post-deletions",
+			SQL: `
+CREATE TABLE IF NOT EXISTS post_deletions (
+    post_id         TEXT PRIMARY KEY REFERENCES posts(id) ON DELETE CASCADE,
+    thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    board_id        TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    deleted_by_id   TEXT NOT NULL DEFAULT '',
+    deleted_by_name TEXT NOT NULL DEFAULT '',
+    reason          TEXT NOT NULL DEFAULT '',
+    kind            TEXT NOT NULL CHECK(kind IN ('recycle', 'junk')),
+    deleted_at      BIGINT NOT NULL DEFAULT 0,
+    seq             BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_post_deletions_board_kind
+    ON post_deletions(board_id, kind, deleted_at DESC, seq DESC);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (41, 'postgres-post-deletions', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

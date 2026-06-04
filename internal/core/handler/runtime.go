@@ -155,6 +155,14 @@ func markPostRestored(tx *sql.Tx, postID string, seq int64) error {
 	return currentRuntime().MarkPostRestored(tx, postID, seq)
 }
 
+func recordPostDeletion(tx *sql.Tx, postID, threadID, boardID, deletedByID, deletedByName, reason, kind string, deletedAt, seq int64) error {
+	return currentRuntime().RecordPostDeletion(tx, postID, threadID, boardID, deletedByID, deletedByName, reason, kind, deletedAt, seq)
+}
+
+func clearPostDeletion(tx *sql.Tx, postID string) error {
+	return currentRuntime().ClearPostDeletion(tx, postID)
+}
+
 func markPostPurged(tx *sql.Tx, postID string, seq int64) error {
 	return currentRuntime().MarkPostPurged(tx, postID, seq)
 }

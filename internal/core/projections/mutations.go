@@ -108,6 +108,35 @@ func MarkPostRestored(tx *sql.Tx, postID string, seq int64) error {
 	return err
 }
 
+func RecordPostDeletion(tx *sql.Tx, postID, threadID, boardID, deletedByID, deletedByName, reason, kind string, deletedAt, seq int64) error {
+	if kind != "junk" {
+		kind = "recycle"
+	}
+	_, err := QExec(tx,
+		`INSERT INTO post_deletions (
+		    post_id, thread_id, board_id, deleted_by_id, deleted_by_name,
+		    reason, kind, deleted_at, seq
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(post_id)
+		 DO UPDATE SET
+		    thread_id=excluded.thread_id,
+		    board_id=excluded.board_id,
+		    deleted_by_id=excluded.deleted_by_id,
+		    deleted_by_name=excluded.deleted_by_name,
+		    reason=excluded.reason,
+		    kind=excluded.kind,
+		    deleted_at=excluded.deleted_at,
+		    seq=excluded.seq`,
+		postID, threadID, boardID, deletedByID, deletedByName, reason, kind, deletedAt, seq,
+	)
+	return err
+}
+
+func ClearPostDeletion(tx *sql.Tx, postID string) error {
+	_, err := QExec(tx, `DELETE FROM post_deletions WHERE post_id=?`, postID)
+	return err
+}
+
 // MarkPostPurged irreversibly clears the post body from the projection (GDPR
 // hard-delete escape hatch). The body is replaced with an empty string and the
 // post is kept redacted. The event log still contains the original content.

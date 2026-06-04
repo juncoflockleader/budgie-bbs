@@ -219,6 +219,27 @@ func (s *Server) handleListBoardMemberApplications(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, map[string]any{"applications": apps})
 }
 
+func (s *Server) handleListBoardDeletedPosts(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	boardID := r.PathValue("board")
+	info, err := s.core.GetBoardInfo(boardID)
+	if err != nil || info == nil {
+		writeError(w, http.StatusNotFound, "not_found", "board not found", false)
+		return
+	}
+	if !actorCanModerateBoardPostsInfo(actor, info) {
+		writeError(w, http.StatusForbidden, proto.ErrForbidden, "board post moderation permission required", false)
+		return
+	}
+	limit, offset := paginate(r)
+	posts, err := s.core.ListBoardDeletedPosts(boardID, r.URL.Query().Get("kind"), limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
+}
+
 func (s *Server) handleListDigestEntries(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
@@ -835,6 +856,21 @@ func actorCanManageBoardMembersInfo(actor *core.User, info *core.BoardInfo) bool
 	}
 	for _, member := range info.Members {
 		if member.UserID == actor.ID && member.CanManageMembers {
+			return true
+		}
+	}
+	return false
+}
+
+func actorCanModerateBoardPostsInfo(actor *core.User, info *core.BoardInfo) bool {
+	if actorCanModerateBoardInfo(actor, info) {
+		return true
+	}
+	if actor == nil {
+		return false
+	}
+	for _, member := range info.Members {
+		if member.UserID == actor.ID && member.CanModeratePosts {
 			return true
 		}
 	}

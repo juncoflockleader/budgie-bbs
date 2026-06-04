@@ -274,6 +274,7 @@ GET /api/v1/boards/{id}
 GET /api/v1/boards/{id}/online?limit=&offset=
 GET /api/v1/boards/{id}/members
 GET /api/v1/boards/{id}/member-applications?status=
+GET /api/v1/boards/{id}/deleted?kind=recycle|junk&limit=&offset=
 GET /api/v1/boards/{id}/digest?kind=&path=&limit=&offset=
 GET /api/v1/boards/{id}/digest/tree?kind=
 GET /api/v1/digest?kind=&path=&limit=&offset=
@@ -640,6 +641,10 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   boards where the caller currently has a board-member row, including
   member-read boards they can enter. It supplies board/thread context for
   KBS-style resident-board aggregate reading.
+- `GET /api/v1/boards/{id}/deleted` exposes a moderator-only board deletion
+  bin. `kind=recycle` lists moderator/site-moderator redactions, `kind=junk`
+  lists author self-deletions inside the edit window, and restored posts leave
+  the bin.
 - Board membership requirements expose KBS-style admission knobs. `maxMembers`,
   `minLoginCount`, `minPostCount`, `minTrustLevel`, `minScore`,
   `minBoardPostCount`, `minBoardOriginalPostCount`, `minBoardDigestCount`, and

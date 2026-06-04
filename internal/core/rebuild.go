@@ -65,6 +65,7 @@ func clearProjectionTables(tx *sql.Tx) error {
 		"mail_attachment_blobs",
 		"mail_attachments",
 		"mail_messages",
+		"post_deletions",
 		"posts",
 		"threads",
 		"poll_votes",
@@ -219,6 +220,28 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			return err
 		}
 	case *proto.PostRedactedPayload:
+		post, err := getPostTx(tx, evt.ID)
+		if err != nil {
+			return err
+		}
+		if post != nil {
+			thread, err := getThreadTx(tx, post.Thread)
+			if err != nil {
+				return err
+			}
+			if thread != nil {
+				deletedByID, deletedByName := deletedByProjectionIdentity(tx, evt.By)
+				kind := "recycle"
+				if deletedByID != "" && post.AuthorID == deletedByID {
+					kind = "junk"
+				} else if deletedByID == "" && evt.By == post.Author {
+					kind = "junk"
+				}
+				if err := recordPostDeletion(tx, post.ID, post.Thread, thread.Board, deletedByID, deletedByName, evt.Reason, kind, evt.TS, seq); err != nil {
+					return err
+				}
+			}
+		}
 		if _, err := qExec(tx,
 			`UPDATE posts SET redacted=1, updated_seq=?, updated_at=? WHERE id=?`,
 			seq, evt.TS, evt.ID,
@@ -226,6 +249,9 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 			return err
 		}
 	case *proto.PostRestoredPayload:
+		if err := clearPostDeletion(tx, evt.ID); err != nil {
+			return err
+		}
 		if _, err := qExec(tx,
 			`UPDATE posts SET redacted=0, updated_seq=?, updated_at=? WHERE id=?`,
 			seq, evt.TS, evt.ID,
@@ -503,6 +529,22 @@ func loadUserIDByName(tx *sql.Tx, name string) string {
 		return ""
 	}
 	return strings.TrimSpace(userID)
+}
+
+func deletedByProjectionIdentity(tx *sql.Tx, by string) (string, string) {
+	by = strings.TrimSpace(by)
+	if by == "" {
+		return "", ""
+	}
+	var name string
+	err := qQueryRow(tx, `SELECT name FROM users WHERE id=?`, by).Scan(&name)
+	if err == nil {
+		return by, strings.TrimSpace(name)
+	}
+	if userID := loadUserIDByName(tx, by); userID != "" {
+		return userID, by
+	}
+	return by, by
 }
 
 func ensureSysmailBoardSettingsProjection(tx *sql.Tx, ts int64) error {

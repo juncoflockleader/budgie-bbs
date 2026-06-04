@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/boards/{board}/online", auth(http.HandlerFunc(s.handleListBoardOnlineUsers)))
 	mux.Handle("GET /api/v1/boards/{board}/members", auth(http.HandlerFunc(s.handleListBoardMembers)))
 	mux.Handle("GET /api/v1/boards/{board}/member-applications", auth(http.HandlerFunc(s.handleListBoardMemberApplications)))
+	mux.Handle("GET /api/v1/boards/{board}/deleted", auth(http.HandlerFunc(s.handleListBoardDeletedPosts)))
 	mux.Handle("GET /api/v1/boards/{board}/digest/tree", auth(http.HandlerFunc(s.handleListDigestPathTree)))
 	mux.Handle("GET /api/v1/boards/{board}/digest", auth(http.HandlerFunc(s.handleListDigestEntries)))
 	mux.Handle("GET /api/v1/boards/{board}/threads", auth(http.HandlerFunc(s.handleListThreads)))

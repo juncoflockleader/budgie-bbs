@@ -605,6 +605,21 @@ type Post struct {
 	UpdatedAt      int64            `json:"updatedAt"`
 }
 
+type PostDeletion struct {
+	Post          Post   `json:"post"`
+	PostID        string `json:"postId"`
+	ThreadID      string `json:"threadId"`
+	BoardID       string `json:"boardId"`
+	BoardName     string `json:"boardName"`
+	ThreadTitle   string `json:"threadTitle"`
+	DeletedByID   string `json:"deletedById,omitempty"`
+	DeletedByName string `json:"deletedByName"`
+	Reason        string `json:"reason,omitempty"`
+	Kind          string `json:"kind"`
+	DeletedAt     int64  `json:"deletedAt"`
+	Seq           int64  `json:"seq"`
+}
+
 type PostAttachment struct {
 	ID          string `json:"id"`
 	PostID      string `json:"postId"`

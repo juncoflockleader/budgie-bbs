@@ -1158,6 +1158,10 @@ func (c *Core) ListResidentBoardPosts(userID string, limit, offset int) ([]Post,
 	return listResidentBoardPosts(c.DB, userID, limit, offset)
 }
 
+func (c *Core) ListBoardDeletedPosts(boardID, kind string, limit, offset int) ([]PostDeletion, error) {
+	return listBoardDeletedPosts(c.DB, boardID, kind, limit, offset)
+}
+
 // AuditLog returns recent durable events (mod/admin use).
 func (c *Core) AuditLog(after int64, limit int) ([]*proto.Event, error) {
 	return replayEvents(c.DB, after, nil, limit)

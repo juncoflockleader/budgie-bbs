@@ -46,6 +46,7 @@ type Category = projections.Category
 type Thread = projections.Thread
 type ThreadSummary = projections.ThreadSummary
 type Post = projections.Post
+type PostDeletion = projections.PostDeletion
 type PostAttachment = projections.PostAttachment
 type User = projections.User
 type AccountRegistrationSettings = projections.AccountRegistrationSettings

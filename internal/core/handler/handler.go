@@ -43,6 +43,8 @@ type Runtime struct {
 	UserReacted                  func(db *sql.DB, postID, userID string) (bool, error)
 	MarkPostRedacted             func(tx *sql.Tx, postID string, seq int64) error
 	MarkPostRestored             func(tx *sql.Tx, postID string, seq int64) error
+	RecordPostDeletion           func(tx *sql.Tx, postID, threadID, boardID, deletedByID, deletedByName, reason, kind string, deletedAt, seq int64) error
+	ClearPostDeletion            func(tx *sql.Tx, postID string) error
 	MarkPostPurged               func(tx *sql.Tx, postID string, seq int64) error
 	SetPostFlags                 func(tx *sql.Tx, postID string, marked, recommended, noReply, tex, mailBack bool, seq int64) error
 	SetThreadLocked              func(tx *sql.Tx, threadID string, locked bool) error

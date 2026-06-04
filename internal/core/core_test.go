@@ -7779,6 +7779,72 @@ func TestPollPostCannotBeEdited(t *testing.T) {
 	}, proto.ErrValidationFailed)
 }
 
+func TestBoardDeletedPostsRebuildFromEventLog(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	junkThread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Author deletion",
+		Body:  "author deleted body",
+	})
+	junkPosts, err := c.ListPosts(junkThread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(junkPosts) != 1 {
+		t.Fatalf("expected one junk target post, got %+v", junkPosts)
+	}
+	exec(t, c, bob, proto.CmdRedactPost, proto.RedactPostPayload{
+		Post:   junkPosts[0].ID,
+		Reason: "author cleanup",
+	})
+
+	recycleThread := exec(t, c, bob, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Moderator deletion",
+		Body:  "moderator deleted body",
+	})
+	recyclePosts, err := c.ListPosts(recycleThread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recyclePosts) != 1 {
+		t.Fatalf("expected one recycle target post, got %+v", recyclePosts)
+	}
+	exec(t, c, admin, proto.CmdRedactPost, proto.RedactPostPayload{
+		Post:   recyclePosts[0].ID,
+		Reason: "moderator cleanup",
+	})
+
+	assertDeletedBin := func(kind, postID, deletedBy, reason string) {
+		t.Helper()
+		deleted, err := c.ListBoardDeletedPosts("general", kind, 10, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(deleted) != 1 {
+			t.Fatalf("expected one %s deleted post, got %+v", kind, deleted)
+		}
+		if deleted[0].PostID != postID || deleted[0].Kind != kind || deleted[0].DeletedByName != deletedBy || deleted[0].Reason != reason || !deleted[0].Post.Redacted {
+			t.Fatalf("unexpected %s deleted post: %+v", kind, deleted[0])
+		}
+	}
+
+	assertDeletedBin("junk", junkPosts[0].ID, "bob", "author cleanup")
+	assertDeletedBin("recycle", recyclePosts[0].ID, "admin", "moderator cleanup")
+
+	if err := c.RebuildProjectionsFromEventLog(0); err != nil {
+		t.Fatalf("rebuild failed: %v", err)
+	}
+
+	assertDeletedBin("junk", junkPosts[0].ID, "bob", "author cleanup")
+	assertDeletedBin("recycle", recyclePosts[0].ID, "admin", "moderator cleanup")
+}
+
 type forumSnapshot struct {
 	thread          *core.Thread
 	posts           []core.Post

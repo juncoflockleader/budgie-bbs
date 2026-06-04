@@ -434,6 +434,10 @@ func listResidentBoardPosts(db *sql.DB, userID string, limit, offset int) ([]Pos
 	return projections.ListResidentBoardPosts(db, userID, limit, offset)
 }
 
+func listBoardDeletedPosts(db *sql.DB, boardID, kind string, limit, offset int) ([]PostDeletion, error) {
+	return projections.ListBoardDeletedPosts(db, boardID, kind, limit, offset)
+}
+
 func listPubkeyTitlesByUserName(db *sql.DB, username string) ([]string, error) {
 	return projections.ListPubkeyTitlesByUserName(db, username)
 }
@@ -488,6 +492,14 @@ func markPostRedacted(tx *sql.Tx, postID string, seq int64) error {
 
 func markPostRestored(tx *sql.Tx, postID string, seq int64) error {
 	return projections.MarkPostRestored(tx, postID, seq)
+}
+
+func recordPostDeletion(tx *sql.Tx, postID, threadID, boardID, deletedByID, deletedByName, reason, kind string, deletedAt, seq int64) error {
+	return projections.RecordPostDeletion(tx, postID, threadID, boardID, deletedByID, deletedByName, reason, kind, deletedAt, seq)
+}
+
+func clearPostDeletion(tx *sql.Tx, postID string) error {
+	return projections.ClearPostDeletion(tx, postID)
 }
 
 func moveThreadBoard(tx *sql.Tx, threadID, toBoard string) error {

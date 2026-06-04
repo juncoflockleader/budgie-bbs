@@ -1256,8 +1256,13 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
-	if !h.actorCanModerateBoardPostsTx(tx, actor, thread.Board) && !(isAuthor && withinWindow) {
+	canModeratePosts := h.actorCanModerateBoardPostsTx(tx, actor, thread.Board)
+	if !canModeratePosts && !(isAuthor && withinWindow) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "insufficient permissions to redact this post", false)}
+	}
+	deletionKind := "recycle"
+	if !canModeratePosts && isAuthor && withinWindow {
+		deletionKind = "junk"
 	}
 
 	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
@@ -1268,6 +1273,9 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		return internalErr(err)
 	}
 	if err := markPostRedacted(tx, post.ID, seq); err != nil {
+		return internalErr(err)
+	}
+	if err := recordPostDeletion(tx, post.ID, post.Thread, thread.Board, actor.ID, actor.Name, p.Reason, deletionKind, ts, seq); err != nil {
 		return internalErr(err)
 	}
 	if err := ftsDeletePost(tx, post.ID); err != nil {
@@ -1322,6 +1330,9 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 		return internalErr(err)
 	}
 	if err := markPostRestored(tx, post.ID, seq); err != nil {
+		return internalErr(err)
+	}
+	if err := clearPostDeletion(tx, post.ID); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {

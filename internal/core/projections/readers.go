@@ -3293,6 +3293,83 @@ func ListResidentBoardPosts(db *sql.DB, userID string, limit, offset int) ([]Pos
 	return attachPostAttachments(db, posts)
 }
 
+func ListBoardDeletedPosts(db *sql.DB, boardID, kind string, limit, offset int) ([]PostDeletion, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	kind = strings.TrimSpace(strings.ToLower(kind))
+	if kind != "recycle" && kind != "junk" {
+		kind = ""
+	}
+	rows, err := QQuery(db,
+		`SELECT d.post_id, d.thread_id, d.board_id, b.name, t.title,
+		        COALESCE(d.deleted_by_id, ''), COALESCE(d.deleted_by_name, ''), COALESCE(d.reason, ''),
+		        d.kind, d.deleted_at, d.seq,
+		        p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		        COALESCE(p.reply_to,''), p.version, p.redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
+		   FROM post_deletions d
+		   JOIN posts p ON p.id=d.post_id
+		   JOIN threads t ON t.id=d.thread_id
+		   JOIN boards b ON b.id=d.board_id
+		  WHERE d.board_id=?
+		    AND p.redacted=1
+		    AND (?='' OR d.kind=?)
+		  ORDER BY d.deleted_at DESC, d.seq DESC
+		  LIMIT ? OFFSET ?`,
+		boardID, kind, kind, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PostDeletion{}
+	for rows.Next() {
+		var d PostDeletion
+		var redacted int
+		if err := rows.Scan(
+			&d.PostID, &d.ThreadID, &d.BoardID, &d.BoardName, &d.ThreadTitle,
+			&d.DeletedByID, &d.DeletedByName, &d.Reason, &d.Kind, &d.DeletedAt, &d.Seq,
+			&d.Post.Author, &d.Post.AuthorID, &d.Post.Body, &d.Post.Signature, &d.Post.ContentType,
+			&d.Post.ReplyTo, &d.Post.Version, &redacted, &d.Post.ReactionCount,
+			&d.Post.CreatedSeq, &d.Post.UpdatedSeq, &d.Post.CreatedAt, &d.Post.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		d.Post.ID = d.PostID
+		d.Post.Thread = d.ThreadID
+		d.Post.Board = d.BoardID
+		d.Post.BoardName = d.BoardName
+		d.Post.ThreadTitle = d.ThreadTitle
+		d.Post.Redacted = redacted != 0
+		if d.Post.CreatedAt == 0 {
+			d.Post.CreatedAt = d.Post.CreatedSeq
+		}
+		if d.Post.UpdatedAt == 0 {
+			d.Post.UpdatedAt = d.Post.CreatedAt
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		attachments, err := ListPostAttachments(db, out[i].PostID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Post.Attachments = attachments
+		if err := hydratePostMetadata(db, &out[i].Post); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func applyBoardPolicyFlags(b *Board, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded, zapAllowed int) {
 	b.AnonymousAllowed = anonymousAllowed != 0
 	b.ReadOnly = readOnly != 0
