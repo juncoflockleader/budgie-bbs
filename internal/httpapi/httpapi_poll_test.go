@@ -524,6 +524,128 @@ func TestHTTPCommandEndpointMalformedExpiryPollDoesNotCreatePoll(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointVotePollLifecycleAndErrors(t *testing.T) {
+	c, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	commandBody := map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Command vote poll",
+			"body":  "[poll]\nChoose?\nNorth\nSouth\n[/poll]",
+		},
+	}
+
+	createAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, commandBody, &createAck); status != http.StatusCreated || !createAck.OK || createAck.Result == nil {
+		t.Fatalf("create command poll thread failed: status=%d ok=%v err=%+v", status, createAck.OK, createAck.Error)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+createAck.Result.ID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	if len(threadPolls.Polls) != 1 {
+		t.Fatalf("expected 1 poll in thread, got %d", len(threadPolls.Polls))
+	}
+
+	var postID string
+	for id := range threadPolls.Polls {
+		postID = id
+		break
+	}
+	poll := threadPolls.Polls[postID]
+	if poll == nil {
+		t.Fatal("expected poll projection for command-created thread")
+	}
+
+	// Unknown poll ID should return not_found via command endpoint.
+	unknownAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "votePoll",
+		"payload": map[string]any{
+			"poll":   "pol_missing",
+			"option": poll.Options[0].ID,
+		},
+	}, &unknownAck); status != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown poll command vote, got %d", status)
+	}
+
+	// Unknown option should return not_found.
+	unknownOptionAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "votePoll",
+		"payload": map[string]any{
+			"poll":   poll.ID,
+			"option": "opt_missing",
+		},
+	}, &unknownOptionAck); status != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown option command vote, got %d", status)
+	}
+
+	// Expired poll should reject via command vote endpoint.
+	if _, err := c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), poll.ID); err != nil {
+		t.Fatalf("expire poll in DB: %v", err)
+	}
+
+	expiredAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "votePoll",
+		"payload": map[string]any{
+			"poll":   poll.ID,
+			"option": poll.Options[0].ID,
+		},
+	}, &expiredAck); status != http.StatusConflict {
+		t.Fatalf("expected 409 for expired poll command vote, got %d", status)
+	}
+	if expiredAck.Error == nil || expiredAck.Error.Code != "conflict" {
+		t.Fatalf("expected conflict error payload, got %+v", expiredAck.Error)
+	}
+
+	// Restore to open the poll, then command vote should succeed.
+	if _, err := c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, 0, poll.ID); err != nil {
+		t.Fatalf("restore poll expiry: %v", err)
+	}
+	successAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "votePoll",
+		"payload": map[string]any{
+			"poll":   poll.ID,
+			"option": poll.Options[0].ID,
+		},
+	}, &successAck); status != http.StatusCreated || !successAck.OK {
+		t.Fatalf("expected successful command poll vote after restore, status=%d ok=%v err=%+v", status, successAck.OK, successAck.Error)
+	}
+
+	// Unauthenticated command vote should be rejected.
+	unauthAck := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", "", map[string]any{
+		"command": "votePoll",
+		"payload": map[string]any{
+			"poll":   poll.ID,
+			"option": poll.Options[0].ID,
+		},
+	}, &unauthAck); status != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated command vote, got %d", status)
+	}
+}
+
+func TestHTTPCommandEndpointInvalidPayload(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	ack := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": "not-an-object",
+	}, &ack); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for non-object command payload, got %d", status)
+	}
+}
+
 func TestHTTPCommandEndpointReplyPollLifecycle(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
