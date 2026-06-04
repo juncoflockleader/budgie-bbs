@@ -3148,6 +3148,56 @@ func ListReadablePostsByAuthor(db *sql.DB, viewerID string, includePrivate bool,
 	return attachPostAttachments(db, posts)
 }
 
+func ListResidentBoardPosts(db *sql.DB, userID string, limit, offset int) ([]Post, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT p.id, p.thread, t.board, b.name AS board_name, t.title AS thread_title,
+		        p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		        COALESCE(p.reply_to,''), p.version, p.redacted,
+		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
+		   FROM board_members bm
+		   JOIN boards b ON b.id=bm.board_id
+		   JOIN threads t ON t.board=bm.board_id
+		   JOIN posts p ON p.thread=t.id
+		  WHERE bm.user_id=?
+		    AND p.redacted=0
+		  ORDER BY p.created_seq DESC
+		  LIMIT ? OFFSET ?`,
+		userID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var posts []Post
+	for rows.Next() {
+		var p Post
+		var redacted int
+		if err := rows.Scan(&p.ID, &p.Thread, &p.Board, &p.BoardName, &p.ThreadTitle, &p.Author, &p.AuthorID, &p.Body, &p.Signature, &p.ContentType,
+			&p.ReplyTo, &p.Version, &redacted, &p.ReactionCount, &p.CreatedSeq, &p.UpdatedSeq, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if p.CreatedAt == 0 {
+			p.CreatedAt = p.CreatedSeq
+		}
+		if p.UpdatedAt == 0 {
+			p.UpdatedAt = p.CreatedAt
+		}
+		p.Redacted = redacted != 0
+		posts = append(posts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return attachPostAttachments(db, posts)
+}
+
 func applyBoardPolicyFlags(b *Board, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded, zapAllowed int) {
 	b.AnonymousAllowed = anonymousAllowed != 0
 	b.ReadOnly = readOnly != 0

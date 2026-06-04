@@ -14,6 +14,7 @@ import { RankingsPage } from './pages/RankingsPage'
 import { UnreadPage } from './pages/UnreadPage'
 import { UserProfilePage } from './pages/UserProfilePage'
 import { AuthorPostsPage } from './pages/AuthorPostsPage'
+import { ResidentFeedPage } from './pages/ResidentFeedPage'
 import * as api from './api/client'
 import type { Board, Thread, ThreadSummary, BudgieEvent } from './api/types'
 import { useStream } from './hooks/useStream'
@@ -27,6 +28,7 @@ type Page =
   | { name: 'search'; query: string }
   | { name: 'notifications' }
   | { name: 'unread' }
+  | { name: 'resident-feed' }
   | { name: 'private'; messageTo?: string }
   | { name: 'social' }
   | { name: 'rankings' }
@@ -128,6 +130,7 @@ export function App() {
           />
         </form>
         <button className="link-btn nav-unread" onClick={() => nav({ name: 'unread' })}>Unread</button>
+        <button className="link-btn nav-resident" onClick={() => nav({ name: 'resident-feed' })}>Resident</button>
         <button className="link-btn nav-chat" onClick={() => nav({ name: 'chat' })}>Chat</button>
         <button className="link-btn nav-social" onClick={() => nav({ name: 'social' })}>People</button>
         <button className="link-btn nav-rankings" onClick={() => nav({ name: 'rankings' })}>Rankings</button>
@@ -203,6 +206,13 @@ export function App() {
             token={token}
             username={page.username}
             onBack={() => nav({ name: 'user-profile', username: page.username })}
+            onOpenThread={(board, thread, initialPostId) => nav({ name: 'thread', board, thread, initialPostId })}
+          />
+        )}
+        {page.name === 'resident-feed' && (
+          <ResidentFeedPage
+            token={token}
+            onBack={() => nav({ name: 'boards' })}
             onOpenThread={(board, thread, initialPostId) => nav({ name: 'thread', board, thread, initialPostId })}
           />
         )}

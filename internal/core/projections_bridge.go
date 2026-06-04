@@ -422,6 +422,10 @@ func listReadablePostsByAuthor(db *sql.DB, viewerID string, includePrivate bool,
 	return projections.ListReadablePostsByAuthor(db, viewerID, includePrivate, name, limit, offset)
 }
 
+func listResidentBoardPosts(db *sql.DB, userID string, limit, offset int) ([]Post, error) {
+	return projections.ListResidentBoardPosts(db, userID, limit, offset)
+}
+
 func listPubkeyTitlesByUserName(db *sql.DB, username string) ([]string, error) {
 	return projections.ListPubkeyTitlesByUserName(db, username)
 }

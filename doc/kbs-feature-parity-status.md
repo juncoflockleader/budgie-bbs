@@ -404,6 +404,8 @@ enforced version:
 - A DB-backed `attachment_blobs` storage table for binary uploads/downloads.
 - Authenticated board detail API: `GET /api/v1/boards/{board}`.
 - Authenticated member list API: `GET /api/v1/boards/{board}/members`.
+- Authenticated resident-board article feed:
+  `GET /api/v1/boards/resident-feed?limit=&offset=`.
 - Authenticated member application API:
   `GET /api/v1/boards/{board}/member-applications?status=`.
 - Admin relay queue API:
@@ -496,6 +498,9 @@ enforced version:
 - Web thread readers expose title rename, post-level file upload, and
   authenticated download for stored attachments.
 - Web board lists expose a membership application action for member-mode boards.
+- Web top navigation exposes a `Resident` reader that aggregates latest
+  articles from the caller's current resident boards and opens the source
+  thread/post directly.
 - Web board settings expose membership requirements, pending applications with
   approve/reject actions for delegated managers, blacklist actions and delegated
   member-permission toggles for full moderators, and current-member leave flows.
@@ -901,6 +906,8 @@ social graph:
 - Enforced read-only, no-reply, anonymous-posting, board-moderator, and
   member-only read/post flows.
 - Board member application, approval/rejection/blacklist, and self-leave flows.
+- Board-member resident reading mode aggregates latest articles from boards
+  where the user currently has a board-member row.
 - Sanitized `Registry` / `reject_registry` generated records for public-board
   member-application decisions.
 - Sanitized `newcomers` generated records for completed account registrations.
@@ -983,6 +990,10 @@ social graph:
 
 ## Remaining Major KBS Parity Areas
 
+- Private-mail refinements that are still forum-native: forward, range-delete,
+  same-thread/same-author reading modes, and cross-post mail-to-board.
+- Board recycle/junk/range-delete workflows for moderator/user-deleted
+  articles.
 - Remaining specialized historical/stat-log boards and richer community
   statistics.
 - Explicitly out of the current BBS/forum parity goal: POP3/SMTP bridges,
@@ -991,5 +1002,7 @@ social graph:
 
 ## Suggested Next Slices
 
-1. Remaining specialized historical/stat-log boards and richer community
+1. Private-mail forward/range/traversal workflows.
+2. Board recycle/junk/range-delete workflows.
+3. Remaining specialized historical/stat-log boards and richer community
    statistics.

@@ -1396,6 +1396,18 @@ export async function listAuthorPosts(
   return { data: r.data?.posts ?? [] }
 }
 
+export async function listResidentBoardPosts(
+  token: string,
+  limit = 30,
+  offset = 0,
+): Promise<ApiResponse<Post[]>> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  const res = await fetch(`${BASE}/boards/resident-feed?${params}`, { headers: authHeaders(token) })
+  const r = await json<{ posts: Post[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.posts ?? [] }
+}
+
 export async function updateMyProfile(
   token: string,
   payload: { displayName?: string; title?: string; bio?: string; avatar?: string; signature?: string; plan?: string; homepage?: string },

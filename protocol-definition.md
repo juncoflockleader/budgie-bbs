@@ -269,6 +269,7 @@ GET /api/v1/boards/favorites/tree
 GET /api/v1/boards/favorites/export
 GET /api/v1/boards/summary?q=&sort=&new=&newDays=
 GET /api/v1/boards/unread?q=&sort=&new=&newDays=
+GET /api/v1/boards/resident-feed?limit=&offset=
 GET /api/v1/boards/{id}
 GET /api/v1/boards/{id}/online?limit=&offset=
 GET /api/v1/boards/{id}/members
@@ -630,6 +631,10 @@ sendDigestEntryMail { entry*, to[], toGroups[], toFriends,
   Delegated member managers cannot grant or revoke those delegation flags,
   manage board moderators, manage members who already hold delegated board
   permissions, blacklist applications, or review their own application.
+- `GET /api/v1/boards/resident-feed` returns latest non-redacted posts from
+  boards where the caller currently has a board-member row, including
+  member-read boards they can enter. It supplies board/thread context for
+  KBS-style resident-board aggregate reading.
 - Board membership requirements expose KBS-style admission knobs. `maxMembers`,
   `minLoginCount`, `minPostCount`, `minTrustLevel`, `minScore`,
   `minBoardPostCount`, `minBoardOriginalPostCount`, `minBoardDigestCount`, and

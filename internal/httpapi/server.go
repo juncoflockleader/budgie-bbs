@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/boards/favorites/export", auth(http.HandlerFunc(s.handleExportFavoriteTree)))
 	mux.Handle("GET /api/v1/boards/summary", auth(http.HandlerFunc(s.handleListBoardSummaries)))
 	mux.Handle("GET /api/v1/boards/unread", auth(http.HandlerFunc(s.handleListUnreadBoards)))
+	mux.Handle("GET /api/v1/boards/resident-feed", auth(http.HandlerFunc(s.handleListResidentBoardPosts)))
 	mux.Handle("GET /api/v1/digest/search", auth(http.HandlerFunc(s.handleSearchDigestEntries)))
 	mux.Handle("GET /api/v1/digest", auth(http.HandlerFunc(s.handleListSiteDigestEntries)))
 	mux.Handle("GET /api/v1/announcements", auth(http.HandlerFunc(s.handleListSiteAnnouncements)))

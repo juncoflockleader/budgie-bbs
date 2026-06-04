@@ -522,6 +522,17 @@ func (s *Server) handleListUnreadBoards(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"boards": boards})
 }
 
+func (s *Server) handleListResidentBoardPosts(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	limit, offset := paginate(r)
+	posts, err := s.core.ListResidentBoardPosts(actor.ID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
+}
+
 func boardSummaryOptions(r *http.Request) core.BoardSummaryOptions {
 	q := r.URL.Query()
 	newOnly := false
