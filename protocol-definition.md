@@ -168,8 +168,8 @@ Scope grammar: `type:id`.
 
 | Scope | Delivers |
 |---|---|
-| `board:<id>` | `thread.new`, `thread.moved`, `thread.locked` in that board |
-| `thread:<id>` | `post.appended`, `post.edited`, `post.flags_set`, `post.redacted`, `post.restored` in that thread |
+| `board:<id>` | `thread.new`, `thread.title_set`, `thread.moved`, `thread.locked` in that board |
+| `thread:<id>` | `thread.title_set`, `post.appended`, `post.edited`, `post.flags_set`, `post.redacted`, `post.restored` in that thread |
 | `chat:<room>` | `chat.line` in that room (ephemeral) |
 | `presence:global` or `presence:<board>` | `user.joined`, `user.left`, `presence.update` |
 | `account:self` | events targeting this account (always implicitly subscribed) |
@@ -353,6 +353,7 @@ Returns: the ack envelope.
 | `POST /api/v1/posts/{id}/repost` | `repostPost` |
 | `DELETE /api/v1/posts/{id}` | `redactPost` |
 | `POST /api/v1/posts/{id}/restore` | `restorePost` |
+| `PATCH /api/v1/threads/{id}/title` | `setThreadTitle` |
 | `POST /api/v1/threads/{id}/lock` | `lockThread` |
 | `PATCH /api/v1/categories/{id}` | update category metadata/visibility |
 | `PATCH /api/v1/boards/{id}/settings` | `setBoardSettings` |
@@ -466,6 +467,7 @@ editPost       { post*, body* }                             -> post.edited
 setPostFlag    { post*, marked?, recommended?, noReply?, tex?, mailBack? } -> post.flags_set
 redactPost     { post*, reason }                            -> post.redacted
 restorePost    { post* }                                    -> post.restored
+setThreadTitle { thread*, title* }                          -> thread.title_set
 flagPost       { post*, reason }                             -> post.flagged
 ```
 - `contentType`: `"markup"` (default — the medium-neutral subset, Decision 3) or `"ansi-art"` (raw CP437+ANSI payload, fixed-geometry).
@@ -513,6 +515,9 @@ flagPost       { post*, reason }                             -> post.flagged
   lineage in `sourcePost`, `sourceThread`, `sourceBoard`, `sourceAuthor`,
   `sourceAuthorId`, and `sourceTitle`; attachments are not cloned by this
   command.
+- `setThreadTitle` changes the thread/topic title. The thread starter may use
+  it during the normal edit window; board thread moderators may use it later.
+  It does not append a post or advance unread markers.
 
 ### Moderation & structure
 
@@ -926,6 +931,7 @@ post.edited     { id, thread, newBody, version, ts }
 post.flags_set  { id, thread, marked, recommended, noReply, tex, mailBack, by, ts }
 post.redacted   { id, thread, by, reason, ts }        // body NOT included
 post.restored   { id, thread, by, ts }
+thread.title_set { thread, title, by, ts }
 thread.locked   { thread, locked, by, ts }
 thread.moved    { thread, fromBoard, toBoard, by, ts }
 user.sanctioned { user, kind, scope, durationSec, by, reason, ts }

@@ -136,6 +136,11 @@ func SetThreadLocked(tx *sql.Tx, threadID string, locked bool) error {
 	return err
 }
 
+func SetThreadTitle(tx *sql.Tx, threadID, title string, ts int64) error {
+	_, err := QExec(tx, `UPDATE threads SET title=?, updated_at=? WHERE id=?`, title, ts, threadID)
+	return err
+}
+
 func MoveThreadBoard(tx *sql.Tx, threadID, toBoard string) error {
 	_, err := QExec(tx, `UPDATE threads SET board=? WHERE id=?`, toBoard, threadID)
 	return err

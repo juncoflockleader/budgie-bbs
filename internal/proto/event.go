@@ -12,6 +12,7 @@ const (
 	EvtPostFlagsSet        EventKind = "post.flags_set"
 	EvtPostRedacted        EventKind = "post.redacted"
 	EvtPostRestored        EventKind = "post.restored"
+	EvtThreadTitleSet      EventKind = "thread.title_set"
 	EvtThreadLocked        EventKind = "thread.locked"
 	EvtThreadMoved         EventKind = "thread.moved"
 	EvtUserSanctioned      EventKind = "user.sanctioned"
@@ -66,7 +67,7 @@ type Event struct {
 func (e *Event) IsDurable() bool {
 	switch e.Kind {
 	case EvtThreadNew, EvtPostAppended, EvtPostAttachmentAdded, EvtPostEdited, EvtPostRedacted,
-		EvtPostFlagsSet, EvtPostRestored, EvtPostPurged, EvtThreadLocked, EvtThreadMoved,
+		EvtPostFlagsSet, EvtPostRestored, EvtPostPurged, EvtThreadTitleSet, EvtThreadLocked, EvtThreadMoved,
 		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated,
 		EvtMailSent, EvtMailAttachmentAdded, EvtDirectMessageSent,
 		EvtUserBlessed, EvtPostReacted, EvtPostUnreacted, EvtPollVoted,
@@ -160,6 +161,13 @@ type PostPurgedPayload struct {
 	Thread string `json:"thread"`
 	By     string `json:"by"`
 	Reason string `json:"reason,omitempty"`
+	TS     int64  `json:"ts"`
+}
+
+type ThreadTitleSetPayload struct {
+	Thread string `json:"thread"`
+	Title  string `json:"title"`
+	By     string `json:"by"`
 	TS     int64  `json:"ts"`
 }
 

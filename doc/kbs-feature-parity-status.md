@@ -353,7 +353,7 @@ enforced version:
     with `canCurate`.
   - Curate announcement entries with `canAnnounce`.
   - Redact and restore board posts with `canModeratePosts`.
-  - Lock/move threads and toggle article no-reply flags with
+  - Rename/lock/move threads and toggle article no-reply flags with
     `canModerateThreads`.
   - Publish public poll-result records with `canManagePolls`.
   - Edit board policy flags and member admission requirements with
@@ -369,8 +369,8 @@ enforced version:
 - Web new-thread and reply composers expose anonymous posting when enabled.
 - Web new-thread and reply composers expose attachment metadata controls when
   enabled, and thread readers show attachment chips on posts.
-- Web thread readers expose post-level file upload and authenticated download
-  for stored attachments.
+- Web thread readers expose title rename, post-level file upload, and
+  authenticated download for stored attachments.
 - Web board lists expose a membership application action for member-mode boards.
 - Web board settings expose membership requirements, pending applications with
   approve/reject actions for delegated managers, blacklist actions and delegated
@@ -747,6 +747,9 @@ social graph:
   cross-board same-author reading through authenticated author-post streams.
 - Reply-tree-specific traversal inside a loaded thread.
 - KBS-style quoted replies from thread reading and the append-post API.
+- KBS-style thread title changes via `setThreadTitle` and
+  `PATCH /api/v1/threads/{thread}/title`; thread starters can rename inside the
+  edit window, and board thread moderators can rename later.
 - KBS-style article flags for marked, recommended, no-reply, TeX, and
   mail-back articles, with mail-back replies bridged into private mail.
 - Cross-post/repost article creation with source post/thread/board/author

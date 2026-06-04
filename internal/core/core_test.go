@@ -300,6 +300,63 @@ func TestPermissions(t *testing.T) {
 	})
 }
 
+func TestSetThreadTitleWorkflow(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	bob := registerAndGetUser(t, c, "bob", "pw")
+
+	res := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Original topic", Body: "Start",
+	})
+	threadID := res.ID
+
+	exec(t, c, alice, proto.CmdSetThreadTitle, proto.SetThreadTitlePayload{
+		Thread: threadID,
+		Title:  "Edited by author",
+	})
+	thread, err := c.GetThread(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread == nil || thread.Title != "Edited by author" {
+		t.Fatalf("expected author title edit, got %+v", thread)
+	}
+
+	execExpectErr(t, c, bob, proto.CmdSetThreadTitle, proto.SetThreadTitlePayload{
+		Thread: threadID,
+		Title:  "Bob takeover",
+	}, proto.ErrForbidden)
+
+	oldCreatedAt := time.Now().Add(-48 * time.Hour).UnixMilli()
+	if _, err := c.DB.Exec(`UPDATE threads SET created_at=? WHERE id=?`, oldCreatedAt, threadID); err != nil {
+		t.Fatal(err)
+	}
+	execExpectErr(t, c, alice, proto.CmdSetThreadTitle, proto.SetThreadTitlePayload{
+		Thread: threadID,
+		Title:  "Late author edit",
+	}, proto.ErrEditWindowExpired)
+
+	exec(t, c, admin, proto.CmdSetThreadTitle, proto.SetThreadTitlePayload{
+		Thread: threadID,
+		Title:  "Moderator title",
+	})
+	thread, err = c.GetThread(threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread == nil || thread.Title != "Moderator title" {
+		t.Fatalf("expected moderator title edit, got %+v", thread)
+	}
+
+	execExpectErr(t, c, admin, proto.CmdSetThreadTitle, proto.SetThreadTitlePayload{
+		Thread: threadID,
+		Title:  strings.Repeat("x", 161),
+	}, proto.ErrValidationFailed)
+}
+
 func TestSyssecuritySystemBoardLogs(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()
@@ -6941,6 +6998,10 @@ func TestRebuildProjectionsFromEventLog(t *testing.T) {
 		Thread:  threadID,
 		ToBoard: "archive",
 	})
+	exec(t, c, admin, proto.CmdSetThreadTitle, proto.SetThreadTitlePayload{
+		Thread: threadID,
+		Title:  "Replay title",
+	})
 	poll, err := c.GetPollByPostID(pollPostID)
 	if err != nil {
 		t.Fatal(err)
@@ -6983,6 +7044,9 @@ func TestRebuildProjectionsFromEventLog(t *testing.T) {
 	}
 	if beforeSnapshot.thread.Board != afterSnapshot.thread.Board {
 		t.Fatalf("thread board changed by rebuild: %q vs %q", beforeSnapshot.thread.Board, afterSnapshot.thread.Board)
+	}
+	if beforeSnapshot.thread.Title != afterSnapshot.thread.Title {
+		t.Fatalf("thread title changed by rebuild: %q vs %q", beforeSnapshot.thread.Title, afterSnapshot.thread.Title)
 	}
 	if beforeSnapshot.thread.PostCount != afterSnapshot.thread.PostCount {
 		t.Fatalf("thread post count changed by rebuild: %d vs %d", beforeSnapshot.thread.PostCount, afterSnapshot.thread.PostCount)

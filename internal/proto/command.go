@@ -13,6 +13,7 @@ const (
 	CmdSetPostFlag                CommandName = "setPostFlag"
 	CmdRedactPost                 CommandName = "redactPost"
 	CmdRestorePost                CommandName = "restorePost"
+	CmdSetThreadTitle             CommandName = "setThreadTitle"
 	CmdLockThread                 CommandName = "lockThread"
 	CmdMoveThread                 CommandName = "moveThread"
 	CmdSanctionUser               CommandName = "sanctionUser"
@@ -460,6 +461,11 @@ type RedactPostPayload struct {
 
 type RestorePostPayload struct {
 	Post string `json:"post"`
+}
+
+type SetThreadTitlePayload struct {
+	Thread string `json:"thread"`
+	Title  string `json:"title"`
 }
 
 type LockThreadPayload struct {

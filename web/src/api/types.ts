@@ -509,6 +509,7 @@ export type EventKind =
   | 'post.flags_set'
   | 'post.redacted'
   | 'post.restored'
+  | 'thread.title_set'
   | 'thread.locked'
   | 'thread.moved'
   | 'user.sanctioned'
@@ -565,6 +566,9 @@ export interface PostRedactedPayload {
 }
 export interface PostRestoredPayload {
   id: string; thread: string; by: string; ts: number
+}
+export interface ThreadTitleSetPayload {
+  thread: string; title: string; by: string; ts: number
 }
 export interface ThreadLockedPayload {
   thread: string; locked: boolean; by: string; ts: number

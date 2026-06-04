@@ -136,6 +136,8 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.PostFlaggedPayload)
 	case proto.EvtReviewResolved:
 		dst = new(proto.ReviewResolvedPayload)
+	case proto.EvtThreadTitleSet:
+		dst = new(proto.ThreadTitleSetPayload)
 	case proto.EvtThreadLocked:
 		dst = new(proto.ThreadLockedPayload)
 	case proto.EvtThreadMoved:

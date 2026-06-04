@@ -3,7 +3,7 @@ import * as api from '../api/client'
 import type { AttachmentPayload, BoardInfo, Thread, ThreadSummary, Post, Poll, BudgieEvent, PostAttachment } from '../api/types'
 import type {
   PostAppendedPayload, PostAttachmentAddedPayload, PostEditedPayload, PostFlagsSetPayload, PostRedactedPayload, PostRestoredPayload,
-  ThreadLockedPayload, PostReactedPayload, PostUnreactedPayload, PollVotedPayload,
+  ThreadTitleSetPayload, ThreadLockedPayload, PostReactedPayload, PostUnreactedPayload, PollVotedPayload,
 } from '../api/types'
 import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
@@ -101,6 +101,7 @@ export function ThreadPage({
   const [posts, setPosts] = useState<Post[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [threadTitle, setThreadTitle] = useState(thread.title)
   const [threadLocked, setThreadLocked] = useState(thread.locked)
   const [composing, setComposing] = useState(false)
   const [draftBody, setDraftBody] = useState('')
@@ -129,6 +130,10 @@ export function ThreadPage({
   const postRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const isAdmin = currentUserRole === 'admin'
   const draftPollValidation = useMemo(() => validatePollMarkup(draftBody), [draftBody])
+
+  useEffect(() => {
+    setThreadTitle(thread.title)
+  }, [thread.id, thread.title])
 
   // Fetch trust level for an author if not already loaded
   async function loadTrust(author: string) {
@@ -245,9 +250,9 @@ export function ThreadPage({
       mode: 'reading',
       board: thread.board,
       thread: thread.id,
-      location: thread.title,
+      location: threadTitle,
     })
-  }, [token, thread.id, thread.board, thread.title])
+  }, [token, thread.id, thread.board, threadTitle])
 
   useEffect(() => {
     loadCurrentUserTrust()
@@ -352,6 +357,9 @@ export function ThreadPage({
       setReplyTreePosts(prev => prev?.map(post =>
         post.id === p.id ? { ...post, redacted: false } : post
       ) ?? prev)
+    } else if (evt.event === 'thread.title_set') {
+      const p = evt.payload as ThreadTitleSetPayload
+      if (p.thread === thread.id) setThreadTitle(p.title)
     } else if (evt.event === 'thread.locked') {
       const p = evt.payload as ThreadLockedPayload
       if (p.thread === thread.id) setThreadLocked(p.locked)
@@ -449,6 +457,20 @@ export function ThreadPage({
     if (res.error) alert(res.error.message)
   }
 
+  async function renameThreadTitle() {
+    const next = prompt('Thread title:', threadTitle)
+    if (next === null) return
+    const title = next.trim()
+    if (!title || title === threadTitle) return
+    const previous = threadTitle
+    setThreadTitle(title)
+    const res = await api.execCommand(token, 'setThreadTitle', { thread: thread.id, title })
+    if (res.error) {
+      setThreadTitle(previous)
+      alert(res.error.message)
+    }
+  }
+
   async function toggleReact(postId: string) {
     const state = reactions[postId]
     if (state?.reacted) {
@@ -533,6 +555,7 @@ export function ThreadPage({
   const curationDefaultKind = canCurateBoard ? 'digest' : 'announcement'
   const canModeratePosts = canManageBoard || Boolean(currentMember?.canModeratePosts)
   const canModerateThreads = canManageBoard || Boolean(currentMember?.canModerateThreads)
+  const canRenameThread = canModerateThreads || thread.authorId === currentUserId || thread.author === currentUsername
   const canManagePolls = canManageBoard || Boolean(currentMember?.canManagePolls)
   const boardBlocksReplies = Boolean(boardInfo?.settings.readOnly || boardInfo?.settings.noReply)
   const canReplyInBoard = !threadLocked && (!boardBlocksReplies || canManageBoard)
@@ -630,14 +653,14 @@ export function ThreadPage({
   }
 
   async function curateThreadDigest() {
-    const payload = promptDigestPayload(thread.title, curationDefaultKind)
+    const payload = promptDigestPayload(threadTitle, curationDefaultKind)
     if (!payload) return
     const res = await api.curateThread(token, thread.id, payload)
     if (res.error) alert(res.error.message)
   }
 
   async function curatePostDigest(post: Post) {
-    const payload = promptDigestPayload(`${thread.title} #${post.createdSeq}`, curationDefaultKind)
+    const payload = promptDigestPayload(`${threadTitle} #${post.createdSeq}`, curationDefaultKind)
     if (!payload) return
     const res = await api.curatePost(token, post.id, payload)
     if (res.error) alert(res.error.message)
@@ -646,7 +669,7 @@ export function ThreadPage({
   async function repostArticle(post: Post) {
     const board = prompt('Repost to board:', thread.board)
     if (board === null) return
-    const title = prompt('Repost title:', thread.title)
+    const title = prompt('Repost title:', threadTitle)
     if (title === null) return
     const res = await api.repostPost(token, post.id, {
       board: board.trim(),
@@ -738,7 +761,7 @@ export function ThreadPage({
     <div className="thread-page">
       <div className="page-header">
         <button className="back-btn" onClick={onBack}>← Threads</button>
-        <h2 className="thread-title">{thread.title}</h2>
+        <h2 className="thread-title">{threadTitle}</h2>
         {threadLocked && <span className="locked-badge">🔒 Locked</span>}
         <span className="unread-pill">{unreadPosts.length} unread</span>
         <button className="link-btn" disabled={unreadPosts.length === 0} onClick={() => jumpUnread('previous')}>Prev unread</button>
@@ -765,6 +788,7 @@ export function ThreadPage({
         {canUseCurationAction && <button className="link-btn" onClick={curateThreadDigest}>Digest thread</button>}
         <button className="link-btn" disabled={unreadPosts.length === 0} onClick={markThreadRead}>Mark all read</button>
         {readSeq > 0 && <button className="link-btn" onClick={restoreThreadRead}>Restore marker</button>}
+        {canRenameThread && <button className="link-btn" onClick={renameThreadTitle}>Rename</button>}
         {canModerateThreads && (
           <button className="link-btn" onClick={toggleLock}>
             {threadLocked ? '🔓 Unlock' : '🔒 Lock'}

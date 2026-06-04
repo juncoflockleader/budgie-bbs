@@ -2418,6 +2418,23 @@ func TestHTTPDelegatedBoardMemberPermissions(t *testing.T) {
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("alice delegated thread lock status: %d error=%+v", status, ack.Error)
 	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/threads/"+thread.Result.ID+"/title", carolToken, map[string]string{
+		"title": "carol title",
+	}, &ack); status != http.StatusForbidden {
+		t.Fatalf("expected non-author cannot rename thread, got %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/threads/"+thread.Result.ID+"/title", aliceToken, map[string]string{
+		"title": "delegated title",
+	}, &ack); status != http.StatusCreated {
+		t.Fatalf("alice delegated thread title status: %d error=%+v", status, ack.Error)
+	}
+	clubThreads := threadSummariesResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/club/threads", bobToken, nil, &clubThreads); status != http.StatusOK {
+		t.Fatalf("list club threads status: %d", status)
+	}
+	if !hasHTTPThreadSummary(clubThreads, thread.Result.ID, "delegated title") {
+		t.Fatalf("expected renamed thread in club thread list, got %+v", clubThreads.Threads)
+	}
 	posts := postsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
 		t.Fatalf("list posts status: %d", status)

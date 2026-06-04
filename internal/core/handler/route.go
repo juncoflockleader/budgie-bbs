@@ -104,6 +104,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.restorePost(actor, p)
 
+	case proto.CmdSetThreadTitle:
+		var p proto.SetThreadTitlePayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.setThreadTitle(actor, p)
+
 	case proto.CmdLockThread:
 		var p proto.LockThreadPayload
 		if err := json.Unmarshal(payload, &p); err != nil {

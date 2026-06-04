@@ -193,6 +193,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/threads/{thread}/read", auth(http.HandlerFunc(s.handleMarkThreadRead)))
 	mux.Handle("POST /api/v1/threads/{thread}/read/restore", auth(http.HandlerFunc(s.handleRestoreThreadRead)))
 	mux.Handle("POST /api/v1/threads/{thread}/digest", auth(http.HandlerFunc(s.handleCurateThread)))
+	mux.Handle("PATCH /api/v1/threads/{thread}/title", auth(http.HandlerFunc(s.handleSetThreadTitle)))
 	mux.Handle("POST /api/v1/threads/{thread}/lock", auth(http.HandlerFunc(s.handleLockThread)))
 	mux.Handle("POST /api/v1/digest/{entry}/mail", auth(http.HandlerFunc(s.handleSendDigestEntryMail)))
 	mux.Handle("PATCH /api/v1/digest/{entry}", auth(http.HandlerFunc(s.handleUpdateDigestEntry)))

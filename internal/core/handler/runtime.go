@@ -163,6 +163,10 @@ func setThreadLocked(tx *sql.Tx, threadID string, locked bool) error {
 	return currentRuntime().SetThreadLocked(tx, threadID, locked)
 }
 
+func setThreadTitle(tx *sql.Tx, threadID, title string, ts int64) error {
+	return currentRuntime().SetThreadTitle(tx, threadID, title, ts)
+}
+
 func moveThreadBoard(tx *sql.Tx, threadID, toBoard string) error {
 	return currentRuntime().MoveThreadBoard(tx, threadID, toBoard)
 }

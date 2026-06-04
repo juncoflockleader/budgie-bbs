@@ -1,7 +1,7 @@
 import { type MouseEvent, useEffect, useState, useCallback } from 'react'
 import * as api from '../api/client'
 import type { Board, BoardInfo, BoardMember, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
-import type { BudgieEvent, ThreadNewPayload } from '../api/types'
+import type { BudgieEvent, ThreadNewPayload, ThreadTitleSetPayload } from '../api/types'
 import { Spinner } from '../components/Spinner'
 import { useStream } from '../hooks/useStream'
 
@@ -101,6 +101,11 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
           unreadPosts: 1,
         }, ...prev]
       })
+    } else if (evt.event === 'thread.title_set') {
+      const p = evt.payload as ThreadTitleSetPayload
+      setThreads(prev => prev.map(thread => (
+        thread.id === p.thread ? { ...thread, title: p.title, updatedAt: p.ts } : thread
+      )))
     }
   }, [board.id])
 

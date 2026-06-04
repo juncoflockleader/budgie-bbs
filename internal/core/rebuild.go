@@ -239,6 +239,10 @@ func rebuildProjectionEvent(tx *sql.Tx, seq int64, payload any) error {
 		); err != nil {
 			return err
 		}
+	case *proto.ThreadTitleSetPayload:
+		if err := setThreadTitleWithTime(tx, evt.Thread, evt.Title, evt.TS); err != nil {
+			return err
+		}
 	case *proto.ThreadLockedPayload:
 		if err := setThreadLockedWithTime(tx, evt.Thread, evt.Locked, evt.TS); err != nil {
 			return err
@@ -465,6 +469,11 @@ func setThreadLockedWithTime(tx *sql.Tx, threadID string, locked bool, ts int64)
 		v = 1
 	}
 	_, err := qExec(tx, `UPDATE threads SET locked=?, updated_at=? WHERE id=?`, v, ts, threadID)
+	return err
+}
+
+func setThreadTitleWithTime(tx *sql.Tx, threadID, title string, ts int64) error {
+	_, err := qExec(tx, `UPDATE threads SET title=?, updated_at=? WHERE id=?`, title, ts, threadID)
 	return err
 }
 

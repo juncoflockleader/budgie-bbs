@@ -1193,6 +1193,75 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
+func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Reply {
+	if p.Thread == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	}
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "title is required", false)}
+	}
+	if len(title) > 160 {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "title must be 160 characters or less", false)}
+	}
+	if actor == nil {
+		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
+	}
+
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	thread, err := getThreadTx(tx, p.Thread)
+	if err != nil {
+		return internalErr(err)
+	}
+	if thread == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+	}
+	if thread.Title == title {
+		return Reply{Result: &proto.AckResult{ID: thread.ID}}
+	}
+
+	canModerateThread := h.actorCanModerateBoardThreadsTx(tx, actor, thread.Board)
+	isAuthor := thread.AuthorID == actor.ID
+	if thread.AuthorID == "" {
+		isAuthor = thread.Author == actor.Name
+	}
+	withinWindow := time.Now().UnixMilli()-thread.CreatedAt < editWindowDur.Milliseconds()
+	if !canModerateThread {
+		if !isAuthor {
+			return Reply{Err: errDetail(proto.ErrForbidden, "thread author or board thread moderation permission required", false)}
+		}
+		if !withinWindow {
+			return Reply{Err: errDetail(proto.ErrEditWindowExpired, "edit window has expired", false)}
+		}
+	}
+
+	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadTitleSet, scopes, &proto.ThreadTitleSetPayload{
+		Thread: thread.ID, Title: title, By: actor.ID, TS: ts,
+	})
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := setThreadTitle(tx, thread.ID, title, ts); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadTitleSet, Seq: seq, Scopes: scopes,
+		Payload: &proto.ThreadTitleSetPayload{Thread: thread.ID, Title: title, By: actor.Name, TS: ts}, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
+}
+
 func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 	ts := nowMS()
 

@@ -45,6 +45,7 @@ type Runtime struct {
 	MarkPostPurged               func(tx *sql.Tx, postID string, seq int64) error
 	SetPostFlags                 func(tx *sql.Tx, postID string, marked, recommended, noReply, tex, mailBack bool, seq int64) error
 	SetThreadLocked              func(tx *sql.Tx, threadID string, locked bool) error
+	SetThreadTitle               func(tx *sql.Tx, threadID, title string, ts int64) error
 	MoveThreadBoard              func(tx *sql.Tx, threadID, toBoard string) error
 	SetUserRole                  func(tx *sql.Tx, userID, role string) error
 	InsertBoard                  func(tx *sql.Tx, id, name, description, parentID string, position int) error

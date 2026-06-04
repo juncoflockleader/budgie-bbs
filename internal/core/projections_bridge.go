@@ -514,6 +514,10 @@ func setThreadLocked(tx *sql.Tx, threadID string, locked bool) error {
 	return projections.SetThreadLocked(tx, threadID, locked)
 }
 
+func setThreadTitle(tx *sql.Tx, threadID, title string, ts int64) error {
+	return projections.SetThreadTitle(tx, threadID, title, ts)
+}
+
 func setThreadPref(db *sql.DB, userID, threadID, level string) error {
 	return projections.SetThreadPref(db, userID, threadID, level)
 }

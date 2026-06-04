@@ -1661,7 +1661,7 @@ export async function clearUserSanction(
 
 export type CommandName =
   | 'createThread' | 'appendPost' | 'repostPost' | 'postBoardMail' | 'editPost' | 'setPostFlag' | 'redactPost' | 'restorePost'
-  | 'lockThread' | 'moveThread' | 'sanctionUser' | 'clearUserSanction' | 'setContentFilter' | 'grantRole' | 'revokeRole' | 'publishStatsSnapshot'
+  | 'setThreadTitle' | 'lockThread' | 'moveThread' | 'sanctionUser' | 'clearUserSanction' | 'setContentFilter' | 'grantRole' | 'revokeRole' | 'publishStatsSnapshot'
   | 'sendChatLine' | 'setPresence' | 'createBoard' | 'purgePost'
   | 'setBoardSettings' | 'setBoardMemberRequirements' | 'setBoardModerator'
   | 'setBoardMember' | 'applyBoardMembership' | 'reviewBoardMembership' | 'leaveBoardMembership'
