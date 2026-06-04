@@ -47,7 +47,8 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
   const [polls, setPolls] = useState<Record<string, Poll | null>>({})
   // authorName → trust level
   const [trustLevels, setTrustLevels] = useState<Record<string, number>>({})
-  const [canCreatePoll, setCanCreatePoll] = useState(true)
+  const [canCreatePoll, setCanCreatePoll] = useState(false)
+  const [isTrustLoaded, setIsTrustLoaded] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const isMod = currentUserRole === 'moderator' || currentUserRole === 'admin'
   const isAdmin = currentUserRole === 'admin'
@@ -62,10 +63,14 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
   }
 
   async function loadCurrentUserTrust() {
+    setIsTrustLoaded(false)
     const trustRes = await api.getTrust(token, currentUsername)
     if (trustRes.data) {
       setCanCreatePoll(trustRes.data.trustLevel >= 2)
+    } else {
+      setCanCreatePoll(false)
     }
+    setIsTrustLoaded(true)
   }
 
   // Fetch poll for a post if not already loading/loaded
@@ -399,8 +404,8 @@ export function ThreadPage({ token, thread, currentUserId, currentUsername, curr
             <div className="compose-actions">
               <PollComposer
                 onInsert={insertPollIntoDraft}
-                disabled={!canCreatePoll}
-                disabledHint={!canCreatePoll ? 'Polls require trust level 2+' : undefined}
+                disabled={!isTrustLoaded || !canCreatePoll}
+                disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
               />
               <button onClick={submitPost} disabled={submitting || !draftBody.trim()}>
                 {submitting ? '…' : 'Post reply'}

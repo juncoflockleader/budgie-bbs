@@ -17,7 +17,7 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [isTrustLoaded, setIsTrustLoaded] = useState(false)
-  const [canCreatePoll, setCanCreatePoll] = useState(true)
+  const [canCreatePoll, setCanCreatePoll] = useState(false)
 
   function appendPoll(markup: string) {
     setBody(prev => {
@@ -32,6 +32,8 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
       const trustRes = await api.getTrust(token, currentUsername)
       if (trustRes.data) {
         setCanCreatePoll(trustRes.data.trustLevel >= 2)
+      } else {
+        setCanCreatePoll(false)
       }
       setIsTrustLoaded(true)
     })()
@@ -84,7 +86,7 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
         <div className="compose-actions">
           <PollComposer
             onInsert={appendPoll}
-            disabled={isTrustLoaded && !canCreatePoll}
+            disabled={!isTrustLoaded || !canCreatePoll}
             disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
           />
         </div>
