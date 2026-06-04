@@ -492,6 +492,21 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.insertPollTemplate()
 			return nil
+		case "ctrl+e":
+			if !m.canCreatePoll {
+				if m.trustLoaded {
+					m.statusMsg = "polls require trust level 2+"
+				} else {
+					m.statusMsg = "checking poll permission…"
+				}
+				return nil
+			}
+			if m.composingNewThread && m.titleInput.Focused() {
+				m.statusMsg = "focus body first"
+				return nil
+			}
+			m.insertPollTemplateWithExpires("1h")
+			return nil
 		case "ctrl+s":
 			if m.composingNewThread {
 				// If title field still focused, move to body first.
@@ -1188,7 +1203,27 @@ func (m model) submitNewThread() tea.Cmd {
 }
 
 func (m *model) insertPollTemplate() {
-	template := "[poll expires=1h]\nQuestion\nOption 1\nOption 2\n[/poll]"
+	template := "[poll]\nQuestion\nOption 1\nOption 2\n[/poll]"
+	value := m.compose.Value()
+	body := strings.TrimRight(value, "\n")
+	if body == "" {
+		m.compose.SetValue(template)
+		return
+	}
+
+	if strings.HasSuffix(value, "\n") {
+		m.compose.InsertString("\n" + template)
+		return
+	}
+	m.compose.InsertString("\n\n" + template)
+}
+
+func (m *model) insertPollTemplateWithExpires(expiresAt string) {
+	if expiresAt == "" {
+		m.insertPollTemplate()
+		return
+	}
+	template := "[poll expires=" + expiresAt + "]\nQuestion\nOption 1\nOption 2\n[/poll]"
 	value := m.compose.Value()
 	body := strings.TrimRight(value, "\n")
 	if body == "" {
@@ -1206,12 +1241,12 @@ func (m *model) insertPollTemplate() {
 func composeHelpLine(canCreatePoll, trustLoaded bool) string {
 	base := "Ctrl+S=submit  Esc=cancel"
 	if canCreatePoll {
-		return base + "  Ctrl+P=add poll template"
+		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll"
 	}
 	if trustLoaded {
-		return base + "  Ctrl+P=add poll template (trust level 2+ required)"
+		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll (trust level 2+ required)"
 	}
-	return base + "  Ctrl+P=add poll template (checking permission…)"
+	return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll (checking permission…)"
 }
 
 func (m model) fetchPollPermission() tea.Cmd {
