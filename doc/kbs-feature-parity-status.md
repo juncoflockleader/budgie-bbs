@@ -193,6 +193,11 @@ thread. Budgie now has the first thread-level version:
   restore-marker, and per-post `Mark to here` actions.
 - Web thread readers expose previous/next unread-thread controls within the
   current board.
+- Web thread readers expose KBS-style quoted-reply actions that open the reply
+  composer with editable quoted article text.
+- The `appendPost` command and thread-post REST alias accept `quotePost` with
+  `replyTo` so non-web clients can request the same server-generated quoted
+  reply body while preserving direct reply links.
 - Web `Unread` page exposes site-wide unread threads, favorite-board unread
   threads, favorite-folder unread threads, direct first-unread opening, and
   mark-thread-read controls.
@@ -741,6 +746,7 @@ social graph:
 - First/last post jumps, same-author trails inside a loaded thread, and
   cross-board same-author reading through authenticated author-post streams.
 - Reply-tree-specific traversal inside a loaded thread.
+- KBS-style quoted replies from thread reading and the append-post API.
 - KBS-style article flags for marked, recommended, no-reply, TeX, and
   mail-back articles, with mail-back replies bridged into private mail.
 - Cross-post/repost article creation with source post/thread/board/author

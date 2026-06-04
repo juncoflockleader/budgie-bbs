@@ -178,8 +178,10 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if p.Thread == "" || p.Body == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread and body are required", false)}
 	}
-	pollBlock, cleanBody := extractPoll(p.Body)
-	if pollBlock != nil && cleanBody != p.Body {
+	userBody := p.Body
+	pollBlock, cleanBody := extractPoll(userBody)
+	pollStripped := pollBlock != nil && cleanBody != userBody
+	if pollStripped {
 		if errReply := h.requireMinTrustForPoll(actor, 2, "reply"); errReply.Err != nil {
 			return errReply
 		}
@@ -234,10 +236,6 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	contentFilter, err := matchContentFilter(h.db, thread.Board, p.Body)
-	if err != nil {
-		return internalErr(err)
-	}
 
 	// Sanction check.
 	if kind, ok := activeSanction(h.db, actor.ID, thread.Board); ok {
@@ -249,6 +247,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 
 	var mailBackTarget *Post
+	var quoteSource *Post
 	// Threading depth cap: max 1 level. If replyTo is itself a reply, flatten.
 	if p.ReplyTo != "" {
 		parent, err := getPost(h.db, p.ReplyTo)
@@ -261,6 +260,12 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		if parent.Thread != thread.ID {
 			return Reply{Err: errDetail(proto.ErrValidationFailed, "replyTo post belongs to another thread", false)}
 		}
+		if p.QuotePost {
+			if parent.Redacted {
+				return Reply{Err: errDetail(proto.ErrConflict, "cannot quote a redacted post", false)}
+			}
+			quoteSource = parent
+		}
 		if parent.NoReply && !canModerateThread {
 			return Reply{Err: errDetail(proto.ErrForbidden, "article is not accepting replies", false)}
 		}
@@ -272,6 +277,9 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 			p.ReplyTo = parent.ReplyTo
 		}
 	} else {
+		if p.QuotePost {
+			return Reply{Err: errDetail(proto.ErrValidationFailed, "replyTo is required for quoted replies", false)}
+		}
 		root, err := threadRootPost(h.db, thread.ID)
 		if err != nil {
 			return internalErr(err)
@@ -279,6 +287,16 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		if root != nil && root.MailBack {
 			mailBackTarget = root
 		}
+	}
+	rawBody := userBody
+	if quoteSource != nil {
+		prefix := formatQuotedReplyPrefix(quoteSource)
+		cleanBody = prefix + cleanBody
+		rawBody = prefix + userBody
+	}
+	contentFilter, err := matchContentFilter(h.db, thread.Board, rawBody)
+	if err != nil {
+		return internalErr(err)
 	}
 
 	tx, err := h.db.Begin()
@@ -290,7 +308,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, &proto.PostAppendedPayload{
 		ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID, Body: cleanBody,
-		RawBody:     p.Body,
+		RawBody:     rawBody,
 		Signature:   signature,
 		ContentType: ct, ReplyTo: p.ReplyTo, Attachments: attachments, TS: ts,
 	})
@@ -329,7 +347,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if pollBlock != nil && cleanBody != p.Body {
+	if pollStripped {
 		// Create poll rows within the same TX.
 		pollID := newID("pol_")
 		if err := insertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
@@ -354,7 +372,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID, Body: cleanBody, RawBody: p.Body, Signature: signature, ContentType: ct, ReplyTo: p.ReplyTo, Attachments: attachments, TS: ts}, TS: ts})
+		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID, Body: cleanBody, RawBody: rawBody, Signature: signature, ContentType: ct, ReplyTo: p.ReplyTo, Attachments: attachments, TS: ts}, TS: ts})
 	if filterEvent != nil {
 		h.bus.Publish(filterEvent)
 	}
@@ -364,6 +382,36 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	h.publishGeneratedEvents(filterGeneratedEvents)
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
+}
+
+func formatQuotedReplyPrefix(source *Post) string {
+	author := strings.TrimSpace(source.Author)
+	if author == "" {
+		author = "Unknown"
+	}
+	body := strings.TrimSpace(source.Body)
+	if body == "" {
+		body = "[empty article]"
+	}
+	lines := strings.Split(body, "\n")
+	const maxQuoteLines = 24
+	const maxQuoteBytes = 2400
+	var b strings.Builder
+	fmt.Fprintf(&b, "> %s wrote:\n", author)
+	for i, line := range lines {
+		if i >= maxQuoteLines || b.Len()+len(line)+8 > maxQuoteBytes {
+			b.WriteString("> ...\n")
+			break
+		}
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			b.WriteString(">\n")
+			continue
+		}
+		fmt.Fprintf(&b, "> %s\n", line)
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {

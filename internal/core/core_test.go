@@ -201,6 +201,72 @@ func TestProjectionMatchesLogReplay(t *testing.T) {
 	}
 }
 
+func TestAppendPostQuotedReply(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	thread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general",
+		Title: "Quote me",
+		Body:  "First line\nSecond line",
+	})
+	sourcePosts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sourcePosts) != 1 {
+		t.Fatalf("expected source post, got %+v", sourcePosts)
+	}
+
+	reply := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread:    thread.ID,
+		ReplyTo:   sourcePosts[0].ID,
+		QuotePost: true,
+		Body:      "My answer",
+	})
+	posts, err := c.ListPosts(thread.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quoted *core.Post
+	for i := range posts {
+		if posts[i].ID == reply.ID {
+			quoted = &posts[i]
+			break
+		}
+	}
+	if quoted == nil {
+		t.Fatalf("expected quoted reply post, got %+v", posts)
+	}
+	for _, want := range []string{"> admin wrote:", "> First line", "> Second line", "My answer"} {
+		if !strings.Contains(quoted.Body, want) {
+			t.Fatalf("expected quoted reply body to contain %q, got:\n%s", want, quoted.Body)
+		}
+	}
+	if quoted.ReplyTo != sourcePosts[0].ID {
+		t.Fatalf("expected quoted reply to keep direct reply target %q, got %+v", sourcePosts[0].ID, quoted)
+	}
+
+	execExpectErr(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread:    thread.ID,
+		QuotePost: true,
+		Body:      "No target",
+	}, proto.ErrValidationFailed)
+	exec(t, c, admin, proto.CmdRedactPost, proto.RedactPostPayload{
+		Post:   sourcePosts[0].ID,
+		Reason: "test redaction",
+	})
+	execExpectErr(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread:    thread.ID,
+		ReplyTo:   sourcePosts[0].ID,
+		QuotePost: true,
+		Body:      "No leak",
+	}, proto.ErrConflict)
+}
+
 // TestPermissions verifies that a regular user cannot perform moderator actions.
 func TestPermissions(t *testing.T) {
 	c, cancel := newTestCore(t)

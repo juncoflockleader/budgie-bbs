@@ -457,7 +457,8 @@ Payloads are sketches; required fields marked `*`. All commands accept a `cid`. 
 
 ```
 createThread   { board*, title*, body*, contentType, anonymous, attachments[] } -> thread.new (+ first post.appended)
-appendPost     { thread*, body*, replyTo, contentType, anonymous, attachments[] } -> post.appended
+appendPost     { thread*, body*, replyTo?, quotePost?, contentType,
+                 anonymous, attachments[] }                    -> post.appended
 repostPost     { post*, board*, title? }                    -> thread.new (+ source-linked post.appended)
 postBoardMail  { board, thread, subject, body*, contentType, attachments[] } -> thread.new or post.appended
 attachPost     { post*, filename*, contentType, sizeBytes } -> post.attachment_added
@@ -470,6 +471,9 @@ flagPost       { post*, reason }                             -> post.flagged
 - `contentType`: `"markup"` (default — the medium-neutral subset, Decision 3) or `"ansi-art"` (raw CP437+ANSI payload, fixed-geometry).
 - `anonymous`: optional on `createThread` and `appendPost`; accepted only when
   the board allows anonymous posting or the actor can moderate the board.
+- `quotePost`: optional on `appendPost` and requires `replyTo`. It prepends
+  editable quoted article text from the reply target, rejects redacted or
+  cross-thread quote sources, and preserves the normal direct reply link.
 - `attachments`: optional file metadata, max 8 per post:
   `{ filename*, contentType, sizeBytes, url }`. The handler generates
   attachment ids in the durable `post.appended` payload. Normal users may attach

@@ -1634,6 +1634,33 @@ func TestHTTPPostReplyTreeAndReadPolicy(t *testing.T) {
 	if got := httpPostThreadTitleForPost(tree, rootID); got != "Reply tree" {
 		t.Fatalf("expected thread title on reply tree post, got %q in %+v", got, tree.Posts)
 	}
+	quoted := ackResponse{}
+	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+thread.Result.ID+"/posts", aliceToken, map[string]any{
+		"replyTo":   rootID,
+		"quotePost": true,
+		"body":      "HTTP quoted reply",
+	}, &quoted); status != http.StatusCreated {
+		t.Fatalf("quoted reply status: %d error=%+v", status, quoted.Error)
+	}
+	quotedPosts := postsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+thread.Result.ID+"/posts", aliceToken, nil, &quotedPosts); status != http.StatusOK {
+		t.Fatalf("list quoted reply posts status: %d", status)
+	}
+	foundQuoted := false
+	for _, post := range quotedPosts.Posts {
+		if post.ID != quoted.Result.ID {
+			continue
+		}
+		foundQuoted = true
+		for _, want := range []string{"> alice wrote:", "> root", "HTTP quoted reply"} {
+			if !strings.Contains(post.Body, want) {
+				t.Fatalf("expected quoted reply body to contain %q, got:\n%s", want, post.Body)
+			}
+		}
+	}
+	if !foundQuoted {
+		t.Fatalf("expected quoted reply post %q, got %+v", quoted.Result.ID, quotedPosts.Posts)
+	}
 
 	ack := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/boards", adminToken, map[string]string{

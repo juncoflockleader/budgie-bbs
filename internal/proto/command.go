@@ -410,6 +410,7 @@ type AppendPostPayload struct {
 	Thread      string              `json:"thread"`
 	Body        string              `json:"body"`
 	ReplyTo     string              `json:"replyTo,omitempty"`
+	QuotePost   bool                `json:"quotePost,omitempty"`
 	ContentType string              `json:"contentType,omitempty"`
 	Anonymous   bool                `json:"anonymous,omitempty"`
 	Attachments []AttachmentPayload `json:"attachments,omitempty"`

@@ -44,6 +44,31 @@ function hasPollBlock(body: string) {
   return body.toLowerCase().includes('[poll')
 }
 
+function formatQuotePrefix(post: Post) {
+  const author = post.author?.trim() || 'Unknown'
+  const body = (post.body || '[empty article]').trim()
+  const lines = body.split('\n')
+  const quoted: string[] = [`> ${author} wrote:`]
+  let bytes = quoted[0].length
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].replace(/\r$/, '')
+    if (i >= 24 || bytes + line.length > 2400) {
+      quoted.push('> ...')
+      break
+    }
+    quoted.push(line ? `> ${line}` : '>')
+    bytes += line.length + 3
+  }
+  return `${quoted.join('\n')}\n\n`
+}
+
+function prependQuoteToDraft(post: Post, draft: string) {
+  const quote = formatQuotePrefix(post)
+  if (!draft.trim()) return quote
+  if (draft.trimStart().startsWith(quote.trim())) return draft
+  return `${quote}${draft}`
+}
+
 function promptDigestPayload(defaultTitle: string, defaultKind = 'digest') {
   const kind = prompt('Digest kind:', defaultKind)
   if (kind === null) return null
@@ -384,6 +409,14 @@ export function ThreadPage({
       setComposing(false)
       setComposeError(null)
     }
+  }
+
+  function startReply(post: Post, quoted = false) {
+    setReplyTo(post.id)
+    if (quoted) {
+      setDraftBody(prev => prependQuoteToDraft(post, prev))
+    }
+    setComposing(true)
   }
 
   function insertPollIntoDraft(markup: string) {
@@ -828,10 +861,10 @@ export function ThreadPage({
                     {rx.reacted ? '❤️' : '🤍'}{rx.count > 0 ? ` ${rx.count}` : ''}
                   </button>
                   {canReplyToPost && !post.redacted && (
-                    <button className="link-btn" onClick={() => {
-                      setReplyTo(post.id)
-                      setComposing(true)
-                    }}>Reply</button>
+                    <>
+                      <button className="link-btn" onClick={() => startReply(post)}>Reply</button>
+                      <button className="link-btn" onClick={() => startReply(post, true)}>Quote</button>
+                    </>
                   )}
                   {(canModeratePosts || post.authorId === currentUserId) && !post.redacted && (
                     <button className="link-btn danger" onClick={() => redactPost(post.id)}>Redact</button>
