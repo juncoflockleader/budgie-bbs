@@ -503,6 +503,117 @@ func TestPollVoteValidations(t *testing.T) {
 	}, proto.ErrConflict)
 }
 
+func TestPollCreationRequiresEnoughOptions(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll]\nQuestion\nOnly one option\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Single option", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+	if posts[0].Body != threadBody {
+		t.Fatalf("expected malformed poll body to remain intact, got %q", posts[0].Body)
+	}
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		t.Fatal("expected no poll for single-option block")
+	}
+}
+
+func TestPollCreationStripsBulletedOptions(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "[poll]\nQuestion?\n- Option A\n* Option B\n[/poll]"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Bulleted options", Body: threadBody,
+	})
+
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll to be created from bulleted options")
+	}
+
+	fullPoll, err := c.GetPoll(poll.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullPoll == nil {
+		t.Fatal("expected full poll projection")
+	}
+	if fullPoll.Question != "Question?" {
+		t.Fatalf("expected question 'Question?', got %q", fullPoll.Question)
+	}
+	if len(fullPoll.Options) != 2 {
+		t.Fatalf("expected 2 options, got %d", len(fullPoll.Options))
+	}
+	if fullPoll.Options[0].Text != "Option A" || fullPoll.Options[1].Text != "Option B" {
+		t.Fatalf("expected stripped option texts, got %q and %q", fullPoll.Options[0].Text, fullPoll.Options[1].Text)
+	}
+
+	if posts[0].Body != "" {
+		t.Fatalf("expected poll body to be stripped to empty, got %q", posts[0].Body)
+	}
+}
+
+func TestPollCreationMissingCloseTagLeavesBodyIntact(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	threadBody := "before\n[poll]\nQuestion?\nOption A\nOption B\nafter"
+	threadRes := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Open tag only", Body: threadBody,
+	})
+	posts, err := c.ListPosts(threadRes.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+	if posts[0].Body != threadBody {
+		t.Fatalf("expected missing-close poll to stay intact, got %q", posts[0].Body)
+	}
+	poll, err := c.GetPollByPostID(posts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll != nil {
+		t.Fatal("expected no poll for missing close tag")
+	}
+}
+
 type forumSnapshot struct {
 	thread          *core.Thread
 	posts           []core.Post
