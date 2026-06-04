@@ -619,6 +619,46 @@ func TestHTTPCommandEndpointRejectsMissingPayload(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointIdempotentPayloadMismatch(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	commandID := "poll-conflict-replay-1"
+	first := ackResponse{}
+	firstStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Idempotent conflict poll",
+			"body":  "[poll]\nFirst?\nA\nB\n[/poll]",
+		},
+	}, &first, map[string]string{
+		"X-Command-Id": commandID,
+	})
+	if firstStatus != http.StatusCreated || !first.OK || first.Result == nil {
+		t.Fatalf("first command failed: status=%d ok=%v err=%+v", firstStatus, first.OK, first.Error)
+	}
+
+	conflict := ackResponse{}
+	conflictStatus := doJSONRequestWithHeaders(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Different title",
+			"body":  "[poll]\nSecond?\nA\nB\n[/poll]",
+		},
+	}, &conflict, map[string]string{
+		"X-Command-Id": commandID,
+	})
+	if conflictStatus != http.StatusConflict {
+		t.Fatalf("expected 409 when replaying same command-id with different payload, got %d", conflictStatus)
+	}
+	if conflict.Error == nil || conflict.Error.Code != "conflict" {
+		t.Fatalf("expected conflict error payload, got %+v", conflict.Error)
+	}
+}
+
 func TestHTTPCommandEndpointVotePollLifecycleAndErrors(t *testing.T) {
 	c, handler := setupHTTPTestServer(t)
 
