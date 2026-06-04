@@ -1592,6 +1592,51 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	}
 }
 
+func TestThreadRankingsUseRecencyDecay(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "decay", Name: "Decay"})
+	stale := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "decay",
+		Title: "Busy but old",
+		Body:  "root",
+	})
+	for i := 0; i < 7; i++ {
+		exec(t, c, admin, proto.CmdAppendPost, proto.AppendPostPayload{
+			Thread: stale.ID,
+			Body:   fmt.Sprintf("old reply %d", i),
+		})
+	}
+	recent := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "decay",
+		Title: "Fresh reply",
+		Body:  "root",
+	})
+	exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: recent.ID,
+		Body:   "new reply",
+	})
+	staleUpdatedAt := time.Now().Add(-14 * 24 * time.Hour).UnixMilli()
+	if _, err := c.DB.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, staleUpdatedAt, stale.ID); err != nil {
+		t.Fatalf("age stale thread: %v", err)
+	}
+
+	threads, err := c.ListThreadRankings(alice, "decay", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) < 2 {
+		t.Fatalf("expected recent and stale thread rankings, got %+v", threads)
+	}
+	if threads[0].ID != recent.ID || threads[1].ID != stale.ID || threads[0].Score <= threads[1].Score {
+		t.Fatalf("expected recency decay to rank fresh thread before stale raw activity, got %+v", threads)
+	}
+}
+
 func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

@@ -96,9 +96,10 @@ ranking surface:
   the current UTC day has a deterministic `BBSLists` snapshot thread.
 - Presence changes and stat snapshots maintain a projection-backed daily
   `community_stat_history` row with current counters and max-online users/time.
-- Hot-thread scores combine visible post count and reaction count.
-- Board, thread, and archive rankings hide member-read boards from users who
-  cannot read those boards; direct thread-ranking queries for inaccessible
+- Hot-thread scores combine visible post count, reaction count, and a 48-hour
+  recency half-life so stale activity decays behind fresh conversation.
+- Board, thread, reply, and archive rankings hide member-read boards from users
+  who cannot read those boards; direct thread-ranking queries for inaccessible
   boards are rejected.
 - Stat snapshots lazily create a KBS-style `BBSLists` system board and
   deterministic daily generated thread/posts containing community counters,
@@ -109,8 +110,7 @@ ranking surface:
   blessing counts, and archive paths, with board/thread/reply/archive rows
   opening the relevant reading surface.
 
-This does not yet implement guest counters, deeper historical charting, or
-richer topic-decay algorithms.
+This does not yet implement guest counters or deeper historical charting.
 
 ### Board-Level Unread Workflow And Read Markers
 

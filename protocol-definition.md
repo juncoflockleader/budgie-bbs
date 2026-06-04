@@ -317,6 +317,9 @@ These read projection tables directly (see Decision 2) and are CDN-cacheable. Mo
 Ranking reads are derived projection views for KBS-style public lists: community
 counters, active boards, hot threads, latest replies, top posters, blessing
 rituals, and active archive paths.
+Hot-thread `score` is recency-decayed: visible posts and reactions form the
+activity base, then thread `updatedAt` applies a 48-hour half-life so stale
+activity gradually falls behind fresh conversation.
 Board/thread/reply/archive rankings hide member-read boards unless the viewer
 can read them; direct thread ranking queries scoped to an inaccessible board are
 rejected. Public generated system boards such as `newcomers`, `BBSLists`,

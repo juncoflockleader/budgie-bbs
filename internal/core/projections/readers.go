@@ -225,7 +225,6 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 		`SELECT t.id, t.board, b.name, t.title, t.author, COALESCE(t.author_id, ''),
 		        COUNT(DISTINCT p.id) AS post_count,
 		        COUNT(pr.post_id) AS reaction_count,
-		        (COUNT(DISTINCT p.id) + COUNT(pr.post_id) * 2) AS score,
 		        t.last_seq, t.created_at, t.updated_at
 		   FROM threads t
 		   JOIN boards b ON b.id=t.board
@@ -241,23 +240,60 @@ func ListThreadRankings(db *sql.DB, viewerID string, includePrivate bool, boardI
 		      OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=b.id AND m.user_id=?)
 		    )
 		  GROUP BY t.id, t.board, b.name, t.title, t.author, t.author_id, t.last_seq, t.created_at, t.updated_at
-		  ORDER BY score DESC, t.last_seq DESC
-		  LIMIT ? OFFSET ?`,
-		boardID, boardID, boolInt(includePrivate), viewerID, viewerID, limit, offset,
+		  ORDER BY t.last_seq DESC`,
+		boardID, boardID, boolInt(includePrivate), viewerID, viewerID,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []ThreadRanking{}
+	now := time.Now().UnixMilli()
 	for rows.Next() {
 		var rank ThreadRanking
-		if err := rows.Scan(&rank.ID, &rank.Board, &rank.BoardName, &rank.Title, &rank.Author, &rank.AuthorID, &rank.PostCount, &rank.ReactionCount, &rank.Score, &rank.LastSeq, &rank.CreatedAt, &rank.UpdatedAt); err != nil {
+		if err := rows.Scan(&rank.ID, &rank.Board, &rank.BoardName, &rank.Title, &rank.Author, &rank.AuthorID, &rank.PostCount, &rank.ReactionCount, &rank.LastSeq, &rank.CreatedAt, &rank.UpdatedAt); err != nil {
 			return nil, err
 		}
+		rank.Score = hotThreadScore(rank.PostCount, rank.ReactionCount, rank.UpdatedAt, now)
 		out = append(out, rank)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		if out[i].LastSeq != out[j].LastSeq {
+			return out[i].LastSeq > out[j].LastSeq
+		}
+		return out[i].Title < out[j].Title
+	})
+	if offset >= len(out) {
+		return []ThreadRanking{}, nil
+	}
+	end := offset + limit
+	if end > len(out) {
+		end = len(out)
+	}
+	return out[offset:end], nil
+}
+
+func hotThreadScore(postCount, reactionCount int, updatedAt, now int64) int {
+	base := int64(postCount*100 + reactionCount*200)
+	if base <= 0 {
+		return 0
+	}
+	if updatedAt <= 0 || now <= updatedAt {
+		return int(base)
+	}
+	ageHours := (now - updatedAt) / int64(time.Hour/time.Millisecond)
+	const halfLifeHours int64 = 48
+	score := base * halfLifeHours / (halfLifeHours + ageHours)
+	if score < 1 {
+		return 1
+	}
+	return int(score)
 }
 
 func ListReplyRankings(db *sql.DB, viewerID string, includePrivate bool, limit, offset int) ([]ReplyRanking, error) {
