@@ -1239,6 +1239,65 @@ func TestPollCreationOnReplyWithMissingCloseTagLeavesBodyIntact(t *testing.T) {
 	}
 }
 
+func TestPollCreationOnReplySupportsUppercasePollTags(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	setTrustLevel(t, c, alice.ID, 2)
+
+	base := exec(t, c, alice, proto.CmdCreateThread, proto.CreateThreadPayload{
+		Board: "general", Title: "Base", Body: "hello",
+	})
+	replyRes := exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{
+		Thread: base.ID,
+		Body:   "[POLL]\nQuestion?\nOption A\nOption B\n[/POLL]",
+	})
+
+	posts, err := c.ListPosts(base.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts, got %d", len(posts))
+	}
+
+	var reply *core.Post
+	for i := range posts {
+		if posts[i].ID == replyRes.ID {
+			reply = &posts[i]
+			break
+		}
+	}
+	if reply == nil {
+		t.Fatal("append post response not found in thread")
+	}
+	if reply.Body != "" {
+		t.Fatalf("expected reply poll body to be stripped, got %q", reply.Body)
+	}
+
+	poll, err := c.GetPollByPostID(reply.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poll == nil {
+		t.Fatal("expected poll row for uppercase poll reply")
+	}
+	fullPoll, err := c.GetPoll(poll.ID, alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullPoll == nil {
+		t.Fatal("expected full poll projection")
+	}
+	if fullPoll.Question != "Question?" {
+		t.Fatalf("expected question text, got %q", fullPoll.Question)
+	}
+	if len(fullPoll.Options) != 2 {
+		t.Fatalf("expected 2 options, got %d", len(fullPoll.Options))
+	}
+}
+
 func TestPollCreationOnReplyRejectsInvalidExpires(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

@@ -785,6 +785,144 @@ func TestHTTPCommandEndpointUppercasePollTags(t *testing.T) {
 	}
 }
 
+func TestHTTPCommandEndpointReplyPollUppercaseTags(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Uppercase reply poll command",
+			"body":  "base body",
+		},
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || !threadAck.OK || threadAck.Result == nil {
+		t.Fatalf("command create base thread failed: status=%d ok=%v err=%+v", threadStatus, threadAck.OK, threadAck.Error)
+	}
+	threadID := threadAck.Result.ID
+
+	replyCommand := map[string]any{
+		"command": "appendPost",
+		"payload": map[string]any{
+			"thread": threadID,
+			"body":   "[POLL]\nQuestion?\nOption A\nOption B\n[/POLL]",
+		},
+	}
+	replyAck := ackResponse{}
+	replyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, replyCommand, &replyAck)
+	if replyStatus != http.StatusCreated || !replyAck.OK || replyAck.Result == nil {
+		t.Fatalf("command reply uppercase poll failed: status=%d ok=%v err=%+v", replyStatus, replyAck.OK, replyAck.Error)
+	}
+	replyPostID := replyAck.Result.ID
+
+	posts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts); status != http.StatusOK {
+		t.Fatalf("list posts status: %d", status)
+	}
+	if len(posts.Posts) != 2 {
+		t.Fatalf("expected 2 posts after command reply, got %d", len(posts.Posts))
+	}
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyPostID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("expected command reply post %s in thread", replyPostID)
+	}
+	if replyPost.Body != "" {
+		t.Fatalf("expected command reply poll body to be stripped, got %q", replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls); status != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", status)
+	}
+	poll := threadPolls.Polls[replyPostID]
+	if poll == nil {
+		t.Fatalf("expected poll attached to command reply post %s", replyPostID)
+	}
+	if poll.Question != "Question?" {
+		t.Fatalf("expected question %q, got %q", "Question?", poll.Question)
+	}
+	if len(poll.Options) != 2 {
+		t.Fatalf("expected 2 options for command reply uppercase poll, got %d", len(poll.Options))
+	}
+}
+
+func TestHTTPRestEndpointReplyPollUppercaseTags(t *testing.T) {
+	_, handler := setupHTTPTestServer(t)
+
+	adminToken := registerUser(t, handler, "admin")
+
+	threadAck := ackResponse{}
+	threadStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/commands", adminToken, map[string]any{
+		"command": "createThread",
+		"payload": map[string]any{
+			"board": "general",
+			"title": "Uppercase reply poll base",
+			"body":  "base body",
+		},
+	}, &threadAck)
+	if threadStatus != http.StatusCreated || !threadAck.OK || threadAck.Result == nil {
+		t.Fatalf("command create base thread failed: status=%d ok=%v err=%+v", threadStatus, threadAck.OK, threadAck.Error)
+	}
+
+	threadID := threadAck.Result.ID
+	replyBody := "[POLL]\nQuestion?\nOption A\nOption B\n[/POLL]"
+	replyAck := ackResponse{}
+	replyStatus := doJSONRequest(t, handler, http.MethodPost, "/api/v1/threads/"+threadID+"/posts", adminToken, map[string]string{
+		"body": replyBody,
+	}, &replyAck)
+	if replyStatus != http.StatusCreated || replyAck.Result == nil {
+		t.Fatalf("REST reply uppercase poll failed: status=%d err=%+v", replyStatus, replyAck.Error)
+	}
+	replyPostID := replyAck.Result.ID
+
+	posts := listPostsResponse{}
+	postsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", adminToken, nil, &posts)
+	if postsStatus != http.StatusOK {
+		t.Fatalf("list posts status: %d", postsStatus)
+	}
+	if len(posts.Posts) != 2 {
+		t.Fatalf("expected 2 posts after REST reply, got %d", len(posts.Posts))
+	}
+	var replyPost *postPayload
+	for i := range posts.Posts {
+		if posts.Posts[i].ID == replyPostID {
+			replyPost = &posts.Posts[i]
+			break
+		}
+	}
+	if replyPost == nil {
+		t.Fatalf("expected REST reply post %s in thread", replyPostID)
+	}
+	if replyPost.Body != "" {
+		t.Fatalf("expected REST reply poll body to be stripped, got %q", replyPost.Body)
+	}
+
+	threadPolls := threadPollsResponse{}
+	pollsStatus := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/polls", adminToken, nil, &threadPolls)
+	if pollsStatus != http.StatusOK {
+		t.Fatalf("list thread polls status: %d", pollsStatus)
+	}
+	poll := threadPolls.Polls[replyPostID]
+	if poll == nil {
+		t.Fatalf("expected poll attached to REST reply post %s", replyPostID)
+	}
+	if poll.Question != "Question?" {
+		t.Fatalf("expected question %q, got %q", "Question?", poll.Question)
+	}
+	if len(poll.Options) != 2 {
+		t.Fatalf("expected 2 options for REST reply uppercase poll, got %d", len(poll.Options))
+	}
+}
+
 func TestHTTPCommandEndpointRejectsUnknownCommand(t *testing.T) {
 	_, handler := setupHTTPTestServer(t)
 
