@@ -1091,6 +1091,15 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	}, &ack); status != http.StatusCreated {
 		t.Fatalf("recommend life board status: %d error=%+v", status, ack.Error)
 	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/tech/moderators/bob", adminToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("set tech moderator status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/life/moderators/alice", adminToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("set life moderator status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/secret/moderators/admin", adminToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("set secret moderator status: %d error=%+v", status, ack.Error)
+	}
 	recommendedBoards := recommendedBoardsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/recommended", aliceToken, nil, &recommendedBoards); status != http.StatusOK {
 		t.Fatalf("recommended boards status: %d", status)
@@ -1222,6 +1231,9 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if _, err := c.DB.Exec(`INSERT INTO user_activity (user_id, total_online_seconds)
 		VALUES ((SELECT id FROM users WHERE name='bob'), ?)
 		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`, int64(120)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`UPDATE user_activity SET last_visit_day='2026-06-04' WHERE user_id IN ((SELECT id FROM users WHERE name='alice'), (SELECT id FROM users WHERE name='bob'))`); err != nil {
 		t.Fatal(err)
 	}
 	if err := projections.UpsertCommunityStatHistoryFromCurrent(c.DB, time.Now().UTC().UnixMilli()); err != nil {
@@ -1421,14 +1433,15 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads status: %d", status)
 	}
-	if len(systemThreads.Threads) != 12 {
-		t.Fatalf("expected generated stats, login-history, user-activity, board-online, online-user roster, board-activity, board-rank, new-board, recommended-board, recommended-article, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
+	if len(systemThreads.Threads) != 13 {
+		t.Fatalf("expected generated stats, login-history, user-activity, board-online, online-user roster, board-moderator activity, board-activity, board-rank, new-board, recommended-board, recommended-article, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
 	}
 	if !hasHTTPThreadSummary(systemThreads, snapshot.Result.ID, "2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_countlogins_20260604", "Login count history 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_statguy_20260604", "User activity rankings 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_bonline_20260604", "Board online occupancy 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_uonline_20260604", "Online user roster 2026-06-04") ||
+		!hasHTTPThreadSummary(systemThreads, "bbslists_statbm_20260604", "Board moderator activity 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_boardlog_20260604", "Board activity history 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_boardrank_20260604", "Board popularity list 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_newboards_20260604", "New board list 2026-06-04") ||
@@ -1436,7 +1449,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		!hasHTTPThreadSummary(systemThreads, "bbslists_commend_20260604", "Recommended article list 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_toplog_20260604", "Hot topic history 2026-06-04") ||
 		!hasHTTPThreadSummary(systemThreads, "bbslists_bless_20260604", "Daily blessing list 2026-06-04") {
-		t.Fatalf("expected generated stats, login-history, user-activity, board-online, online-user roster, board-activity, board-rank, new-board, recommended-board, recommended-article, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
+		t.Fatalf("expected generated stats, login-history, user-activity, board-online, online-user roster, board-moderator activity, board-activity, board-rank, new-board, recommended-board, recommended-article, hot-topic, and blessing threads, got %+v", systemThreads.Threads)
 	}
 	systemPosts := listPostsResponse{}
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+snapshot.Result.ID+"/posts", aliceToken, nil, &systemPosts); status != http.StatusOK {
@@ -1501,6 +1514,19 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	for _, want := range []string{"Online user roster 2026-06-04", "Online user sessions: 1", "Distinct online users: 1", "Online guests: 1", "Visible online users", "alice: active on tech (tech)"} {
 		if !strings.Contains(onlineRosterBody, want) {
 			t.Fatalf("expected online-user roster body to contain %q, got:\n%s", want, onlineRosterBody)
+		}
+	}
+	boardModeratorPosts := listPostsResponse{}
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/bbslists_statbm_20260604/posts", aliceToken, nil, &boardModeratorPosts); status != http.StatusOK {
+		t.Fatalf("list BBSLists board-moderator activity posts status: %d", status)
+	}
+	if len(boardModeratorPosts.Posts) != 1 {
+		t.Fatalf("expected one generated board-moderator activity post, got %+v", boardModeratorPosts.Posts)
+	}
+	boardModeratorBody := boardModeratorPosts.Posts[0].Body
+	for _, want := range []string{"Board moderator activity 2026-06-04", "Public boards with moderators: 2", "Moderator assignments: 2", "Online moderators: 1", "Public board moderator roster", "tech (tech): 1 moderators, 2 posts, 1 threads, 1 users online", "bob: position 0, offline, 2 logins, 2 posts, 2m stay time, last activity 2026-06-04", "life (life): 1 moderators, 1 posts, 1 threads", "alice: position 0, online, 1 login, 1 post, 0s stay time, last activity 2026-06-04"} {
+		if !strings.Contains(boardModeratorBody, want) {
+			t.Fatalf("expected board-moderator body to contain %q, got:\n%s", want, boardModeratorBody)
 		}
 	}
 	boardLogPosts := listPostsResponse{}
@@ -1610,6 +1636,9 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		if strings.Contains(onlineRosterBody, forbidden) {
 			t.Fatalf("expected online-user roster body to hide private %q, got:\n%s", forbidden, onlineRosterBody)
 		}
+		if strings.Contains(boardModeratorBody, forbidden) {
+			t.Fatalf("expected board-moderator body to hide private %q, got:\n%s", forbidden, boardModeratorBody)
+		}
 		if strings.Contains(userActivityBody, forbidden) {
 			t.Fatalf("expected user-activity body to hide private %q, got:\n%s", forbidden, userActivityBody)
 		}
@@ -1639,7 +1668,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards/BBSLists/threads", aliceToken, nil, &systemThreads); status != http.StatusOK {
 		t.Fatalf("list BBSLists threads after repeat status: %d", status)
 	}
-	if len(systemThreads.Threads) != 12 {
+	if len(systemThreads.Threads) != 13 {
 		t.Fatalf("expected repeated snapshot publish not to duplicate thread, got %+v", systemThreads.Threads)
 	}
 }
@@ -1793,6 +1822,12 @@ func TestHTTPStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	}, &ack); status != http.StatusOK {
 		t.Fatalf("set hidden presence status: %d error=%+v", status, ack.Error)
 	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/visible_stats/moderators/alice", adminToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("set visible moderator status: %d error=%+v", status, ack.Error)
+	}
+	if status := doJSONRequest(t, handler, http.MethodPut, "/api/v1/boards/hidden_stats/moderators/bob", adminToken, nil, &ack); status != http.StatusCreated {
+		t.Fatalf("set hidden moderator status: %d error=%+v", status, ack.Error)
+	}
 
 	snapshot := ackResponse{}
 	if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
@@ -1800,7 +1835,7 @@ func TestHTTPStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	}, &snapshot); status != http.StatusCreated {
 		t.Fatalf("publish stats snapshot status: %d error=%+v", status, snapshot.Error)
 	}
-	for _, threadID := range []string{snapshot.Result.ID, "bbslists_statguy_20260607", "bbslists_bonline_20260607", "bbslists_uonline_20260607", "bbslists_boardlog_20260607", "bbslists_boardrank_20260607", "bbslists_newboards_20260607", "bbslists_rcmdbrd_20260607", "bbslists_commend_20260607", "bbslists_toplog_20260607"} {
+	for _, threadID := range []string{snapshot.Result.ID, "bbslists_statguy_20260607", "bbslists_bonline_20260607", "bbslists_uonline_20260607", "bbslists_statbm_20260607", "bbslists_boardlog_20260607", "bbslists_boardrank_20260607", "bbslists_newboards_20260607", "bbslists_rcmdbrd_20260607", "bbslists_commend_20260607", "bbslists_toplog_20260607"} {
 		posts := listPostsResponse{}
 		if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/threads/"+threadID+"/posts", aliceToken, nil, &posts); status != http.StatusOK {
 			t.Fatalf("list generated posts for %s status: %d", threadID, status)

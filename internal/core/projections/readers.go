@@ -740,6 +740,23 @@ func ListUserRankings(db *sql.DB, limit, offset int) ([]UserRanking, error) {
 	return out, rows.Err()
 }
 
+func GetPublicUserPostActivity(db *sql.DB, userID string) (postCount int, lastPostAt int64, err error) {
+	err = QQueryRow(db,
+		`SELECT COUNT(DISTINCT p.id) AS posts_created,
+		        COALESCE(MAX(p.created_at), 0) AS last_post_at
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		   LEFT JOIN board_settings s ON s.board_id=t.board
+		  WHERE p.author_id=?
+		    AND p.redacted=0
+		    AND t.board NOT IN (`+generatedSystemBoardSQLList+`)
+		    AND COALESCE(s.stats_excluded, 0)=0
+		    AND COALESCE(s.member_read_mode, 0)=0`,
+		userID,
+	).Scan(&postCount, &lastPostAt)
+	return postCount, lastPostAt, err
+}
+
 func ListBlessingRankings(db *sql.DB, limit, offset int) ([]BlessingRanking, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50

@@ -1228,6 +1228,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	if _, _, err := h.ensureStatsOnlineUserRosterSystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
+	if _, _, err := h.ensureStatsBoardModeratorActivitySystemPost(actor, dateLabel, dateID, ts); err != nil {
+		return internalErr(err)
+	}
 	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
 		return internalErr(err)
 	}
@@ -1502,6 +1505,124 @@ func (h *Handler) shouldMaskStatsOnlineUserBoard(boardID string) (bool, error) {
 		return false, err
 	}
 	return memberReadMode != 0 || statsExcluded != 0, nil
+}
+
+func (h *Handler) ensureStatsBoardModeratorActivitySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
+	threadID := "bbslists_statbm_" + dateID
+	postID := "bbslists_statbm_post_" + dateID
+	var existingSeq int64
+	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
+	if err == nil {
+		if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+			return "", 0, err
+		}
+		return threadID, existingSeq, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", 0, err
+	}
+	if err := projections.UpsertCommunityStatHistoryFromCurrent(h.db, ts); err != nil {
+		return "", 0, err
+	}
+	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	onlineUsers, err := projections.ListOnlineUsers(h.db, "", "", 200, 0)
+	if err != nil {
+		return "", 0, err
+	}
+	activity, err := h.listStatsBoardModeratorActivity(boards, onlineUsers)
+	if err != nil {
+		return "", 0, err
+	}
+	body := formatStatsBoardModeratorActivityBody(dateLabel, activity)
+	return h.ensureStatsSystemPost(actor, threadID, postID, "Board moderator activity "+dateLabel, body, ts)
+}
+
+type statsBoardModeratorActivity struct {
+	Board      projections.BoardRanking
+	Moderators []statsBoardModerator
+}
+
+type statsBoardModerator struct {
+	UserID             string
+	Name               string
+	Position           int
+	CreatedAt          int64
+	UpdatedAt          int64
+	LoginCount         int
+	PostsCreated       int
+	TotalOnlineSeconds int64
+	LastVisitDay       string
+	Online             bool
+}
+
+func (h *Handler) listStatsBoardModeratorActivity(boards []projections.BoardRanking, onlineUsers []projections.SocialUser) ([]statsBoardModeratorActivity, error) {
+	online := make(map[string]bool)
+	for _, user := range onlineUsers {
+		if user.UserID != "" {
+			online[user.UserID] = true
+		}
+	}
+	out := make([]statsBoardModeratorActivity, 0)
+	for _, board := range boards {
+		if board.ModeratorCount <= 0 {
+			continue
+		}
+		moderators, err := projections.ListBoardModerators(h.db, board.ID)
+		if err != nil {
+			return nil, err
+		}
+		entry := statsBoardModeratorActivity{Board: board, Moderators: make([]statsBoardModerator, 0, len(moderators))}
+		for _, moderator := range moderators {
+			stat, err := h.getStatsBoardModerator(moderator, online[moderator.UserID])
+			if err != nil {
+				return nil, err
+			}
+			entry.Moderators = append(entry.Moderators, stat)
+		}
+		if len(entry.Moderators) > 0 {
+			out = append(out, entry)
+		}
+	}
+	return out, nil
+}
+
+func (h *Handler) getStatsBoardModerator(moderator projections.BoardModerator, online bool) (statsBoardModerator, error) {
+	stat := statsBoardModerator{
+		UserID:    moderator.UserID,
+		Name:      moderator.Name,
+		Position:  moderator.Position,
+		CreatedAt: moderator.CreatedAt,
+		UpdatedAt: moderator.UpdatedAt,
+		Online:    online,
+	}
+	err := qQueryRow(
+		h.db,
+		`SELECT COALESCE(ua.login_count, 0),
+		        COALESCE(ua.total_online_seconds, 0),
+		        COALESCE(ua.last_visit_day, '')
+		   FROM users u
+		   LEFT JOIN user_activity ua ON ua.user_id=u.id
+		  WHERE u.id=?`,
+		moderator.UserID,
+	).Scan(&stat.LoginCount, &stat.TotalOnlineSeconds, &stat.LastVisitDay)
+	if err == sql.ErrNoRows {
+		return stat, nil
+	}
+	if err != nil {
+		return stat, err
+	}
+	postCount, lastPostAt, err := projections.GetPublicUserPostActivity(h.db, moderator.UserID)
+	if err != nil {
+		return stat, err
+	}
+	stat.PostsCreated = postCount
+	if strings.TrimSpace(stat.LastVisitDay) == "" && lastPostAt > 0 {
+		stat.LastVisitDay = time.UnixMilli(lastPostAt).UTC().Format("2006-01-02")
+	}
+	return stat, nil
 }
 
 func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
@@ -2414,6 +2535,74 @@ func formatStatsOnlineUserLocation(user projections.SocialUser) string {
 		return mode + " in " + label
 	}
 	return mode
+}
+
+func formatStatsBoardModeratorActivityBody(dateLabel string, activity []statsBoardModeratorActivity) string {
+	boardCount, assignmentCount, onlineCount, dormantCount := statsBoardModeratorActivitySummary(activity)
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Board moderator activity %s\n\n", dateLabel)
+	fmt.Fprintf(&b, "- Public boards with moderators: %d\n", boardCount)
+	fmt.Fprintf(&b, "- Moderator assignments: %d\n", assignmentCount)
+	fmt.Fprintf(&b, "- Online moderators: %d\n", onlineCount)
+	fmt.Fprintf(&b, "- Dormant moderator assignments: %d\n\n", dormantCount)
+
+	b.WriteString("## Public board moderator roster\n")
+	if len(activity) == 0 {
+		b.WriteString("- No public board moderators are assigned.\n")
+		return b.String()
+	}
+	for i, entry := range activity {
+		fmt.Fprintf(&b, "%d. %s (%s): %d moderators, %d posts, %d threads, %d users online\n",
+			i+1,
+			entry.Board.Name,
+			entry.Board.ID,
+			len(entry.Moderators),
+			entry.Board.PostCount,
+			entry.Board.ThreadCount,
+			entry.Board.OnlineUsers)
+		for _, moderator := range entry.Moderators {
+			fmt.Fprintf(&b, "   - %s: position %d, %s, %s, %s, %s stay time, last activity %s\n",
+				moderator.Name,
+				moderator.Position,
+				formatStatsModeratorOnline(moderator.Online),
+				formatStatsCount(moderator.LoginCount, "login", "logins"),
+				formatStatsCount(moderator.PostsCreated, "post", "posts"),
+				formatStatsDuration(moderator.TotalOnlineSeconds),
+				formatStatsModeratorLastActivity(moderator.LastVisitDay))
+		}
+	}
+	return b.String()
+}
+
+func statsBoardModeratorActivitySummary(activity []statsBoardModeratorActivity) (boardCount, assignmentCount, onlineCount, dormantCount int) {
+	for _, entry := range activity {
+		boardCount++
+		for _, moderator := range entry.Moderators {
+			assignmentCount++
+			if moderator.Online {
+				onlineCount++
+			}
+			if strings.TrimSpace(moderator.LastVisitDay) == "" {
+				dormantCount++
+			}
+		}
+	}
+	return boardCount, assignmentCount, onlineCount, dormantCount
+}
+
+func formatStatsModeratorOnline(online bool) string {
+	if online {
+		return "online"
+	}
+	return "offline"
+}
+
+func formatStatsModeratorLastActivity(day string) string {
+	day = strings.TrimSpace(day)
+	if day == "" {
+		return "not recorded"
+	}
+	return day
 }
 
 func formatStatsBoardActivityHistoryBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, history []projections.CommunityStatHistory) string {
