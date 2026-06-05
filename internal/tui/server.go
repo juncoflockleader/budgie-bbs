@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/ssh"
@@ -35,6 +37,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		wish.WithAddress(fmt.Sprintf(":%d", s.port)),
 		wish.WithHostKeyPath(s.hostKey),
 		wish.WithPublicKeyAuth(s.authPublicKey),
+		wish.WithPasswordAuth(s.authPassword),
 		wish.WithMiddleware(
 			bubbletea.Middleware(s.tuiHandler),
 		),
@@ -70,9 +73,33 @@ func (s *Server) authPublicKey(ctx ssh.Context, key ssh.PublicKey) bool {
 
 	user, err := s.core.UserByPubkey(fp)
 	if err != nil || user == nil {
-		slog.Warn("ssh: unknown pubkey, proceeding as guest", "fp", fp)
-		ctx.SetValue(userKey{}, guestUser())
-		return true
+		if isGuestSSHUser(ctx.User()) {
+			slog.Warn("ssh: unknown pubkey, proceeding as guest", "fp", fp)
+			ctx.SetValue(userKey{}, guestUser())
+			return true
+		}
+		slog.Warn("ssh: unknown pubkey", "user", ctx.User(), "fp", fp)
+		return false
+	}
+	ctx.SetValue(userKey{}, user)
+	return true
+}
+
+// authPassword authenticates SSH password logins against the same account
+// credentials and login host ACLs used by the HTTP login endpoint.
+func (s *Server) authPassword(ctx ssh.Context, password string) bool {
+	username := strings.TrimSpace(ctx.User())
+	if username == "" || isGuestSSHUser(username) {
+		return false
+	}
+	user, err := s.core.AuthenticateUserFromHost(username, password, remoteHost(ctx.RemoteAddr()))
+	if err != nil || user == nil {
+		slog.Warn("ssh: password auth failed", "user", username, "err", err)
+		return false
+	}
+	if err := s.core.RecordLogin(user.ID); err != nil {
+		slog.Error("ssh: could not record login", "user", username, "err", err)
+		return false
 	}
 	ctx.SetValue(userKey{}, user)
 	return true
@@ -111,4 +138,19 @@ type userKey struct{}
 
 func guestUser() *core.User {
 	return &core.User{ID: "guest", Name: "guest", Role: "user"}
+}
+
+func isGuestSSHUser(username string) bool {
+	return strings.EqualFold(strings.TrimSpace(username), "guest")
+}
+
+func remoteHost(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err == nil {
+		return host
+	}
+	return addr.String()
 }
