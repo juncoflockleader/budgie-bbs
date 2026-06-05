@@ -57,7 +57,12 @@ type (
 	}
 	notificationStatusMsg struct{ unread int }
 	disconnectMsg         struct{}
-	pollPermissionMsg     struct {
+	postSubmittedMsg      struct{ thread string }
+	threadSubmittedMsg    struct {
+		board  string
+		thread string
+	}
+	pollPermissionMsg struct {
 		canCreatePoll bool
 		err           error
 	}
@@ -289,6 +294,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case disconnectMsg:
 		m.statusMsg = "disconnected"
 
+	case postSubmittedMsg:
+		m.finishCompose()
+		if m.page == pageCompose {
+			m.popPage()
+		}
+		if msg.thread != "" {
+			m.currentThread = msg.thread
+			cmds = append(cmds, m.fetchPosts(msg.thread))
+		}
+		m.statusMsg = "post submitted"
+		cmds = append(cmds, m.fetchNotificationStatus())
+
+	case threadSubmittedMsg:
+		m.finishCompose()
+		if m.page == pageCompose {
+			m.popPage()
+		}
+		if msg.board != "" {
+			m.currentBoard = msg.board
+			cmds = append(cmds, m.fetchThreads(msg.board))
+		}
+		if msg.thread != "" {
+			m.currentThread = msg.thread
+			m.posts = nil
+			m.pushPage(pageThread)
+			cmds = append(cmds, m.fetchPosts(msg.thread), m.resubscribeThread(msg.thread))
+		}
+		m.statusMsg = "thread submitted"
+		cmds = append(cmds, m.fetchNotificationStatus())
+
 	case errMsg:
 		m.statusMsg = "error: " + msg.err.Error()
 
@@ -365,10 +400,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
+	key := keyString(msg)
 	switch m.page {
 	case pageBoardList:
-		switch msg.String() {
-		case "enter", " ":
+		switch key {
+		case "enter", " ", "right":
 			if b := m.selectedBoard(); b != nil {
 				m.currentBoard = b.ID
 				m.pushPage(pageThreadList)
@@ -394,8 +430,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case pageThreadList:
-		switch msg.String() {
-		case "enter", " ":
+		switch key {
+		case "enter", " ", "right":
 			if t := m.selectedThread(); t != nil {
 				m.currentThread = t.ID
 				m.pushPage(pageThread)
@@ -425,7 +461,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case pageThread:
-		switch msg.String() {
+		switch key {
 		case "k", "up":
 			m.moveSelectedPost(-1)
 		case "j", "down":
@@ -477,11 +513,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case pagePoll:
-		switch msg.String() {
+		switch key {
 		case "esc", "left":
 			m.popPage()
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-			idx := int(msg.String()[0]-'0') - 1
+			idx := int(key[0]-'0') - 1
 			poll := m.currentPollData()
 			if poll == nil {
 				m.statusMsg = "poll not found"
@@ -499,7 +535,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case pageCompose:
-		switch msg.String() {
+		switch key {
 		case "ctrl+p":
 			if !m.canCreatePoll {
 				if m.trustLoaded {
@@ -598,7 +634,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case pageChat:
-		switch msg.String() {
+		switch key {
 		case "esc", "left":
 			m.popPage()
 		case "q", "ctrl+c":
@@ -607,7 +643,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 
 	case pageSearch:
-		switch msg.String() {
+		switch key {
 		case "enter":
 			if m.searchQuery != "" {
 				return m.runSearch(m.searchQuery)
@@ -620,14 +656,15 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "esc", "left":
 			m.popPage()
 		default:
-			if len(msg.String()) == 1 {
-				m.searchQuery += msg.String()
+			rawKey := msg.String()
+			if len(rawKey) == 1 {
+				m.searchQuery += rawKey
 				m.vp.SetContent(m.styled(styleTitle, "Search: ") + m.searchQuery + "▌")
 			}
 		}
 	case pageNotifications:
-		switch msg.String() {
-		case "enter":
+		switch key {
+		case "enter", "right":
 			selection := m.selectedNotification()
 			if selection == nil || selection.Read {
 				return nil
@@ -883,11 +920,11 @@ func (m model) View() string {
 	var body string
 	switch m.page {
 	case pageBoardList:
-		body = m.list.View()
+		body = m.list.View() + "\n" + m.styled(styleDim, "enter/→=open board  c=chat  N=notifications  /=search  q=quit")
 	case pageThreadList:
-		body = m.list.View()
+		body = m.list.View() + "\n" + m.styled(styleDim, "enter/→=open thread  n=new thread  /=search  esc/←=back  q=quit")
 	case pageNotifications:
-		body = m.list.View() + "\n" + m.styled(styleDim, "enter=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
+		body = m.list.View() + "\n" + m.styled(styleDim, "enter/→=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
 	case pageThread:
 		help := "n=reply  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		if m.actor.IsMod() {
@@ -1285,6 +1322,7 @@ func (m model) resubscribeThread(threadID string) tea.Cmd {
 }
 
 func (m model) submitPost(body string) tea.Cmd {
+	threadID := m.currentThread
 	return func() tea.Msg {
 		if err := validatePollMarkup(body); err != nil {
 			return errMsg{fmt.Errorf("invalid poll markup: %w", err)}
@@ -1298,7 +1336,7 @@ func (m model) submitPost(body string) tea.Cmd {
 		if reply.Err != nil {
 			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
 		}
-		return nil
+		return postSubmittedMsg{thread: threadID}
 	}
 }
 
@@ -1325,8 +1363,19 @@ func (m model) submitNewThread() tea.Cmd {
 		if reply.Err != nil {
 			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
 		}
-		return nil
+		threadID := ""
+		if reply.Result != nil {
+			threadID = reply.Result.ID
+		}
+		return threadSubmittedMsg{board: board, thread: threadID}
 	}
+}
+
+func (m *model) finishCompose() {
+	m.compose.Blur()
+	m.compose.Reset()
+	m.titleInput.Blur()
+	m.titleInput.Reset()
 }
 
 func (m *model) insertPollTemplate() {
@@ -1374,6 +1423,18 @@ func composeHelpLine(canCreatePoll, trustLoaded bool) string {
 		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll  Ctrl+W=1w poll (trust level 2+ required)"
 	}
 	return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll  Ctrl+W=1w poll (checking permission…)"
+}
+
+func keyString(msg tea.KeyMsg) string {
+	return normalizeKeyString(msg.String())
+}
+
+func normalizeKeyString(key string) string {
+	lower := strings.ToLower(key)
+	if strings.HasPrefix(lower, "ctrl+") {
+		return lower
+	}
+	return key
 }
 
 func (m model) fetchPollPermission() tea.Cmd {
