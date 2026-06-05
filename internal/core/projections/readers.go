@@ -4021,6 +4021,7 @@ func GetUserSignature(db *sql.DB, userID, id string) (*UserSignature, error) {
 
 func ListUserSignatures(db *sql.DB, userID string) (*UserSignatureBundle, error) {
 	bundle := &UserSignatureBundle{
+		Signatures: []UserSignature{},
 		Settings: UserSignatureSettings{UserID: userID},
 		MaxCount: MaxUserSignatures,
 	}
@@ -4082,6 +4083,7 @@ func GetUserLoginACLRule(db *sql.DB, userID, id string) (*UserLoginACLRule, erro
 
 func ListUserLoginACL(db *sql.DB, userID, host string) (*UserLoginACLBundle, error) {
 	bundle := &UserLoginACLBundle{
+		Rules:    []UserLoginACLRule{},
 		Settings: UserLoginACLSettings{UserID: userID},
 		Host:     strings.TrimSpace(host),
 		Allowed:  true,

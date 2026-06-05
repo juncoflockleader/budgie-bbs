@@ -693,6 +693,39 @@ func TestUserSignatureBankSelection(t *testing.T) {
 	}
 }
 
+func TestEmptyProfileBundlesMarshalArrays(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+	profile, err := c.UserProfileByName("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signatures, err := c.ListUserSignatures(alice.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginACL, err := c.ListUserLoginACL(alice.ID, "198.51.100.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for label, value := range map[string]any{
+		"profile":    profile,
+		"signatures": signatures,
+		"loginACL":   loginACL,
+	} {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", label, err)
+		}
+		if strings.Contains(string(raw), ":null") {
+			t.Fatalf("expected %s empty slices to marshal as arrays, got %s", label, raw)
+		}
+	}
+}
+
 func TestUserSignatureRecountRepairsSelection(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

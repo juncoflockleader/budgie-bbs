@@ -520,8 +520,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
       <span className="category-admin-actions">
         <button className="board-action-btn" disabled={index <= 0} onClick={e => moveCategory(category, 'up', e)} title="Move category up">↑</button>
         <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => moveCategory(category, 'down', e)} title="Move category down">↓</button>
-        <button className="board-action-btn" onClick={e => renameCategory(category, e)} title="Edit category">Edit</button>
-        <button className="board-action-btn" onClick={e => reparentCategory(category, e)} title="Move category">Move</button>
+        <button className="board-action-btn" onClick={e => renameCategory(category, e)} title="Edit category" aria-label={`Edit ${category.name}`}>✎</button>
+        <button className="board-action-btn" onClick={e => reparentCategory(category, e)} title="Move category" aria-label={`Move ${category.name}`}>⇄</button>
         <select
           className="favorite-folder-select"
           value={category.visibility || 'public'}

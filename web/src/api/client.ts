@@ -66,6 +66,21 @@ async function json<T>(res: Response): Promise<ApiResponse<T>> {
   return { data: body as T }
 }
 
+async function jsonAck(res: Response): Promise<ApiResponse<AckResult>> {
+  const body = await res.json() as {
+    ok?: boolean
+    result?: AckResult
+    error?: ApiResponse<AckResult>['error']
+    code?: string
+    message?: string
+    retryable?: boolean
+  }
+  if (!res.ok || body.ok === false) {
+    return { error: body.error ?? { code: body.code ?? 'request_failed', message: body.message ?? 'Request failed', retryable: Boolean(body.retryable) } }
+  }
+  return { data: body.result ?? { id: undefined, seq: undefined } }
+}
+
 export async function register(name: string, password: string): Promise<ApiResponse<AuthResponse>> {
   const res = await fetch(`${BASE}/auth/register`, {
     method: 'POST',
@@ -370,6 +385,18 @@ export async function listUnreadBoards(token: string): Promise<ApiResponse<Board
   const r = await json<{ boards: BoardSummary[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.boards ?? [] }
+}
+
+export async function createBoard(
+  token: string,
+  payload: { id: string; name: string; description?: string; parentId?: string; position?: number },
+): Promise<ApiResponse<AckResult>> {
+  const res = await fetch(`${BASE}/boards`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return jsonAck(res)
 }
 
 export async function setBoardFavorite(
@@ -1355,13 +1382,15 @@ export async function publishPollResult(token: string, pollId: string): Promise<
 // ── M9: Trust ──────────────────────────────────────────────────────────────
 
 export async function getTrust(token: string, username: string): Promise<ApiResponse<TrustInfo>> {
-  const res = await fetch(`${BASE}/users/${username}/trust`, { headers: authHeaders(token) })
+  const res = await fetch(`${BASE}/users/${encodeURIComponent(username)}/trust`, { headers: authHeaders(token) })
   return json<TrustInfo>(res)
 }
 
 export async function getUserProfile(token: string | null, username: string): Promise<ApiResponse<UserProfile>> {
-  const res = await fetch(`${BASE}/users/${username}`, { headers: authHeaders(token) })
-  return json<UserProfile>(res)
+  const res = await fetch(`${BASE}/users/${encodeURIComponent(username)}`, { headers: authHeaders(token) })
+  const r = await json<UserProfile>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data ? { ...r.data, pubkeys: r.data.pubkeys ?? [] } : r.data }
 }
 
 export async function getAccountRegistrationSettings(token: string): Promise<ApiResponse<AccountRegistrationSettings>> {
@@ -1437,6 +1466,22 @@ export async function reviewPasswordRecoveryRequest(
   return { data: r.data?.request }
 }
 
+export async function grantRole(
+  token: string,
+  username: string,
+  role: 'trusted' | 'moderator' | 'admin',
+): Promise<ApiResponse<AckResult>> {
+  return execCommand(token, 'grantRole', { user: username, role })
+}
+
+export async function revokeRole(
+  token: string,
+  username: string,
+  role: 'trusted' | 'moderator' | 'admin',
+): Promise<ApiResponse<AckResult>> {
+  return execCommand(token, 'revokeRole', { user: username, role })
+}
+
 export async function transferUserId(
   token: string,
   username: string,
@@ -1472,7 +1517,7 @@ export async function listUserPosts(
   offset = 0,
 ): Promise<ApiResponse<Post[]>> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
-  const res = await fetch(`${BASE}/users/${username}/posts?${params}`, { headers: authHeaders(token) })
+  const res = await fetch(`${BASE}/users/${encodeURIComponent(username)}/posts?${params}`, { headers: authHeaders(token) })
   const r = await json<{ posts: Post[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.posts ?? [] }
@@ -1571,7 +1616,9 @@ export async function deleteMyPersonalFile(token: string, name: string): Promise
 
 export async function listMySignatures(token: string): Promise<ApiResponse<UserSignatureBundle>> {
   const res = await fetch(`${BASE}/users/me/signatures`, { headers: authHeaders(token) })
-  return json<UserSignatureBundle>(res)
+  const r = await json<UserSignatureBundle>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data ? { ...r.data, signatures: r.data.signatures ?? [] } : r.data }
 }
 
 export async function createMySignature(
@@ -1635,7 +1682,9 @@ export async function setMySignatureSettings(
 
 export async function listMyLoginACL(token: string): Promise<ApiResponse<UserLoginACLBundle>> {
   const res = await fetch(`${BASE}/users/me/login-acl`, { headers: authHeaders(token) })
-  return json<UserLoginACLBundle>(res)
+  const r = await json<UserLoginACLBundle>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data ? { ...r.data, rules: r.data.rules ?? [] } : r.data }
 }
 
 export async function createMyLoginACLRule(
@@ -1859,5 +1908,5 @@ export async function execCommand(
     headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
     body: JSON.stringify({ command: name, payload, cid }),
   })
-  return json<AckResult>(res)
+  return jsonAck(res)
 }

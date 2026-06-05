@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -167,6 +170,152 @@ func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 	if !strings.Contains(view, "Main Menu") || !strings.Contains(view, "Boards") || !strings.Contains(view, "Live Chat") {
 		t.Fatalf("expected main menu view, got: %q", view)
 	}
+	foundProfile := false
+	foundOnline := false
+	for _, item := range m.list.Items() {
+		menuItem, ok := item.(mainMenuItem)
+		if ok && menuItem.title == "Profile" {
+			foundProfile = true
+		}
+		if ok && menuItem.title == "Online" {
+			foundOnline = true
+		}
+	}
+	if !foundProfile {
+		t.Fatalf("expected main menu items to include Profile, got %#v", m.list.Items())
+	}
+	if !foundOnline {
+		t.Fatalf("expected main menu items to include Online, got %#v", m.list.Items())
+	}
+}
+
+func TestMainMenuProfileShortcutOpensProfileSettings(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageMainMenu,
+		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		supportsANSI: false,
+	}
+	m.rebuildList()
+
+	_ = m.handleKey(keyMsg("5"))
+	if m.page != pageProfile {
+		t.Fatalf("expected profile shortcut to open profile page, got %s", pageName(m.page))
+	}
+	if len(m.list.Items()) == 0 {
+		t.Fatalf("expected profile field items")
+	}
+	if _, ok := m.list.Items()[0].(profileFieldItem); !ok {
+		t.Fatalf("expected profile field items, got %#v", m.list.Items())
+	}
+	view := m.View()
+	if !strings.Contains(view, "My Profile") || !strings.Contains(view, "Display name") {
+		t.Fatalf("expected profile settings view, got: %q", view)
+	}
+}
+
+func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
+	c := newTestCore(t)
+	actor, err := c.RegisterUser("alice", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := newModel(c, actor, 80, 24, false)
+	m.page = pageProfile
+	profile, err := c.UserProfileByName(actor.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.profile = profile
+	m.rebuildList()
+	m.list.Select(len(profileFields()) - 1)
+	m.openProfileField()
+	if m.page != pageProfileEdit || !m.profileField.multiline {
+		t.Fatalf("expected signature edit page, got page=%s field=%+v", pageName(m.page), m.profileField)
+	}
+
+	m.profileEditor.SetValue("sig line")
+	cmd := m.submitProfileField()
+	if cmd == nil {
+		t.Fatal("expected save command")
+	}
+	updated, _ := m.Update(cmd())
+	got := updated.(model)
+	if got.page != pageProfile {
+		t.Fatalf("expected save to return to profile page, got %s", pageName(got.page))
+	}
+	if got.statusMsg != "profile saved" {
+		t.Fatalf("expected saved status, got %q", got.statusMsg)
+	}
+	saved, err := c.UserProfileByName(actor.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Signature != "sig line" {
+		t.Fatalf("expected signature to save, got %q", saved.Signature)
+	}
+}
+
+func TestMainMenuOnlineShortcutOpensOnlineUsers(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageMainMenu,
+		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		supportsANSI: false,
+	}
+	m.rebuildList()
+
+	_ = m.handleKey(keyMsg("6"))
+	if m.page != pageOnline {
+		t.Fatalf("expected online shortcut to open online page, got %s", pageName(m.page))
+	}
+	view := m.View()
+	if !strings.Contains(view, "Who is Online") || !strings.Contains(view, "Visible sessions") {
+		t.Fatalf("expected online users view, got: %q", view)
+	}
+}
+
+func TestOnlineUsersPageShowsPresenceRows(t *testing.T) {
+	c := newTestCore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+
+	alice, err := c.RegisterUser("alice", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := c.RegisterUser("bob", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(proto.SetPresencePayload{Status: "active", Mode: "reading", Board: "general", Location: "General board"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := c.ExecCmd(context.Background(), bob, proto.CmdSetPresence, raw, "")
+	if reply.Err != nil {
+		t.Fatal(fmt.Errorf("%s", reply.Err.Message))
+	}
+
+	users, err := c.ListOnlineUsers(alice.ID, "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := model{
+		actor:        alice,
+		page:         pageOnline,
+		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		onlineUsers:  users,
+		supportsANSI: false,
+	}
+	m.rebuildList()
+
+	view := m.View()
+	if !strings.Contains(view, "bob") || !strings.Contains(view, "reading") || !strings.Contains(view, "General board") {
+		t.Fatalf("expected online users view to show bob's presence, got: %q", view)
+	}
 }
 
 func TestBoardAndThreadListViewsShowKeyHints(t *testing.T) {
@@ -185,7 +334,8 @@ func TestBoardAndThreadListViewsShowKeyHints(t *testing.T) {
 
 	m.page = pageThreadList
 	threadView := m.View()
-	if !strings.Contains(threadView, "enter/→=open thread") || !strings.Contains(threadView, "n=new thread") {
+	if !strings.Contains(threadView, "enter/→=open thread") || !strings.Contains(threadView, "n=new thread") ||
+		!strings.Contains(threadView, "r=refresh") || !strings.Contains(threadView, "Ctrl+↑/↓=page") {
 		t.Fatalf("expected thread list key hints, got: %q", threadView)
 	}
 }
@@ -205,6 +355,69 @@ func TestThreadListPrefixesThreadSerials(t *testing.T) {
 	rendered := m.list.View()
 	if !strings.Contains(rendered, "0001  Welcome") || !strings.Contains(rendered, "0002  Second") {
 		t.Fatalf("expected thread list to include serial numbers, got: %q", rendered)
+	}
+}
+
+func TestThreadListSerialsUsePageOffset(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageThreadList,
+		currentBoard: "general",
+		threadOffset: threadPageSize,
+		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
+		threads: []core.Thread{
+			{ID: "thr_51", Title: "Next page", Author: "alice", PostCount: 2},
+		},
+	}
+	m.rebuildList()
+
+	rendered := m.list.View()
+	if !strings.Contains(rendered, "0051  Next page") || !strings.Contains(rendered, "general [51-51]") {
+		t.Fatalf("expected thread list to use page offset in serials and title, got: %q", rendered)
+	}
+}
+
+func TestThreadListRefreshAndPaginationKeys(t *testing.T) {
+	threads := make([]core.Thread, threadPageSize)
+	for i := range threads {
+		threads[i] = core.Thread{ID: fmt.Sprintf("thr_%d", i+1), Title: fmt.Sprintf("Thread %d", i+1)}
+	}
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageThreadList,
+		currentBoard: "general",
+		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
+		threads:      threads,
+	}
+
+	if cmd := m.handleKey(keyMsg("r")); cmd == nil {
+		t.Fatal("expected r to refresh current thread page")
+	}
+	if m.statusMsg != "refreshing threads" {
+		t.Fatalf("expected refresh status, got %q", m.statusMsg)
+	}
+
+	if cmd := m.handleKey(keyMsg("ctrl+down")); cmd == nil {
+		t.Fatal("expected ctrl+down to fetch next thread page")
+	}
+	if !strings.Contains(m.statusMsg, "51-100") {
+		t.Fatalf("expected next-page loading status, got %q", m.statusMsg)
+	}
+
+	m.threadOffset = threadPageSize
+	if cmd := m.handleKey(keyMsg("ctrl+up")); cmd == nil {
+		t.Fatal("expected ctrl+up to fetch previous thread page")
+	}
+	if !strings.Contains(m.statusMsg, "1-50") {
+		t.Fatalf("expected previous-page loading status, got %q", m.statusMsg)
+	}
+
+	m.threadOffset = 0
+	if cmd := m.handleKey(keyMsg("ctrl+up")); cmd != nil {
+		t.Fatal("did not expect ctrl+up to fetch before the first page")
+	}
+	if m.statusMsg != "already at first page" {
+		t.Fatalf("expected first-page guard status, got %q", m.statusMsg)
 	}
 }
 
@@ -338,6 +551,38 @@ func TestThreadSubmittedReturnsFromComposeToNewThread(t *testing.T) {
 	}
 }
 
+func TestNewThreadTitleEnterFocusesBodyWithoutLeadingNewline(t *testing.T) {
+	m := model{
+		actor:              &core.User{Name: "alice"},
+		page:               pageCompose,
+		vp:                 viewport.New(80, 20),
+		compose:            textarea.New(),
+		titleInput:         textinput.New(),
+		composingNewThread: true,
+		supportsANSI:       false,
+	}
+	m.titleInput.SetValue("Title")
+	m.titleInput.Focus()
+	m.compose.Placeholder = "Write your post"
+	m.compose.Blur()
+
+	updated, _ := m.Update(keyMsg("enter"))
+	got := updated.(model)
+	if got.titleInput.Focused() {
+		t.Fatalf("expected title input to blur after enter")
+	}
+	if !got.compose.Focused() {
+		t.Fatalf("expected body input to focus after enter")
+	}
+	if got.compose.Value() != "" {
+		t.Fatalf("expected title enter not to insert body text, got %q", got.compose.Value())
+	}
+	view := got.View()
+	if !strings.Contains(view, "Title:") || !strings.Contains(view, "Write your post") {
+		t.Fatalf("expected new-thread compose to show title and body together, got %q", view)
+	}
+}
+
 func TestNormalizeKeyStringMakesControlKeysCaseInsensitive(t *testing.T) {
 	if got := normalizeKeyString("ctrl+S"); got != "ctrl+s" {
 		t.Fatalf("expected ctrl+S to normalize to ctrl+s, got %q", got)
@@ -353,6 +598,12 @@ func keyMsg(value string) tea.KeyMsg {
 	}
 	if value == "left" {
 		return tea.KeyMsg{Type: tea.KeyLeft}
+	}
+	if value == "ctrl+up" {
+		return tea.KeyMsg{Type: tea.KeyCtrlUp}
+	}
+	if value == "ctrl+down" {
+		return tea.KeyMsg{Type: tea.KeyCtrlDown}
 	}
 	if value == "enter" {
 		return tea.KeyMsg{Type: tea.KeyEnter}

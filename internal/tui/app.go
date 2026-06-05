@@ -31,14 +31,23 @@ const (
 	pageChat
 	pageSearch
 	pageNotifications
+	pageProfile
+	pageProfileEdit
+	pageOnline
 )
+
+const threadPageSize = 50
 
 // msg types for the bubbletea update cycle.
 type (
-	eventMsg     struct{ evt *proto.Event }
-	errMsg       struct{ err error }
-	boardsMsg    struct{ boards []core.Board }
-	threadsMsg   struct{ threads []core.Thread }
+	eventMsg   struct{ evt *proto.Event }
+	errMsg     struct{ err error }
+	boardsMsg  struct{ boards []core.Board }
+	threadsMsg struct {
+		board   string
+		offset  int
+		threads []core.Thread
+	}
 	postsMsg     struct{ posts []core.Post }
 	postPollsMsg struct {
 		thread string
@@ -61,10 +70,23 @@ type (
 		unread        int
 	}
 	notificationStatusMsg struct{ unread int }
-	disconnectMsg         struct{}
-	postSubmittedMsg      struct{ thread string }
-	chatSentMsg           struct{}
-	threadSubmittedMsg    struct {
+	profileMsg            struct {
+		profile *core.UserProfile
+		err     error
+	}
+	profileSavedMsg struct {
+		profile *core.UserProfile
+		err     error
+	}
+	onlineUsersMsg struct {
+		users []core.SocialUser
+		err   error
+	}
+	presenceSetMsg     struct{ err error }
+	disconnectMsg      struct{}
+	postSubmittedMsg   struct{ thread string }
+	chatSentMsg        struct{}
+	threadSubmittedMsg struct {
 		board  string
 		thread string
 	}
@@ -88,14 +110,17 @@ type model struct {
 
 	currentBoard  string
 	currentThread string
+	threadOffset  int
 
 	// Component state.
-	list        list.Model
-	vp          viewport.Model
-	compose     textarea.Model
-	titleInput  textinput.Model
-	chatInput   textinput.Model
-	searchQuery string
+	list          list.Model
+	vp            viewport.Model
+	compose       textarea.Model
+	titleInput    textinput.Model
+	chatInput     textinput.Model
+	profileInput  textinput.Model
+	profileEditor textarea.Model
+	searchQuery   string
 
 	// Compose mode: true = creating new thread, false = replying
 	composingNewThread bool
@@ -114,6 +139,9 @@ type model struct {
 	// Notifications tracked in the current actor session.
 	notifications []core.Notification
 	unreadNotifs  int
+	profile       *core.UserProfile
+	profileField  profileField
+	onlineUsers   []core.SocialUser
 	supportsANSI  bool
 }
 
@@ -167,6 +195,10 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	ci.CharLimit = 1000
 	ci.Width = width - 4
 
+	pi := textinput.New()
+	pi.CharLimit = 1000
+	pi.Width = width - 4
+
 	m := model{
 		c:             c,
 		actor:         actor,
@@ -176,6 +208,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		height:        height,
 		titleInput:    ti,
 		chatInput:     ci,
+		profileInput:  pi,
 		selectedPost:  -1,
 		postReactions: make(map[string]bool),
 		postPolls:     make(map[string]*core.Poll),
@@ -194,6 +227,9 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	m.compose.Placeholder = "Write your post… (Ctrl+S to submit, Esc to cancel)"
 	m.compose.SetWidth(width - 4)
 	m.compose.SetHeight(height / 3)
+	m.profileEditor = textarea.New()
+	m.profileEditor.SetWidth(width - 4)
+	m.profileEditor.SetHeight(height / 3)
 	m.rebuildList()
 
 	return m
@@ -239,6 +275,7 @@ func (m model) Init() tea.Cmd {
 		m.fetchBoards(),
 		m.fetchNotificationStatus(),
 		m.fetchPollPermission(),
+		m.setPresence("active", "tui", "", "", "Main Menu"),
 		m.awaitEvent(),
 	)
 }
@@ -257,14 +294,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compose.SetHeight(msg.Height / 3)
 		m.titleInput.Width = msg.Width - 4
 		m.chatInput.Width = msg.Width - 4
+		m.profileInput.Width = msg.Width - 4
+		m.profileEditor.SetWidth(msg.Width - 4)
+		m.profileEditor.SetHeight(msg.Height / 3)
 
 	case boardsMsg:
 		m.boards = msg.boards
 		m.rebuildList()
 
 	case threadsMsg:
+		if msg.board != "" && m.currentBoard != "" && msg.board != m.currentBoard {
+			return m, nil
+		}
+		pageChanged := msg.offset != m.threadOffset
+		m.threadOffset = msg.offset
 		m.threads = msg.threads
 		m.rebuildList()
+		if pageChanged {
+			m.list.Select(0)
+		}
 
 	case postsMsg:
 		m.posts = msg.posts
@@ -343,6 +391,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case notificationStatusMsg:
 		m.unreadNotifs = msg.unread
 
+	case profileMsg:
+		if msg.err != nil {
+			m.statusMsg = "error: " + msg.err.Error()
+			return m, nil
+		}
+		m.profile = msg.profile
+		if m.page == pageProfile {
+			m.rebuildList()
+		}
+
+	case profileSavedMsg:
+		if msg.err != nil {
+			m.statusMsg = "error: " + msg.err.Error()
+			return m, nil
+		}
+		m.profile = msg.profile
+		m.statusMsg = "profile saved"
+		if m.page == pageProfileEdit {
+			m.popPage()
+		}
+		if m.page == pageProfile {
+			m.rebuildList()
+		}
+
+	case onlineUsersMsg:
+		if msg.err != nil {
+			m.statusMsg = "error: " + msg.err.Error()
+			return m, nil
+		}
+		m.onlineUsers = msg.users
+		if m.page == pageOnline {
+			m.rebuildList()
+		}
+
+	case presenceSetMsg:
+		if msg.err != nil {
+			m.statusMsg = "presence: " + msg.err.Error()
+		}
+
 	case eventMsg:
 		cmds = append(cmds, m.awaitEvent()) // re-arm listener
 		cmds = append(cmds, m.handleEvent(msg.evt)...)
@@ -372,7 +459,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.board != "" {
 			m.currentBoard = msg.board
-			cmds = append(cmds, m.fetchThreads(msg.board))
+			m.threadOffset = 0
+			cmds = append(cmds, m.fetchThreads(msg.board, m.threadOffset))
 		}
 		if msg.thread != "" {
 			m.currentThread = msg.thread
@@ -400,14 +488,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Capture the page BEFORE handleKey might change it, so the component
 		// dispatch below uses the correct component for this key event.
 		activePage := m.page
+		key := keyString(msg)
+		titleFocusNavigation := activePage == pageCompose &&
+			m.composingNewThread &&
+			m.titleInput.Focused() &&
+			(key == "enter" || key == "tab" || key == "ctrl+s")
 		cmd := m.handleKey(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+		if titleFocusNavigation {
+			return m, tea.Batch(cmds...)
+		}
 
 		// Delegate to the component that was active when the key arrived.
 		switch activePage {
-		case pageMainMenu, pageBoardList, pageThreadList, pageNotifications:
+		case pageMainMenu, pageBoardList, pageThreadList, pageNotifications, pageProfile, pageOnline:
 			var c tea.Cmd
 			m.list, c = m.list.Update(msg)
 			cmds = append(cmds, c)
@@ -432,13 +528,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.compose, c = m.compose.Update(msg)
 				cmds = append(cmds, c)
 			}
+		case pageProfileEdit:
+			if m.profileField.multiline {
+				var c tea.Cmd
+				m.profileEditor, c = m.profileEditor.Update(msg)
+				cmds = append(cmds, c)
+			} else {
+				var c tea.Cmd
+				m.profileInput, c = m.profileInput.Update(msg)
+				cmds = append(cmds, c)
+			}
 		}
 		return m, tea.Batch(cmds...)
 	}
 
 	// Non-key messages also need component updates.
 	switch m.page {
-	case pageMainMenu, pageBoardList, pageThreadList:
+	case pageMainMenu, pageBoardList, pageThreadList, pageProfile, pageOnline:
 		var c tea.Cmd
 		m.list, c = m.list.Update(msg)
 		cmds = append(cmds, c)
@@ -458,6 +564,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			var c tea.Cmd
 			m.compose, c = m.compose.Update(msg)
+			cmds = append(cmds, c)
+		}
+	case pageProfileEdit:
+		if m.profileField.multiline {
+			var c tea.Cmd
+			m.profileEditor, c = m.profileEditor.Update(msg)
+			cmds = append(cmds, c)
+		} else {
+			var c tea.Cmd
+			m.profileInput, c = m.profileInput.Update(msg)
 			cmds = append(cmds, c)
 		}
 	}
@@ -486,6 +602,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
 			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+		case "5", "p":
+			return m.enterProfile()
+		case "6", "o":
+			return m.enterOnline()
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
@@ -496,10 +616,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "enter", " ", "right":
 			if b := m.selectedBoard(); b != nil {
 				m.currentBoard = b.ID
+				m.threadOffset = 0
 				m.pushPage(pageThreadList)
 				m.threads = nil
 				m.rebuildList()
-				return m.fetchThreads(b.ID)
+				return m.fetchThreads(b.ID, m.threadOffset)
 			}
 		case "c":
 			return m.enterChat()
@@ -534,6 +655,40 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 					m.resubscribeThread(t.ID),
 				)
 			}
+		case "r":
+			if m.currentBoard == "" {
+				m.statusMsg = "no board selected"
+				return nil
+			}
+			m.statusMsg = "refreshing threads"
+			return m.fetchThreads(m.currentBoard, m.threadOffset)
+		case "ctrl+up":
+			if m.currentBoard == "" {
+				m.statusMsg = "no board selected"
+				return nil
+			}
+			if m.threadOffset == 0 {
+				m.statusMsg = "already at first page"
+				return nil
+			}
+			nextOffset := m.threadOffset - threadPageSize
+			if nextOffset < 0 {
+				nextOffset = 0
+			}
+			m.statusMsg = fmt.Sprintf("loading threads %d-%d", nextOffset+1, nextOffset+threadPageSize)
+			return m.fetchThreads(m.currentBoard, nextOffset)
+		case "ctrl+down":
+			if m.currentBoard == "" {
+				m.statusMsg = "no board selected"
+				return nil
+			}
+			if len(m.threads) < threadPageSize {
+				m.statusMsg = "already at last page"
+				return nil
+			}
+			nextOffset := m.threadOffset + threadPageSize
+			m.statusMsg = fmt.Sprintf("loading threads %d-%d", nextOffset+1, nextOffset+threadPageSize)
+			return m.fetchThreads(m.currentBoard, nextOffset)
 		case "n":
 			m.composingNewThread = true
 			m.titleInput.Reset()
@@ -603,7 +758,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			if !m.popPage() {
 				m.page = pageMainMenu
 			}
-			return m.fetchThreads(m.currentBoard)
+			return m.fetchThreads(m.currentBoard, m.threadOffset)
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
@@ -856,6 +1011,57 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.rebuildList()
 		}
+
+	case pageProfile:
+		switch key {
+		case "enter", " ", "right":
+			m.openProfileField()
+		case "r":
+			return m.fetchProfile()
+		case "esc", "left":
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
+			m.rebuildList()
+		case "q", "ctrl+c":
+			m.c.Unsubscribe(m.sub)
+			return tea.Quit
+		}
+
+	case pageProfileEdit:
+		switch key {
+		case "ctrl+s":
+			return m.submitProfileField()
+		case "esc":
+			m.profileInput.Blur()
+			m.profileEditor.Blur()
+			if !m.popPage() {
+				m.page = pageProfile
+			}
+			if m.page == pageProfile {
+				m.rebuildList()
+			}
+		}
+
+	case pageOnline:
+		switch key {
+		case "r":
+			return m.fetchOnlineUsers()
+		case "enter", " ", "right":
+			user := m.selectedOnlineUser()
+			if user == nil {
+				return nil
+			}
+			m.statusMsg = formatOnlineUserStatus(*user)
+		case "esc", "left":
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
+			m.rebuildList()
+		case "q", "ctrl+c":
+			m.c.Unsubscribe(m.sub)
+			return tea.Quit
+		}
 	}
 	return nil
 }
@@ -919,7 +1125,7 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 
 	case proto.EvtThreadNew:
 		if m.page == pageThreadList {
-			cmds = append(cmds, m.fetchThreads(m.currentBoard))
+			cmds = append(cmds, m.fetchThreads(m.currentBoard, m.threadOffset))
 		}
 		cmds = append(cmds, m.fetchNotificationStatus())
 
@@ -1015,6 +1221,11 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			m.statusMsg = fmt.Sprintf("thread %s by %s", action, p.By)
 		}
 		cmds = append(cmds, m.fetchNotificationStatus())
+
+	case proto.EvtPresenceUpdate:
+		if m.page == pageOnline {
+			cmds = append(cmds, m.fetchOnlineUsers())
+		}
 	}
 
 	if cmds == nil {
@@ -1042,9 +1253,15 @@ func (m model) View() string {
 	case pageBoardList:
 		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=open board  c=chat  N=notifications  /=search  esc/←=menu  q=quit")
 	case pageThreadList:
-		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=open thread  n=new thread  /=search  esc/←=back  q=quit")
+		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=open thread  n=new thread  r=refresh  Ctrl+↑/↓=page  /=search  esc/←=back  q=quit")
 	case pageNotifications:
 		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
+	case pageProfile:
+		body = m.renderPanel(m.renderProfileSettings()) + "\n" + m.helpLine("enter/→=edit  r=refresh  esc/←=menu  q=quit")
+	case pageProfileEdit:
+		body = m.renderPanel(m.renderProfileEditor()) + "\n" + m.helpLine("Ctrl+S=save  Esc=cancel")
+	case pageOnline:
+		body = m.renderPanel(m.renderOnlineUsers()) + "\n" + m.helpLine("r=refresh  enter/→=details  esc/←=menu  q=quit")
 	case pageThread:
 		help := "n=reply  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		if m.actor.IsMod() {
@@ -1112,12 +1329,12 @@ func (m model) View() string {
 	case pageCompose:
 		if m.composingNewThread {
 			titleSection := m.styled(styleTitle, "New thread") + "\n\n" +
-				m.styled(styleDim, "Title: ") + m.titleInput.View() + "\n\n"
+				m.styled(styleDim, "Title: ") + m.titleInput.View() + "\n\n" +
+				m.compose.View()
 			if m.titleInput.Focused() {
-				body = m.renderPanel(titleSection + m.styled(styleDim, "Enter/Tab=next field  Esc=cancel"))
+				body = m.renderPanel(titleSection) + "\n" + m.helpLine("enter/tab=body  ctrl+s=body  esc=cancel")
 			} else {
-				body = m.renderPanel(titleSection+m.compose.View()) + "\n" +
-					m.helpLine(composeHelpLine(m.canCreatePoll, m.trustLoaded))
+				body = m.renderPanel(titleSection) + "\n" + m.helpLine(composeHelpLine(m.canCreatePoll, m.trustLoaded))
 			}
 		} else {
 			body = m.renderPanel(m.styled(styleTitle, "New reply")+"\n\n"+m.compose.View()) +
@@ -1138,7 +1355,133 @@ func (m model) renderMainMenu() string {
 	b.WriteString("\n")
 	b.WriteString(m.styled(styleDim, "A server-hosted campus BBS over SSH") + "\n\n")
 	b.WriteString(m.list.View())
-	return m.renderPanel(b.String()) + "\n" + m.helpLine("enter/→=open  1-4=jump  q=quit")
+	return m.renderPanel(b.String()) + "\n" + m.helpLine("enter/→=open  1-6=jump  p=profile  o=online  q=quit")
+}
+
+func (m model) renderProfileSettings() string {
+	var b strings.Builder
+	b.WriteString(m.styled(styleTitle, "My Profile") + "\n")
+	name := ""
+	role := ""
+	if m.actor != nil {
+		name = m.actor.Name
+		role = m.actor.Role
+	}
+	if role == "" {
+		role = "user"
+	}
+	displayName := m.profileFieldValue(profileField{key: "displayName"})
+	if strings.TrimSpace(displayName) == "" {
+		displayName = name
+	}
+	b.WriteString(fmt.Sprintf("%s %s\n", m.styled(styleDim, "User:"), name))
+	b.WriteString(fmt.Sprintf("%s %s\n", m.styled(styleDim, "Display:"), displayName))
+	b.WriteString(fmt.Sprintf("%s %s", m.styled(styleDim, "Role:"), role))
+	if m.profile != nil {
+		b.WriteString(fmt.Sprintf("  %s %d  %s %d",
+			m.styled(styleDim, "Trust:"), m.profile.TrustLevel,
+			m.styled(styleDim, "Posts:"), m.profile.PostsCreated,
+		))
+	} else {
+		b.WriteString("  " + m.styled(styleDim, "Loading profile…"))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(m.list.View())
+	return b.String()
+}
+
+func (m model) renderProfileEditor() string {
+	field := m.profileField
+	if field.key == "" {
+		return m.styled(styleDim, "No profile field selected.")
+	}
+	var b strings.Builder
+	b.WriteString(m.styled(styleTitle, "Edit "+field.label) + "\n")
+	if field.desc != "" {
+		b.WriteString(m.styled(styleDim, field.desc) + "\n")
+	}
+	b.WriteString("\n")
+	if field.multiline {
+		b.WriteString(m.profileEditor.View())
+	} else {
+		b.WriteString(m.profileInput.View())
+	}
+	return b.String()
+}
+
+func (m model) renderOnlineUsers() string {
+	var b strings.Builder
+	b.WriteString(m.styled(styleTitle, "Who is Online") + "\n")
+	b.WriteString(fmt.Sprintf("%s %d\n\n", m.styled(styleDim, "Visible sessions:"), len(m.onlineUsers)))
+	if len(m.onlineUsers) == 0 {
+		b.WriteString(m.styled(styleDim, "No visible users online. Press r to refresh.") + "\n")
+		return b.String()
+	}
+	b.WriteString(m.list.View())
+	return b.String()
+}
+
+func (m model) profileFieldValue(field profileField) string {
+	if m.profile == nil {
+		if field.key == "displayName" && m.actor != nil {
+			return m.actor.Name
+		}
+		return ""
+	}
+	switch field.key {
+	case "displayName":
+		if strings.TrimSpace(m.profile.DisplayName) == "" && m.actor != nil {
+			return m.actor.Name
+		}
+		return m.profile.DisplayName
+	case "title":
+		return m.profile.Title
+	case "bio":
+		return m.profile.Bio
+	case "avatar":
+		return m.profile.Avatar
+	case "signature":
+		return m.profile.Signature
+	case "plan":
+		return m.profile.Plan
+	case "homepage":
+		return m.profile.Homepage
+	default:
+		return ""
+	}
+}
+
+func (m model) profileWithField(field profileField, value string) core.UserProfile {
+	var next core.UserProfile
+	if m.profile != nil {
+		next = *m.profile
+	}
+	if m.actor != nil {
+		next.ID = m.actor.ID
+		next.Name = m.actor.Name
+		next.Role = m.actor.Role
+	}
+	value = strings.TrimSpace(value)
+	switch field.key {
+	case "displayName":
+		if value == "" && m.actor != nil {
+			value = m.actor.Name
+		}
+		next.DisplayName = value
+	case "title":
+		next.Title = value
+	case "bio":
+		next.Bio = value
+	case "avatar":
+		next.Avatar = value
+	case "signature":
+		next.Signature = value
+	case "plan":
+		next.Plan = value
+	case "homepage":
+		next.Homepage = value
+	}
+	return next
 }
 
 func (m model) renderPanel(content string) string {
@@ -1241,6 +1584,115 @@ func (i notificationItem) FilterValue() string {
 	return i.n.Actor + " " + i.n.ThreadID
 }
 
+type profileField struct {
+	key       string
+	label     string
+	desc      string
+	multiline bool
+}
+
+type profileFieldItem struct {
+	field profileField
+	value string
+}
+
+func (i profileFieldItem) Title() string { return i.field.label }
+
+func (i profileFieldItem) Description() string {
+	value := strings.TrimSpace(i.value)
+	if value == "" {
+		return i.field.desc
+	}
+	value = strings.ReplaceAll(value, "\n", " / ")
+	if len(value) > 96 {
+		value = value[:96] + "…"
+	}
+	return value
+}
+
+func (i profileFieldItem) FilterValue() string { return i.field.label + " " + i.value }
+
+func profileFields() []profileField {
+	return []profileField{
+		{key: "displayName", label: "Display name", desc: "Shown on your public profile"},
+		{key: "title", label: "Title", desc: "Short BBS title or rank"},
+		{key: "bio", label: "Bio", desc: "Public profile introduction", multiline: true},
+		{key: "avatar", label: "Avatar", desc: "Emoji or short avatar text"},
+		{key: "homepage", label: "Homepage", desc: "Personal URL or homepage"},
+		{key: "plan", label: "Plan", desc: "Classic BBS plan text", multiline: true},
+		{key: "signature", label: "Signature", desc: "Default post signature", multiline: true},
+	}
+}
+
+type onlineUserItem struct{ u core.SocialUser }
+
+func (i onlineUserItem) Title() string {
+	name := i.u.DisplayName
+	if strings.TrimSpace(name) == "" {
+		name = i.u.Name
+	}
+	if name != i.u.Name && i.u.Name != "" {
+		name = fmt.Sprintf("%s (%s)", name, i.u.Name)
+	}
+	if i.u.Mutual {
+		name += " ★"
+	}
+	return name
+}
+
+func (i onlineUserItem) Description() string { return formatOnlineUserStatus(i.u) }
+
+func (i onlineUserItem) FilterValue() string {
+	return i.u.Name + " " + i.u.DisplayName + " " + i.u.Status + " " + i.u.Mode + " " + i.u.BoardName + " " + i.u.LocationLabel
+}
+
+func formatOnlineUserStatus(user core.SocialUser) string {
+	mode := strings.TrimSpace(user.Mode)
+	if mode == "" {
+		mode = strings.TrimSpace(user.Status)
+	}
+	if mode == "" {
+		mode = "online"
+	}
+	location := strings.TrimSpace(user.LocationLabel)
+	if location == "" && strings.TrimSpace(user.BoardName) != "" {
+		location = user.BoardName
+	}
+	if location == "" && strings.TrimSpace(user.BoardID) != "" {
+		location = user.BoardID
+	}
+	if location == "" && strings.TrimSpace(user.ThreadID) != "" {
+		location = "thread " + user.ThreadID
+	}
+	parts := []string{mode}
+	if location != "" {
+		parts = append(parts, location)
+	}
+	if user.IdleSeconds > 0 {
+		parts = append(parts, "idle "+formatIdle(user.IdleSeconds))
+	}
+	if user.Role != "" && user.Role != "user" {
+		parts = append(parts, user.Role)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatIdle(seconds int64) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	hours := minutes / 60
+	if hours < 24 {
+		return fmt.Sprintf("%dh%02dm", hours, minutes%60)
+	}
+	days := hours / 24
+	return fmt.Sprintf("%dd%02dh", days, hours%24)
+}
+
 func (m *model) rebuildList() {
 	switch m.page {
 	case pageMainMenu:
@@ -1249,6 +1701,8 @@ func (m *model) rebuildList() {
 			mainMenuItem{key: "2", title: "Live Chat", desc: "Join the lobby chat"},
 			mainMenuItem{key: "3", title: "Notifications", desc: "Read mentions, replies, watched threads"},
 			mainMenuItem{key: "4", title: "Search", desc: "Search posts"},
+			mainMenuItem{key: "5", title: "Profile", desc: "Edit your public profile and signature"},
+			mainMenuItem{key: "6", title: "Online", desc: "See who is online right now"},
 		})
 		m.list.Title = "Main Menu"
 	case pageBoardList:
@@ -1261,10 +1715,14 @@ func (m *model) rebuildList() {
 	case pageThreadList:
 		items := make([]list.Item, len(m.threads))
 		for i, t := range m.threads {
-			items[i] = threadItem{index: i + 1, t: t}
+			items[i] = threadItem{index: m.threadOffset + i + 1, t: t}
 		}
 		m.list.SetItems(items)
-		m.list.Title = m.currentBoard
+		if len(m.threads) == 0 {
+			m.list.Title = fmt.Sprintf("%s [empty]", m.currentBoard)
+		} else {
+			m.list.Title = fmt.Sprintf("%s [%d-%d]", m.currentBoard, m.threadOffset+1, m.threadOffset+len(m.threads))
+		}
 	case pageNotifications:
 		items := make([]list.Item, len(m.notifications))
 		for i, n := range m.notifications {
@@ -1272,6 +1730,21 @@ func (m *model) rebuildList() {
 		}
 		m.list.SetItems(items)
 		m.list.Title = "Notifications"
+	case pageProfile:
+		fields := profileFields()
+		items := make([]list.Item, len(fields))
+		for i, field := range fields {
+			items[i] = profileFieldItem{field: field, value: m.profileFieldValue(field)}
+		}
+		m.list.SetItems(items)
+		m.list.Title = "Profile Settings"
+	case pageOnline:
+		items := make([]list.Item, len(m.onlineUsers))
+		for i, user := range m.onlineUsers {
+			items[i] = onlineUserItem{u: user}
+		}
+		m.list.SetItems(items)
+		m.list.Title = "Online Users"
 	}
 }
 
@@ -1295,8 +1768,53 @@ func (m *model) openMainMenuSelection() tea.Cmd {
 		m.pushPage(pageSearch)
 		m.searchQuery = ""
 		m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+	case "5":
+		return m.enterProfile()
+	case "6":
+		return m.enterOnline()
 	}
 	return nil
+}
+
+func (m *model) enterProfile() tea.Cmd {
+	m.pushPage(pageProfile)
+	m.rebuildList()
+	return m.fetchProfile()
+}
+
+func (m *model) openProfileField() {
+	item, ok := m.list.SelectedItem().(profileFieldItem)
+	if !ok {
+		return
+	}
+	if m.profile == nil {
+		m.statusMsg = "profile loading"
+		return
+	}
+	m.profileField = item.field
+	value := m.profileFieldValue(item.field)
+	m.profileInput.Blur()
+	m.profileEditor.Blur()
+	if item.field.multiline {
+		m.profileEditor.SetValue(value)
+		m.profileEditor.Focus()
+	} else {
+		m.profileInput.Reset()
+		m.profileInput.Placeholder = item.field.label
+		m.profileInput.SetValue(value)
+		m.profileInput.Focus()
+	}
+	m.pushPage(pageProfileEdit)
+}
+
+func (m *model) enterOnline() tea.Cmd {
+	m.pushPage(pageOnline)
+	m.onlineUsers = nil
+	m.rebuildList()
+	return tea.Batch(
+		m.setPresence("active", "online", "", "", "Online users"),
+		m.fetchOnlineUsers(),
+	)
 }
 
 func (m *model) enterChat() tea.Cmd {
@@ -1328,6 +1846,14 @@ func (m *model) selectedNotification() *core.Notification {
 		return nil
 	}
 	return &sel.n
+}
+
+func (m *model) selectedOnlineUser() *core.SocialUser {
+	sel, ok := m.list.SelectedItem().(onlineUserItem)
+	if !ok {
+		return nil
+	}
+	return &sel.u
 }
 
 func (m *model) selectedPostID() string {
@@ -1525,13 +2051,13 @@ func (m model) fetchBoards() tea.Cmd {
 	}
 }
 
-func (m model) fetchThreads(board string) tea.Cmd {
+func (m model) fetchThreads(board string, offset int) tea.Cmd {
 	return func() tea.Msg {
-		threads, err := m.c.ListThreads(board, 50, 0)
+		threads, err := m.c.ListThreads(board, threadPageSize, offset)
 		if err != nil {
 			return errMsg{err}
 		}
-		return threadsMsg{threads}
+		return threadsMsg{board: board, offset: offset, threads: threads}
 	}
 }
 
@@ -1841,6 +2367,95 @@ func (m model) fetchNotificationStatus() tea.Cmd {
 	}
 }
 
+func (m model) fetchProfile() tea.Cmd {
+	return func() tea.Msg {
+		if m.c == nil || m.actor == nil {
+			return profileMsg{err: fmt.Errorf("profile unavailable")}
+		}
+		profile, err := m.c.UserProfileByName(m.actor.Name)
+		if err != nil {
+			return profileMsg{err: err}
+		}
+		return profileMsg{profile: profile}
+	}
+}
+
+func (m model) fetchOnlineUsers() tea.Cmd {
+	return func() tea.Msg {
+		if m.c == nil || m.actor == nil {
+			return onlineUsersMsg{err: fmt.Errorf("online list unavailable")}
+		}
+		users, err := m.c.ListOnlineUsers(m.actor.ID, "", 100, 0)
+		if err != nil {
+			return onlineUsersMsg{err: err}
+		}
+		return onlineUsersMsg{users: users}
+	}
+}
+
+func (m model) setPresence(status, mode, board, thread, location string) tea.Cmd {
+	return func() tea.Msg {
+		if m.c == nil || m.actor == nil {
+			return presenceSetMsg{}
+		}
+		p := proto.SetPresencePayload{
+			Status:    status,
+			SessionID: "tui",
+			Mode:      mode,
+			Board:     board,
+			Thread:    thread,
+			Location:  location,
+		}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return presenceSetMsg{err: err}
+		}
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdSetPresence, raw, "")
+		if reply.Err != nil {
+			return presenceSetMsg{err: fmt.Errorf("%s", reply.Err.Message)}
+		}
+		return presenceSetMsg{}
+	}
+}
+
+func (m *model) submitProfileField() tea.Cmd {
+	field := m.profileField
+	if field.key == "" {
+		return nil
+	}
+	value := m.profileInput.Value()
+	if field.multiline {
+		value = m.profileEditor.Value()
+	}
+	if field.key == "title" && len(strings.TrimSpace(value)) > 80 {
+		m.statusMsg = "title must be 80 characters or less"
+		return nil
+	}
+	next := m.profileWithField(field, value)
+	return func() tea.Msg {
+		if m.c == nil || m.actor == nil {
+			return profileSavedMsg{err: fmt.Errorf("profile unavailable")}
+		}
+		if err := m.c.UpdateUserProfile(
+			m.actor.ID,
+			next.DisplayName,
+			next.Title,
+			next.Bio,
+			next.Avatar,
+			next.Signature,
+			next.Plan,
+			next.Homepage,
+		); err != nil {
+			return profileSavedMsg{err: err}
+		}
+		profile, err := m.c.UserProfileByName(m.actor.Name)
+		if err != nil {
+			return profileSavedMsg{err: err}
+		}
+		return profileSavedMsg{profile: profile}
+	}
+}
+
 func (m *model) rebuildSearchView(posts []core.Post) {
 	var b strings.Builder
 	b.WriteString(m.styled(styleTitle, fmt.Sprintf("Search results (%d)", len(posts))) + "\n\n")
@@ -1896,6 +2511,12 @@ func pageName(p page) string {
 		return "Search"
 	case pageNotifications:
 		return "Notifications"
+	case pageProfile:
+		return "Profile"
+	case pageProfileEdit:
+		return "Profile Edit"
+	case pageOnline:
+		return "Online"
 	}
 	return ""
 }

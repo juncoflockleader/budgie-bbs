@@ -15,6 +15,7 @@ import { UnreadPage } from './pages/UnreadPage'
 import { UserProfilePage } from './pages/UserProfilePage'
 import { AuthorPostsPage } from './pages/AuthorPostsPage'
 import { ResidentFeedPage } from './pages/ResidentFeedPage'
+import { AdminPage } from './pages/AdminPage'
 import * as api from './api/client'
 import type { Board, Thread, ThreadSummary, BudgieEvent } from './api/types'
 import { useStream } from './hooks/useStream'
@@ -32,6 +33,7 @@ type Page =
   | { name: 'private'; messageTo?: string }
   | { name: 'social' }
   | { name: 'rankings' }
+  | { name: 'admin' }
   | { name: 'user-profile'; username: string }
   | { name: 'author-posts'; username: string }
 
@@ -184,6 +186,7 @@ export function App() {
         <button className="link-btn nav-chat" onClick={() => nav({ name: 'chat' })}>Chat</button>
         <button className="link-btn nav-social" onClick={() => nav({ name: 'social' })}>People</button>
         <button className="link-btn nav-rankings" onClick={() => nav({ name: 'rankings' })}>Rankings</button>
+        {user.role === 'admin' && <button className="link-btn nav-admin" onClick={() => nav({ name: 'admin' })}>Admin</button>}
         <button
           className={`link-btn nav-private${privateUnreadCount > 0 ? ' nav-private--unread' : ''}`}
           onClick={() => { nav({ name: 'private' }); setPrivateUnreadCount(0) }}
@@ -327,6 +330,14 @@ export function App() {
             onBack={() => goBack({ name: 'boards' })}
             onOpenBoard={board => nav({ name: 'threads', board })}
             onOpenThread={(board, thread) => nav({ name: 'thread', board, thread })}
+          />
+        )}
+        {page.name === 'admin' && (
+          <AdminPage
+            token={token}
+            currentUserRole={user.role}
+            onBack={() => goBack({ name: 'boards' })}
+            onOpenBoard={board => nav({ name: 'threads', board })}
           />
         )}
       </main>
