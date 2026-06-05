@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, FormEvent, useRef } from 'react'
 import { useAuth } from './hooks/useAuth'
+import { LocaleCode, useI18n } from './i18n'
 import { AuthPage } from './pages/AuthPage'
 import { BoardListPage } from './pages/BoardListPage'
 import { ThreadListPage } from './pages/ThreadListPage'
@@ -38,6 +39,7 @@ type Page =
   | { name: 'author-posts'; username: string }
 
 export function App() {
+  const { locale, setLocale, t } = useI18n()
   const { auth, login, logout } = useAuth()
   const [page, setPage] = useState<Page>({ name: 'boards' })
   const [searchDraft, setSearchDraft] = useState('')
@@ -177,37 +179,49 @@ export function App() {
             className="nav-search-input"
             value={searchDraft}
             onChange={e => setSearchDraft(e.target.value)}
-            placeholder="Search…"
-            aria-label="Search posts"
+            placeholder={t('nav.searchPlaceholder')}
+            aria-label={t('nav.searchAria')}
           />
         </form>
-        <button className="link-btn nav-unread" onClick={() => nav({ name: 'unread' })}>Unread</button>
-        <button className="link-btn nav-resident" onClick={() => nav({ name: 'resident-feed' })}>Resident</button>
-        <button className="link-btn nav-chat" onClick={() => nav({ name: 'chat' })}>Chat</button>
-        <button className="link-btn nav-social" onClick={() => nav({ name: 'social' })}>People</button>
-        <button className="link-btn nav-rankings" onClick={() => nav({ name: 'rankings' })}>Rankings</button>
-        {user.role === 'admin' && <button className="link-btn nav-admin" onClick={() => nav({ name: 'admin' })}>Admin</button>}
+        <button className="link-btn nav-unread" onClick={() => nav({ name: 'unread' })}>{t('nav.unread')}</button>
+        <button className="link-btn nav-resident" onClick={() => nav({ name: 'resident-feed' })}>{t('nav.resident')}</button>
+        <button className="link-btn nav-chat" onClick={() => nav({ name: 'chat' })}>{t('nav.chat')}</button>
+        <button className="link-btn nav-social" onClick={() => nav({ name: 'social' })}>{t('nav.people')}</button>
+        <button className="link-btn nav-rankings" onClick={() => nav({ name: 'rankings' })}>{t('nav.rankings')}</button>
+        {user.role === 'admin' && <button className="link-btn nav-admin" onClick={() => nav({ name: 'admin' })}>{t('nav.admin')}</button>}
         <button
           className={`link-btn nav-private${privateUnreadCount > 0 ? ' nav-private--unread' : ''}`}
           onClick={() => { nav({ name: 'private' }); setPrivateUnreadCount(0) }}
         >
-          Inbox{privateUnreadCount > 0 && <span className="notif-badge">{privateUnreadCount > 99 ? '99+' : privateUnreadCount}</span>}
+          {t('nav.inbox')}{privateUnreadCount > 0 && <span className="notif-badge">{privateUnreadCount > 99 ? '99+' : privateUnreadCount}</span>}
         </button>
         <button
           className={`link-btn nav-notifications${unreadCount > 0 ? ' nav-notifications--unread' : ''}`}
-          onClick={() => { nav({ name: 'notifications' }); setUnreadCount(0) }}
-          title="Notifications"
+          onClick={() => {
+            nav({ name: 'notifications' }); setUnreadCount(0)
+          }}
+          title={t('nav.notifications')}
         >
           🔔{unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
         </button>
         <button
           className="link-btn nav-user"
           onClick={() => nav({ name: 'user-profile', username: user.name })}
-          title="Open your profile"
+          title={t('nav.openProfile')}
         >
           {user.name}
         </button>
-        <button className="link-btn nav-logout" onClick={handleLogout}>Logout</button>
+        <select
+          className="nav-locale"
+          value={locale}
+          onChange={event => setLocale(event.currentTarget.value as LocaleCode)}
+          aria-label={t('settings.language')}
+        >
+          <option value="en">EN</option>
+          <option value="zh-CN">中文</option>
+          <option value="zh-TW">中文（繁）</option>
+        </select>
+        <button className="link-btn nav-logout" onClick={handleLogout}>{t('nav.logout')}</button>
       </nav>
 
       <main className="main-content">

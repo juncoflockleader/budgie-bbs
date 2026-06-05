@@ -3,6 +3,8 @@ import * as api from '../api/client'
 import type { Post } from '../api/types'
 import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
+import { useI18n } from '../i18n'
+import { formatCount } from '../i18n/format'
 
 interface Props {
   token: string
@@ -11,6 +13,7 @@ interface Props {
 }
 
 export function SearchPage({ token, initialQuery = '', onBack }: Props) {
+  const { locale, t } = useI18n()
   const [query, setQuery] = useState(initialQuery)
   const [results, setResults] = useState<Post[]>([])
   const [loading, setLoading] = useState(false)
@@ -28,7 +31,7 @@ export function SearchPage({ token, initialQuery = '', onBack }: Props) {
     setSearched(true)
     const res = await api.search(token, q.trim())
     setLoading(false)
-    if (res.error) setError(res.error.message)
+    if (res.error) setError(t('common.errorPrefix', { message: res.error.message }))
     else setResults(res.data ?? [])
   }
 
@@ -40,8 +43,8 @@ export function SearchPage({ token, initialQuery = '', onBack }: Props) {
   return (
     <div className="search-page">
       <div className="page-header">
-        <button className="back-btn" onClick={onBack}>← Back</button>
-        <h2>Search</h2>
+        <button className="back-btn" onClick={onBack}>← {t('common.back')}</button>
+        <h2>{t('search.title')}</h2>
       </div>
       <form className="search-form" onSubmit={submit}>
         <input
@@ -49,25 +52,25 @@ export function SearchPage({ token, initialQuery = '', onBack }: Props) {
           className="search-input"
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search posts…"
+          placeholder={t('search.postsPlaceholder')}
         />
         <button type="submit" disabled={loading || !query.trim()}>
-          {loading ? '…' : 'Search'}
+          {loading ? '…' : t('search.title')}
         </button>
       </form>
       {error && <p className="error">{error}</p>}
       {loading && <Spinner />}
       {searched && !loading && (
         results.length === 0
-          ? <p className="muted">No results for "{query}".</p>
+          ? <p className="muted">{t('search.noResults', { query })}</p>
           : (
             <div className="search-results">
-              <p className="muted search-count">{results.length} result{results.length !== 1 ? 's' : ''}</p>
+              <p className="muted search-count">{t('search.resultsCount', { count: formatCount(results.length, locale) })}</p>
               {results.map(post => (
                 <div key={post.id} className="post-card">
                   <div className="post-meta">
                     <span className="post-author">{post.author}</span>
-                    <span className="muted">in thread {post.thread}</span>
+                    <span className="muted">{t('search.inThread')}{' '}{post.thread}</span>
                   </div>
                   <div className="post-body">
                     <Markup body={post.body} redacted={post.redacted} />

@@ -2,20 +2,15 @@ import { useEffect, useState } from 'react'
 import * as api from '../api/client'
 import type { Notification } from '../api/types'
 import { Spinner } from '../components/Spinner'
+import { useI18n } from '../i18n'
 
 interface Props {
   token: string
   onBack: () => void
 }
 
-const KIND_LABEL: Record<Notification['kind'], string> = {
-  mention: '@ mention',
-  reply: '↩ reply',
-  watched: '👁 watched',
-  login: 'login',
-}
-
 export function NotificationsPage({ token, onBack }: Props) {
+  const { t } = useI18n()
   const [notifs, setNotifs] = useState<Notification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -26,7 +21,7 @@ export function NotificationsPage({ token, onBack }: Props) {
     const res = await api.listNotifications(token)
     setLoading(false)
     if (res.error) {
-      setError(res.error.message)
+      setError(t('common.errorPrefix', { message: res.error.message }))
     } else if (res.data) {
       setNotifs(res.data.notifications)
       setUnreadCount(res.data.unreadCount)
@@ -39,7 +34,7 @@ export function NotificationsPage({ token, onBack }: Props) {
     const target = notifs.find(n => n.id === id)
     const res = await api.markNotificationRead(token, id)
     if (res.error) {
-      setError(res.error.message)
+      setError(t('common.errorPrefix', { message: res.error.message }))
       return
     }
     setNotifs(prev => prev.map(n => n.id === id ? { ...n, read: true } : n))
@@ -49,7 +44,7 @@ export function NotificationsPage({ token, onBack }: Props) {
   async function markAll() {
     const res = await api.markAllNotificationsRead(token)
     if (res.error) {
-      setError(res.error.message)
+      setError(t('common.errorPrefix', { message: res.error.message }))
       return
     }
     setNotifs(prev => prev.map(n => ({ ...n, read: true })))
@@ -60,7 +55,7 @@ export function NotificationsPage({ token, onBack }: Props) {
     const target = notifs.find(n => n.id === id)
     const res = await api.deleteNotification(token, id)
     if (res.error) {
-      setError(res.error.message)
+      setError(t('common.errorPrefix', { message: res.error.message }))
       return
     }
     setNotifs(prev => prev.filter(n => n.id !== id))
@@ -70,17 +65,17 @@ export function NotificationsPage({ token, onBack }: Props) {
   async function clearRead() {
     const res = await api.clearNotifications(token, true)
     if (res.error) {
-      setError(res.error.message)
+      setError(t('common.errorPrefix', { message: res.error.message }))
       return
     }
     setNotifs(prev => prev.filter(n => !n.read))
   }
 
   async function clearAll() {
-    if (!window.confirm('Clear all notifications?')) return
+    if (!window.confirm(t('notifications.clear')) ) return
     const res = await api.clearNotifications(token)
     if (res.error) {
-      setError(res.error.message)
+      setError(t('common.errorPrefix', { message: res.error.message }))
       return
     }
     setNotifs([])
@@ -92,20 +87,27 @@ export function NotificationsPage({ token, onBack }: Props) {
 
   const hasRead = notifs.some(n => n.read)
 
+  const kindLabel: Record<Notification['kind'], string> = {
+    mention: t('notifications.mention'),
+    reply: t('notifications.reply'),
+    watched: t('notifications.watched'),
+    login: t('notifications.loginOnline'),
+  }
+
   return (
     <div className="notifications-page">
       <div className="page-header">
-        <button className="back-btn" onClick={onBack}>← Back</button>
-        <h2>Notifications {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}</h2>
+        <button className="back-btn" onClick={onBack}>← {t('common.back')}</button>
+        <h2>{t('notifications.title')} {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}</h2>
         {unreadCount > 0 && (
-          <button className="link-btn" onClick={markAll}>Mark all read</button>
+          <button className="link-btn" onClick={markAll}>{t('notifications.markAllRead')}</button>
         )}
-        {hasRead && <button className="link-btn" onClick={clearRead}>Clear read</button>}
-        {notifs.length > 0 && <button className="link-btn danger" onClick={clearAll}>Clear all</button>}
+        {hasRead && <button className="link-btn" onClick={clearRead}>{t('notifications.clearRead')}</button>}
+        {notifs.length > 0 && <button className="link-btn danger" onClick={clearAll}>{t('notifications.clearAll')}</button>}
       </div>
 
       {notifs.length === 0 ? (
-        <p className="muted empty-state">No notifications yet.</p>
+        <p className="muted empty-state">{t('notifications.noNotifications')}</p>
       ) : (
         <div className="notif-list">
           {notifs.map(n => (
@@ -114,13 +116,13 @@ export function NotificationsPage({ token, onBack }: Props) {
               className={`notif-item${n.read ? '' : ' notif-item--unread'}`}
               onClick={() => { if (!n.read) markRead(n.id) }}
             >
-              <span className="notif-kind">{KIND_LABEL[n.kind]}</span>
+              <span className="notif-kind">{kindLabel[n.kind]}</span>
               <span className="notif-actor">{n.actor}</span>
               {n.kind === 'login' ? (
-                <span className="muted"> is online</span>
+                <span className="muted">{t('notifications.inThread')}</span>
               ) : (
                 <>
-                  <span className="muted"> in thread </span>
+                  <span className="muted">{t('notifications.inThread').trim()}</span>
                   <span className="notif-thread">{n.threadId}</span>
                 </>
               )}
@@ -133,7 +135,7 @@ export function NotificationsPage({ token, onBack }: Props) {
                   void deleteNotif(n.id)
                 }}
               >
-                Delete
+                {t('notifications.delete')}
               </button>
             </div>
           ))}

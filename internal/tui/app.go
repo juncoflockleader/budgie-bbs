@@ -38,6 +38,8 @@ const (
 
 const threadPageSize = 50
 
+const sectionChromeLines = 4 // global header, panel borders, help line
+
 // msg types for the bubbletea update cycle.
 type (
 	eventMsg   struct{ evt *proto.Event }
@@ -142,6 +144,7 @@ type model struct {
 	profile       *core.UserProfile
 	profileField  profileField
 	onlineUsers   []core.SocialUser
+	authorNames   map[string]string
 	supportsANSI  bool
 }
 
@@ -153,18 +156,19 @@ type chatLine struct {
 
 // Styles.
 var (
-	styleTitle              = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	styleDim                = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleHeader             = lipgloss.NewStyle().Background(lipgloss.Color("19")).Foreground(lipgloss.Color("229")).Bold(true).Padding(0, 1)
-	styleStatus             = lipgloss.NewStyle().Background(lipgloss.Color("124")).Foreground(lipgloss.Color("229")).Padding(0, 1)
-	styleHelp               = lipgloss.NewStyle().Background(lipgloss.Color("18")).Foreground(lipgloss.Color("159")).Padding(0, 1)
-	stylePanel              = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("26")).Padding(0, 1)
-	styleMenuLogo           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Background(lipgloss.Color("88")).Padding(0, 1)
-	stylePostSep            = lipgloss.NewStyle().Foreground(lipgloss.Color("24")).SetString(strings.Repeat("─", 80))
-	styleAuthor             = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("32"))
-	styleRedacted           = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
-	styleChatUser           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("178"))
-	styleSelectedPostHeader = lipgloss.NewStyle().Background(lipgloss.Color("25")).Foreground(lipgloss.Color("231")).Bold(true).Reverse(true).Padding(0, 1)
+	postSepText           = strings.Repeat("─", 80)
+	postSignatureSepText  = strings.Repeat("─", 24)
+	styleTitle            = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	styleDim              = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleHeader           = lipgloss.NewStyle().Background(lipgloss.Color("19")).Foreground(lipgloss.Color("229")).Bold(true).Padding(0, 1)
+	styleHelp             = lipgloss.NewStyle().Background(lipgloss.Color("18")).Foreground(lipgloss.Color("159")).Padding(0, 1)
+	stylePanel            = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("26")).Padding(0, 1)
+	stylePostSep          = lipgloss.NewStyle().Foreground(lipgloss.Color("24"))
+	stylePostInnerSep     = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+	stylePostSignatureSep = lipgloss.NewStyle().Foreground(lipgloss.Color("30"))
+	styleAuthor           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("32"))
+	styleRedacted         = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	styleChatUser         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("178"))
 )
 
 func (m *model) styled(style lipgloss.Style, value string) string {
@@ -175,10 +179,28 @@ func (m *model) styled(style lipgloss.Style, value string) string {
 }
 
 func (m *model) postSepLine() string {
+	return m.postBoundaryLine()
+}
+
+func (m *model) postBoundaryLine() string {
 	if m == nil || m.supportsANSI {
-		return stylePostSep.String()
+		return stylePostSep.Render(postSepText)
 	}
-	return strings.Repeat("─", 80)
+	return postSepText
+}
+
+func (m *model) postInnerSepLine() string {
+	if m == nil || m.supportsANSI {
+		return stylePostInnerSep.Render(postSepText)
+	}
+	return postSepText
+}
+
+func (m *model) postSignatureSepLine() string {
+	if m == nil || m.supportsANSI {
+		return stylePostSignatureSep.Render(postSignatureSepText)
+	}
+	return postSignatureSepText
 }
 
 func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool) model {
@@ -212,15 +234,17 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		selectedPost:  -1,
 		postReactions: make(map[string]bool),
 		postPolls:     make(map[string]*core.Poll),
+		authorNames:   make(map[string]string),
 		supportsANSI:  supportsANSI,
 	}
 
-	m.list = list.New(nil, newBBSListDelegate(), width, height-3)
+	m.list = list.New(nil, newBBSListDelegate(), width, sectionContentHeightFor(height))
 	m.list.SetShowHelp(false)
 	m.list.SetShowStatusBar(false)
 	m.list.SetFilteringEnabled(false)
+	m.list.SetShowTitle(false)
 
-	m.vp = viewport.New(width, height-4)
+	m.vp = viewport.New(width, sectionContentHeightFor(height))
 	m.vp.Style = lipgloss.NewStyle()
 
 	m.compose = textarea.New()
@@ -287,9 +311,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.list.SetSize(msg.Width, msg.Height-3)
+		m.list.SetSize(msg.Width, m.sectionContentHeight())
 		m.vp.Width = msg.Width
-		m.vp.Height = msg.Height - 4
+		m.vp.Height = m.sectionContentHeight()
 		m.compose.SetWidth(msg.Width - 4)
 		m.compose.SetHeight(msg.Height / 3)
 		m.titleInput.Width = msg.Width - 4
@@ -316,6 +340,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case postsMsg:
 		m.posts = msg.posts
+		m.hydratePostAuthorNames(m.posts)
 		if err := m.hydrateReactionState(); err != nil {
 			m.statusMsg = "error: " + err.Error()
 			return m, nil
@@ -397,6 +422,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.profile = msg.profile
+		m.cacheProfileDisplayName(msg.profile)
 		if m.page == pageProfile {
 			m.rebuildList()
 		}
@@ -407,6 +433,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.profile = msg.profile
+		m.cacheProfileDisplayName(msg.profile)
 		m.statusMsg = "profile saved"
 		if m.page == pageProfileEdit {
 			m.popPage()
@@ -606,9 +633,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return m.enterProfile()
 		case "6", "o":
 			return m.enterOnline()
+		case "7":
+			return m.quit()
 		case "q", "ctrl+c":
-			m.c.Unsubscribe(m.sub)
-			return tea.Quit
+			return m.quit()
 		}
 
 	case pageBoardList:
@@ -647,13 +675,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		switch key {
 		case "enter", " ", "right":
 			if t := m.selectedThread(); t != nil {
-				m.currentThread = t.ID
 				m.pushPage(pageThread)
-				m.posts = nil
-				return tea.Batch(
-					m.fetchPosts(t.ID),
-					m.resubscribeThread(t.ID),
-				)
+				return m.openThread(*t)
 			}
 		case "r":
 			if m.currentBoard == "" {
@@ -713,9 +736,17 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case pageThread:
 		switch key {
 		case "k", "up":
-			m.moveSelectedPost(-1)
+			return m.navigateAdjacentThread(-1)
 		case "j", "down":
-			m.moveSelectedPost(1)
+			return m.navigateAdjacentThread(1)
+		case "ctrl+up":
+			m.vp.LineUp(1)
+		case "ctrl+down":
+			m.vp.LineDown(1)
+		case "home":
+			m.vp.GotoTop()
+		case "end":
+			m.vp.GotoBottom()
 		case "n":
 			m.composingNewThread = false
 			m.compose.Reset()
@@ -1076,7 +1107,7 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			return []tea.Cmd{m.fetchNotificationStatus()}
 		}
 		if p.Thread == m.currentThread {
-			m.posts = append(m.posts, core.Post{
+			post := core.Post{
 				ID:            p.ID,
 				Thread:        p.Thread,
 				Author:        p.Author,
@@ -1090,7 +1121,9 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 				UpdatedSeq:    evt.Seq,
 				CreatedAt:     p.TS,
 				UpdatedAt:     p.TS,
-			})
+			}
+			m.posts = append(m.posts, post)
+			m.hydratePostAuthorNames([]core.Post{post})
 			m.postReactions[p.ID] = false
 			m.selectedPost = len(m.posts) - 1
 			m.rebuildPostView()
@@ -1235,39 +1268,37 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 }
 
 func (m model) View() string {
-	headerLabel := fmt.Sprintf(" BudgieBBS | %s | %s ", m.actor.Name, pageName(m.page))
+	headerLabel := fmt.Sprintf(" BudgieBBS | %s | %s ", m.actor.Name, m.headerTitle())
 	if m.unreadNotifs > 0 {
 		headerLabel += fmt.Sprintf(" ● %d unread", m.unreadNotifs)
 	}
-	header := m.fullWidth(styleHeader, headerLabel)
-	statusText := m.statusMsg
-	if statusText == "" {
-		statusText = "ready"
+	if strings.TrimSpace(m.statusMsg) != "" {
+		headerLabel += " | " + strings.TrimSpace(m.statusMsg)
 	}
-	status := m.fullWidth(styleStatus, statusText)
+	header := m.fullWidth(styleHeader, headerLabel)
 
 	var body string
 	switch m.page {
 	case pageMainMenu:
-		body = m.renderMainMenu()
+		body = m.renderSection("Main Menu", m.renderMainMenu(), "enter/→=open  1-7=jump  p=profile  o=online  q=quit")
 	case pageBoardList:
-		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=open board  c=chat  N=notifications  /=search  esc/←=menu  q=quit")
+		body = m.renderSection("Boards", m.list.View(), "enter/→=open board  c=chat  N=notifications  /=search  esc/←=menu  q=quit")
 	case pageThreadList:
-		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=open thread  n=new thread  r=refresh  Ctrl+↑/↓=page  /=search  esc/←=back  q=quit")
+		body = m.renderSection(m.boardTitleOrFallback(), m.list.View(), "enter/→=open thread  n=new thread  r=refresh  Ctrl+↑/↓=page  /=search  esc/←=back  q=quit")
 	case pageNotifications:
-		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
+		body = m.renderSection("Notifications", m.list.View(), "enter/→=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
 	case pageProfile:
-		body = m.renderPanel(m.renderProfileSettings()) + "\n" + m.helpLine("enter/→=edit  r=refresh  esc/←=menu  q=quit")
+		body = m.renderSection("My Profile", m.renderProfileSettings(), "enter/→=edit  r=refresh  esc/←=menu  q=quit")
 	case pageProfileEdit:
-		body = m.renderPanel(m.renderProfileEditor()) + "\n" + m.helpLine("Ctrl+S=save  Esc=cancel")
+		body = m.renderSection(m.profileEditorHeader(), m.renderProfileEditor(), "Ctrl+S=save  Esc=cancel")
 	case pageOnline:
-		body = m.renderPanel(m.renderOnlineUsers()) + "\n" + m.helpLine("r=refresh  enter/→=details  esc/←=menu  q=quit")
+		body = m.renderSection("Who is Online", m.renderOnlineUsers(), "r=refresh  enter/→=details  esc/←=menu  q=quit")
 	case pageThread:
-		help := "n=reply  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
+		help := "↑/↓=thread  Ctrl+↑/↓=line  Space/PgDn,b/PgUp=page  Home/End  n=reply  r=react  p=poll  esc/←=back"
 		if m.actor.IsMod() {
-			help = "n=reply  L=lock/unlock  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
+			help = "↑/↓=thread  Ctrl+↑/↓=line  Space/PgDn,b/PgUp=page  Home/End  n=reply  L=lock  r=react  p=poll  esc/←=back"
 		}
-		body = m.renderPanel(m.vp.View()) + "\n" + m.helpLine(help)
+		body = m.renderSection(m.boardTitleOrFallback(), m.vp.View(), help)
 	case pagePoll:
 		poll := m.currentPollData()
 		if poll == nil {
@@ -1285,7 +1316,6 @@ func (m model) View() string {
 				total += opt.VoteCount
 			}
 			var b strings.Builder
-			b.WriteString(m.styled(styleTitle, "Poll") + "\n\n")
 			if poll.Question != "" {
 				b.WriteString(m.styled(styleTitle, poll.Question) + "\n\n")
 			}
@@ -1321,46 +1351,41 @@ func (m model) View() string {
 				}
 				return "s"
 			}(), expires)) + "\n")
-			body = m.renderPanel(b.String()) + "\n" + m.helpLine(help)
+			body = m.renderSection("Poll", b.String(), help)
 		}
 		if body == "" {
 			body = m.styled(styleDim, "No poll loaded")
 		}
 	case pageCompose:
 		if m.composingNewThread {
-			titleSection := m.styled(styleTitle, "New thread") + "\n\n" +
-				m.styled(styleDim, "Title: ") + m.titleInput.View() + "\n\n" +
+			titleSection := m.styled(styleDim, "Title: ") + m.titleInput.View() + "\n\n" +
 				m.compose.View()
 			if m.titleInput.Focused() {
-				body = m.renderPanel(titleSection) + "\n" + m.helpLine("enter/tab=body  ctrl+s=body  esc=cancel")
+				body = m.renderSection("New Thread", titleSection, "enter/tab=body  ctrl+s=body  esc=cancel")
 			} else {
-				body = m.renderPanel(titleSection) + "\n" + m.helpLine(composeHelpLine(m.canCreatePoll, m.trustLoaded))
+				body = m.renderSection("New Thread", titleSection, composeHelpLine(m.canCreatePoll, m.trustLoaded))
 			}
 		} else {
-			body = m.renderPanel(m.styled(styleTitle, "New reply")+"\n\n"+m.compose.View()) +
-				"\n" + m.helpLine(composeHelpLine(m.canCreatePoll, m.trustLoaded))
+			body = m.renderSection("New Reply", m.compose.View(), composeHelpLine(m.canCreatePoll, m.trustLoaded))
 		}
 	case pageChat:
-		body = m.renderPanel(m.vp.View()+"\n\n"+m.chatInput.View()) + "\n" + m.helpLine("enter=send  esc/←=back")
+		body = m.renderSection("Live Chat - #lobby", m.chatSectionContent(), "enter=send  esc/←=back")
 	case pageSearch:
-		body = m.renderPanel(m.vp.View()) + "\n" + m.helpLine("type query  enter=search  esc/←=back")
+		body = m.renderSection("Search", m.vp.View(), "type query  enter=search  esc/←=back")
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
+	return lipgloss.JoinVertical(lipgloss.Left, header, body)
 }
 
 func (m model) renderMainMenu() string {
 	var b strings.Builder
-	b.WriteString(m.styled(styleMenuLogo, " BudgieBBS "))
-	b.WriteString("\n")
 	b.WriteString(m.styled(styleDim, "A server-hosted campus BBS over SSH") + "\n\n")
 	b.WriteString(m.list.View())
-	return m.renderPanel(b.String()) + "\n" + m.helpLine("enter/→=open  1-6=jump  p=profile  o=online  q=quit")
+	return b.String()
 }
 
 func (m model) renderProfileSettings() string {
 	var b strings.Builder
-	b.WriteString(m.styled(styleTitle, "My Profile") + "\n")
 	name := ""
 	role := ""
 	if m.actor != nil {
@@ -1396,7 +1421,6 @@ func (m model) renderProfileEditor() string {
 		return m.styled(styleDim, "No profile field selected.")
 	}
 	var b strings.Builder
-	b.WriteString(m.styled(styleTitle, "Edit "+field.label) + "\n")
 	if field.desc != "" {
 		b.WriteString(m.styled(styleDim, field.desc) + "\n")
 	}
@@ -1411,7 +1435,6 @@ func (m model) renderProfileEditor() string {
 
 func (m model) renderOnlineUsers() string {
 	var b strings.Builder
-	b.WriteString(m.styled(styleTitle, "Who is Online") + "\n")
 	b.WriteString(fmt.Sprintf("%s %d\n\n", m.styled(styleDim, "Visible sessions:"), len(m.onlineUsers)))
 	if len(m.onlineUsers) == 0 {
 		b.WriteString(m.styled(styleDim, "No visible users online. Press r to refresh.") + "\n")
@@ -1485,14 +1508,15 @@ func (m model) profileWithField(field profileField, value string) core.UserProfi
 }
 
 func (m model) renderPanel(content string) string {
+	content = limitLines(content, m.sectionContentHeight())
 	if !m.supportsANSI {
 		return content
 	}
-	width := m.width
-	if width <= 4 {
-		width = 80
-	}
-	return stylePanel.Width(width - 2).Render(content)
+	return stylePanel.Width(m.panelWidth() - 2).Render(content)
+}
+
+func (m model) renderSection(_ string, content, help string) string {
+	return m.renderPanel(content) + "\n" + m.helpLine(help)
 }
 
 func (m model) helpLine(help string) string {
@@ -1503,11 +1527,144 @@ func (m model) fullWidth(style lipgloss.Style, value string) string {
 	if !m.supportsANSI {
 		return value
 	}
-	width := m.width
-	if width <= 0 {
-		width = 80
+	width := m.panelWidth()
+	return style.Width(width).Render(truncateDisplayWidth(value, width-2))
+}
+
+func (m model) panelWidth() int {
+	if m.width <= 4 {
+		return 80
 	}
-	return style.Width(width).Render(value)
+	return m.width
+}
+
+func (m model) sectionContentHeight() int {
+	return sectionContentHeightFor(m.height)
+}
+
+func sectionContentHeightFor(height int) int {
+	if height <= 0 {
+		height = 24
+	}
+	contentHeight := height - sectionChromeLines
+	if contentHeight < 1 {
+		return 1
+	}
+	return contentHeight
+}
+
+func limitLines(content string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= maxLines {
+		return content
+	}
+	return strings.Join(lines[:maxLines], "\n")
+}
+
+func (m model) chatSectionContent() string {
+	input := m.chatInput.View()
+	historyLines := m.sectionContentHeight() - 2
+	if historyLines < 1 {
+		return input
+	}
+	return limitLines(m.vp.View(), historyLines) + "\n\n" + input
+}
+
+func (m model) boardTitleOrFallback() string {
+	title := m.boardTitle()
+	if title == "" {
+		title = m.currentBoard
+	}
+	if title == "" {
+		title = "Board"
+	}
+	return title
+}
+
+func (m model) profileEditorHeader() string {
+	if strings.TrimSpace(m.profileField.label) == "" {
+		return "Edit Profile"
+	}
+	return "Edit " + m.profileField.label
+}
+
+func (m model) headerTitle() string {
+	switch m.page {
+	case pageMainMenu:
+		return "Main Menu"
+	case pageBoardList:
+		return "Boards"
+	case pageThreadList, pageThread:
+		return m.boardTitleOrFallback()
+	case pageNotifications:
+		return "Notifications"
+	case pageProfile:
+		return "My Profile"
+	case pageProfileEdit:
+		return m.profileEditorHeader()
+	case pageOnline:
+		return "Who is Online"
+	case pagePoll:
+		return "Poll"
+	case pageCompose:
+		if m.composingNewThread {
+			return "New Thread"
+		}
+		return "New Reply"
+	case pageChat:
+		return "Live Chat - #lobby"
+	case pageSearch:
+		return "Search"
+	default:
+		return pageName(m.page)
+	}
+}
+
+func truncateDisplayWidth(value string, maxWidth int) string {
+	if maxWidth <= 0 || lipgloss.Width(value) <= maxWidth {
+		return value
+	}
+	var b strings.Builder
+	width := 0
+	for _, r := range value {
+		rw := lipgloss.Width(string(r))
+		if width+rw > maxWidth {
+			break
+		}
+		b.WriteRune(r)
+		width += rw
+	}
+	return b.String()
+}
+
+func (m model) boardTitle() string {
+	boardID := strings.TrimSpace(m.currentBoard)
+	if boardID == "" {
+		for _, post := range m.posts {
+			if name := strings.TrimSpace(post.BoardName); name != "" {
+				return name
+			}
+			if id := strings.TrimSpace(post.Board); id != "" {
+				boardID = id
+				break
+			}
+		}
+	}
+	if boardID == "" {
+		return ""
+	}
+	for _, board := range m.boards {
+		if board.ID == boardID {
+			if name := strings.TrimSpace(board.Name); name != "" {
+				return name
+			}
+			return board.ID
+		}
+	}
+	return boardID
 }
 
 // --- List helpers ---
@@ -1694,6 +1851,7 @@ func formatIdle(seconds int64) string {
 }
 
 func (m *model) rebuildList() {
+	m.list.SetShowTitle(false)
 	switch m.page {
 	case pageMainMenu:
 		m.list.SetItems([]list.Item{
@@ -1703,6 +1861,7 @@ func (m *model) rebuildList() {
 			mainMenuItem{key: "4", title: "Search", desc: "Search posts"},
 			mainMenuItem{key: "5", title: "Profile", desc: "Edit your public profile and signature"},
 			mainMenuItem{key: "6", title: "Online", desc: "See who is online right now"},
+			mainMenuItem{key: "7", title: "Exit", desc: "Leave BudgieBBS"},
 		})
 		m.list.Title = "Main Menu"
 	case pageBoardList:
@@ -1772,8 +1931,17 @@ func (m *model) openMainMenuSelection() tea.Cmd {
 		return m.enterProfile()
 	case "6":
 		return m.enterOnline()
+	case "7":
+		return m.quit()
 	}
 	return nil
+}
+
+func (m *model) quit() tea.Cmd {
+	if m.c != nil && m.sub != nil {
+		m.c.Unsubscribe(m.sub)
+	}
+	return tea.Quit
 }
 
 func (m *model) enterProfile() tea.Cmd {
@@ -1894,6 +2062,56 @@ func (m *model) moveSelectedPost(delta int) {
 	m.rebuildPostView()
 }
 
+func (m *model) navigateAdjacentThread(delta int) tea.Cmd {
+	if delta == 0 {
+		return nil
+	}
+	if len(m.threads) == 0 {
+		m.statusMsg = "thread list not loaded"
+		return nil
+	}
+	currentIndex := -1
+	for i, thread := range m.threads {
+		if thread.ID == m.currentThread {
+			currentIndex = i
+			break
+		}
+	}
+	if currentIndex < 0 {
+		m.statusMsg = "current thread not in board list"
+		return nil
+	}
+	nextIndex := currentIndex + delta
+	if nextIndex < 0 {
+		m.statusMsg = "already at first thread"
+		return nil
+	}
+	if nextIndex >= len(m.threads) {
+		m.statusMsg = "already at last thread"
+		return nil
+	}
+	m.list.Select(nextIndex)
+	return m.openThread(m.threads[nextIndex])
+}
+
+func (m *model) openThread(thread core.Thread) tea.Cmd {
+	if strings.TrimSpace(thread.ID) == "" {
+		m.statusMsg = "thread not found"
+		return nil
+	}
+	m.currentThread = thread.ID
+	m.posts = nil
+	m.postPolls = make(map[string]*core.Poll)
+	m.currentPoll = ""
+	m.selectedPost = -1
+	m.vp.SetContent(m.styled(styleDim, "Loading thread..."))
+	m.vp.GotoTop()
+	return tea.Batch(
+		m.fetchPosts(thread.ID),
+		m.resubscribeThread(thread.ID),
+	)
+}
+
 func (m *model) hydrateReactionState() error {
 	for _, p := range m.posts {
 		reacted, err := m.c.UserReacted(p.ID, m.actor.ID)
@@ -1905,41 +2123,64 @@ func (m *model) hydrateReactionState() error {
 	return nil
 }
 
+func (m *model) hydratePostAuthorNames(posts []core.Post) {
+	if m.authorNames == nil {
+		m.authorNames = make(map[string]string)
+	}
+	if m.c == nil {
+		return
+	}
+	for _, post := range posts {
+		name := strings.TrimSpace(post.Author)
+		if name == "" {
+			continue
+		}
+		if _, ok := m.authorNames[name]; ok {
+			continue
+		}
+		profile, err := m.c.UserProfileByName(name)
+		if err != nil || profile == nil {
+			m.authorNames[name] = ""
+			continue
+		}
+		m.cacheProfileDisplayName(profile)
+	}
+}
+
+func (m *model) cacheProfileDisplayName(profile *core.UserProfile) {
+	if profile == nil {
+		return
+	}
+	if m.authorNames == nil {
+		m.authorNames = make(map[string]string)
+	}
+	name := strings.TrimSpace(profile.Name)
+	if name == "" {
+		return
+	}
+	displayName := strings.TrimSpace(profile.DisplayName)
+	if displayName == "" {
+		displayName = name
+	}
+	m.authorNames[name] = displayName
+}
+
 // --- Post/chat view rendering ---
 
 func (m *model) rebuildPostView() {
 	var b strings.Builder
+	ordinals := make(map[string]string, len(m.posts))
 	for i, p := range m.posts {
-		selected := i == m.selectedPost
-		pollTag := ""
-		if _, ok := m.postPolls[p.ID]; ok {
-			pollTag = m.styled(styleDim, "  [poll]")
+		if p.ID != "" {
+			ordinals[p.ID] = postOrdinal(i)
 		}
-		createdAt := p.CreatedAt
-		if createdAt == 0 {
-			createdAt = p.CreatedSeq
+	}
+	for i, p := range m.posts {
+		headerLines := m.postHeaderLines(i, p, ordinals)
+		if len(headerLines) > 0 {
+			b.WriteString(strings.Join(headerLines, "\n") + "\n")
 		}
-		ts := fmt.Sprintf("#%d", p.CreatedSeq)
-		if createdAt > 1_000_000_000_000 {
-			ts = time.UnixMilli(createdAt).Format("2006-01-02 15:04")
-		}
-		author := m.styled(styleAuthor, p.Author)
-		reactions := ""
-		if p.ReactionCount > 0 {
-			reactions = fmt.Sprintf("  ♥ %d", p.ReactionCount)
-		}
-		if selected {
-			author = p.Author
-		}
-		header := fmt.Sprintf("%-4s  %s  %s%s%s", postOrdinal(i), author, m.styled(styleDim, ts), reactions, pollTag)
-		if p.Version > 1 {
-			header += m.styled(styleDim, " (edited)")
-		}
-		if selected {
-			header = m.blockLine(styleSelectedPostHeader, header)
-		}
-		b.WriteString(header + "\n")
-		b.WriteString(m.postSepLine() + "\n")
+		b.WriteString(m.postInnerSepLine() + "\n")
 		body := ""
 		if p.Redacted {
 			body = m.styled(styleRedacted, "[removed by moderator]")
@@ -1948,12 +2189,183 @@ func (m *model) rebuildPostView() {
 		}
 		b.WriteString(body)
 		if signature := strings.TrimSpace(p.Signature); signature != "" && !p.Redacted {
-			b.WriteString("\n" + m.postSepLine() + "\n")
+			b.WriteString("\n" + m.postSignatureSepLine() + "\n")
 			b.WriteString(m.renderMarkup(signature))
 		}
-		b.WriteString("\n" + m.postSepLine() + "\n")
+		b.WriteString("\n" + m.postBoundaryLine() + "\n")
 	}
 	m.vp.SetContent(b.String())
+}
+
+func (m model) postHeaderLines(index int, p core.Post, ordinals map[string]string) []string {
+	ordinal := postOrdinal(index)
+	authorLine := fmt.Sprintf(
+		"%-4s  %s %s  %s %s",
+		ordinal,
+		m.styled(styleDim, "Author:"),
+		m.postAuthorLabel(p),
+		m.styled(styleDim, "Time:"),
+		m.postTimeLabel(p),
+	)
+	if index != 0 {
+		return []string{authorLine}
+	}
+	headerLines := []string{
+		fmt.Sprintf("%-4s  %s %s", ordinal, m.styled(styleDim, "Title:"), m.postTitle(p)),
+		fmt.Sprintf(
+			"      %s %s  %s %s",
+			m.styled(styleDim, "Author:"),
+			m.postAuthorLabel(p),
+			m.styled(styleDim, "Time:"),
+			m.postTimeLabel(p),
+		),
+	}
+	if meta := m.postMetadata(p, ordinals); len(meta) > 0 {
+		headerLines = append(headerLines, m.wrapPostMetadata(meta)...)
+	}
+	return headerLines
+}
+
+func (m model) postTitle(p core.Post) string {
+	if title := strings.TrimSpace(p.ThreadTitle); title != "" {
+		return title
+	}
+	threadID := p.Thread
+	if threadID == "" {
+		threadID = m.currentThread
+	}
+	for _, t := range m.threads {
+		if t.ID == threadID {
+			if title := strings.TrimSpace(t.Title); title != "" {
+				return title
+			}
+			break
+		}
+	}
+	if threadID != "" {
+		return threadID
+	}
+	return "(untitled)"
+}
+
+func (m model) postAuthorLabel(p core.Post) string {
+	name := strings.TrimSpace(p.Author)
+	if name == "" {
+		name = "(unknown)"
+	}
+	displayName := ""
+	if m.authorNames != nil {
+		displayName = strings.TrimSpace(m.authorNames[name])
+	}
+	if displayName == "" && m.actor != nil && m.actor.Name == name && m.profile != nil {
+		displayName = strings.TrimSpace(m.profile.DisplayName)
+	}
+	styledName := m.styled(styleAuthor, name)
+	if displayName != "" {
+		return styledName + m.styled(styleDim, " ("+displayName+")")
+	}
+	return styledName
+}
+
+func (m model) postTimeLabel(p core.Post) string {
+	if p.CreatedAt > 1_000_000_000_000 {
+		return time.UnixMilli(p.CreatedAt).Format("2006-01-02 15:04")
+	}
+	if p.CreatedSeq > 0 {
+		return fmt.Sprintf("seq #%d", p.CreatedSeq)
+	}
+	return "unknown"
+}
+
+func (m model) postMetadata(p core.Post, ordinals map[string]string) []string {
+	var meta []string
+	if p.CreatedSeq > 0 {
+		meta = append(meta, fmt.Sprintf("Seq: #%d", p.CreatedSeq))
+	}
+	if p.UpdatedSeq > 0 && p.UpdatedSeq != p.CreatedSeq {
+		meta = append(meta, fmt.Sprintf("Updated: #%d", p.UpdatedSeq))
+	}
+	if p.Version > 1 {
+		meta = append(meta, fmt.Sprintf("Version: v%d", p.Version))
+	}
+	if p.UpdatedAt > 1_000_000_000_000 && p.CreatedAt > 1_000_000_000_000 && p.UpdatedAt != p.CreatedAt {
+		meta = append(meta, "Edited: "+time.UnixMilli(p.UpdatedAt).Format("2006-01-02 15:04"))
+	}
+	if p.ReplyTo != "" {
+		target := ordinals[p.ReplyTo]
+		if target == "" {
+			target = p.ReplyTo
+		}
+		meta = append(meta, "Reply: "+target)
+	}
+	if p.ContentType != "" {
+		meta = append(meta, "Type: "+p.ContentType)
+	}
+	if p.ReactionCount > 0 {
+		meta = append(meta, fmt.Sprintf("♥ %d", p.ReactionCount))
+	}
+	if _, ok := m.postPolls[p.ID]; ok {
+		meta = append(meta, "[poll]")
+	}
+	if len(p.Attachments) > 0 {
+		meta = append(meta, fmt.Sprintf("Attachments: %d", len(p.Attachments)))
+	}
+	if p.Marked {
+		meta = append(meta, "Marked")
+	}
+	if p.Recommended {
+		meta = append(meta, "Recommended")
+	}
+	if p.NoReply {
+		meta = append(meta, "No reply")
+	}
+	if p.TeX {
+		meta = append(meta, "TeX")
+	}
+	if p.MailBack {
+		meta = append(meta, "Mail back")
+	}
+	if p.Redacted {
+		meta = append(meta, "Redacted")
+	}
+	if p.SourceTitle != "" {
+		meta = append(meta, "Source: "+p.SourceTitle)
+	} else if p.SourceThread != "" {
+		meta = append(meta, "Source: "+p.SourceThread)
+	}
+	return meta
+}
+
+func (m model) wrapPostMetadata(meta []string) []string {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	prefix := "      Meta: "
+	continuation := "            "
+	lines := []string{prefix}
+	current := prefix
+	for _, item := range meta {
+		if item == "" {
+			continue
+		}
+		next := item
+		if current != prefix && current != continuation {
+			next = "  " + next
+		}
+		if len(current)+len(next) > width && current != prefix && current != continuation {
+			lines[len(lines)-1] = current
+			current = continuation + item
+			lines = append(lines, current)
+			continue
+		}
+		current += next
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	lines[len(lines)-1] = current
+	return lines
 }
 
 func postOrdinal(index int) string {
@@ -1976,7 +2388,6 @@ func (m model) blockLine(style lipgloss.Style, value string) string {
 
 func (m *model) rebuildChatView() {
 	var b strings.Builder
-	b.WriteString(m.styled(styleTitle, "Live Chat — #lobby") + "\n\n")
 	if len(m.chat) == 0 {
 		b.WriteString(m.styled(styleDim, "No messages yet. Say hello!") + "\n")
 		m.vp.SetContent(b.String())
@@ -2458,7 +2869,7 @@ func (m *model) submitProfileField() tea.Cmd {
 
 func (m *model) rebuildSearchView(posts []core.Post) {
 	var b strings.Builder
-	b.WriteString(m.styled(styleTitle, fmt.Sprintf("Search results (%d)", len(posts))) + "\n\n")
+	b.WriteString(m.styled(styleDim, fmt.Sprintf("Results: %d", len(posts))) + "\n\n")
 	if len(posts) == 0 {
 		b.WriteString(m.styled(styleDim, "No results found."))
 	}

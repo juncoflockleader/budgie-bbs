@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -129,8 +131,107 @@ func TestRebuildPostViewSeparatesMetadataBodyAndSignature(t *testing.T) {
 	if !strings.Contains(rendered, "Post body") || !strings.Contains(rendered, "sig line") {
 		t.Fatalf("expected rendered post body and signature, got: %q", rendered)
 	}
-	if strings.Count(rendered, strings.Repeat("─", 80)) < 3 {
-		t.Fatalf("expected metadata/body/signature dividers, got: %q", rendered)
+	if strings.Count(rendered, postSepText) < 2 || !strings.Contains(rendered, postSignatureSepText) {
+		t.Fatalf("expected full-width post dividers and short signature divider, got: %q", rendered)
+	}
+}
+
+func TestPostSeparatorsDifferentiateFloors(t *testing.T) {
+	boundaryColor := fmt.Sprint(stylePostSep.GetForeground())
+	innerColor := fmt.Sprint(stylePostInnerSep.GetForeground())
+	signatureColor := fmt.Sprint(stylePostSignatureSep.GetForeground())
+	if boundaryColor == innerColor || boundaryColor == signatureColor || innerColor == signatureColor {
+		t.Fatalf("expected post boundary, inner, and signature separators to use distinct colors")
+	}
+
+	plain := model{supportsANSI: false}
+	if plain.postBoundaryLine() != plain.postInnerSepLine() {
+		t.Fatalf("expected plain terminal post boundary and inner separators to fall back to identical text lines")
+	}
+	if lipgloss.Width(plain.postSignatureSepLine()) >= lipgloss.Width(plain.postBoundaryLine()) {
+		t.Fatalf("expected signature separator to be shorter than full post separators")
+	}
+}
+
+func TestRebuildPostViewShowsTitleAuthorTimeAndMetadata(t *testing.T) {
+	created := time.Date(2026, time.June, 5, 9, 30, 0, 0, time.Local).UnixMilli()
+	updated := time.Date(2026, time.June, 5, 10, 15, 0, 0, time.Local).UnixMilli()
+	var m model
+	m.vp = viewport.New(120, 20)
+	m.width = 120
+	m.currentBoard = "tech"
+	m.boards = []core.Board{{ID: "tech", Name: "Tech Board"}}
+	m.threads = []core.Thread{{ID: "thr_1", Title: "Welcome thread"}}
+	m.authorNames = map[string]string{"alice": "Alicia"}
+	m.posts = []core.Post{
+		{
+			ID:            "pst_1",
+			Thread:        "thr_1",
+			Author:        "bob",
+			Body:          "OP body",
+			ContentType:   "markup",
+			Version:       2,
+			ReactionCount: 3,
+			Attachments:   []core.PostAttachment{{Filename: "notes.txt"}},
+			CreatedSeq:    41,
+			UpdatedSeq:    47,
+			CreatedAt:     created,
+			UpdatedAt:     updated,
+			Marked:        true,
+			Recommended:   true,
+			NoReply:       true,
+			TeX:           true,
+			MailBack:      true,
+			SourceTitle:   "Source thread",
+		},
+		{
+			ID:          "pst_2",
+			Thread:      "thr_1",
+			Author:      "alice",
+			Body:        "Reply body",
+			ContentType: "reply-markup",
+			ReplyTo:     "pst_1",
+			CreatedSeq:  42,
+			CreatedAt:   created,
+		},
+	}
+	m.postPolls = map[string]*core.Poll{"pst_1": {ID: "poll_1"}}
+	m.selectedPost = 1
+
+	m.rebuildPostView()
+	rendered := m.vp.View()
+	expected := []string{
+		"Title: Welcome thread",
+		"Author: bob",
+		"Time: 2026-06-05 09:30",
+		"Seq: #41",
+		"Updated: #47",
+		"Version: v2",
+		"Edited: 2026-06-05 10:15",
+		"Type: markup",
+		"♥ 3",
+		"[poll]",
+		"Attachments: 1",
+		"Marked",
+		"Recommended",
+		"No reply",
+		"TeX",
+		"Mail back",
+		"Source: Source thread",
+	}
+	for _, want := range expected {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered post metadata to contain %q, got: %q", want, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "[1]   Author: alice (Alicia)  Time: 2026-06-05 09:30") {
+		t.Fatalf("expected reply header to show only author and time, got: %q", rendered)
+	}
+	unexpectedReplyMetadata := []string{"[1]   Title:", "Type: reply-markup", "Reply: OP"}
+	for _, unwanted := range unexpectedReplyMetadata {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("did not expect reply header metadata %q, got: %q", unwanted, rendered)
+		}
 	}
 }
 
@@ -170,8 +271,16 @@ func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 	if !strings.Contains(view, "Main Menu") || !strings.Contains(view, "Boards") || !strings.Contains(view, "Live Chat") {
 		t.Fatalf("expected main menu view, got: %q", view)
 	}
+	lines := strings.Split(view, "\n")
+	if len(lines) == 0 || !strings.Contains(lines[0], "BudgieBBS | alice | Main Menu") {
+		t.Fatalf("expected main menu title in the top header, got: %q", view)
+	}
+	if strings.Count(view, "Main Menu") != 1 {
+		t.Fatalf("expected main menu title to render only once, got: %q", view)
+	}
 	foundProfile := false
 	foundOnline := false
+	foundExit := false
 	for _, item := range m.list.Items() {
 		menuItem, ok := item.(mainMenuItem)
 		if ok && menuItem.title == "Profile" {
@@ -180,12 +289,65 @@ func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 		if ok && menuItem.title == "Online" {
 			foundOnline = true
 		}
+		if ok && menuItem.title == "Exit" {
+			foundExit = true
+		}
 	}
 	if !foundProfile {
 		t.Fatalf("expected main menu items to include Profile, got %#v", m.list.Items())
 	}
 	if !foundOnline {
 		t.Fatalf("expected main menu items to include Online, got %#v", m.list.Items())
+	}
+	if !foundExit {
+		t.Fatalf("expected main menu items to include Exit, got %#v", m.list.Items())
+	}
+	if !strings.Contains(view, "1-7=jump") {
+		t.Fatalf("expected main menu help to include the Exit shortcut range, got: %q", view)
+	}
+	if strings.Contains(view, "ready") {
+		t.Fatalf("did not expect default ready status line to consume space, got: %q", view)
+	}
+	if m.list.ShowTitle() {
+		t.Fatal("expected main menu list title to be hidden because the top header owns the title")
+	}
+	if !strings.Contains(view, "A server-hosted campus BBS over SSH") {
+		t.Fatalf("expected main menu content to keep the BBS tagline, got: %q", view)
+	}
+}
+
+func TestMainMenuExitItemQuits(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageMainMenu,
+		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		supportsANSI: false,
+	}
+	m.rebuildList()
+	m.list.Select(len(m.list.Items()) - 1)
+
+	cmd := m.handleKey(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("expected Exit menu item to return a quit command")
+	}
+	if got := cmd(); got != tea.Quit() {
+		t.Fatalf("expected Exit command to quit, got %#v", got)
+	}
+}
+
+func TestStatusMessageRendersInTopHeader(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageMainMenu,
+		statusMsg:    "profile saved",
+		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		supportsANSI: false,
+	}
+	m.rebuildList()
+
+	view := m.View()
+	if !strings.Contains(view, "BudgieBBS | alice | Main Menu  | profile saved") {
+		t.Fatalf("expected status message in top header, got: %q", view)
 	}
 }
 
@@ -340,6 +502,112 @@ func TestBoardAndThreadListViewsShowKeyHints(t *testing.T) {
 	}
 }
 
+func TestBoardHeaderShowsBoardTitleInBoardAndThreadViews(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageThreadList,
+		currentBoard: "tech",
+		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
+		boards: []core.Board{{
+			ID:   "tech",
+			Name: "Tech Board",
+		}},
+		supportsANSI: false,
+	}
+	m.rebuildList()
+
+	threadListView := m.View()
+	threadListLines := strings.Split(threadListView, "\n")
+	if len(threadListLines) == 0 || !strings.Contains(threadListLines[0], "Tech Board") {
+		t.Fatalf("expected thread list top header to show board title, got: %q", threadListView)
+	}
+	if strings.Count(threadListView, "Tech Board") != 1 {
+		t.Fatalf("expected board title to render only once in thread list, got: %q", threadListView)
+	}
+
+	m.page = pageThread
+	m.vp = viewport.New(80, 10)
+	m.posts = []core.Post{{ID: "pst_1", Author: "alice", Body: "post content"}}
+	m.postPolls = map[string]*core.Poll{}
+	m.rebuildPostView()
+	threadView := m.View()
+	threadLines := strings.Split(threadView, "\n")
+	if len(threadLines) == 0 || !strings.Contains(threadLines[0], "Tech Board") {
+		t.Fatalf("expected reading top header to show board title, got: %q", threadView)
+	}
+	if strings.Count(threadView, "Tech Board") != 1 {
+		t.Fatalf("expected board title to render only once in reading view, got: %q", threadView)
+	}
+}
+
+func TestTopHeaderMergesSectionTitle(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageNotifications,
+		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		supportsANSI: false,
+	}
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) == 0 || !strings.Contains(lines[0], "BudgieBBS | alice | Notifications") {
+		t.Fatalf("expected notifications title in top header, got: %q", view)
+	}
+	if len(lines) > 1 && strings.TrimSpace(lines[1]) == "Notifications" {
+		t.Fatalf("did not expect a second standalone notifications header, got: %q", view)
+	}
+}
+
+func TestViewHeightFitsTerminal(t *testing.T) {
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageMainMenu,
+		width:        48,
+		height:       10,
+		statusMsg:    strings.Repeat("saved ", 20),
+		list:         list.New(nil, newBBSListDelegate(), 48, 30),
+		supportsANSI: true,
+	}
+	m.rebuildList()
+
+	if got := lipgloss.Height(m.View()); got > m.height {
+		t.Fatalf("expected main menu view height <= %d, got %d", m.height, got)
+	}
+
+	m.page = pageThread
+	m.currentBoard = "tech"
+	m.boards = []core.Board{{ID: "tech", Name: "Tech Board"}}
+	m.vp = viewport.New(48, 30)
+	m.vp.SetContent(strings.Repeat("post line\n", 40))
+	if got := lipgloss.Height(m.View()); got > m.height {
+		t.Fatalf("expected thread view height <= %d, got %d", m.height, got)
+	}
+}
+
+func TestChatViewKeepsInputWithinTerminalHeight(t *testing.T) {
+	ci := textinput.New()
+	ci.Prompt = "> "
+	ci.Focus()
+	ci.SetValue("hello")
+	m := model{
+		actor:        &core.User{Name: "alice"},
+		page:         pageChat,
+		width:        48,
+		height:       9,
+		vp:           viewport.New(48, 30),
+		chatInput:    ci,
+		supportsANSI: true,
+	}
+	m.vp.SetContent(strings.Repeat("chat line\n", 40))
+
+	view := m.View()
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("expected chat view height <= %d, got %d", m.height, got)
+	}
+	if !strings.Contains(view, "> hello") {
+		t.Fatalf("expected chat input to remain visible, got: %q", view)
+	}
+}
+
 func TestThreadListPrefixesThreadSerials(t *testing.T) {
 	m := model{
 		actor: &core.User{Name: "alice"},
@@ -372,8 +640,12 @@ func TestThreadListSerialsUsePageOffset(t *testing.T) {
 	m.rebuildList()
 
 	rendered := m.list.View()
-	if !strings.Contains(rendered, "0051  Next page") || !strings.Contains(rendered, "general [51-51]") {
-		t.Fatalf("expected thread list to use page offset in serials and title, got: %q", rendered)
+	if !strings.Contains(rendered, "0051  Next page") {
+		t.Fatalf("expected thread list to use page offset in serials, got: %q", rendered)
+	}
+	fullView := m.View()
+	if !strings.Contains(fullView, "general") {
+		t.Fatalf("expected thread list view to include board header, got: %q", fullView)
 	}
 }
 
@@ -418,6 +690,135 @@ func TestThreadListRefreshAndPaginationKeys(t *testing.T) {
 	}
 	if m.statusMsg != "already at first page" {
 		t.Fatalf("expected first-page guard status, got %q", m.statusMsg)
+	}
+}
+
+func TestThreadReaderUpDownOpenAdjacentThreads(t *testing.T) {
+	m := model{
+		actor:         &core.User{Name: "alice"},
+		page:          pageThread,
+		currentBoard:  "general",
+		currentThread: "thr_2",
+		list:          list.New(nil, list.NewDefaultDelegate(), 80, 20),
+		vp:            viewport.New(80, 20),
+		postPolls:     map[string]*core.Poll{"pst_1": {ID: "poll_1"}},
+		selectedPost:  0,
+		threads: []core.Thread{
+			{ID: "thr_1", Title: "First"},
+			{ID: "thr_2", Title: "Second"},
+			{ID: "thr_3", Title: "Third"},
+		},
+		supportsANSI: false,
+	}
+
+	cmd := m.handleKey(keyMsg("up"))
+	if cmd == nil {
+		t.Fatal("expected up in thread reader to load the previous thread")
+	}
+	if m.currentThread != "thr_1" {
+		t.Fatalf("expected up to switch to previous thread, got %q", m.currentThread)
+	}
+	if m.selectedPost != -1 || len(m.posts) != 0 || len(m.postPolls) != 0 {
+		t.Fatalf("expected adjacent thread navigation to clear old post state")
+	}
+	if !strings.Contains(m.vp.View(), "Loading thread") {
+		t.Fatalf("expected loading placeholder while adjacent thread loads, got %q", m.vp.View())
+	}
+
+	cmd = m.handleKey(keyMsg("down"))
+	if cmd == nil {
+		t.Fatal("expected down in thread reader to load the next thread")
+	}
+	if m.currentThread != "thr_2" {
+		t.Fatalf("expected down to switch to next thread, got %q", m.currentThread)
+	}
+}
+
+func TestThreadReaderUpDownBoundaries(t *testing.T) {
+	m := model{
+		actor:         &core.User{Name: "alice"},
+		page:          pageThread,
+		currentThread: "thr_1",
+		list:          list.New(nil, list.NewDefaultDelegate(), 80, 20),
+		vp:            viewport.New(80, 20),
+		threads: []core.Thread{
+			{ID: "thr_1", Title: "First"},
+		},
+	}
+
+	if cmd := m.handleKey(keyMsg("up")); cmd != nil {
+		t.Fatal("did not expect up at first thread to fetch")
+	}
+	if m.statusMsg != "already at first thread" {
+		t.Fatalf("expected first-thread boundary status, got %q", m.statusMsg)
+	}
+	if cmd := m.handleKey(keyMsg("down")); cmd != nil {
+		t.Fatal("did not expect down at last thread to fetch")
+	}
+	if m.statusMsg != "already at last thread" {
+		t.Fatalf("expected last-thread boundary status, got %q", m.statusMsg)
+	}
+}
+
+func TestThreadReaderKeepsDedicatedScrollKeys(t *testing.T) {
+	m := model{
+		actor:         &core.User{Name: "alice"},
+		page:          pageThread,
+		currentThread: "thr_1",
+		width:         80,
+		height:        12,
+		list:          list.New(nil, list.NewDefaultDelegate(), 80, 20),
+		vp:            viewport.New(80, 4),
+		threads: []core.Thread{
+			{ID: "thr_1", Title: "First"},
+			{ID: "thr_2", Title: "Second"},
+		},
+		supportsANSI: false,
+	}
+	m.vp.SetContent(strings.Join([]string{
+		"line 01",
+		"line 02",
+		"line 03",
+		"line 04",
+		"line 05",
+		"line 06",
+		"line 07",
+		"line 08",
+		"line 09",
+	}, "\n"))
+
+	updated, _ := m.Update(keyMsg("pgdown"))
+	got := updated.(model)
+	if got.currentThread != "thr_1" {
+		t.Fatalf("expected pgdown to scroll without changing thread, got %q", got.currentThread)
+	}
+	if got.vp.YOffset == 0 {
+		t.Fatalf("expected pgdown to scroll the thread body")
+	}
+
+	updated, _ = got.Update(keyMsg("home"))
+	got = updated.(model)
+	if got.vp.YOffset != 0 {
+		t.Fatalf("expected home to return to top, got offset %d", got.vp.YOffset)
+	}
+
+	updated, _ = got.Update(keyMsg("ctrl+down"))
+	got = updated.(model)
+	if got.vp.YOffset != 1 {
+		t.Fatalf("expected ctrl+down to scroll by one line, got offset %d", got.vp.YOffset)
+	}
+
+	updated, _ = got.Update(keyMsg("end"))
+	got = updated.(model)
+	if got.currentThread != "thr_1" {
+		t.Fatalf("expected end to scroll without changing thread, got %q", got.currentThread)
+	}
+	if got.vp.YOffset <= 1 {
+		t.Fatalf("expected end to move near the bottom, got offset %d", got.vp.YOffset)
+	}
+
+	if view := got.View(); !strings.Contains(view, "Ctrl+↑/↓=line") || !strings.Contains(view, "Space/PgDn,b/PgUp=page") {
+		t.Fatalf("expected thread reader help to show scroll alternatives, got %q", view)
 	}
 }
 
@@ -598,6 +999,24 @@ func keyMsg(value string) tea.KeyMsg {
 	}
 	if value == "left" {
 		return tea.KeyMsg{Type: tea.KeyLeft}
+	}
+	if value == "up" {
+		return tea.KeyMsg{Type: tea.KeyUp}
+	}
+	if value == "down" {
+		return tea.KeyMsg{Type: tea.KeyDown}
+	}
+	if value == "pgup" {
+		return tea.KeyMsg{Type: tea.KeyPgUp}
+	}
+	if value == "pgdown" {
+		return tea.KeyMsg{Type: tea.KeyPgDown}
+	}
+	if value == "home" {
+		return tea.KeyMsg{Type: tea.KeyHome}
+	}
+	if value == "end" {
+		return tea.KeyMsg{Type: tea.KeyEnd}
 	}
 	if value == "ctrl+up" {
 		return tea.KeyMsg{Type: tea.KeyCtrlUp}
