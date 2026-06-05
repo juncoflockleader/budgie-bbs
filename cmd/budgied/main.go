@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -104,8 +105,8 @@ func main() {
 		}
 
 		httpSrv := httpapi.New(c, secret)
-		if *webRoot != "" {
-			httpSrv.SetWebRoot(*webRoot)
+		if root := resolveWebRoot(*webRoot); root != "" {
+			httpSrv.SetWebRoot(root)
 		}
 		wsSrv := wsapi.New(c, secret)
 
@@ -163,8 +164,8 @@ func main() {
 
 	// HTTP + WebSocket mux.
 	httpSrv := httpapi.New(c, secret)
-	if *webRoot != "" {
-		httpSrv.SetWebRoot(*webRoot)
+	if root := resolveWebRoot(*webRoot); root != "" {
+		httpSrv.SetWebRoot(root)
 	}
 	wsSrv := wsapi.New(c, secret)
 
@@ -209,6 +210,26 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func resolveWebRoot(path string) string {
+	if strings.TrimSpace(path) != "" {
+		return path
+	}
+	const localDist = "web/dist"
+	if hasWebIndex(localDist) {
+		slog.Info("serving web SPA", "path", localDist)
+		return localDist
+	}
+	return ""
+}
+
+func hasWebIndex(root string) bool {
+	if root == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(root, "index.html"))
+	return err == nil && !info.IsDir()
 }
 
 func startStatsSnapshotScheduler(ctx context.Context, c *core.Core) {

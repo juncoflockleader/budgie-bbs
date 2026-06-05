@@ -22,7 +22,8 @@ import (
 type page int
 
 const (
-	pageBoardList page = iota
+	pageMainMenu page = iota
+	pageBoardList
 	pageThreadList
 	pageThread
 	pagePoll
@@ -44,6 +45,10 @@ type (
 		polls  map[string]*core.Poll
 		err    error
 	}
+	chatLinesMsg struct {
+		lines []core.ChatLine
+		err   error
+	}
 	pollMsg struct {
 		postID string
 		poll   *core.Poll
@@ -58,6 +63,7 @@ type (
 	notificationStatusMsg struct{ unread int }
 	disconnectMsg         struct{}
 	postSubmittedMsg      struct{ thread string }
+	chatSentMsg           struct{}
 	threadSubmittedMsg    struct {
 		board  string
 		thread string
@@ -88,6 +94,7 @@ type model struct {
 	vp          viewport.Model
 	compose     textarea.Model
 	titleInput  textinput.Model
+	chatInput   textinput.Model
 	searchQuery string
 
 	// Compose mode: true = creating new thread, false = replying
@@ -118,14 +125,18 @@ type chatLine struct {
 
 // Styles.
 var (
-	styleTitle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	styleDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	styleHeader   = lipgloss.NewStyle().Background(lipgloss.Color("236")).Foreground(lipgloss.Color("252")).Padding(0, 1)
-	styleStatus   = lipgloss.NewStyle().Foreground(lipgloss.Color("215"))
-	stylePostSep  = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).SetString(strings.Repeat("─", 80))
-	styleAuthor   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("32"))
-	styleRedacted = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
-	styleChatUser = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("178"))
+	styleTitle              = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	styleDim                = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	styleHeader             = lipgloss.NewStyle().Background(lipgloss.Color("19")).Foreground(lipgloss.Color("229")).Bold(true).Padding(0, 1)
+	styleStatus             = lipgloss.NewStyle().Background(lipgloss.Color("124")).Foreground(lipgloss.Color("229")).Padding(0, 1)
+	styleHelp               = lipgloss.NewStyle().Background(lipgloss.Color("18")).Foreground(lipgloss.Color("159")).Padding(0, 1)
+	stylePanel              = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("26")).Padding(0, 1)
+	styleMenuLogo           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220")).Background(lipgloss.Color("88")).Padding(0, 1)
+	stylePostSep            = lipgloss.NewStyle().Foreground(lipgloss.Color("24")).SetString(strings.Repeat("─", 80))
+	styleAuthor             = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("32"))
+	styleRedacted           = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+	styleChatUser           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("178"))
+	styleSelectedPostHeader = lipgloss.NewStyle().Background(lipgloss.Color("25")).Foreground(lipgloss.Color("231")).Bold(true).Reverse(true).Padding(0, 1)
 )
 
 func (m *model) styled(style lipgloss.Style, value string) string {
@@ -150,22 +161,31 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	ti.Placeholder = "Thread title…"
 	ti.CharLimit = 200
 
+	ci := textinput.New()
+	ci.Placeholder = "Say something…"
+	ci.Prompt = "> "
+	ci.CharLimit = 1000
+	ci.Width = width - 4
+
 	m := model{
 		c:             c,
 		actor:         actor,
 		sub:           sub,
-		page:          pageBoardList,
+		page:          pageMainMenu,
 		width:         width,
 		height:        height,
 		titleInput:    ti,
+		chatInput:     ci,
 		selectedPost:  -1,
 		postReactions: make(map[string]bool),
 		postPolls:     make(map[string]*core.Poll),
 		supportsANSI:  supportsANSI,
 	}
 
-	m.list = list.New(nil, list.NewDefaultDelegate(), width, height-3)
+	m.list = list.New(nil, newBBSListDelegate(), width, height-3)
 	m.list.SetShowHelp(false)
+	m.list.SetShowStatusBar(false)
+	m.list.SetFilteringEnabled(false)
 
 	m.vp = viewport.New(width, height-4)
 	m.vp.Style = lipgloss.NewStyle()
@@ -174,8 +194,27 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	m.compose.Placeholder = "Write your post… (Ctrl+S to submit, Esc to cancel)"
 	m.compose.SetWidth(width - 4)
 	m.compose.SetHeight(height / 3)
+	m.rebuildList()
 
 	return m
+}
+
+func newBBSListDelegate() list.DefaultDelegate {
+	delegate := list.NewDefaultDelegate()
+	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Foreground(lipgloss.Color("252"))
+	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(lipgloss.Color("109"))
+	delegate.Styles.SelectedTitle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("231")).
+		Background(lipgloss.Color("25")).
+		Bold(true).
+		Reverse(true).
+		Padding(0, 1)
+	delegate.Styles.SelectedDesc = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("159")).
+		Background(lipgloss.Color("24")).
+		Reverse(true).
+		Padding(0, 1)
+	return delegate
 }
 
 // pushPage saves the current page on the stack and navigates to p.
@@ -217,6 +256,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compose.SetWidth(msg.Width - 4)
 		m.compose.SetHeight(msg.Height / 3)
 		m.titleInput.Width = msg.Width - 4
+		m.chatInput.Width = msg.Width - 4
 
 	case boardsMsg:
 		m.boards = msg.boards
@@ -257,6 +297,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.postPolls = make(map[string]*core.Poll)
 		}
 		m.rebuildPostView()
+
+	case chatLinesMsg:
+		if msg.err != nil {
+			m.statusMsg = "error: " + msg.err.Error()
+			return m, nil
+		}
+		m.chat = make([]chatLine, 0, len(msg.lines))
+		for _, line := range msg.lines {
+			ts := line.TS
+			if ts == 0 {
+				ts = line.CreatedAt
+			}
+			m.chat = append(m.chat, chatLine{user: line.User, text: line.Text, ts: ts})
+		}
+		m.rebuildChatView()
+		m.vp.GotoBottom()
 
 	case pollMsg:
 		if msg.err != nil {
@@ -306,6 +362,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "post submitted"
 		cmds = append(cmds, m.fetchNotificationStatus())
 
+	case chatSentMsg:
+		m.statusMsg = "chat sent"
+
 	case threadSubmittedMsg:
 		m.finishCompose()
 		if m.page == pageCompose {
@@ -348,14 +407,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Delegate to the component that was active when the key arrived.
 		switch activePage {
-		case pageBoardList, pageThreadList, pageNotifications:
+		case pageMainMenu, pageBoardList, pageThreadList, pageNotifications:
 			var c tea.Cmd
 			m.list, c = m.list.Update(msg)
 			cmds = append(cmds, c)
-		case pageThread, pagePoll, pageChat, pageSearch:
+		case pageThread, pagePoll, pageSearch:
 			var c tea.Cmd
 			m.vp, c = m.vp.Update(msg)
 			cmds = append(cmds, c)
+		case pageChat:
+			var inputCmd tea.Cmd
+			m.chatInput, inputCmd = m.chatInput.Update(msg)
+			cmds = append(cmds, inputCmd)
+			var viewportCmd tea.Cmd
+			m.vp, viewportCmd = m.vp.Update(msg)
+			cmds = append(cmds, viewportCmd)
 		case pageCompose:
 			if m.composingNewThread && m.titleInput.Focused() {
 				var c tea.Cmd
@@ -372,7 +438,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Non-key messages also need component updates.
 	switch m.page {
-	case pageBoardList, pageThreadList:
+	case pageMainMenu, pageBoardList, pageThreadList:
 		var c tea.Cmd
 		m.list, c = m.list.Update(msg)
 		cmds = append(cmds, c)
@@ -402,6 +468,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	key := keyString(msg)
 	switch m.page {
+	case pageMainMenu:
+		switch key {
+		case "enter", " ", "right":
+			return m.openMainMenuSelection()
+		case "1":
+			m.page = pageBoardList
+			m.rebuildList()
+		case "2":
+			return m.enterChat()
+		case "3":
+			m.pushPage(pageNotifications)
+			m.notifications = nil
+			m.rebuildList()
+			return m.fetchNotifications()
+		case "4", "/":
+			m.pushPage(pageSearch)
+			m.searchQuery = ""
+			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+		case "q", "ctrl+c":
+			m.c.Unsubscribe(m.sub)
+			return tea.Quit
+		}
+
 	case pageBoardList:
 		switch key {
 		case "enter", " ", "right":
@@ -413,8 +502,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				return m.fetchThreads(b.ID)
 			}
 		case "c":
-			m.pushPage(pageChat)
-			m.rebuildChatView()
+			return m.enterChat()
 		case "N":
 			m.pushPage(pageNotifications)
 			m.notifications = nil
@@ -424,6 +512,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
 			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+		case "esc", "left":
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
+			m.rebuildList()
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
@@ -453,7 +546,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.searchQuery = ""
 			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
 		case "esc", "left":
-			m.popPage()
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
 			m.rebuildList()
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
@@ -505,7 +600,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return m.openPoll(postID)
 		case "esc", "left":
-			m.popPage()
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
 			return m.fetchThreads(m.currentBoard)
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
@@ -515,7 +612,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case pagePoll:
 		switch key {
 		case "esc", "left":
-			m.popPage()
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 			idx := int(key[0]-'0') - 1
 			poll := m.currentPollData()
@@ -635,8 +734,18 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case pageChat:
 		switch key {
+		case "enter":
+			text := strings.TrimSpace(m.chatInput.Value())
+			if text == "" {
+				return nil
+			}
+			m.chatInput.Reset()
+			m.statusMsg = "sending chat…"
+			return m.sendChatLine(text)
 		case "esc", "left":
-			m.popPage()
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
 		case "q", "ctrl+c":
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
@@ -654,7 +763,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				m.vp.SetContent(m.styled(styleTitle, "Search: ") + m.searchQuery + "▌")
 			}
 		case "esc", "left":
-			m.popPage()
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
 		default:
 			rawKey := msg.String()
 			if len(rawKey) == 1 {
@@ -740,7 +851,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.rebuildList()
 			m.statusMsg = "notifications cleared"
 		case "esc", "left":
-			m.popPage()
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
 			m.rebuildList()
 		}
 	}
@@ -763,6 +876,7 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 				Author:        p.Author,
 				AuthorID:      p.AuthorID,
 				Body:          p.Body,
+				Signature:     p.Signature,
 				ContentType:   p.ContentType,
 				ReplyTo:       p.ReplyTo,
 				ReactionCount: 0,
@@ -914,23 +1028,29 @@ func (m model) View() string {
 	if m.unreadNotifs > 0 {
 		headerLabel += fmt.Sprintf(" ● %d unread", m.unreadNotifs)
 	}
-	header := m.styled(styleHeader, headerLabel)
-	status := m.styled(styleDim, m.statusMsg)
+	header := m.fullWidth(styleHeader, headerLabel)
+	statusText := m.statusMsg
+	if statusText == "" {
+		statusText = "ready"
+	}
+	status := m.fullWidth(styleStatus, statusText)
 
 	var body string
 	switch m.page {
+	case pageMainMenu:
+		body = m.renderMainMenu()
 	case pageBoardList:
-		body = m.list.View() + "\n" + m.styled(styleDim, "enter/→=open board  c=chat  N=notifications  /=search  q=quit")
+		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=open board  c=chat  N=notifications  /=search  esc/←=menu  q=quit")
 	case pageThreadList:
-		body = m.list.View() + "\n" + m.styled(styleDim, "enter/→=open thread  n=new thread  /=search  esc/←=back  q=quit")
+		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=open thread  n=new thread  /=search  esc/←=back  q=quit")
 	case pageNotifications:
-		body = m.list.View() + "\n" + m.styled(styleDim, "enter/→=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
+		body = m.renderPanel(m.list.View()) + "\n" + m.helpLine("enter/→=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
 	case pageThread:
 		help := "n=reply  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		if m.actor.IsMod() {
 			help = "n=reply  L=lock/unlock  r=react  p=poll  ↑/↓=select  esc/←=back  q=quit"
 		}
-		body = m.vp.View() + "\n" + m.styled(styleDim, help)
+		body = m.renderPanel(m.vp.View()) + "\n" + m.helpLine(help)
 	case pagePoll:
 		poll := m.currentPollData()
 		if poll == nil {
@@ -984,7 +1104,7 @@ func (m model) View() string {
 				}
 				return "s"
 			}(), expires)) + "\n")
-			body = b.String() + "\n" + m.styled(styleDim, help)
+			body = m.renderPanel(b.String()) + "\n" + m.helpLine(help)
 		}
 		if body == "" {
 			body = m.styled(styleDim, "No poll loaded")
@@ -994,25 +1114,74 @@ func (m model) View() string {
 			titleSection := m.styled(styleTitle, "New thread") + "\n\n" +
 				m.styled(styleDim, "Title: ") + m.titleInput.View() + "\n\n"
 			if m.titleInput.Focused() {
-				body = titleSection + m.styled(styleDim, "Enter/Tab=next field  Esc=cancel")
+				body = m.renderPanel(titleSection + m.styled(styleDim, "Enter/Tab=next field  Esc=cancel"))
 			} else {
-				body = titleSection + m.compose.View() + "\n" +
-					m.styled(styleDim, composeHelpLine(m.canCreatePoll, m.trustLoaded))
+				body = m.renderPanel(titleSection+m.compose.View()) + "\n" +
+					m.helpLine(composeHelpLine(m.canCreatePoll, m.trustLoaded))
 			}
 		} else {
-			body = m.styled(styleTitle, "New reply") + "\n\n" + m.compose.View() +
-				"\n" + m.styled(styleDim, composeHelpLine(m.canCreatePoll, m.trustLoaded))
+			body = m.renderPanel(m.styled(styleTitle, "New reply")+"\n\n"+m.compose.View()) +
+				"\n" + m.helpLine(composeHelpLine(m.canCreatePoll, m.trustLoaded))
 		}
 	case pageChat:
-		body = m.vp.View() + "\n" + m.styled(styleDim, "esc/←=back")
+		body = m.renderPanel(m.vp.View()+"\n\n"+m.chatInput.View()) + "\n" + m.helpLine("enter=send  esc/←=back")
 	case pageSearch:
-		body = m.vp.View() + "\n" + m.styled(styleDim, "type query  enter=search  esc/←=back")
+		body = m.renderPanel(m.vp.View()) + "\n" + m.helpLine("type query  enter=search  esc/←=back")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
 }
 
+func (m model) renderMainMenu() string {
+	var b strings.Builder
+	b.WriteString(m.styled(styleMenuLogo, " BudgieBBS "))
+	b.WriteString("\n")
+	b.WriteString(m.styled(styleDim, "A server-hosted campus BBS over SSH") + "\n\n")
+	b.WriteString(m.list.View())
+	return m.renderPanel(b.String()) + "\n" + m.helpLine("enter/→=open  1-4=jump  q=quit")
+}
+
+func (m model) renderPanel(content string) string {
+	if !m.supportsANSI {
+		return content
+	}
+	width := m.width
+	if width <= 4 {
+		width = 80
+	}
+	return stylePanel.Width(width - 2).Render(content)
+}
+
+func (m model) helpLine(help string) string {
+	return m.fullWidth(styleHelp, help)
+}
+
+func (m model) fullWidth(style lipgloss.Style, value string) string {
+	if !m.supportsANSI {
+		return value
+	}
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	return style.Width(width).Render(value)
+}
+
 // --- List helpers ---
+
+type mainMenuItem struct {
+	key   string
+	title string
+	desc  string
+}
+
+func (i mainMenuItem) Title() string {
+	return fmt.Sprintf("%s) %s", i.key, i.title)
+}
+
+func (i mainMenuItem) Description() string { return i.desc }
+
+func (i mainMenuItem) FilterValue() string { return i.title }
 
 type boardItem struct{ b core.Board }
 
@@ -1020,9 +1189,17 @@ func (i boardItem) Title() string       { return i.b.Name }
 func (i boardItem) Description() string { return i.b.Description }
 func (i boardItem) FilterValue() string { return i.b.Name }
 
-type threadItem struct{ t core.Thread }
+type threadItem struct {
+	index int
+	t     core.Thread
+}
 
-func (i threadItem) Title() string { return i.t.Title }
+func (i threadItem) Title() string {
+	if i.index > 0 {
+		return fmt.Sprintf("%04d  %s", i.index, i.t.Title)
+	}
+	return i.t.Title
+}
 func (i threadItem) Description() string {
 	return fmt.Sprintf("by %s · %d posts", i.t.Author, i.t.PostCount)
 }
@@ -1066,6 +1243,14 @@ func (i notificationItem) FilterValue() string {
 
 func (m *model) rebuildList() {
 	switch m.page {
+	case pageMainMenu:
+		m.list.SetItems([]list.Item{
+			mainMenuItem{key: "1", title: "Boards", desc: "Browse boards and threads"},
+			mainMenuItem{key: "2", title: "Live Chat", desc: "Join the lobby chat"},
+			mainMenuItem{key: "3", title: "Notifications", desc: "Read mentions, replies, watched threads"},
+			mainMenuItem{key: "4", title: "Search", desc: "Search posts"},
+		})
+		m.list.Title = "Main Menu"
 	case pageBoardList:
 		items := make([]list.Item, len(m.boards))
 		for i, b := range m.boards {
@@ -1076,7 +1261,7 @@ func (m *model) rebuildList() {
 	case pageThreadList:
 		items := make([]list.Item, len(m.threads))
 		for i, t := range m.threads {
-			items[i] = threadItem{t}
+			items[i] = threadItem{index: i + 1, t: t}
 		}
 		m.list.SetItems(items)
 		m.list.Title = m.currentBoard
@@ -1088,6 +1273,37 @@ func (m *model) rebuildList() {
 		m.list.SetItems(items)
 		m.list.Title = "Notifications"
 	}
+}
+
+func (m *model) openMainMenuSelection() tea.Cmd {
+	item, ok := m.list.SelectedItem().(mainMenuItem)
+	if !ok {
+		return nil
+	}
+	switch item.key {
+	case "1":
+		m.page = pageBoardList
+		m.rebuildList()
+	case "2":
+		return m.enterChat()
+	case "3":
+		m.pushPage(pageNotifications)
+		m.notifications = nil
+		m.rebuildList()
+		return m.fetchNotifications()
+	case "4":
+		m.pushPage(pageSearch)
+		m.searchQuery = ""
+		m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+	}
+	return nil
+}
+
+func (m *model) enterChat() tea.Cmd {
+	m.pushPage(pageChat)
+	m.chatInput.Focus()
+	m.rebuildChatView()
+	return m.fetchChatLines("lobby")
 }
 
 func (m *model) selectedBoard() *core.Board {
@@ -1168,10 +1384,7 @@ func (m *model) hydrateReactionState() error {
 func (m *model) rebuildPostView() {
 	var b strings.Builder
 	for i, p := range m.posts {
-		marker := "  "
-		if i == m.selectedPost {
-			marker = m.styled(styleDim, "→ ")
-		}
+		selected := i == m.selectedPost
 		pollTag := ""
 		if _, ok := m.postPolls[p.ID]; ok {
 			pollTag = m.styled(styleDim, "  [poll]")
@@ -1189,24 +1402,60 @@ func (m *model) rebuildPostView() {
 		if p.ReactionCount > 0 {
 			reactions = fmt.Sprintf("  ♥ %d", p.ReactionCount)
 		}
-		b.WriteString(fmt.Sprintf("%s%s  %s  #%d%s%s", marker, author, m.styled(styleDim, ts), i+1, reactions, pollTag))
-		if p.Version > 1 {
-			b.WriteString(m.styled(styleDim, " (edited)"))
+		if selected {
+			author = p.Author
 		}
-		b.WriteString("\n")
+		header := fmt.Sprintf("%-4s  %s  %s%s%s", postOrdinal(i), author, m.styled(styleDim, ts), reactions, pollTag)
+		if p.Version > 1 {
+			header += m.styled(styleDim, " (edited)")
+		}
+		if selected {
+			header = m.blockLine(styleSelectedPostHeader, header)
+		}
+		b.WriteString(header + "\n")
+		b.WriteString(m.postSepLine() + "\n")
+		body := ""
 		if p.Redacted {
-			b.WriteString(m.styled(styleRedacted, "[removed by moderator]"))
+			body = m.styled(styleRedacted, "[removed by moderator]")
 		} else {
-			b.WriteString(m.renderMarkup(p.Body))
+			body = m.renderMarkup(p.Body)
+		}
+		b.WriteString(body)
+		if signature := strings.TrimSpace(p.Signature); signature != "" && !p.Redacted {
+			b.WriteString("\n" + m.postSepLine() + "\n")
+			b.WriteString(m.renderMarkup(signature))
 		}
 		b.WriteString("\n" + m.postSepLine() + "\n")
 	}
 	m.vp.SetContent(b.String())
 }
 
+func postOrdinal(index int) string {
+	if index == 0 {
+		return "OP"
+	}
+	return fmt.Sprintf("[%d]", index)
+}
+
+func (m model) blockLine(style lipgloss.Style, value string) string {
+	if !m.supportsANSI {
+		return value
+	}
+	width := m.width
+	if width <= 4 {
+		width = 80
+	}
+	return style.Width(width - 4).Render(value)
+}
+
 func (m *model) rebuildChatView() {
 	var b strings.Builder
 	b.WriteString(m.styled(styleTitle, "Live Chat — #lobby") + "\n\n")
+	if len(m.chat) == 0 {
+		b.WriteString(m.styled(styleDim, "No messages yet. Say hello!") + "\n")
+		m.vp.SetContent(b.String())
+		return
+	}
 	for _, line := range m.chat {
 		ts := time.UnixMilli(line.ts).Format("15:04")
 		b.WriteString(fmt.Sprintf("%s %s %s\n",
@@ -1296,6 +1545,19 @@ func (m model) fetchPosts(thread string) tea.Cmd {
 	}
 }
 
+func (m model) fetchChatLines(room string) tea.Cmd {
+	return func() tea.Msg {
+		if m.c == nil {
+			return chatLinesMsg{}
+		}
+		lines, err := m.c.ListChatLines(room, 50)
+		if err != nil {
+			return chatLinesMsg{err: err}
+		}
+		return chatLinesMsg{lines: lines}
+	}
+}
+
 func (m model) fetchPollsForPosts(posts []core.Post) tea.Cmd {
 	thread := m.currentThread
 	postIDs := make([]string, 0, len(posts))
@@ -1318,6 +1580,21 @@ func (m model) resubscribeThread(threadID string) tea.Cmd {
 	return func() tea.Msg {
 		m.c.Bus.AddScopes(m.sub, []string{"thread:" + threadID})
 		return nil
+	}
+}
+
+func (m model) sendChatLine(text string) tea.Cmd {
+	return func() tea.Msg {
+		p := proto.SendChatLinePayload{Room: "lobby", Text: text}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return errMsg{err}
+		}
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdSendChatLine, raw, "")
+		if reply.Err != nil {
+			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
+		}
+		return chatSentMsg{}
 	}
 }
 
@@ -1601,6 +1878,8 @@ func (m model) toggleThreadLock() tea.Cmd {
 
 func pageName(p page) string {
 	switch p {
+	case pageMainMenu:
+		return "Main Menu"
 	case pageBoardList:
 		return "Boards"
 	case pageThreadList:
