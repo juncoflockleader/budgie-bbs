@@ -4,6 +4,7 @@ import type { Board, BoardInfo, BoardMember, BoardMemberApplication, BoardMember
 import type { BudgieEvent, ThreadNewPayload, ThreadTitleSetPayload } from '../api/types'
 import { Spinner } from '../components/Spinner'
 import { useStream } from '../hooks/useStream'
+import { useI18n } from '../i18n'
 
 interface Props {
   token: string
@@ -17,6 +18,7 @@ interface Props {
 }
 
 export function ThreadListPage({ token, board, currentUserId, currentUserRole, onSelect, onBack, onNewThread, onMessageUser }: Props) {
+  const { t } = useI18n()
   const [threads, setThreads] = useState<ThreadSummary[]>([])
   const [pinnedEntries, setPinnedEntries] = useState<DigestEntry[]>([])
   const [digestEntries, setDigestEntries] = useState<DigestEntry[]>([])
@@ -42,6 +44,11 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   const [activeAuthorQuery, setActiveAuthorQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const approvalModeLabel: Record<string, string> = {
+    manual: t('board.approvalMode.manual'),
+    auto: t('board.approvalMode.auto'),
+  }
 
   useEffect(() => {
     void api.setPresence(token, {
@@ -360,9 +367,9 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   }
 
   async function reviewMembershipApplication(app: BoardMemberApplication, status: 'approved' | 'rejected' | 'blacklisted') {
-    const title = status === 'approved' ? prompt('Member title:', app.title ?? '') : ''
+    const title = status === 'approved' ? window.prompt(t('board.reviewMemberTitle'), app.title ?? '') : ''
     if (title === null) return
-    const note = status !== 'approved' ? prompt('Review note:', '') : ''
+    const note = status !== 'approved' ? window.prompt(t('board.reviewNote'), '') : ''
     if (note === null) return
     const res = await api.reviewBoardMembership(token, app.id, { status, title: title ?? '', note: note ?? '' })
     if (res.error) {
@@ -376,7 +383,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   }
 
   async function applyForMembership() {
-    const note = prompt('Application note:', '')
+    const note = window.prompt(t('board.applicationNote'), '')
     if (note === null) return
     const res = await api.applyBoardMembership(token, board.id, note)
     if (res.error) {
@@ -390,7 +397,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   }
 
   async function leaveMembership() {
-    if (!confirm(`Leave ${board.name}?`)) return
+    if (!window.confirm(`${t('board.leaveBoardPrompt', { board: board.name })}`)) return
     const res = await api.leaveBoardMembership(token, board.id)
     if (res.error) {
       setError(res.error.message)
@@ -439,7 +446,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
         <span className="thread-row-content">
           <span className="item-title">{entry.title}</span>
           <span className="item-meta muted">
-            {entry.kind}{entry.path ? ` / ${entry.path}` : ''}{entry.author ? ` · by ${entry.author}` : ''}
+            {entry.kind}{entry.path ? ` / ${entry.path}` : ''}{entry.author ? ` · ${t('thread.by')} ${entry.author}` : ''}
           </span>
           {entry.note && <span className="item-desc muted">{entry.note}</span>}
           {entry.excerpt && <span className="item-desc">{entry.excerpt}</span>}
@@ -488,19 +495,19 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   return (
     <div className="thread-list">
       <div className="page-header">
-        <button className="back-btn" onClick={onBack}>← Boards</button>
+        <button className="back-btn" onClick={onBack}>← {t('nav.boards')}</button>
         <h2>{board.name}</h2>
-        {settings?.readOnly && <span className="policy-badge">Read-only</span>}
-        {settings?.noReply && <span className="policy-badge">No replies</span>}
-        {settings?.anonymousAllowed && <span className="policy-badge">Anonymous</span>}
-        {settings?.memberReadMode && <span className="policy-badge">Member read</span>}
-        {settings?.memberPostMode && <span className="policy-badge">Member post</span>}
-        {settings?.statsExcluded && <span className="policy-badge">Hidden from stats</span>}
-        {settings && !settings.zapAllowed && <span className="policy-badge">No zap</span>}
-        {(settings?.memberReadMode || settings?.memberPostMode) && !currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={applyForMembership}>Apply</button>}
-        {currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={leaveMembership}>Leave</button>}
-        {canOpenBoardSettings && <button className="link-btn" onClick={() => setSettingsOpen(open => !open)}>Board settings</button>}
-        <button className="new-btn" onClick={onNewThread} disabled={!canCreateThread}>+ New thread</button>
+        {settings?.readOnly && <span className="policy-badge">{t('board.readOnly')}</span>}
+        {settings?.noReply && <span className="policy-badge">{t('board.noReplies')}</span>}
+        {settings?.anonymousAllowed && <span className="policy-badge">{t('board.anonymous')}</span>}
+        {settings?.memberReadMode && <span className="policy-badge">{t('board.memberRead')}</span>}
+        {settings?.memberPostMode && <span className="policy-badge">{t('board.memberPost')}</span>}
+        {settings?.statsExcluded && <span className="policy-badge">{t('board.hiddenFromStats')}</span>}
+        {settings && !settings.zapAllowed && <span className="policy-badge">{t('board.noZap')}</span>}
+        {(settings?.memberReadMode || settings?.memberPostMode) && !currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={applyForMembership}>{t('board.apply')}</button>}
+        {currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={leaveMembership}>{t('board.leave')}</button>}
+        {canOpenBoardSettings && <button className="link-btn" onClick={() => setSettingsOpen(open => !open)}>{t('board.settings')}</button>}
+        <button className="new-btn" onClick={onNewThread} disabled={!canCreateThread}>{t('board.createThread')}</button>
       </div>
       <form className="search-form thread-search-form" onSubmit={submitThreadSearch}>
         <input
@@ -508,19 +515,19 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
           type="search"
           value={titleQuery}
           onChange={e => setTitleQuery(e.currentTarget.value)}
-          placeholder="Title"
-          aria-label="Search thread titles"
+          placeholder={t('board.searchTitle')}
+          aria-label={t('board.searchTitle')}
         />
         <input
           className="search-input"
           type="search"
           value={authorQuery}
           onChange={e => setAuthorQuery(e.currentTarget.value)}
-          placeholder="Author"
-          aria-label="Search thread authors"
+          placeholder={t('board.searchAuthor')}
+          aria-label={t('board.searchAuthor')}
         />
-        <button type="submit" disabled={!titleQuery.trim() && !authorQuery.trim()}>Search</button>
-        {(activeTitleQuery || activeAuthorQuery) && <button type="button" className="link-btn" onClick={clearThreadSearch}>Clear</button>}
+        <button type="submit" disabled={!titleQuery.trim() && !authorQuery.trim()}>{t('board.search')}</button>
+        {(activeTitleQuery || activeAuthorQuery) && <button type="button" className="link-btn" onClick={clearThreadSearch}>{t('common.clear')}</button>}
       </form>
       {settingsOpen && canOpenBoardSettings && settingsDraft && (
         <section className="board-settings-panel">
@@ -528,78 +535,78 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
             <>
               <div className="settings-grid">
                 {([
-                  ['anonymousAllowed', 'Anonymous'],
-                  ['readOnly', 'Read-only'],
-                  ['noReply', 'No replies'],
-                  ['attachmentsAllowed', 'Attachments'],
-                  ['mailInAllowed', 'Mail-in'],
-                  ['relayEnabled', 'Relay'],
-                  ['memberReadMode', 'Member read'],
-                  ['memberPostMode', 'Member post'],
-                  ['statsExcluded', 'Hide from stats'],
-                  ['zapAllowed', 'Zap allowed'],
+                  ['anonymousAllowed', 'anonymous'],
+                  ['readOnly', 'readOnly'],
+                  ['noReply', 'noReplies'],
+                  ['attachmentsAllowed', 'attachmentsAllowed'],
+                  ['mailInAllowed', 'mailInAllowed'],
+                  ['relayEnabled', 'relayEnabled'],
+                  ['memberReadMode', 'memberReadMode'],
+                  ['memberPostMode', 'memberPostMode'],
+                  ['statsExcluded', 'hiddenFromStats'],
+                  ['zapAllowed', 'zapAllowed'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="setting-toggle">
                     <input type="checkbox" checked={settingsDraft[key]} onChange={() => toggleSetting(key)} />
-                    {label}
+                    {t(`board.${label}`)}
                   </label>
                 ))}
               </div>
               <div className="board-settings-actions">
-                <button onClick={saveSettings}>Save settings</button>
+                <button onClick={saveSettings}>{t('board.saveSettings')}</button>
               </div>
               {requirements && (
                 <div className="member-requirements-grid">
                   <label className="requirement-field">
-                    <span>Approval</span>
+                    <span>{t('board.approval')}</span>
                     <select value={requirements.approvalMode} onChange={e => updateApprovalMode(e.target.value as BoardMemberRequirements['approvalMode'])}>
-                      <option value="manual">Manual</option>
-                      <option value="auto">Auto</option>
+                      <option value="manual">{approvalModeLabel.manual}</option>
+                      <option value="auto">{approvalModeLabel.auto}</option>
                     </select>
                   </label>
                   <label className="requirement-field">
-                    <span>Min logins</span>
+                    <span>{t('board.minLogins')}</span>
                     <input type="number" min={0} value={requirements.minLoginCount} onChange={e => updateRequirement('minLoginCount', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Min posts</span>
+                    <span>{t('board.minPosts')}</span>
                     <input type="number" min={0} value={requirements.minPostCount} onChange={e => updateRequirement('minPostCount', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Min score</span>
+                    <span>{t('board.minScore')}</span>
                     <input type="number" min={0} value={requirements.minScore} onChange={e => updateRequirement('minScore', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Board posts</span>
+                    <span>{t('board.boardPosts')}</span>
                     <input type="number" min={0} value={requirements.minBoardPostCount} onChange={e => updateRequirement('minBoardPostCount', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Board originals</span>
+                    <span>{t('board.boardOriginals')}</span>
                     <input type="number" min={0} value={requirements.minBoardOriginalPostCount} onChange={e => updateRequirement('minBoardOriginalPostCount', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Board digests</span>
+                    <span>{t('board.boardDigests')}</span>
                     <input type="number" min={0} value={requirements.minBoardDigestCount} onChange={e => updateRequirement('minBoardDigestCount', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Board marks</span>
+                    <span>{t('board.boardMarks')}</span>
                     <input type="number" min={0} value={requirements.minBoardMarkCount} onChange={e => updateRequirement('minBoardMarkCount', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Min trust</span>
+                    <span>{t('board.minTrust')}</span>
                     <input type="number" min={0} value={requirements.minTrustLevel} onChange={e => updateRequirement('minTrustLevel', e.target.value)} />
                   </label>
                   <label className="requirement-field">
-                    <span>Max members</span>
+                    <span>{t('board.maxMembers')}</span>
                     <input type="number" min={0} value={requirements.maxMembers} onChange={e => updateRequirement('maxMembers', e.target.value)} />
                   </label>
-                  <button onClick={saveMemberRequirements}>Save requirements</button>
+                  <button onClick={saveMemberRequirements}>{t('board.saveRequirements')}</button>
                 </div>
               )}
             </>
           )}
           {canManageBoard && <div className="moderator-row">
-            <span className="muted">Moderators:</span>
+            <span className="muted">{t('board.moderators')}:</span>
             {boardInfo?.moderators.map(mod => (
               <span key={mod.userId} className="moderator-chip">
                 {mod.name}
@@ -612,24 +619,24 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                   className="moderator-input"
                   value={moderatorName}
                   onChange={e => setModeratorName(e.target.value)}
-                  placeholder="username"
+                  placeholder={t('board.username')}
                 />
-                <button onClick={addModerator} disabled={!moderatorName.trim()}>Add</button>
+                <button onClick={addModerator} disabled={!moderatorName.trim()}>{t('board.add')}</button>
               </>
             )}
           </div>}
           {canManageBoardMembers && <div className="moderator-row">
-            <span className="muted">Members:</span>
+            <span className="muted">{t('board.members')}:</span>
             {boardInfo?.members.map((member, memberIndex) => (
               <span key={member.userId} className="moderator-chip">
                 {member.name}{member.title ? ` · ${member.title}` : ''}
-                {member.canManageMembers && <span className="member-role-badge">manager</span>}
-                {member.canCurate && <span className="member-role-badge">curator</span>}
-                {member.canModeratePosts && <span className="member-role-badge">posts</span>}
-                {member.canModerateThreads && <span className="member-role-badge">threads</span>}
-                {member.canAnnounce && <span className="member-role-badge">announce</span>}
-                {member.canManagePolls && <span className="member-role-badge">polls</span>}
-                {member.canSetBoardSettings && <span className="member-role-badge">settings</span>}
+                {member.canManageMembers && <span className="member-role-badge">{t('board.memberRole.manageMembers')}</span>}
+                {member.canCurate && <span className="member-role-badge">{t('board.memberRole.curate')}</span>}
+                {member.canModeratePosts && <span className="member-role-badge">{t('board.memberRole.moderatePosts')}</span>}
+                {member.canModerateThreads && <span className="member-role-badge">{t('board.memberRole.moderateThreads')}</span>}
+                {member.canAnnounce && <span className="member-role-badge">{t('board.memberRole.announce')}</span>}
+                {member.canManagePolls && <span className="member-role-badge">{t('board.memberRole.managePolls')}</span>}
+                {member.canSetBoardSettings && <span className="member-role-badge">{t('board.memberRole.manageSettings')}</span>}
                 {canManageBoard && (
                   <>
                     <button
@@ -637,63 +644,63 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                       disabled={memberIndex === 0}
                       onClick={() => moveMember(member.name, member.title, 'up')}
                     >
-                      Up
+                      {t('board.favoriteActions.moveCategoryUp')}
                     </button>
                     <button
                       className="link-btn"
                       disabled={memberIndex >= (boardInfo?.members.length ?? 0) - 1}
                       onClick={() => moveMember(member.name, member.title, 'down')}
                     >
-                      Down
+                      {t('board.favoriteActions.moveCategoryDown')}
                     </button>
                     <button
                       className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canManageMembers: !member.canManageMembers })}
                     >
-                      {member.canManageMembers ? 'Manager off' : 'Manager on'}
+                      {member.canManageMembers ? t('board.roleDisable', { role: t('board.memberRole.manageMembers') }) : t('board.roleEnable', { role: t('board.memberRole.manageMembers') })}
                     </button>
                     <button
                       className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canCurate: !member.canCurate })}
                     >
-                      {member.canCurate ? 'Curator off' : 'Curator on'}
+                      {member.canCurate ? t('board.roleDisable', { role: t('board.memberRole.curate') }) : t('board.roleEnable', { role: t('board.memberRole.curate') })}
                     </button>
                     <button
                       className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canModeratePosts: !member.canModeratePosts })}
                     >
-                      {member.canModeratePosts ? 'Posts off' : 'Posts on'}
+                      {member.canModeratePosts ? t('board.roleDisable', { role: t('board.memberRole.moderatePosts') }) : t('board.roleEnable', { role: t('board.memberRole.moderatePosts') })}
                     </button>
                     <button
                       className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canModerateThreads: !member.canModerateThreads })}
                     >
-                      {member.canModerateThreads ? 'Threads off' : 'Threads on'}
+                      {member.canModerateThreads ? t('board.roleDisable', { role: t('board.memberRole.moderateThreads') }) : t('board.roleEnable', { role: t('board.memberRole.moderateThreads') })}
                     </button>
                     <button
                       className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canAnnounce: !member.canAnnounce })}
                     >
-                      {member.canAnnounce ? 'Announce off' : 'Announce on'}
+                      {member.canAnnounce ? t('board.roleDisable', { role: t('board.memberRole.announce') }) : t('board.roleEnable', { role: t('board.memberRole.announce') })}
                     </button>
                     <button
                       className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canManagePolls: !member.canManagePolls })}
                     >
-                      {member.canManagePolls ? 'Polls off' : 'Polls on'}
+                      {member.canManagePolls ? t('board.roleDisable', { role: t('board.memberRole.managePolls') }) : t('board.roleEnable', { role: t('board.memberRole.managePolls') })}
                     </button>
                     <button
                       className="link-btn"
                       onClick={() => toggleMemberPermission(member.name, member.title, { ...member, canSetBoardSettings: !member.canSetBoardSettings })}
                     >
-                      {member.canSetBoardSettings ? 'Settings off' : 'Settings on'}
+                      {member.canSetBoardSettings ? t('board.roleDisable', { role: t('board.memberRole.manageSettings') }) : t('board.roleEnable', { role: t('board.memberRole.manageSettings') })}
                     </button>
                   </>
                 )}
                 <button
                   className="link-btn"
                   disabled={!canManageBoard && memberRequiresBoardManager(member)}
-                  title={!canManageBoard && memberRequiresBoardManager(member) ? 'Board moderator required' : undefined}
+                  title={!canManageBoard && memberRequiresBoardManager(member) ? t('board.boardModeratorRequired') : undefined}
                   onClick={() => removeMember(member.name)}
                 >
                   ×
@@ -710,41 +717,41 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
               className="moderator-input"
               value={memberTitle}
               onChange={e => setMemberTitle(e.target.value)}
-              placeholder="title"
+              placeholder={t('board.memberTitle')}
             />
             {canManageBoard && (
               <>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanManageMembers} onChange={e => setMemberCanManageMembers(e.target.checked)} />
-                  Manager
+                  {t('board.memberRole.manageMembers')}
                 </label>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanCurate} onChange={e => setMemberCanCurate(e.target.checked)} />
-                  Curator
+                  {t('board.memberRole.curate')}
                 </label>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanModeratePosts} onChange={e => setMemberCanModeratePosts(e.target.checked)} />
-                  Posts
+                  {t('board.memberRole.moderatePosts')}
                 </label>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanModerateThreads} onChange={e => setMemberCanModerateThreads(e.target.checked)} />
-                  Threads
+                  {t('board.memberRole.moderateThreads')}
                 </label>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanAnnounce} onChange={e => setMemberCanAnnounce(e.target.checked)} />
-                  Announce
+                  {t('board.memberRole.announce')}
                 </label>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanManagePolls} onChange={e => setMemberCanManagePolls(e.target.checked)} />
-                  Polls
+                  {t('board.memberRole.managePolls')}
                 </label>
                 <label className="inline-toggle">
                   <input type="checkbox" checked={memberCanSetBoardSettings} onChange={e => setMemberCanSetBoardSettings(e.target.checked)} />
-                  Settings
+                  {t('board.memberRole.manageSettings')}
                 </label>
               </>
             )}
-            <button onClick={addMember} disabled={!memberName.trim()}>Add</button>
+            <button onClick={addMember} disabled={!memberName.trim()}>{t('board.add')}</button>
           </div>}
           {canManageBoardMembers && memberApplications.length > 0 && (
             <div className="member-application-list">
