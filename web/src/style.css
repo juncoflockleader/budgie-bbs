@@ -140,6 +140,7 @@ label {
   gap: 1rem;
 }
 .auth-title { color: var(--c-accent2); font-size: 1.8em }
+.auth-locale { align-self: flex-end; margin-bottom: -0.5rem; }
 .auth-form {
   display: flex;
   flex-direction: column;

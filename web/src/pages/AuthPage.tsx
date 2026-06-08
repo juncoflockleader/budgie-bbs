@@ -8,7 +8,7 @@ interface Props {
 }
 
 export function AuthPage({ onLogin }: Props) {
-  const { t } = useI18n()
+  const { t, locale, setLocale } = useI18n()
   const [mode, setMode] = useState<'login' | 'register' | 'recover'>('login')
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
@@ -58,6 +58,17 @@ export function AuthPage({ onLogin }: Props) {
   return (
     <div className="auth-page">
       <h1 className="auth-title">{t('app.name')}</h1>
+      <div className="auth-locale">
+        <select
+          value={locale}
+          onChange={e => setLocale(e.currentTarget.value as typeof locale)}
+          aria-label={t('settings.language')}
+        >
+          <option value="en">EN</option>
+          <option value="zh-CN">中文</option>
+          <option value="zh-TW">中文（繁）</option>
+        </select>
+      </div>
       <form className="auth-form" onSubmit={submit}>
         <h2>{mode === 'login' ? t('auth.modeSignIn') : mode === 'register' ? t('auth.modeRegister') : t('auth.modeRecover')}</h2>
         <label>

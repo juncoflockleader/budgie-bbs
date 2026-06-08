@@ -615,6 +615,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	key := keyString(msg)
+	// Global: cycle language without leaving the current page.
+	if key == "ctrl+l" {
+		m.cycleLocale()
+		return nil
+	}
 	switch m.page {
 	case pageMainMenu:
 		switch key {
@@ -1949,6 +1954,32 @@ func (m *model) rebuildList() {
 		m.list.SetItems(items)
 		m.list.Title = m.tr(msgPageOnline)
 	}
+}
+
+func (m *model) cycleLocale() {
+	switch m.locale {
+	case localeEN:
+		m.locale = localeZHCN
+	case localeZHCN:
+		m.locale = localeZHTW
+	default:
+		m.locale = localeEN
+	}
+	// Refresh input placeholders in the new locale.
+	m.titleInput.Placeholder = m.tr(msgPlaceholderThreadTitle)
+	m.chatInput.Placeholder = m.tr(msgPlaceholderChatMessage)
+	m.compose.Placeholder = m.tr(msgPlaceholderComposeBody)
+	// Rebuild all visible content.
+	m.rebuildList()
+	switch m.page {
+	case pageThread:
+		m.rebuildPostView()
+	case pageChat:
+		m.rebuildChatView()
+	case pageSearch:
+		m.rebuildSearchView(m.posts)
+	}
+	m.statusMsg = m.tr(msgStatusLocaleSwitch)
 }
 
 func (m *model) openMainMenuSelection() tea.Cmd {

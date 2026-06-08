@@ -228,6 +228,8 @@ const (
 	msgOnlineModeOnline       msgKey = "online.online"
 
 	msgNotificationsNoRead msgKey = "notifications.none"
+
+	msgStatusLocaleSwitch msgKey = "status.localeSwitch"
 )
 
 var tuiMessages = map[localeCode]map[msgKey]string{
@@ -425,6 +427,7 @@ var tuiMessages = map[localeCode]map[msgKey]string{
 		msgOnlineModeIdleTemplate:   "idle {idle}",
 		msgOnlineModeOnline:         "online",
 		msgNotificationsNoRead:      "No notifications yet.",
+		msgStatusLocaleSwitch:       "Language: English",
 	},
 	localeZHCN: {
 		msgAppName:                 "BudgieBBS",
@@ -483,6 +486,7 @@ var tuiMessages = map[localeCode]map[msgKey]string{
 		msgLabelProfile:            "个人设置",
 		msgLabelLoading:            "资料加载中…",
 		msgLabelNoProfileField:     "未选择资料项。",
+		msgStatusLocaleSwitch:      "语言：简体中文",
 		msgHelpMainMenu:            "enter/→=打开  1-7=跳转  p=资料  o=在线  q=退出",
 		msgHelpBoardList:           "enter/→=打开版面  c=聊天  N=通知  /=搜索  esc/←=主菜单  q=退出",
 		msgHelpThreadList:          "enter/→=打开串  n=发帖  r=刷新  Ctrl+↑/↓=分页  /=搜索  esc/←=返回  q=退出",
@@ -795,6 +799,7 @@ var tuiMessages = map[localeCode]map[msgKey]string{
 		msgOnlineModeIdleTemplate:  "閒置 {idle}",
 		msgOnlineModeOnline:        "上線",
 		msgNotificationsNoRead:     "目前尚無通知。",
+		msgStatusLocaleSwitch:      "語言：繁體中文",
 	},
 }
 
