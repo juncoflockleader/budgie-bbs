@@ -126,6 +126,7 @@ func newHandler(db *sql.DB, bus Bus) *Handler {
 		InsertSanction:               insertSanction,
 		ClearUserSanctions:           clearUserSanctions,
 		EnqueueOutboxJob:             enqueueOutboxJob,
+		PGNotifyEphemeral:            pgNotifyEphemeralFn,
 	})
 	return handler.New(db, bus)
 }

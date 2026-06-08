@@ -2595,6 +2595,22 @@ func ListChatLines(db *sql.DB, roomID string, limit int) ([]ChatLine, error) {
 	return out, rows.Err()
 }
 
+// GetChatLineByID fetches a single chat line by its ID. Used by the cross-node
+// pg_notify listener to re-publish ephemeral chat events on sibling nodes.
+func GetChatLineByID(db *sql.DB, id string) (*ChatLine, error) {
+	row := QQueryRow(db,
+		`SELECT id, room_id, user_id, user_name, body, created_at
+		   FROM chat_lines WHERE id=?`,
+		id,
+	)
+	var c ChatLine
+	if err := row.Scan(&c.ID, &c.Room, &c.UserID, &c.User, &c.Text, &c.CreatedAt); err != nil {
+		return nil, err
+	}
+	c.TS = c.CreatedAt
+	return &c, nil
+}
+
 func ListChatOnlineUsers(db *sql.DB, viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
 	roomID = strings.TrimSpace(roomID)
 	if roomID == "" {

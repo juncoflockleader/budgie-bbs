@@ -5089,6 +5089,49 @@ func TestChatRoomsRecentAndRoster(t *testing.T) {
 	}, proto.ErrValidationFailed)
 }
 
+// TestGetChatLineByID verifies that GetChatLineByID (used by the Postgres
+// cross-node pg_notify path) correctly fetches a chat line by its ID.
+func TestGetChatLineByID(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	result := exec(t, c, alice, proto.CmdSendChatLine, proto.SendChatLinePayload{
+		Room: "lobby",
+		Text: "hello cross-node",
+	})
+
+	line, err := projections.GetChatLineByID(c.DB, result.ID)
+	if err != nil {
+		t.Fatalf("GetChatLineByID: %v", err)
+	}
+	if line == nil {
+		t.Fatal("expected non-nil chat line")
+	}
+	if line.ID != result.ID {
+		t.Errorf("ID mismatch: got %q, want %q", line.ID, result.ID)
+	}
+	if line.Room != "lobby" {
+		t.Errorf("Room: got %q, want %q", line.Room, "lobby")
+	}
+	if line.User != "alice" {
+		t.Errorf("User: got %q, want %q", line.User, "alice")
+	}
+	if line.Text != "hello cross-node" {
+		t.Errorf("Text: got %q, want %q", line.Text, "hello cross-node")
+	}
+	if line.TS == 0 {
+		t.Error("expected non-zero TS")
+	}
+
+	// Missing ID returns an error.
+	_, err = projections.GetChatLineByID(c.DB, "chat_doesnotexist")
+	if err == nil {
+		t.Error("expected error for missing chat line ID")
+	}
+}
+
 func TestPrivilegedCloakPresence(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

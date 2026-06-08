@@ -462,3 +462,9 @@ func matchContentFilter(db *sql.DB, boardID, text string) (*ContentFilter, error
 func upsertContentFilter(tx *sql.Tx, id, pattern, scope string, active bool, createdBy string, ts int64) error {
 	return currentRuntime().UpsertContentFilter(tx, id, pattern, scope, active, createdBy, ts)
 }
+
+func pgNotifyEphemeral(db *sql.DB, event, eid, scopes string) {
+	if fn := currentRuntime().PGNotifyEphemeral; fn != nil {
+		fn(db, event, eid, scopes)
+	}
+}

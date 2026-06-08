@@ -58,6 +58,20 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 	return seq, nil
 }
 
+// pgNotifyEphemeralFn emits a pg_notify for an ephemeral (non-durable) event.
+// Used so sibling nodes can fetch the record by ID and re-publish locally.
+// No-op when not in Postgres mode or when nodeID is unset.
+func pgNotifyEphemeralFn(db *sql.DB, event, eid, scopes string) {
+	if currentSQLFlavor != postgresFlavor || currentNodeID == "" {
+		return
+	}
+	payload := fmt.Sprintf(`{"seq":0,"event":%q,"node_id":%q,"scopes":%q,"eid":%q}`,
+		event, currentNodeID, scopes, eid)
+	if _, err := db.Exec(`SELECT pg_notify($1, $2)`, pgNotifyChannel, payload); err != nil {
+		slog.Warn("pgNotifyEphemeral: failed", "event", event, "eid", eid, "err", err)
+	}
+}
+
 // headSeq returns the highest seq currently in the events table.
 func headSeq(db *sql.DB) (int64, error) {
 	var head sql.NullInt64

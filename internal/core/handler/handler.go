@@ -124,6 +124,9 @@ type Runtime struct {
 	InsertSanction               func(tx *sql.Tx, id, userID, kind, scope string, expiresAt int64, by, reason string, seq int64) error
 	ClearUserSanctions           func(tx *sql.Tx, userID, kind, scope string) (int64, error)
 	EnqueueOutboxJob             func(tx *sql.Tx, kind string, payload any, ts int64) error
+	// PGNotifyEphemeral emits a pg_notify for an ephemeral (non-durable) event so
+	// sibling nodes can fetch and re-publish it. nil when not in Postgres mode.
+	PGNotifyEphemeral func(db *sql.DB, event, eid, scopes string)
 }
 
 type Bus interface {

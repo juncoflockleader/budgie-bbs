@@ -5,20 +5,27 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 // pgNotifyChannel is the Postgres LISTEN/NOTIFY channel name for cross-node wakeups.
 const pgNotifyChannel = "budgie_events"
 
 // pgWakeupPayload is the JSON payload sent via pg_notify.
+// For durable events: Seq > 0, EID is empty.
+// For ephemeral events (e.g. chat.line): Seq = 0, EID is the record's ID.
 type pgWakeupPayload struct {
 	Seq    int64  `json:"seq"`
 	Event  string `json:"event"`
 	NodeID string `json:"node_id"`
 	Scopes string `json:"scopes"` // comma-separated scope list
+	EID    string `json:"eid,omitempty"` // ephemeral record ID (non-durable events)
 }
 
 // startPGListener starts a goroutine that listens for events committed by other
@@ -90,7 +97,13 @@ func handlePGNotification(n *pq.Notification, nodeID string, db *sql.DB, bus Bus
 		return
 	}
 
-	// Fetch the authoritative event from Postgres by seq.
+	if p.EID != "" {
+		// Ephemeral event: fetch the record by ID and publish to local bus.
+		handlePGEphemeralNotification(p, db, bus)
+		return
+	}
+
+	// Durable event: fetch the authoritative event from Postgres by seq.
 	events, err := replayEvents(db, p.Seq-1, nil, 1)
 	if err != nil {
 		slog.Warn("pg listener: replay failed", "seq", p.Seq, "err", err)
@@ -101,4 +114,26 @@ func handlePGNotification(n *pq.Notification, nodeID string, db *sql.DB, bus Bus
 		return
 	}
 	bus.Publish(events[0])
+}
+
+// handlePGEphemeralNotification handles cross-node wakeups for ephemeral events
+// (e.g. chat lines) that have no durable seq.
+func handlePGEphemeralNotification(p pgWakeupPayload, db *sql.DB, bus Bus) {
+	switch proto.EventKind(p.Event) {
+	case proto.EvtChatLine:
+		line, err := projections.GetChatLineByID(db, p.EID)
+		if err != nil {
+			slog.Warn("pg listener: chat line not found", "eid", p.EID, "err", err)
+			return
+		}
+		scopes := strings.Split(p.Scopes, ",")
+		bus.Publish(&proto.Event{
+			Kind:    proto.EvtChatLine,
+			Scopes:  scopes,
+			Payload: &proto.ChatLinePayload{ID: line.ID, Room: line.Room, User: line.User, Text: line.Text, TS: line.TS},
+			TS:      line.TS,
+		})
+	default:
+		slog.Debug("pg listener: unknown ephemeral event kind", "event", p.Event, "eid", p.EID)
+	}
 }

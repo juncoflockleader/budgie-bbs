@@ -131,6 +131,8 @@ func (h *Handler) sendChatLine(actor *User, p proto.SendChatLinePayload) Reply {
 		Payload: &proto.ChatLinePayload{ID: id, Room: roomID, User: actor.Name, Text: text, TS: ts},
 		TS:      ts,
 	})
+	// Notify sibling nodes in Postgres multi-node deployments.
+	pgNotifyEphemeral(h.db, string(proto.EvtChatLine), id, "chat:"+roomID)
 
 	return Reply{Result: &proto.AckResult{ID: id}}
 }
