@@ -2,6 +2,7 @@ package projections
 
 import (
 	"database/sql"
+	"fmt"
 	"net/netip"
 	"sort"
 	"strings"
@@ -3200,11 +3201,24 @@ func ListPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	return scanSearchPostRows(db, rows)
 }
 
+// ftsSearchClause adapts full-text search to the storage backend. SQLite uses
+// the FTS5 virtual table (MATCH + relevance rank). Postgres has no FTS5 table,
+// so it falls back to a case-insensitive substring match on the body ordered by
+// recency. Returns the WHERE predicate, the ORDER BY expression, and the value
+// to bind for the query placeholder.
+func ftsSearchClause(query string) (predicate, order, arg string) {
+	if currentSQLFlavor == postgresFlavor {
+		return "f.body ILIKE ?", "p.created_at DESC", "%" + query + "%"
+	}
+	return "posts_fts MATCH ?", "rank", query
+}
+
 func SearchReadablePosts(db *sql.DB, viewerID string, includePrivate bool, query, boardID string, limit int) ([]Post, error) {
 	var rows *sql.Rows
 	var err error
+	pred, order, qarg := ftsSearchClause(query)
 	if boardID != "" {
-		rows, err = QQuery(db,
+		rows, err = QQuery(db, fmt.Sprintf(
 			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
 		        COALESCE(p.reply_to,''), p.version, p.redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
@@ -3213,18 +3227,18 @@ func SearchReadablePosts(db *sql.DB, viewerID string, includePrivate bool, query
 		 JOIN posts p ON p.id = f.post_id
 		 JOIN threads t ON t.id = p.thread
 		 LEFT JOIN board_settings s ON s.board_id = t.board
-		 WHERE f.board_id=? AND posts_fts MATCH ? AND p.redacted=0
+		 WHERE f.board_id=? AND %s AND p.redacted=0
 		   AND (
 		     COALESCE(s.member_read_mode, 0)=0
 		     OR ?=1
 		     OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=t.board AND bm.user_id=?)
 		     OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=t.board AND m.user_id=?)
 		   )
-		 ORDER BY rank LIMIT ?`,
-			boardID, query, boolInt(includePrivate), viewerID, viewerID, limit,
+		 ORDER BY %s LIMIT ?`, pred, order),
+			boardID, qarg, boolInt(includePrivate), viewerID, viewerID, limit,
 		)
 	} else {
-		rows, err = QQuery(db,
+		rows, err = QQuery(db, fmt.Sprintf(
 			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
 		        COALESCE(p.reply_to,''), p.version, p.redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
@@ -3233,15 +3247,15 @@ func SearchReadablePosts(db *sql.DB, viewerID string, includePrivate bool, query
 		 JOIN posts p ON p.id = f.post_id
 		 JOIN threads t ON t.id = p.thread
 		 LEFT JOIN board_settings s ON s.board_id = t.board
-		 WHERE posts_fts MATCH ? AND p.redacted=0
+		 WHERE %s AND p.redacted=0
 		   AND (
 		     COALESCE(s.member_read_mode, 0)=0
 		     OR ?=1
 		     OR EXISTS (SELECT 1 FROM board_moderators bm WHERE bm.board_id=t.board AND bm.user_id=?)
 		     OR EXISTS (SELECT 1 FROM board_members m WHERE m.board_id=t.board AND m.user_id=?)
 		   )
-		 ORDER BY rank LIMIT ?`,
-			query, boolInt(includePrivate), viewerID, viewerID, limit,
+		 ORDER BY %s LIMIT ?`, pred, order),
+			qarg, boolInt(includePrivate), viewerID, viewerID, limit,
 		)
 	}
 	if err != nil {
@@ -4406,29 +4420,30 @@ func ListUserSanctions(db *sql.DB, userID string, limit, offset int) ([]UserSanc
 func SearchPosts(db *sql.DB, query, boardID string, limit int) ([]Post, error) {
 	var rows *sql.Rows
 	var err error
+	pred, order, qarg := ftsSearchClause(query)
 	if boardID != "" {
-		rows, err = QQuery(db,
+		rows, err = QQuery(db, fmt.Sprintf(
 			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
 		        COALESCE(p.reply_to,''), p.version, p.redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
 		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
 		 FROM posts_fts f
 		 JOIN posts p ON p.id = f.post_id
-		 WHERE f.board_id=? AND posts_fts MATCH ? AND p.redacted=0
-		 ORDER BY rank LIMIT ?`,
-			boardID, query, limit,
+		 WHERE f.board_id=? AND %s AND p.redacted=0
+		 ORDER BY %s LIMIT ?`, pred, order),
+			boardID, qarg, limit,
 		)
 	} else {
-		rows, err = QQuery(db,
+		rows, err = QQuery(db, fmt.Sprintf(
 			`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
 		        COALESCE(p.reply_to,''), p.version, p.redacted,
 		        COALESCE((SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
 		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
 		 FROM posts_fts f
 		 JOIN posts p ON p.id = f.post_id
-		 WHERE posts_fts MATCH ? AND p.redacted=0
-		 ORDER BY rank LIMIT ?`,
-			query, limit,
+		 WHERE %s AND p.redacted=0
+		 ORDER BY %s LIMIT ?`, pred, order),
+			qarg, limit,
 		)
 	}
 	if err != nil {

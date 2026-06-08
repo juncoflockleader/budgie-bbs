@@ -2279,8 +2279,11 @@ func FtsDeletePost(tx *sql.Tx, postID string) error {
 
 func InsertSanction(tx *sql.Tx, id, userID, kind, scope string, expiresAt int64, by, reason string, seq int64) error {
 	_, err := QExec(tx,
-		`INSERT OR REPLACE INTO user_sanctions (id, user_id, kind, scope, expires_at, by, reason, seq)
-		 VALUES (?,?,?,?,?,?,?,?)`,
+		`INSERT INTO user_sanctions (id, user_id, kind, scope, expires_at, by, reason, seq)
+		 VALUES (?,?,?,?,?,?,?,?)
+		 ON CONFLICT (id) DO UPDATE SET
+		   user_id=EXCLUDED.user_id, kind=EXCLUDED.kind, scope=EXCLUDED.scope,
+		   expires_at=EXCLUDED.expires_at, by=EXCLUDED.by, reason=EXCLUDED.reason, seq=EXCLUDED.seq`,
 		id, userID, kind, scope, expiresAt, by, reason, seq,
 	)
 	return err
@@ -2331,7 +2334,9 @@ func RecordProcessed(tx *sql.Tx, actorID, cid, commandHash, resultJSON string) e
 		return err
 	}
 	_, err := QExec(tx,
-		`INSERT OR REPLACE INTO processed_commands (actor_id, cid, command_hash, result_json, processed_at) VALUES (?,?,?,?,?)`,
+		`INSERT INTO processed_commands (actor_id, cid, command_hash, result_json, processed_at) VALUES (?,?,?,?,?)
+		 ON CONFLICT (actor_id, cid) DO UPDATE SET
+		   command_hash=EXCLUDED.command_hash, result_json=EXCLUDED.result_json, processed_at=EXCLUDED.processed_at`,
 		actorID, cid, commandHash, resultJSON, NowMS(),
 	)
 	return err
@@ -2339,7 +2344,8 @@ func RecordProcessed(tx *sql.Tx, actorID, cid, commandHash, resultJSON string) e
 
 func UpsertReaction(tx *sql.Tx, postID, userID, emoji string, ts int64) error {
 	_, err := QExec(tx,
-		`INSERT OR REPLACE INTO post_reactions (post_id, user_id, emoji, ts) VALUES (?,?,?,?)`,
+		`INSERT INTO post_reactions (post_id, user_id, emoji, ts) VALUES (?,?,?,?)
+		 ON CONFLICT (post_id, user_id) DO UPDATE SET emoji=EXCLUDED.emoji, ts=EXCLUDED.ts`,
 		postID, userID, emoji, ts,
 	)
 	return err
@@ -2368,7 +2374,8 @@ func InsertPollOption(tx *sql.Tx, id, pollID, text string, position int) error {
 
 func CastVote(tx *sql.Tx, pollID, optionID, userID string, ts int64) error {
 	_, err := QExec(tx,
-		`INSERT OR REPLACE INTO poll_votes (poll_id, option_id, user_id, ts) VALUES (?,?,?,?)`,
+		`INSERT INTO poll_votes (poll_id, option_id, user_id, ts) VALUES (?,?,?,?)
+		 ON CONFLICT (poll_id, user_id) DO UPDATE SET option_id=EXCLUDED.option_id, ts=EXCLUDED.ts`,
 		pollID, optionID, userID, ts,
 	)
 	return err
@@ -2417,7 +2424,8 @@ func SetThreadPref(db *sql.DB, userID, threadID, level string) error {
 		return err
 	}
 	_, err := QExec(db,
-		`INSERT OR REPLACE INTO thread_prefs (user_id, thread_id, level) VALUES (?,?,?)`,
+		`INSERT INTO thread_prefs (user_id, thread_id, level) VALUES (?,?,?)
+		 ON CONFLICT (user_id, thread_id) DO UPDATE SET level=EXCLUDED.level`,
 		userID, threadID, level,
 	)
 	return err
@@ -2448,7 +2456,7 @@ func RecordLoginAt(db *sql.DB, userID string, ts int64) error {
 		`INSERT INTO user_activity (user_id, login_count)
 		 VALUES (?, 1)
 		 ON CONFLICT(user_id)
-		 DO UPDATE SET login_count=login_count + 1`,
+		 DO UPDATE SET login_count=user_activity.login_count + 1`,
 		userID,
 	); err != nil {
 		return err
@@ -2549,7 +2557,7 @@ func RecordPostCreated(db *sql.DB, userID string) (int, int, error) {
 func RecordReactionReceived(db *sql.DB, postAuthorID string) error {
 	_, err := QExec(db, `
 		INSERT INTO user_activity (user_id, reactions_recv) VALUES (?,1)
-		ON CONFLICT(user_id) DO UPDATE SET reactions_recv = reactions_recv + 1`,
+		ON CONFLICT(user_id) DO UPDATE SET reactions_recv = user_activity.reactions_recv + 1`,
 		postAuthorID,
 	)
 	return err
@@ -2557,7 +2565,7 @@ func RecordReactionReceived(db *sql.DB, postAuthorID string) error {
 
 func RecordReactionRemoved(db *sql.DB, postAuthorID string) error {
 	_, err := QExec(db, `
-		UPDATE user_activity SET reactions_recv = MAX(0, reactions_recv - 1) WHERE user_id=?`,
+		UPDATE user_activity SET reactions_recv = CASE WHEN reactions_recv > 0 THEN reactions_recv - 1 ELSE 0 END WHERE user_id=?`,
 		postAuthorID,
 	)
 	return err

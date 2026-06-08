@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS processed_commands (
     actor_id     TEXT NOT NULL,
     cid          TEXT NOT NULL,
     command_hash TEXT NOT NULL,
-    result_json  JSONB NOT NULL,
+    result_json  TEXT NOT NULL,
     processed_at BIGINT NOT NULL,
     PRIMARY KEY (actor_id, cid)
 );
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS processed_commands (
 CREATE TABLE IF NOT EXISTS outbox_jobs (
     id           TEXT PRIMARY KEY,
     kind         TEXT NOT NULL,
-    payload      JSONB NOT NULL,
+    payload      TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'pending',
     attempts     INTEGER NOT NULL DEFAULT 0,
     next_run_at  BIGINT NOT NULL DEFAULT 0,
@@ -53,26 +53,6 @@ CREATE TABLE IF NOT EXISTS outbox_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_jobs_ready
     ON outbox_jobs(status, next_run_at, created_at);
-
-CREATE TABLE IF NOT EXISTS relay_deliveries (
-    id          TEXT PRIMARY KEY,
-    board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
-    thread_id   TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    post_id     TEXT NOT NULL UNIQUE REFERENCES posts(id) ON DELETE CASCADE,
-    author_id   TEXT NOT NULL DEFAULT '',
-    author_name TEXT NOT NULL DEFAULT '',
-    title       TEXT NOT NULL DEFAULT '',
-    body        TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL DEFAULT 'pending',
-    last_error  TEXT NOT NULL DEFAULT '',
-    created_at  BIGINT NOT NULL DEFAULT 0,
-    updated_at  BIGINT NOT NULL DEFAULT 0,
-    seq         BIGINT NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_relay_deliveries_status_created
-    ON relay_deliveries(status, created_at, id);
-CREATE INDEX IF NOT EXISTS idx_relay_deliveries_board_created
-    ON relay_deliveries(board_id, created_at, id);
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (1, 'postgres-event-store-foundation', 0)
@@ -653,11 +633,11 @@ CREATE TABLE IF NOT EXISTS auth_pubkeys (
 
 CREATE TABLE IF NOT EXISTS threads (
     id         TEXT PRIMARY KEY,
-    board      TEXT NOT NULL REFERENCES categories(id),
+    board      TEXT NOT NULL REFERENCES boards(id),
     author     TEXT NOT NULL,
     author_id  TEXT NOT NULL REFERENCES users(id),
     title      TEXT NOT NULL,
-    locked     BOOLEAN NOT NULL DEFAULT FALSE,
+    locked     INTEGER NOT NULL DEFAULT 0,
     post_count INTEGER NOT NULL DEFAULT 0,
     last_seq   BIGINT NOT NULL DEFAULT 0,
     created_ts BIGINT NOT NULL,
@@ -675,12 +655,12 @@ CREATE TABLE IF NOT EXISTS posts (
     content_type TEXT NOT NULL DEFAULT 'markup',
     reply_to     TEXT,
     version      INTEGER NOT NULL DEFAULT 1,
-    redacted     BOOLEAN NOT NULL DEFAULT FALSE,
-    marked       BOOLEAN NOT NULL DEFAULT FALSE,
-    recommended  BOOLEAN NOT NULL DEFAULT FALSE,
-    no_reply     BOOLEAN NOT NULL DEFAULT FALSE,
-    tex          BOOLEAN NOT NULL DEFAULT FALSE,
-    mail_back    BOOLEAN NOT NULL DEFAULT FALSE,
+    redacted     INTEGER NOT NULL DEFAULT 0,
+    marked       INTEGER NOT NULL DEFAULT 0,
+    recommended  INTEGER NOT NULL DEFAULT 0,
+    no_reply     INTEGER NOT NULL DEFAULT 0,
+    tex          INTEGER NOT NULL DEFAULT 0,
+    mail_back    INTEGER NOT NULL DEFAULT 0,
     source_post  TEXT NOT NULL DEFAULT '',
     source_thread TEXT NOT NULL DEFAULT '',
     source_board TEXT NOT NULL DEFAULT '',
@@ -839,6 +819,41 @@ CREATE TABLE IF NOT EXISTS content_filters (
 );
 CREATE INDEX IF NOT EXISTS idx_content_filters_active_scope
     ON content_filters(active, scope, updated_at DESC);
+
+-- posts_fts mirrors the SQLite FTS5 virtual table as a plain table. The write
+-- paths (INSERT/UPDATE/DELETE) use identical SQL on both backends; full-text
+-- search on Postgres uses an ILIKE fallback over body (see the search readers).
+CREATE TABLE IF NOT EXISTS posts_fts (
+    post_id   TEXT PRIMARY KEY REFERENCES posts(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL DEFAULT '',
+    board_id  TEXT NOT NULL DEFAULT '',
+    author    TEXT NOT NULL DEFAULT '',
+    body      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_posts_fts_board ON posts_fts(board_id);
+
+-- relay_deliveries lives here (not in migration 1) because its foreign keys
+-- reference boards, threads, and posts, which are created above in this
+-- migration.
+CREATE TABLE IF NOT EXISTS relay_deliveries (
+    id          TEXT PRIMARY KEY,
+    board_id    TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    thread_id   TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    post_id     TEXT NOT NULL UNIQUE REFERENCES posts(id) ON DELETE CASCADE,
+    author_id   TEXT NOT NULL DEFAULT '',
+    author_name TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    last_error  TEXT NOT NULL DEFAULT '',
+    created_at  BIGINT NOT NULL DEFAULT 0,
+    updated_at  BIGINT NOT NULL DEFAULT 0,
+    seq         BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_relay_deliveries_status_created
+    ON relay_deliveries(status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_relay_deliveries_board_created
+    ON relay_deliveries(board_id, created_at, id);
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (2, 'postgres-forum-projections', 0)
@@ -1711,11 +1726,11 @@ ON CONFLICT (version) DO NOTHING;
 			Name:    "postgres-post-article-flags",
 			SQL: `
 ALTER TABLE posts
-    ADD COLUMN IF NOT EXISTS marked BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS marked INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE posts
-    ADD COLUMN IF NOT EXISTS recommended BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS recommended INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE posts
-    ADD COLUMN IF NOT EXISTS no_reply BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS no_reply INTEGER NOT NULL DEFAULT 0;
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (30, 'postgres-post-article-flags', 0)
@@ -1749,9 +1764,9 @@ ON CONFLICT (version) DO NOTHING;
 			Name:    "postgres-post-tex-mailback-flags",
 			SQL: `
 ALTER TABLE posts
-    ADD COLUMN IF NOT EXISTS tex BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS tex INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE posts
-    ADD COLUMN IF NOT EXISTS mail_back BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS mail_back INTEGER NOT NULL DEFAULT 0;
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (32, 'postgres-post-tex-mailback-flags', 0)

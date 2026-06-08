@@ -24,16 +24,25 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 	if err != nil {
 		return 0, err
 	}
-	query := `INSERT INTO events (id, kind, scopes, payload, ts) VALUES (?,?,?,?,?)`
-	if currentSQLFlavor == postgresFlavor {
-		query = `INSERT INTO events (id, kind, scopes, payload, ts) VALUES (?,?,?,CAST(? AS JSONB),?)`
-	}
+	ts := nowMS()
 
-	res, err := execReturningSeq(tx, query, id, string(kind), strings.Join(scopes, ","), string(raw), nowMS())
+	// The two storage backends use different events-table shapes. SQLite
+	// denormalizes scopes/ts into the row; Postgres normalizes scopes into
+	// event_scopes and stores the timestamp as created_at. Either way the
+	// per-scope rows below are the authoritative scope index.
+	var seq int64
+	if currentSQLFlavor == postgresFlavor {
+		seq, err = execReturningSeq(tx,
+			`INSERT INTO events (id, kind, payload, created_at) VALUES (?,?,CAST(? AS JSONB),?)`,
+			id, string(kind), string(raw), ts)
+	} else {
+		seq, err = execReturningSeq(tx,
+			`INSERT INTO events (id, kind, scopes, payload, ts) VALUES (?,?,?,?,?)`,
+			id, string(kind), strings.Join(scopes, ","), string(raw), ts)
+	}
 	if err != nil {
 		return 0, err
 	}
-	seq := res
 	for _, scope := range scopes {
 		if _, err := qExec(tx,
 			`INSERT INTO event_scopes (seq, scope) VALUES (?,?)
@@ -84,10 +93,17 @@ func headSeq(db *sql.DB) (int64, error) {
 // replayEvents returns events with seq > after, optionally filtered to the
 // given scopes (pass nil for all events).
 func replayEvents(db *sql.DB, after int64, filterScopes []string, limit int) ([]*proto.Event, error) {
-	rows, err := qQuery(db,
-		`SELECT seq, kind, scopes, payload, ts FROM events WHERE seq > ? ORDER BY seq`,
-		after,
-	)
+	query := `SELECT seq, kind, scopes, payload, ts FROM events WHERE seq > ? ORDER BY seq`
+	if currentSQLFlavor == postgresFlavor {
+		// Postgres normalizes scopes into event_scopes and names the timestamp
+		// created_at; reassemble the comma-separated scope string and alias the
+		// timestamp so the scan below is identical to the SQLite path.
+		query = `SELECT e.seq, e.kind,
+		                COALESCE((SELECT string_agg(scope, ',') FROM event_scopes es WHERE es.seq = e.seq), '') AS scopes,
+		                e.payload, e.created_at
+		         FROM events e WHERE e.seq > ? ORDER BY e.seq`
+	}
+	rows, err := qQuery(db, query, after)
 	if err != nil {
 		return nil, err
 	}

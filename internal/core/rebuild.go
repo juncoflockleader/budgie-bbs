@@ -586,7 +586,7 @@ func recordReactionReceivedTx(tx *sql.Tx, postAuthorID string) error {
 
 func recordReactionRemovedTx(tx *sql.Tx, postAuthorID string) error {
 	_, err := qExec(tx, `
-		UPDATE user_activity SET reactions_recv = MAX(0, reactions_recv - 1) WHERE user_id=?`,
+		UPDATE user_activity SET reactions_recv = CASE WHEN reactions_recv > 0 THEN reactions_recv - 1 ELSE 0 END WHERE user_id=?`,
 		postAuthorID,
 	)
 	return err
