@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, FormEvent, useRef } from 'react'
 import { useAuth } from './hooks/useAuth'
+import { useTheme, type ThemeId } from './hooks/useTheme'
 import { LocaleCode, useI18n } from './i18n'
 import { AuthPage } from './pages/AuthPage'
 import { BoardListPage } from './pages/BoardListPage'
@@ -40,6 +41,7 @@ type Page =
 
 export function App() {
   const { locale, setLocale, t } = useI18n()
+  const { theme, setTheme } = useTheme()
   const { auth, login, logout } = useAuth()
   const [page, setPage] = useState<Page>({ name: 'boards' })
   const [searchDraft, setSearchDraft] = useState('')
@@ -263,6 +265,18 @@ export function App() {
             <option value="en">EN</option>
             <option value="zh-CN">中文</option>
             <option value="zh-TW">中文（繁）</option>
+          </select>
+
+          <select
+            className="sidebar-theme"
+            value={theme}
+            onChange={event => setTheme(event.currentTarget.value as ThemeId)}
+            aria-label={t('settings.theme')}
+          >
+            <option value="dark">{t('settings.theme.dark')}</option>
+            <option value="dim">{t('settings.theme.dim')}</option>
+            <option value="light">{t('settings.theme.light')}</option>
+            <option value="warm">{t('settings.theme.warm')}</option>
           </select>
 
           <button className="sidebar-item" onClick={handleLogout}>

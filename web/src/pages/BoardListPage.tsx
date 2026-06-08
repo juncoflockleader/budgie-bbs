@@ -12,6 +12,12 @@ interface Props {
   onSelect: (board: Board) => void
 }
 
+type BoardTab = 'unread' | 'favorites' | 'directory' | 'all'
+
+function savedTab(): BoardTab {
+  try { return (localStorage.getItem('budgieBoardTab') as BoardTab) ?? 'unread' } catch { return 'unread' }
+}
+
 export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   const { t } = useI18n()
   const [boards, setBoards] = useState<BoardSummary[]>([])
@@ -22,6 +28,12 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [boardQuery, setBoardQuery] = useState('')
   const [boardSort, setBoardSort] = useState<BoardSortMode>('name')
+  const [activeTab, setActiveTab] = useState<BoardTab>(savedTab)
+
+  function switchTab(tab: BoardTab) {
+    setActiveTab(tab)
+    try { localStorage.setItem('budgieBoardTab', tab) } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -574,88 +586,142 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
 
   return (
     <div className="board-list">
-      <h2>Boards</h2>
-      <div className="board-discovery-controls">
-        <input
-          value={boardQuery}
-          onChange={e => setBoardQuery(e.target.value)}
-          placeholder={t('board.searchTitle')}
-          aria-label={t('board.searchTitle')}
-        />
-        <select value={boardSort} onChange={e => setBoardSort(e.target.value as BoardSortMode)} aria-label={t('board.sortBoards')}>
-          <option value="name">{t('board.nameSort')}</option>
-          <option value="new">{t('board.newSort')}</option>
-          <option value="online">{t('board.onlineSort')}</option>
-          <option value="posts">{t('board.postsSort')}</option>
-          <option value="activity">{t('board.activitySort')}</option>
-          <option value="unread">{t('board.unreadSort')}</option>
-        </select>
+      {/* ── Tab bar ───────────────────────────────────────────────────── */}
+      <div className="board-tabs">
+        <button
+          className={`board-tab board-tab--unread${activeTab === 'unread' ? ' board-tab--active' : ''}`}
+          onClick={() => switchTab('unread')}
+        >
+          {t('board.tabUnread')}
+          {unreadBoards.length > 0 && <span className="board-tab-count">{unreadBoards.length}</span>}
+        </button>
+        <button
+          className={`board-tab${activeTab === 'favorites' ? ' board-tab--active' : ''}`}
+          onClick={() => switchTab('favorites')}
+        >
+          {t('board.tabFavorites')}
+        </button>
+        <button
+          className={`board-tab${activeTab === 'directory' ? ' board-tab--active' : ''}`}
+          onClick={() => switchTab('directory')}
+        >
+          {t('board.tabDirectory')}
+        </button>
+        <button
+          className={`board-tab${activeTab === 'all' ? ' board-tab--active' : ''}`}
+          onClick={() => switchTab('all')}
+        >
+          {t('board.tabAll')}
+        </button>
       </div>
-      <section className="board-section">
-        <h3 className="board-section-title">{t('board.unreadSection')}</h3>
-        {unreadBoards.length === 0 && <p className="muted">{t('board.noUnreadBoards')}</p>}
-        {unreadBoards.length > 0 && (
-          <ul className="item-list">
-            {unreadBoards.map(renderBoard)}
-          </ul>
-        )}
-      </section>
-      <section className="board-section">
-        <h3 className="board-section-title">{t('board.newBoardsSection')}</h3>
-        {newBoards.length === 0 && <p className="muted">{t('board.noNewBoards')}</p>}
-        {newBoards.length > 0 && (
-          <ul className="item-list">
-            {newBoards.map(renderBoard)}
-          </ul>
-        )}
-      </section>
-      <section className="board-section">
-        <h3 className="board-section-title">{t('board.recommendedSection')}</h3>
-        {recommendedVisibleBoards.length === 0 && <p className="muted">{t('board.noRecommendedBoards')}</p>}
-        {recommendedVisibleBoards.length > 0 && (
-          <ul className="item-list">
-            {recommendedVisibleBoards.map(renderRecommendedBoard)}
-          </ul>
-        )}
-      </section>
-      <section className="board-section">
-        <div className="board-section-heading">
-          <h3 className="board-section-title">{t('board.favoritesSection')}</h3>
-          <span className="favorite-folder-actions">
-            {favoriteStats.unreadPosts > 0 && <button className="board-action-btn" onClick={e => markFavoriteScopeRead('', e)} title={t('board.favoriteActions.markRead')}>✓</button>}
-            {favoriteStats.hasReadMarker && <button className="board-action-btn" onClick={e => restoreFavoriteScopeRead('', e)} title={t('board.favoriteActions.restoreReadMarker')}>↶</button>}
-            <button className="board-action-btn" onClick={exportFavorites} title={t('board.favoriteActions.export')}>{t('board.favoriteActions.export')}</button>
-            <button className="board-action-btn" onClick={importFavorites} title={t('board.favoriteActions.import')}>{t('board.favoriteActions.import')}</button>
-            <button className="board-action-btn" onClick={e => createFolder('', e)} title={t('board.favoriteActions.newFolder')}>＋</button>
-          </span>
+
+      {/* ── Unread tab ────────────────────────────────────────────────── */}
+      {activeTab === 'unread' && (
+        <div className="board-tab-body">
+          {newBoards.length > 0 && (
+            <section className="board-section">
+              <h3 className="board-section-title">{t('board.newBoardsSection')}</h3>
+              <ul className="item-list">{newBoards.map(renderBoard)}</ul>
+            </section>
+          )}
+          {unreadBoards.length === 0
+            ? (
+              <div className="board-empty">
+                <span className="board-empty-icon">✓</span>
+                <span>{t('board.allCaughtUp')}</span>
+              </div>
+            )
+            : (
+              <ul className="item-list">{unreadBoards.map(renderBoard)}</ul>
+            )}
         </div>
-        {favoriteTree.folders.length === 0 && favoriteTree.boards.length === 0 && <p className="muted">{t('board.noFavoriteBoards')}</p>}
-        {(favoritesByFolder['']?.length ?? 0) > 0 && (
-          <ul className="item-list favorite-folder-list">
-            {(favoritesByFolder[''] ?? []).map(renderFavoriteBoard)}
-          </ul>
-        )}
-        {(foldersByParent[''] ?? []).map(folder => renderFavoriteFolder(folder))}
-      </section>
-      <section className="board-section">
-        <h3 className="board-section-title">{t('board.categories')}</h3>
-        {directoryRoots.length === 0 && visibleBoards.length === 0 && <p className="muted">{t('board.noDataRoot')}</p>}
-        {directoryRoots.map(category => renderCategory(category))}
-        {uncategorizedBoards.length > 0 && (
-          <ul className="item-list">
-            {uncategorizedBoards.map(renderBoard)}
-          </ul>
-        )}
-      </section>
-      <section className="board-section">
-        <h3 className="board-section-title">{t('board.boardsTitle')}</h3>
-        {visibleBoards.length === 0 && <p className="muted">{t('board.noUnreadBoards')}</p>}
-        {visibleBoards.length > 0 && (
-          <ul className="item-list">
-            {visibleBoards.map(renderBoard)}
-          </ul>
-        )}
-      </section>
+      )}
+
+      {/* ── Favorites tab ─────────────────────────────────────────────── */}
+      {activeTab === 'favorites' && (
+        <div className="board-tab-body">
+          <section className="board-section">
+            <div className="board-section-heading">
+              <h3 className="board-section-title">{t('board.favoritesSection')}</h3>
+              <span className="favorite-folder-actions">
+                {favoriteStats.unreadPosts > 0 && <button className="board-action-btn" onClick={e => markFavoriteScopeRead('', e)} title={t('board.favoriteActions.markRead')}>✓</button>}
+                {favoriteStats.hasReadMarker && <button className="board-action-btn" onClick={e => restoreFavoriteScopeRead('', e)} title={t('board.favoriteActions.restoreReadMarker')}>↶</button>}
+                <button className="board-action-btn" onClick={exportFavorites} title={t('board.favoriteActions.export')}>{t('board.favoriteActions.export')}</button>
+                <button className="board-action-btn" onClick={importFavorites} title={t('board.favoriteActions.import')}>{t('board.favoriteActions.import')}</button>
+                <button className="board-action-btn" onClick={e => createFolder('', e)} title={t('board.favoriteActions.newFolder')}>＋</button>
+              </span>
+            </div>
+            {favoriteTree.folders.length === 0 && favoriteTree.boards.length === 0
+              ? (
+                <div className="board-empty">
+                  <span className="board-empty-icon">☆</span>
+                  <span>{t('board.noFavoritesYet')}</span>
+                </div>
+              )
+              : (
+                <>
+                  {(favoritesByFolder['']?.length ?? 0) > 0 && (
+                    <ul className="item-list favorite-folder-list">
+                      {(favoritesByFolder[''] ?? []).map(renderFavoriteBoard)}
+                    </ul>
+                  )}
+                  {(foldersByParent[''] ?? []).map(folder => renderFavoriteFolder(folder))}
+                </>
+              )}
+          </section>
+          {recommendedVisibleBoards.length > 0 && (
+            <section className="board-section">
+              <h3 className="board-section-title">{t('board.tabDiscoverSection')}</h3>
+              <ul className="item-list">{recommendedVisibleBoards.map(renderRecommendedBoard)}</ul>
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* ── Directory tab ─────────────────────────────────────────────── */}
+      {activeTab === 'directory' && (
+        <div className="board-tab-body">
+          <section className="board-section">
+            {directoryRoots.length === 0 && uncategorizedBoards.length === 0
+              ? <p className="muted">{t('board.noDataRoot')}</p>
+              : (
+                <>
+                  {directoryRoots.map(category => renderCategory(category))}
+                  {uncategorizedBoards.length > 0 && (
+                    <ul className="item-list" style={{ marginTop: '0.5rem' }}>
+                      {uncategorizedBoards.map(renderBoard)}
+                    </ul>
+                  )}
+                </>
+              )}
+          </section>
+        </div>
+      )}
+
+      {/* ── All tab ───────────────────────────────────────────────────── */}
+      {activeTab === 'all' && (
+        <div className="board-tab-body">
+          <div className="board-discovery-controls">
+            <input
+              value={boardQuery}
+              onChange={e => setBoardQuery(e.target.value)}
+              placeholder={t('board.searchTitle')}
+              aria-label={t('board.searchTitle')}
+            />
+            <select value={boardSort} onChange={e => setBoardSort(e.target.value as BoardSortMode)} aria-label={t('board.sortBoards')}>
+              <option value="name">{t('board.nameSort')}</option>
+              <option value="new">{t('board.newSort')}</option>
+              <option value="online">{t('board.onlineSort')}</option>
+              <option value="posts">{t('board.postsSort')}</option>
+              <option value="activity">{t('board.activitySort')}</option>
+              <option value="unread">{t('board.unreadSort')}</option>
+            </select>
+          </div>
+          {visibleBoards.length === 0
+            ? <p className="muted">{t('board.noUnreadBoards')}</p>
+            : <ul className="item-list">{visibleBoards.map(renderBoard)}</ul>}
+        </div>
+      )}
     </div>
   )
 }
