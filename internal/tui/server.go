@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/ssh"
@@ -122,8 +123,28 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 		height = 24
 	}
 
+	// M14: register this SSH session with the node registry so sysops can see
+	// it, kick it, or send it a message.
+	nodeID := core.NewSessionNodeID()
+	entry := core.NodeEntry{
+		NodeID:    nodeID,
+		UserID:    user.ID,
+		Username:  user.Name,
+		RemoteIP:  remoteHost(sess.RemoteAddr()),
+		Location:  "main-menu",
+		LoginTime: time.Now(),
+	}
+	// Kick closes the SSH session; the deferred Unregister below then fires.
+	msgCh := s.core.Nodes.Register(entry, func() { _ = sess.Close() })
+
+	// Unregister when the SSH session ends (normal disconnect or kick).
+	go func() {
+		<-sess.Context().Done()
+		s.core.Nodes.Unregister(nodeID)
+	}()
+
 	caps := terminalProfileFromEnviron(sess.Environ())
-	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale)
+	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh)
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithEnvironment(sess.Environ()),

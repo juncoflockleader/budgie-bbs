@@ -50,6 +50,12 @@ const (
 	EvtPresenceUpdate EventKind = "presence.update"
 	EvtUserJoined     EventKind = "user.joined"
 	EvtUserLeft       EventKind = "user.left"
+
+	// M14 — Node spy (ephemeral): SSH session lifecycle.
+	EvtNodeConnected    EventKind = "node.connected"
+	EvtNodeDisconnected EventKind = "node.disconnected"
+	// EvtNodeMessage is delivered only to the target node's TUI session.
+	EvtNodeMessage EventKind = "node.message"
 )
 
 // Event is a fact emitted by the server.
@@ -390,4 +396,29 @@ type UserJoinedPayload struct {
 type UserLeftPayload struct {
 	User string `json:"user"`
 	TS   int64  `json:"ts"`
+}
+
+// M14 — Node spy payloads.
+
+type NodeConnectedPayload struct {
+	NodeID   string `json:"nodeId"`
+	User     string `json:"user"`
+	RemoteIP string `json:"remoteIp,omitempty"`
+	TS       int64  `json:"ts"`
+}
+
+type NodeDisconnectedPayload struct {
+	NodeID string `json:"nodeId"`
+	User   string `json:"user"`
+	TS     int64  `json:"ts"`
+}
+
+// NodeMessagePayload carries a sysop-to-node message injected into the target
+// session's status bar. Delivered only via the in-process channel; never
+// stored or replayed.
+type NodeMessagePayload struct {
+	NodeID string `json:"nodeId"`
+	From   string `json:"from"`
+	Text   string `json:"text"`
+	TS     int64  `json:"ts"`
 }

@@ -45,6 +45,8 @@ type Core struct {
 	DB      *sql.DB
 	Bus     Bus
 	handler *Handler
+	// Nodes is the in-memory registry of active SSH sessions (M14).
+	Nodes *NodeRegistry
 	// pgDSN and nodeID are non-empty in Postgres mode only.
 	// pgDSN is used to start the cross-node LISTEN goroutine.
 	// nodeID identifies this process in pg_notify payloads.
@@ -71,6 +73,7 @@ func New(dbPath string) (*Core, error) {
 		DB:      db,
 		Bus:     bus,
 		handler: newHandler(db, bus),
+		Nodes:   newNodeRegistry(bus),
 	}
 	return c, nil
 }
@@ -108,6 +111,7 @@ func NewPostgres(dsn string) (*Core, error) {
 		DB:      db,
 		Bus:     bus,
 		handler: h,
+		Nodes:   newNodeRegistry(bus),
 		pgDSN:   dsn,
 		nodeID:  nodeID,
 	}
@@ -161,6 +165,21 @@ func (c *Core) Head() (int64, error) {
 // Replay returns events with seq > after, filtered to the given scopes.
 func (c *Core) Replay(after int64, scopes []string, limit int) ([]*proto.Event, error) {
 	return replayEvents(c.DB, after, scopes, limit)
+}
+
+// ListNodes returns a snapshot of active SSH sessions for sysop use (M14).
+func (c *Core) ListNodes() []NodeEntry {
+	return c.Nodes.List()
+}
+
+// KickNode forcibly closes the SSH session identified by nodeID (M14).
+func (c *Core) KickNode(nodeID string) error {
+	return c.Nodes.KickNode(nodeID)
+}
+
+// SendNodeMessage enqueues a sysop message to the given SSH session (M14).
+func (c *Core) SendNodeMessage(nodeID, msg string) error {
+	return c.Nodes.SendMessage(nodeID, msg)
 }
 
 // Subscribe creates a new subscription on the bus.

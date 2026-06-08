@@ -55,6 +55,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/admin/registration-settings", auth(http.HandlerFunc(s.handleGetAccountRegistrationSettings)))
 	mux.Handle("GET /api/v1/admin/registrations", auth(http.HandlerFunc(s.handleListAccountRegistrations)))
 	mux.Handle("GET /api/v1/admin/password-recovery", auth(http.HandlerFunc(s.handleListPasswordRecoveryRequests)))
+	// M14 — Node spy
+	mux.Handle("GET /api/v1/admin/nodes", auth(http.HandlerFunc(s.handleListNodes)))
+	mux.Handle("POST /api/v1/admin/nodes/{nodeId}/kick", auth(http.HandlerFunc(s.handleKickNode)))
+	mux.Handle("POST /api/v1/admin/nodes/{nodeId}/message", auth(http.HandlerFunc(s.handleSendNodeMessage)))
 	mux.Handle("GET /api/v1/boards", auth(http.HandlerFunc(s.handleListBoards)))
 	mux.Handle("GET /api/v1/boards/recommended", auth(http.HandlerFunc(s.handleListRecommendedBoards)))
 	mux.Handle("GET /api/v1/boards/favorites", auth(http.HandlerFunc(s.handleListFavoriteBoards)))

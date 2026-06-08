@@ -34,6 +34,7 @@ const (
 	pageProfile
 	pageProfileEdit
 	pageOnline
+	pageNodeSpy
 )
 
 const threadPageSize = 50
@@ -86,6 +87,8 @@ type (
 	}
 	presenceSetMsg     struct{ err error }
 	disconnectMsg      struct{}
+	sysopMsgMsg        struct{ msg string }
+	nodeListMsg        struct{ nodes []core.NodeEntry }
 	postSubmittedMsg   struct{ thread string }
 	chatSentMsg        struct{}
 	threadSubmittedMsg struct {
@@ -104,6 +107,10 @@ type model struct {
 	actor  *core.User
 	sub    *core.Subscription
 	locale localeCode
+
+	// M14: node registry handles for this SSH session.
+	nodeID string          // empty in unit tests
+	msgCh  <-chan string   // receives sysop messages; nil if not registered
 
 	page      page
 	pageStack []page // navigation history for back/esc
@@ -145,6 +152,7 @@ type model struct {
 	profile       *core.UserProfile
 	profileField  profileField
 	onlineUsers   []core.SocialUser
+	nodes         []core.NodeEntry // M14: active SSH sessions for sysop panel
 	authorNames   map[string]string
 	supportsANSI  bool
 }
@@ -204,8 +212,11 @@ func (m *model) postSignatureSepLine() string {
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode) model {
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string) model {
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
+	if actor != nil && actor.IsAdmin() {
+		scopes = append(scopes, "system:nodes")
+	}
 	sub := c.Subscribe(scopes)
 	threadTitlePlaceholder := trLocale(locale, msgPlaceholderThreadTitle)
 	chatMessagePlaceholder := trLocale(locale, msgPlaceholderChatMessage)
@@ -229,6 +240,8 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		c:             c,
 		actor:         actor,
 		sub:           sub,
+		nodeID:        nodeID,
+		msgCh:         msgCh,
 		page:          pageMainMenu,
 		width:         width,
 		height:        height,
@@ -300,13 +313,17 @@ func (m *model) popPage() bool {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.fetchBoards(),
 		m.fetchNotificationStatus(),
 		m.fetchPollPermission(),
 		m.setPresence("active", "tui", "", "", m.tr(msgTitleMainMenu)),
 		m.awaitEvent(),
-	)
+	}
+	if m.msgCh != nil {
+		cmds = append(cmds, m.awaitSysopMsg())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -469,6 +486,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case disconnectMsg:
 		m.statusMsg = m.tr(msgStatusDisconnected)
 
+	case sysopMsgMsg:
+		// Sysop message arrives from the node registry channel; show it in the
+		// status bar and re-arm the listener.
+		m.statusMsg = "[sysop] " + msg.msg
+		if m.msgCh != nil {
+			cmds = append(cmds, m.awaitSysopMsg())
+		}
+
+	case nodeListMsg:
+		m.nodes = msg.nodes
+		if m.page == pageNodeSpy {
+			m.rebuildList()
+		}
+
 	case postSubmittedMsg:
 		m.finishCompose()
 		if m.page == pageCompose {
@@ -535,7 +566,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Delegate to the component that was active when the key arrived.
 		switch activePage {
-		case pageMainMenu, pageBoardList, pageThreadList, pageNotifications, pageProfile, pageOnline:
+		case pageMainMenu, pageBoardList, pageThreadList, pageNotifications, pageProfile, pageOnline, pageNodeSpy:
 			var c tea.Cmd
 			m.list, c = m.list.Update(msg)
 			cmds = append(cmds, c)
@@ -576,7 +607,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Non-key messages also need component updates.
 	switch m.page {
-	case pageMainMenu, pageBoardList, pageThreadList, pageProfile, pageOnline:
+	case pageMainMenu, pageBoardList, pageThreadList, pageProfile, pageOnline, pageNodeSpy:
 		var c tea.Cmd
 		m.list, c = m.list.Update(msg)
 		cmds = append(cmds, c)
@@ -608,6 +639,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.profileInput, c = m.profileInput.Update(msg)
 			cmds = append(cmds, c)
 		}
+	}
+
+	// M14: keep the node registry location in sync after each update.
+	if m.c != nil && m.nodeID != "" {
+		m.c.Nodes.UpdateLocation(m.nodeID, m.pageName(m.page))
 	}
 
 	return m, tea.Batch(cmds...)
@@ -667,6 +703,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.notifications = nil
 			m.rebuildList()
 			return m.fetchNotifications()
+		case "S":
+			// M14: sysop node spy panel — admin only.
+			if m.actor != nil && m.actor.IsAdmin() {
+				return m.enterNodeSpy()
+			}
 		case "/":
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
@@ -1115,6 +1156,35 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
 		}
+
+	case pageNodeSpy:
+		switch key {
+		case "r":
+			return m.fetchNodes()
+		case "k":
+			// Kick selected node (admin only).
+			if n := m.selectedNode(); n != nil && m.c != nil {
+				if err := m.c.KickNode(n.NodeID); err != nil {
+					m.statusMsg = "kick failed: " + err.Error()
+				} else {
+					m.statusMsg = "kicked node " + n.NodeID
+					return m.fetchNodes()
+				}
+			}
+		case "m":
+			// Send message to selected node — prompt via status bar input.
+			if n := m.selectedNode(); n != nil {
+				m.statusMsg = "send message to " + n.Username + " (use /msg <text>)"
+			}
+		case "esc", "left":
+			if !m.popPage() {
+				m.page = pageBoardList
+			}
+			m.rebuildList()
+		case "q", "ctrl+c":
+			m.c.Unsubscribe(m.sub)
+			return tea.Quit
+		}
 	}
 	return nil
 }
@@ -1281,6 +1351,12 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		if m.page == pageOnline {
 			cmds = append(cmds, m.fetchOnlineUsers())
 		}
+
+	case proto.EvtNodeConnected, proto.EvtNodeDisconnected:
+		// Refresh the node list whenever the sysop panel is open.
+		if m.page == pageNodeSpy {
+			cmds = append(cmds, m.fetchNodes())
+		}
 	}
 
 	if cmds == nil {
@@ -1308,7 +1384,11 @@ func (m model) View() string {
 	case pageMainMenu:
 		body = m.renderSection(m.tr(msgTitleMainMenu), m.renderMainMenu(), m.tr(msgHelpMainMenu))
 	case pageBoardList:
-		body = m.renderSection(m.tr(msgTitleBoards), m.list.View(), m.tr(msgHelpBoardList))
+		boardHelp := m.tr(msgHelpBoardList)
+		if m.actor != nil && m.actor.IsAdmin() {
+			boardHelp += "  S=node-spy"
+		}
+		body = m.renderSection(m.tr(msgTitleBoards), m.list.View(), boardHelp)
 	case pageThreadList:
 		body = m.renderSection(m.boardTitleOrFallback(), m.list.View(), m.tr(msgHelpThreadList))
 	case pageNotifications:
@@ -1319,6 +1399,8 @@ func (m model) View() string {
 		body = m.renderSection(m.profileEditorHeader(), m.renderProfileEditor(), m.tr(msgHelpProfileEdit))
 	case pageOnline:
 		body = m.renderSection(m.tr(msgTitleOnlineUsers), m.renderOnlineUsers(), m.tr(msgHelpOnline))
+	case pageNodeSpy:
+		body = m.renderSection("Node Spy", m.renderNodeSpy(), "[r]efresh  [k]ick  [esc]back")
 	case pageThread:
 		help := m.tr(msgHelpThreadReader)
 		if m.actor.IsMod() {
@@ -1891,6 +1973,41 @@ func formatIdle(seconds int64) string {
 	return fmt.Sprintf("%dd%02dh", days, hours%24)
 }
 
+// --- M14 node spy helpers ---
+
+// nodeItem is a list.Item representing a single active SSH session.
+type nodeItem struct {
+	n core.NodeEntry
+}
+
+func (i nodeItem) Title() string {
+	return fmt.Sprintf("%s  %s", i.n.Username, i.n.RemoteIP)
+}
+
+func (i nodeItem) Description() string {
+	elapsed := time.Since(i.n.LoginTime).Truncate(time.Second)
+	loc := i.n.Location
+	if loc == "" {
+		loc = "?"
+	}
+	return fmt.Sprintf("%s  %s  node:%s", loc, elapsed, i.n.NodeID[:8])
+}
+
+func (i nodeItem) FilterValue() string {
+	return i.n.Username + " " + i.n.RemoteIP + " " + i.n.Location
+}
+
+func (m model) renderNodeSpy() string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("%s %d active node(s)\n\n", m.styled(styleDim, "›"), len(m.nodes)))
+	if len(m.nodes) == 0 {
+		b.WriteString(m.styled(styleDim, "no active SSH sessions") + "\n")
+		return b.String()
+	}
+	b.WriteString(m.list.View())
+	return b.String()
+}
+
 func (m *model) rebuildList() {
 	m.list.SetShowTitle(false)
 	switch m.page {
@@ -1953,6 +2070,14 @@ func (m *model) rebuildList() {
 		}
 		m.list.SetItems(items)
 		m.list.Title = m.tr(msgPageOnline)
+
+	case pageNodeSpy:
+		items := make([]list.Item, len(m.nodes))
+		for i, n := range m.nodes {
+			items[i] = nodeItem{n: n}
+		}
+		m.list.SetItems(items)
+		m.list.Title = "Node Spy"
 	}
 }
 
@@ -2058,6 +2183,23 @@ func (m *model) enterOnline() tea.Cmd {
 		m.setPresence("active", "online", "", "", m.tr(msgTitleOnlineUsers)),
 		m.fetchOnlineUsers(),
 	)
+}
+
+// enterNodeSpy navigates to the M14 sysop node spy panel (admin only).
+func (m *model) enterNodeSpy() tea.Cmd {
+	m.pushPage(pageNodeSpy)
+	m.nodes = nil
+	m.rebuildList()
+	return m.fetchNodes()
+}
+
+// selectedNode returns the NodeEntry of the currently selected list item, or nil.
+func (m *model) selectedNode() *core.NodeEntry {
+	sel, ok := m.list.SelectedItem().(nodeItem)
+	if !ok {
+		return nil
+	}
+	return &sel.n
 }
 
 func (m *model) enterChat() tea.Cmd {
@@ -2524,6 +2666,29 @@ func (m model) awaitEvent() tea.Cmd {
 			return disconnectMsg{}
 		}
 		return eventMsg{evt}
+	}
+}
+
+// awaitSysopMsg blocks until the node registry sends a sysop message to this
+// session's message channel. Re-arm it in the Update handler after receipt.
+func (m model) awaitSysopMsg() tea.Cmd {
+	ch := m.msgCh
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg := <-ch
+		return sysopMsgMsg{msg}
+	}
+}
+
+// fetchNodes loads the live node list from the in-memory registry.
+func (m model) fetchNodes() tea.Cmd {
+	return func() tea.Msg {
+		if m.c == nil {
+			return nodeListMsg{}
+		}
+		return nodeListMsg{nodes: m.c.ListNodes()}
 	}
 }
 
@@ -3021,6 +3186,8 @@ func (m model) pageName(p page) string {
 		return m.tr(msgTitleProfileEdit)
 	case pageOnline:
 		return m.tr(msgTitleOnlineUsers)
+	case pageNodeSpy:
+		return "Node Spy"
 	}
 	return ""
 }
