@@ -8,17 +8,30 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	_ "github.com/lib/pq"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-// newTestCore creates a temporary SQLite database for testing.
+// newTestCore creates an isolated test core. By default it uses a temporary
+// SQLite database. If BUDGIE_TEST_POSTGRES_DSN is set, it instead provisions a
+// unique Postgres schema per test (full isolation) so the entire suite doubles
+// as a Postgres integration test:
+//
+//	BUDGIE_TEST_POSTGRES_DSN="postgres://user:pass@host:5432/db?sslmode=disable" \
+//	  go test ./internal/core/...
 func newTestCore(t *testing.T) (*core.Core, context.CancelFunc) {
 	t.Helper()
+	if dsn := os.Getenv("BUDGIE_TEST_POSTGRES_DSN"); dsn != "" {
+		return newTestCorePostgres(t, dsn)
+	}
+
 	f, err := os.CreateTemp("", "budgie_test_*.db")
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +46,57 @@ func newTestCore(t *testing.T) (*core.Core, context.CancelFunc) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go c.Run(ctx)
+
+	return c, cancel
+}
+
+var pgTestSchemaSeq atomic.Int64
+
+// newTestCorePostgres provisions a fresh, uniquely-named Postgres schema for one
+// test and returns a Core bound to it via search_path. The schema is dropped on
+// cleanup. Tests run sequentially (no t.Parallel), so the process-global SQL
+// flavor and advisory lock are safe.
+func newTestCorePostgres(t *testing.T, baseDSN string) (*core.Core, context.CancelFunc) {
+	t.Helper()
+	schema := fmt.Sprintf("budgie_test_%d_%d", os.Getpid(), pgTestSchemaSeq.Add(1))
+
+	admin, err := sql.Open("postgres", baseDSN)
+	if err != nil {
+		t.Fatalf("open admin postgres: %v", err)
+	}
+	if _, err := admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE"); err != nil {
+		admin.Close()
+		t.Fatalf("reset schema: %v", err)
+	}
+	if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
+		admin.Close()
+		t.Fatalf("create schema: %v", err)
+	}
+
+	sep := "?"
+	if strings.Contains(baseDSN, "?") {
+		sep = "&"
+	}
+	perTestDSN := baseDSN + sep + "search_path=" + schema
+
+	c, err := core.NewPostgres(perTestDSN)
+	if err != nil {
+		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		admin.Close()
+		t.Fatalf("new postgres core: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go c.Run(ctx)
+
+	t.Cleanup(func() {
+		cancel()
+		if c.DB != nil {
+			_ = c.DB.Close()
+		}
+		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		admin.Close()
+	})
 
 	return c, cancel
 }
@@ -67,6 +131,35 @@ func execExpectErr(t *testing.T, c *core.Core, actor *core.User, cmd proto.Comma
 	}
 	if reply.Err.Code != expectCode {
 		t.Fatalf("expected error %s, got %s: %s", expectCode, reply.Err.Code, reply.Err.Message)
+	}
+}
+
+// testRebind converts ?-placeholders to $N when the suite runs against
+// Postgres, so test helpers that touch c.DB directly stay backend-agnostic.
+func testRebind(query string) string {
+	if core.SQLFlavor() != core.PostgresFlavor() {
+		return query
+	}
+	var b strings.Builder
+	n := 1
+	for i := 0; i < len(query); i++ {
+		if query[i] == '?' {
+			b.WriteByte('$')
+			b.WriteString(fmt.Sprintf("%d", n))
+			n++
+			continue
+		}
+		b.WriteByte(query[i])
+	}
+	return b.String()
+}
+
+// testDBExec runs a raw statement against the test DB, rebinding placeholders
+// for the active backend.
+func testDBExec(t *testing.T, c *core.Core, query string, args ...any) {
+	t.Helper()
+	if _, err := c.DB.Exec(testRebind(query), args...); err != nil {
+		t.Fatalf("test exec %q: %v", query, err)
 	}
 }
 
@@ -350,7 +443,7 @@ func TestSetThreadTitleWorkflow(t *testing.T) {
 	}, proto.ErrForbidden)
 
 	oldCreatedAt := time.Now().Add(-48 * time.Hour).UnixMilli()
-	if _, err := c.DB.Exec(`UPDATE threads SET created_at=? WHERE id=?`, oldCreatedAt, threadID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE threads SET created_at=? WHERE id=?`), oldCreatedAt, threadID); err != nil {
 		t.Fatal(err)
 	}
 	execExpectErr(t, c, alice, proto.CmdSetThreadTitle, proto.SetThreadTitlePayload{
@@ -761,7 +854,7 @@ func TestUserSignatureRecountRepairsSelection(t *testing.T) {
 	if err := c.SetUserSignatureSettings(alice.ID, second.ID, false); err != nil {
 		t.Fatalf("select second signature: %v", err)
 	}
-	if _, err := c.DB.Exec(`UPDATE user_signatures SET active=0 WHERE user_id=? AND id=?`, alice.ID, second.ID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE user_signatures SET active=0 WHERE user_id=? AND id=?`), alice.ID, second.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1525,7 +1618,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "tech", Name: "Tech"})
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "life", Name: "Life"})
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "secret", Name: "Secret"})
-	if _, err := c.DB.Exec(`UPDATE categories SET created_at=? WHERE id IN ('tech','life','secret')`, snapshotAt); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE categories SET created_at=? WHERE id IN ('tech','life','secret')`), snapshotAt); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, c, admin, proto.CmdSetBoardSettings, proto.SetBoardSettingsPayload{
@@ -1686,15 +1779,15 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 	if stats.OnlineUsers != 1 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("expected max-online history to preserve peak after offline, got %+v", stats)
 	}
-	if _, err := c.DB.Exec(`INSERT INTO user_activity (user_id, total_online_seconds)
+	if _, err := c.DB.Exec(testRebind(`INSERT INTO user_activity (user_id, total_online_seconds)
 		VALUES (?, ?)
-		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`, bob.ID, int64(120)); err != nil {
+		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`), bob.ID, int64(120)); err != nil {
 		t.Fatal(err)
 	}
 	// Drain the outbox before pinning last_visit_day so the async
 	// recordPostCreated worker does not overwrite it with today's date.
 	drainOutbox(t, c.DB)
-	if _, err := c.DB.Exec(`UPDATE user_activity SET last_visit_day='2026-06-04' WHERE user_id IN (?, ?)`, alice.ID, bob.ID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE user_activity SET last_visit_day='2026-06-04' WHERE user_id IN (?, ?)`), alice.ID, bob.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := projections.UpsertCommunityStatHistoryFromCurrent(c.DB, time.Now().UTC().UnixMilli()); err != nil {
@@ -1731,12 +1824,12 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected guest login/logout counters in community stats, got %+v", stats)
 	}
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
-	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
+	if _, err := c.DB.Exec(testRebind(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 		total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
 		online_guests, max_online_users, max_online_at, max_online_guests,
 		max_online_guests_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
 		2, 3, 1, 2, 0, 0, 0, 0, int64(60), 0, 0, 1, previousAt.UnixMilli(), 0, int64(0), 1,
 	); err != nil {
@@ -1866,7 +1959,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		User:    "bob",
 		Message: "Ace the lab.",
 	})
-	if _, err := c.DB.Exec(`UPDATE blessings SET created_at=?`, snapshotAt); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE blessings SET created_at=?`), snapshotAt); err != nil {
 		t.Fatal(err)
 	}
 	blessings, err := c.ListBlessingRankings(10, 0)
@@ -2208,7 +2301,7 @@ func TestThreadRankingsUseRecencyDecay(t *testing.T) {
 		Body:   "new reply",
 	})
 	staleUpdatedAt := time.Now().Add(-14 * 24 * time.Hour).UnixMilli()
-	if _, err := c.DB.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, staleUpdatedAt, stale.ID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE threads SET updated_at=? WHERE id=?`), staleUpdatedAt, stale.ID); err != nil {
 		t.Fatalf("age stale thread: %v", err)
 	}
 
@@ -2388,7 +2481,7 @@ func TestStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 	// Boards are created with current wall-clock time; without this override the
 	// "new boards" window (30 days ending 2026-06-07) would exclude them.
 	boardWindowTS := time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC).UnixMilli()
-	if _, err := c.DB.Exec(`UPDATE categories SET created_at=? WHERE id IN ('visible_stats','hidden_stats')`, boardWindowTS); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE categories SET created_at=? WHERE id IN ('visible_stats','hidden_stats')`), boardWindowTS); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2771,14 +2864,14 @@ func insertCommunityStatHistory(t *testing.T, db *sql.DB, day string, users, boa
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO community_stat_history (
+	if _, err := db.Exec(testRebind(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 		total_reactions, total_mail, total_direct_messages, total_logins,
 		total_logouts, total_web_logins, total_web_logouts, total_guest_logins,
 		total_guest_logouts, total_online_seconds, online_users,
 		online_guests, max_online_users, max_online_at, max_online_guests,
 		max_online_guests_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		day, at.UnixMilli(), users, boards, threads, posts, reactions, 0, 0,
 		logins, logins/2, logins, logins/2, users, users/2,
 		onlineSeconds, 0, 0, users, at.UnixMilli(), 0, int64(0), posts,
@@ -2793,10 +2886,10 @@ func insertLoginHourlyStat(t *testing.T, db *sql.DB, day string, hour, loginCoun
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO login_hourly_stats (day, hour, login_count, updated_at)
+	if _, err := db.Exec(testRebind(`INSERT INTO login_hourly_stats (day, hour, login_count, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(day, hour)
-		DO UPDATE SET login_count=excluded.login_count, updated_at=excluded.updated_at`,
+		DO UPDATE SET login_count=excluded.login_count, updated_at=excluded.updated_at`),
 		day, hour, loginCount, at.Add(time.Duration(hour)*time.Hour).UnixMilli(),
 	); err != nil {
 		t.Fatal(err)
@@ -2806,10 +2899,10 @@ func insertLoginHourlyStat(t *testing.T, db *sql.DB, day string, hour, loginCoun
 func setThreadPostsCreatedAt(t *testing.T, db *sql.DB, threadID string, at time.Time) {
 	t.Helper()
 	ms := at.UTC().UnixMilli()
-	if _, err := db.Exec(`UPDATE posts SET created_at=?, updated_at=? WHERE thread=?`, ms, ms, threadID); err != nil {
+	if _, err := db.Exec(testRebind(`UPDATE posts SET created_at=?, updated_at=? WHERE thread=?`), ms, ms, threadID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, ms, threadID); err != nil {
+	if _, err := db.Exec(testRebind(`UPDATE threads SET updated_at=? WHERE id=?`), ms, threadID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -6072,10 +6165,10 @@ func TestMarkPostReadAdvancesThreadMarkerThroughPost(t *testing.T) {
 
 func setTrustLevel(t *testing.T, c *core.Core, userID string, trustLevel int) {
 	t.Helper()
-	_, err := c.DB.Exec(
+	_, err := c.DB.Exec(testRebind(
 		`INSERT INTO user_activity (user_id, posts_created, days_visited, last_visit_day, reactions_recv, trust_level)
 		 VALUES (?, ?, 1, ?, 0, ?)
-		 ON CONFLICT(user_id) DO UPDATE SET trust_level=excluded.trust_level`,
+		 ON CONFLICT(user_id) DO UPDATE SET trust_level=excluded.trust_level`),
 		userID, 0, "1970-01-01", trustLevel,
 	)
 	if err != nil {
@@ -7275,7 +7368,7 @@ func TestPollVoteValidations(t *testing.T) {
 		Poll: poll.ID, Option: "option_missing",
 	}, proto.ErrNotFound)
 
-	_, err = c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), poll.ID)
+	_, err = c.DB.Exec(testRebind(`UPDATE polls SET expires_at=? WHERE id=?`), time.Now().Add(-time.Minute).UnixMilli(), poll.ID)
 	if err != nil {
 		t.Fatalf("failed to expire poll: %v", err)
 	}
@@ -8163,16 +8256,16 @@ func captureForumSnapshot(t *testing.T, c *core.Core, threadID, firstPostID stri
 func clearProjectionTablesForTest(t *testing.T, c *core.Core) {
 	t.Helper()
 	tables := []string{
-		"posts_fts",
-		"direct_messages",
-		"mail_copies",
-		"mail_messages",
-		"posts",
-		"threads",
 		"poll_votes",
 		"poll_options",
 		"polls",
 		"post_reactions",
+		"posts_fts",
+		"posts",
+		"threads",
+		"direct_messages",
+		"mail_copies",
+		"mail_messages",
 		"moderation_reviews",
 		"content_filters",
 		"user_sanctions",

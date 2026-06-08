@@ -230,6 +230,22 @@ See [`scripts/cluster-smoke.sh`](scripts/cluster-smoke.sh) for options. The scri
 requires `curl` and `jq`. A passing run is the operational definition of "the
 cluster delivers cross-node events."
 
+## Validating Postgres mode in CI
+
+The full Go test suite can run against a real Postgres instead of SQLite, which
+exercises every command, projection, and read path against the production
+backend. Set `BUDGIE_TEST_POSTGRES_DSN`; each test provisions an isolated schema
+and tears it down afterward:
+
+```sh
+BUDGIE_TEST_POSTGRES_DSN="postgres://postgres@localhost:5432/budgie?sslmode=disable" \
+  go test ./internal/core/... ./internal/httpapi/...
+```
+
+The DSN's role needs permission to `CREATE SCHEMA` / `DROP SCHEMA` on the target
+database (a throwaway database is recommended). Without the env var the suite
+runs on SQLite as usual.
+
 ## Definition of done (operational)
 
 - Two+ nodes run against one Postgres database.

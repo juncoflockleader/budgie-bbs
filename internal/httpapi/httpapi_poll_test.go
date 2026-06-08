@@ -2,12 +2,10 @@ package httpapi_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -125,28 +123,7 @@ type threadPollsResponse struct {
 func setupHTTPTestServer(t *testing.T) (*core.Core, http.Handler) {
 	t.Helper()
 
-	f, err := os.CreateTemp("", "budgie-httpapi-poll-*.db")
-	if err != nil {
-		t.Fatalf("create temp db: %v", err)
-	}
-	dbPath := f.Name()
-	f.Close()
-	t.Cleanup(func() {
-		_ = os.Remove(dbPath)
-	})
-
-	c, err := core.New(dbPath)
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go c.Run(ctx)
-	t.Cleanup(func() {
-		cancel()
-		_ = c.DB.Close()
-	})
-
+	c := newHTTPTestCore(t)
 	return c, httpapi.New(c, []byte("test-secret")).Handler()
 }
 
@@ -1330,7 +1307,7 @@ func TestHTTPCommandEndpointVotePollLifecycleAndErrors(t *testing.T) {
 	}
 
 	// Expired poll should reject via command vote endpoint.
-	if _, err := c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), poll.ID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE polls SET expires_at=? WHERE id=?`), time.Now().Add(-time.Minute).UnixMilli(), poll.ID); err != nil {
 		t.Fatalf("expire poll in DB: %v", err)
 	}
 
@@ -1349,7 +1326,7 @@ func TestHTTPCommandEndpointVotePollLifecycleAndErrors(t *testing.T) {
 	}
 
 	// Restore to open the poll, then command vote should succeed.
-	if _, err := c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, 0, poll.ID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE polls SET expires_at=? WHERE id=?`), 0, poll.ID); err != nil {
 		t.Fatalf("restore poll expiry: %v", err)
 	}
 	successAck := ackResponse{}
@@ -1956,7 +1933,7 @@ func TestHTTPPollVoteEndpointRejectsExpiredPoll(t *testing.T) {
 		t.Fatal("expected poll id for expiry test")
 	}
 
-	if _, err := c.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), pollID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE polls SET expires_at=? WHERE id=?`), time.Now().Add(-time.Minute).UnixMilli(), pollID); err != nil {
 		t.Fatalf("expire poll in DB: %v", err)
 	}
 
@@ -3108,7 +3085,7 @@ func TestHTTPPollVoteLifecycleAndErrors(t *testing.T) {
 	}
 
 	// Expired poll should reject voting with conflict.
-	if _, err := core.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, time.Now().Add(-time.Minute).UnixMilli(), poll.ID); err != nil {
+	if _, err := core.DB.Exec(testRebind(`UPDATE polls SET expires_at=? WHERE id=?`), time.Now().Add(-time.Minute).UnixMilli(), poll.ID); err != nil {
 		t.Fatalf("expire poll in DB: %v", err)
 	}
 
@@ -3131,7 +3108,7 @@ func TestHTTPPollVoteLifecycleAndErrors(t *testing.T) {
 	}
 
 	// Restore poll to valid expiry to prove happy path still works for this poll after recovery.
-	if _, err := core.DB.Exec(`UPDATE polls SET expires_at=? WHERE id=?`, 0, poll.ID); err != nil {
+	if _, err := core.DB.Exec(testRebind(`UPDATE polls SET expires_at=? WHERE id=?`), 0, poll.ID); err != nil {
 		t.Fatalf("restore poll expiry: %v", err)
 	}
 	vote := ackResponse{}

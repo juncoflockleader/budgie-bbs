@@ -1,34 +1,19 @@
 package httpapi_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 )
 
 func newTestServer(t *testing.T) (*httpapi.Server, func()) {
 	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "health-*.db")
-	if err != nil {
-		t.Fatalf("create temp db: %v", err)
-	}
-	f.Close()
-
-	c, err := core.New(f.Name())
-	if err != nil {
-		t.Fatalf("core.New: %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go c.Run(ctx)
-
+	c := newHTTPTestCore(t)
 	srv := httpapi.New(c, []byte("test-secret"))
-	return srv, cancel
+	return srv, func() {}
 }
 
 func TestHealthzAlwaysOK(t *testing.T) {

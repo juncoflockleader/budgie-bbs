@@ -1079,7 +1079,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 			t.Fatalf("create %s board status: %d error=%+v", board, status, ack.Error)
 		}
 	}
-	if _, err := c.DB.Exec(`UPDATE categories SET created_at=? WHERE id IN ('tech','life','secret')`, snapshotAt); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE categories SET created_at=? WHERE id IN ('tech','life','secret')`), snapshotAt); err != nil {
 		t.Fatal(err)
 	}
 	if status := doJSONRequest(t, handler, http.MethodPatch, "/api/v1/boards/secret/settings", adminToken, map[string]bool{
@@ -1259,9 +1259,9 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	if stats.OnlineUsers != 1 || stats.MaxOnlineUsers != 2 || stats.MaxOnlineAt == 0 {
 		t.Fatalf("expected max-online history to preserve peak after offline, got %+v", stats)
 	}
-	if _, err := c.DB.Exec(`INSERT INTO user_activity (user_id, total_online_seconds)
+	if _, err := c.DB.Exec(testRebind(`INSERT INTO user_activity (user_id, total_online_seconds)
 		VALUES ((SELECT id FROM users WHERE name='bob'), ?)
-		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`, int64(120)); err != nil {
+		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`), int64(120)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.DB.Exec(`UPDATE user_activity SET last_visit_day='2026-06-04' WHERE user_id IN ((SELECT id FROM users WHERE name='alice'), (SELECT id FROM users WHERE name='bob'))`); err != nil {
@@ -1314,12 +1314,12 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected guest login/logout counters in community stats, got %+v", stats)
 	}
 	previousAt := time.Now().UTC().Add(-24 * time.Hour)
-	if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
+	if _, err := c.DB.Exec(testRebind(`INSERT INTO community_stat_history (
 		day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 		total_reactions, total_mail, total_direct_messages, total_logins, total_online_seconds, online_users,
 		online_guests, max_online_users, max_online_at, max_online_guests,
 		max_online_guests_at, head_seq
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		previousAt.Format("2006-01-02"), previousAt.UnixMilli(),
 		2, 3, 1, 2, 0, 0, 0, 0, int64(60), 0, 0, 1, previousAt.UnixMilli(), 0, int64(0), 1,
 	); err != nil {
@@ -1458,7 +1458,7 @@ func TestHTTPCommunityRankingsAndStats(t *testing.T) {
 	}, &bless); status != http.StatusCreated {
 		t.Fatalf("second bless bob status: %d error=%+v", status, bless.Error)
 	}
-	if _, err := c.DB.Exec(`UPDATE blessings SET created_at=?`, snapshotAt); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE blessings SET created_at=?`), snapshotAt); err != nil {
 		t.Fatal(err)
 	}
 	blessingRankings := blessingRankingsResponse{}
@@ -1928,14 +1928,14 @@ func TestHTTPStatsPeriodHistorySystemPosts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.DB.Exec(`INSERT INTO community_stat_history (
+		if _, err := c.DB.Exec(testRebind(`INSERT INTO community_stat_history (
 			day, snapshot_at, total_users, total_boards, total_threads, total_posts,
 			total_reactions, total_mail, total_direct_messages, total_logins,
 			total_logouts, total_web_logins, total_web_logouts, total_guest_logins,
 			total_guest_logouts, total_online_seconds, online_users,
 			online_guests, max_online_users, max_online_at, max_online_guests,
 			max_online_guests_at, head_seq
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 			day, at.UnixMilli(), users, boards, threads, posts, reactions, 0, 0,
 			logins, logins/2, logins, logins/2, users, users/2,
 			onlineSeconds, 0, 0, users, at.UnixMilli(), 0, int64(0), posts,
@@ -2013,10 +2013,10 @@ func TestHTTPStatsLoginHistoryHourlyHistogramSystemPost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.DB.Exec(`INSERT INTO login_hourly_stats (day, hour, login_count, updated_at)
+		if _, err := c.DB.Exec(testRebind(`INSERT INTO login_hourly_stats (day, hour, login_count, updated_at)
 			VALUES (?, ?, ?, ?)
 			ON CONFLICT(day, hour)
-			DO UPDATE SET login_count=excluded.login_count, updated_at=excluded.updated_at`,
+			DO UPDATE SET login_count=excluded.login_count, updated_at=excluded.updated_at`),
 			day, hour, loginCount, at.Add(time.Duration(hour)*time.Hour).UnixMilli(),
 		); err != nil {
 			t.Fatal(err)
@@ -2077,10 +2077,10 @@ func TestHTTPStatsHotTopicPeriodHistorySystemPosts(t *testing.T) {
 		t.Fatalf("reply period thread status: %d error=%+v", status, ack.Error)
 	}
 	periodAt := time.Date(2026, time.June, 12, 12, 0, 0, 0, time.UTC).UnixMilli()
-	if _, err := c.DB.Exec(`UPDATE posts SET created_at=?, updated_at=? WHERE thread=?`, periodAt, periodAt, thread.Result.ID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE posts SET created_at=?, updated_at=? WHERE thread=?`), periodAt, periodAt, thread.Result.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.DB.Exec(`UPDATE threads SET updated_at=? WHERE id=?`, periodAt, thread.Result.ID); err != nil {
+	if _, err := c.DB.Exec(testRebind(`UPDATE threads SET updated_at=? WHERE id=?`), periodAt, thread.Result.ID); err != nil {
 		t.Fatal(err)
 	}
 
