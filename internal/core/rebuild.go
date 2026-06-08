@@ -22,6 +22,16 @@ func rebuildProjectionsFromEventLog(db *sql.DB, fromSeq int64) error {
 		return err
 	}
 
+	// Materialize the full event list before replaying. lib/pq cannot run a new
+	// query on a connection while an earlier result set is still open, and each
+	// rebuildProjectionEvent issues its own queries on this tx — so the cursor
+	// must be fully drained and closed first. (SQLite tolerates interleaving;
+	// Postgres does not.)
+	type rawEvent struct {
+		seq     int64
+		kind    string
+		payload any
+	}
 	rows, err := qQuery(tx,
 		`SELECT seq, kind, payload FROM events WHERE seq > ? ORDER BY seq`,
 		fromSeq,
@@ -29,8 +39,7 @@ func rebuildProjectionsFromEventLog(db *sql.DB, fromSeq int64) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
+	var events []rawEvent
 	for rows.Next() {
 		var (
 			seq     int64
@@ -38,40 +47,51 @@ func rebuildProjectionsFromEventLog(db *sql.DB, fromSeq int64) error {
 			rawJSON string
 		)
 		if err := rows.Scan(&seq, &kind, &rawJSON); err != nil {
+			rows.Close()
 			return err
 		}
 		payload, err := unmarshalPayload(proto.EventKind(kind), []byte(rawJSON))
 		if err != nil {
+			rows.Close()
 			return fmt.Errorf("event %d unmarshal %s: %w", seq, kind, err)
 		}
-		if err := rebuildProjectionEvent(tx, seq, payload); err != nil {
-			return fmt.Errorf("replay event %d (%s): %w", seq, kind, err)
-		}
+		events = append(events, rawEvent{seq: seq, kind: kind, payload: payload})
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return err
+	}
+	rows.Close()
+
+	for _, e := range events {
+		if err := rebuildProjectionEvent(tx, e.seq, e.payload); err != nil {
+			return fmt.Errorf("replay event %d (%s): %w", e.seq, e.kind, err)
+		}
 	}
 
 	return tx.Commit()
 }
 
 func clearProjectionTables(tx *sql.Tx) error {
+	// Ordered children-first so foreign keys are satisfied. Postgres enforces
+	// FKs strictly; deleting a parent (e.g. posts) before its children
+	// (polls, poll_options, poll_votes) would violate the constraint.
 	tables := []string{
+		"poll_votes",
+		"poll_options",
+		"polls",
+		"post_reactions",
 		"posts_fts",
 		"relay_deliveries",
 		"post_attachments",
+		"post_deletions",
+		"posts",
+		"threads",
 		"direct_messages",
 		"mail_copies",
 		"mail_attachment_blobs",
 		"mail_attachments",
 		"mail_messages",
-		"post_deletions",
-		"posts",
-		"threads",
-		"poll_votes",
-		"poll_options",
-		"polls",
-		"post_reactions",
 		"blessings",
 		"moderation_reviews",
 		"content_filters",

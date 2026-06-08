@@ -1064,7 +1064,7 @@ func trashedMailCopyCount(queryable interface {
 }
 
 func activeMailCopyCountsTx(tx *sql.Tx, mailID string) (map[string]int, error) {
-	rows, err := tx.Query(`SELECT user_id, COUNT(*) FROM mail_copies WHERE message_id=? AND mailbox <> 'trash' GROUP BY user_id`, mailID)
+	rows, err := tx.Query(projections.RebindPlaceholders(`SELECT user_id, COUNT(*) FROM mail_copies WHERE message_id=? AND mailbox <> 'trash' GROUP BY user_id`), mailID)
 	if err != nil {
 		return nil, err
 	}
@@ -1091,7 +1091,7 @@ func mailSenderTx(tx *sql.Tx, mailID string) (string, bool, error) {
 }
 
 func mailAccountScopesTx(tx *sql.Tx, mailID, actorID string) ([]string, error) {
-	rows, err := tx.Query(`SELECT DISTINCT user_id FROM mail_copies WHERE message_id=?`, mailID)
+	rows, err := tx.Query(projections.RebindPlaceholders(`SELECT DISTINCT user_id FROM mail_copies WHERE message_id=?`), mailID)
 	if err != nil {
 		return nil, err
 	}
@@ -1192,7 +1192,7 @@ func isFriendMailGroupRef(ref string) bool {
 }
 
 func (h *Handler) listMailAllRecipients(actorID string) ([]string, error) {
-	rows, err := h.db.Query(`SELECT id FROM users WHERE id<>? ORDER BY name`, actorID)
+	rows, err := h.db.Query(projections.RebindPlaceholders(`SELECT id FROM users WHERE id<>? ORDER BY name`), actorID)
 	if err != nil {
 		return nil, err
 	}

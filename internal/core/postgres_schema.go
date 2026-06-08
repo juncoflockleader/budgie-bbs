@@ -82,6 +82,11 @@ CREATE TABLE IF NOT EXISTS categories (
     created_at  BIGINT NOT NULL DEFAULT 0,
     updated_at  BIGINT NOT NULL DEFAULT 0
 );
+-- Seed the default 'general' category (matches the SQLite schema). Boards can
+-- be nested under it via ParentID.
+INSERT INTO categories (id, name, description, position)
+VALUES ('general', 'General', 'General discussion', 0)
+ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS users (
     id                  TEXT PRIMARY KEY,
@@ -635,7 +640,9 @@ CREATE TABLE IF NOT EXISTS threads (
     id         TEXT PRIMARY KEY,
     board      TEXT NOT NULL REFERENCES boards(id),
     author     TEXT NOT NULL,
-    author_id  TEXT NOT NULL REFERENCES users(id),
+    -- No FK to users: system/announcement/anonymous threads use author_id=''
+    -- (matches the SQLite schema, which has no FK here).
+    author_id  TEXT NOT NULL DEFAULT '',
     title      TEXT NOT NULL,
     locked     INTEGER NOT NULL DEFAULT 0,
     post_count INTEGER NOT NULL DEFAULT 0,
@@ -649,7 +656,9 @@ CREATE TABLE IF NOT EXISTS posts (
     id           TEXT PRIMARY KEY,
     thread       TEXT NOT NULL REFERENCES threads(id),
     author       TEXT NOT NULL,
-    author_id    TEXT NOT NULL REFERENCES users(id),
+    -- No FK to users: system/announcement/anonymous posts use author_id=''
+    -- (matches the SQLite schema).
+    author_id    TEXT NOT NULL DEFAULT '',
     body         TEXT NOT NULL,
     signature    TEXT NOT NULL DEFAULT '',
     content_type TEXT NOT NULL DEFAULT 'markup',
@@ -819,6 +828,11 @@ CREATE TABLE IF NOT EXISTS content_filters (
 );
 CREATE INDEX IF NOT EXISTS idx_content_filters_active_scope
     ON content_filters(active, scope, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS cursors (
+    user_id TEXT PRIMARY KEY REFERENCES users(id),
+    seq     BIGINT NOT NULL DEFAULT 0
+);
 
 -- posts_fts mirrors the SQLite FTS5 virtual table as a plain table. The write
 -- paths (INSERT/UPDATE/DELETE) use identical SQL on both backends; full-text

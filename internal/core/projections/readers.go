@@ -2062,7 +2062,7 @@ func ListRelayDeliveries(db *sql.DB, status string, limit, offset int) ([]RelayD
 func ListMailAttachments(db *sql.DB, mailID string) ([]MailAttachment, error) {
 	rows, err := QQuery(db,
 		`SELECT id, message_id, filename, content_type, size_bytes, url,
-		        EXISTS(SELECT 1 FROM mail_attachment_blobs b WHERE b.attachment_id=mail_attachments.id),
+		        CASE WHEN EXISTS(SELECT 1 FROM mail_attachment_blobs b WHERE b.attachment_id=mail_attachments.id) THEN 1 ELSE 0 END,
 		        created_by, created_at
 		   FROM mail_attachments WHERE message_id=? ORDER BY created_at, id`,
 		mailID,
@@ -2089,7 +2089,7 @@ func GetMailAttachment(db *sql.DB, attachmentID string) (*MailAttachment, error)
 	var stored int
 	err := QQueryRow(db,
 		`SELECT id, message_id, filename, content_type, size_bytes, url,
-		        EXISTS(SELECT 1 FROM mail_attachment_blobs b WHERE b.attachment_id=mail_attachments.id),
+		        CASE WHEN EXISTS(SELECT 1 FROM mail_attachment_blobs b WHERE b.attachment_id=mail_attachments.id) THEN 1 ELSE 0 END,
 		        created_by, created_at
 		   FROM mail_attachments WHERE id=?`,
 		attachmentID,
@@ -3352,7 +3352,7 @@ func ListReplyTreePosts(db *sql.DB, rootPostID string, limit, offset int) ([]Pos
 func ListPostAttachments(db *sql.DB, postID string) ([]PostAttachment, error) {
 	rows, err := QQuery(db,
 		`SELECT id, post_id, filename, content_type, size_bytes, url,
-		        EXISTS(SELECT 1 FROM attachment_blobs b WHERE b.attachment_id=post_attachments.id),
+		        CASE WHEN EXISTS(SELECT 1 FROM attachment_blobs b WHERE b.attachment_id=post_attachments.id) THEN 1 ELSE 0 END,
 		        created_by, created_at
 		 FROM post_attachments WHERE post_id=? ORDER BY created_at, id`,
 		postID,
@@ -3379,7 +3379,7 @@ func GetPostAttachment(db *sql.DB, attachmentID string) (*PostAttachment, error)
 	var stored int
 	err := QQueryRow(db,
 		`SELECT id, post_id, filename, content_type, size_bytes, url,
-		        EXISTS(SELECT 1 FROM attachment_blobs b WHERE b.attachment_id=post_attachments.id),
+		        CASE WHEN EXISTS(SELECT 1 FROM attachment_blobs b WHERE b.attachment_id=post_attachments.id) THEN 1 ELSE 0 END,
 		        created_by, created_at
 		   FROM post_attachments WHERE id=?`,
 		attachmentID,
