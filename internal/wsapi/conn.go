@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -55,6 +56,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer ws.Close()
+
+	metrics.WSConnections.Inc()
+	defer metrics.WSConnections.Dec()
 
 	c := &wsConn{ws: ws, core: s.core, actor: actor}
 	c.run(r.Context())
@@ -120,6 +124,8 @@ func (c *wsConn) run(ctx context.Context) {
 		slog.Error("ws: replay error", "err", err)
 		return
 	}
+	metrics.ReplayTotal.Inc()
+	metrics.ReplayBatchSize.Observe(float64(len(events)))
 	for _, evt := range events {
 		if err := c.write(proto.EventToOutbound(evt)); err != nil {
 			return
@@ -237,6 +243,8 @@ func (c *wsConn) deliverEvent(evt *proto.Event) error {
 		if err != nil {
 			slog.Warn("ws: gap replay error", "from", c.lastDurableSeq, "to", evt.Seq-1, "err", err)
 		}
+		metrics.ReplayTotal.Inc()
+		metrics.ReplayBatchSize.Observe(float64(len(missed)))
 		for _, m := range missed {
 			if m.Seq >= evt.Seq {
 				break // stop before re-delivering the event we're about to deliver

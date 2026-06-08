@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -58,6 +59,7 @@ func (b *NATSBus) Publish(evt *proto.Event) {
 	if err != nil {
 		return
 	}
+	metrics.EventsPublishedRemote.Inc()
 	for _, scope := range evt.Scopes {
 		subject := "budgie.events." + sanitizeNATSSubject(scope)
 		_ = b.publisher.Publish(context.Background(), subject, raw)

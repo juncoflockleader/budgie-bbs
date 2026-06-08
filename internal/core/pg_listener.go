@@ -11,6 +11,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -113,7 +114,19 @@ func handlePGNotification(n *pq.Notification, nodeID string, db *sql.DB, bus Bus
 		slog.Warn("pg listener: event not found at seq", "seq", p.Seq)
 		return
 	}
+	recordRemoteWakeup(events[0].TS)
 	bus.Publish(events[0])
+}
+
+// recordRemoteWakeup observes ingestion of a sibling-node event: counts it and
+// records the delay between the event's timestamp and its local receipt.
+func recordRemoteWakeup(eventTS int64) {
+	metrics.EventsIngestedRemote.Inc()
+	if eventTS > 0 {
+		if lag := time.Now().UnixMilli() - eventTS; lag >= 0 {
+			metrics.RemoteWakeupLag.Observe(float64(lag))
+		}
+	}
 }
 
 // handlePGEphemeralNotification handles cross-node wakeups for ephemeral events
@@ -127,6 +140,7 @@ func handlePGEphemeralNotification(p pgWakeupPayload, db *sql.DB, bus Bus) {
 			return
 		}
 		scopes := strings.Split(p.Scopes, ",")
+		recordRemoteWakeup(line.TS)
 		bus.Publish(&proto.Event{
 			Kind:    proto.EvtChatLine,
 			Scopes:  scopes,

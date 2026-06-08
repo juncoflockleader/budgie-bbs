@@ -120,6 +120,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Register scrape-time metrics collectors (SSH sessions, outbox counts).
+	c.RegisterMetricsCollectors()
+
 	// Start the single-writer goroutine.
 	go c.Run(ctx)
 	if *autoStats {

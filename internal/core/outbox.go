@@ -48,6 +48,26 @@ func enqueueOutboxJob(tx *sql.Tx, kind string, payload any, ts int64) error {
 	return err
 }
 
+// outboxStatusCounts returns the number of outbox jobs grouped by status
+// (pending, running, done, dead). Used by the metrics collector.
+func outboxStatusCounts(db *sql.DB) (map[string]int64, error) {
+	rows, err := qQuery(db, `SELECT status, COUNT(*) FROM outbox_jobs GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var status string
+		var n int64
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		out[status] = n
+	}
+	return out, rows.Err()
+}
+
 func runOutboxWorker(ctx context.Context, db *sql.DB, bus Bus) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()

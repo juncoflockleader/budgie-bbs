@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 )
 
 // handleHealthz is the liveness probe. Always returns 200 OK.
@@ -10,6 +12,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+// handleMetrics serves the in-process metrics registry in Prometheus text
+// exposition format. No auth: scrape access is expected to be restricted at
+// the network layer, like /healthz and /readyz.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(metrics.Gather()))
 }
 
 // handleReadyz is the readiness probe.

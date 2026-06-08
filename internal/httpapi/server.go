@@ -33,9 +33,10 @@ func (s *Server) SetWebRoot(path string) { s.webRoot = path }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Health probes (no auth required).
+	// Health probes and metrics (no auth required).
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 
 	// Auth (no middleware required)
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)

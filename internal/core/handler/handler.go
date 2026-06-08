@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -231,7 +232,9 @@ func (h *Handler) Run(ctx context.Context) {
 				env.replyCh <- Reply{Err: errDetail(proto.ErrForbidden, "request cancelled", false)}
 				continue
 			}
+			start := time.Now()
 			reply := h.dispatchWithLock(env.ctx, env.actor, env.name, env.payload, env.cid)
+			metrics.CommandLatency.Observe(float64(time.Since(start).Microseconds()) / 1000.0)
 			env.replyCh <- reply
 		case <-ctx.Done():
 			return
@@ -244,7 +247,9 @@ func (h *Handler) dispatchWithLock(ctx context.Context, actor *User, name proto.
 	if h.lockCmd == nil {
 		return h.dispatch(actor, name, payload, cid)
 	}
+	lockStart := time.Now()
 	unlock, err := h.lockCmd(ctx)
+	metrics.WriterLockWait.Observe(float64(time.Since(lockStart).Microseconds()) / 1000.0)
 	if err != nil {
 		return Reply{Err: errDetail("lock_unavailable", "write lock unavailable: "+err.Error(), true)}
 	}
