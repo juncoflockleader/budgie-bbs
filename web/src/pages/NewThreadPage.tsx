@@ -6,6 +6,7 @@ import { Markup } from '../components/Markup'
 import { PollComposer } from '../components/PollComposer'
 import { hasComposeDraft, loadComposeDraft, removeComposeDraft, saveComposeDraft } from '../draftStorage'
 import { validatePollMarkup } from '../pollValidation'
+import { useI18n } from '../i18n'
 
 interface Props {
   token: string
@@ -30,6 +31,7 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
   const pollValidation = useMemo(() => validatePollMarkup(body), [body])
   const draftKey = useMemo(() => `budgie:compose:new:${currentUsername}:${board.id}`, [currentUsername, board.id])
   const hasDraft = hasComposeDraft({ title, body, anonymous, attachments })
+  const { t } = useI18n()
 
   function appendPoll(markup: string) {
     setBody(prev => {
@@ -87,7 +89,7 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
     setBusy(true)
     setError(null)
     if (pollValidation.hasPollTag && !pollValidation.valid) {
-      setError(pollValidation.message ?? 'Poll syntax is invalid')
+      setError(pollValidation.message ?? t('error.pollSyntax'))
       setBusy(false)
       return
     }
@@ -111,11 +113,11 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
     <div className={`new-thread-page${fullScreen ? ' compose-fullscreen' : ''}`}>
       <div className="page-header">
         <button className="back-btn" onClick={onBack}>← {board.name}</button>
-        <h2>New thread</h2>
+        <h2>{t('compose.createThread')}</h2>
       </div>
       <form className="new-thread-form" onSubmit={submit}>
         <label>
-          Title
+          {t('compose.title')}
           <input
             autoFocus
             value={title}
@@ -126,7 +128,7 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
         </label>
         <div className={previewOpen ? 'compose-layout' : undefined}>
           <label>
-            Body
+            {t('compose.body')}
             <textarea
               value={body}
               onChange={e => {
@@ -135,11 +137,11 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
               }}
               required
               rows={8}
-              placeholder="Markdown-light markup: **bold**, `code`, > quote"
+              placeholder={t('compose.markdownHint')}
             />
           </label>
           {previewOpen && (
-            <section className="compose-preview" aria-label="Preview">
+            <section className="compose-preview" aria-label={t('compose.preview')}>
               <Markup body={body} />
             </section>
           )}
@@ -151,19 +153,23 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
           <PollComposer
             onInsert={appendPoll}
             disabled={!isTrustLoaded || !canCreatePoll}
-            disabledHint={!isTrustLoaded ? 'Checking permission…' : (!canCreatePoll ? 'Polls require trust level 2+' : undefined)}
+            disabledHint={
+              !isTrustLoaded
+                ? t('compose.pollPermissionChecking')
+                : (!canCreatePoll ? t('compose.pollPermissionRestricted') : undefined)
+            }
           />
           <button type="button" className="link-btn" onClick={() => setPreviewOpen(open => !open)} disabled={!body.trim()}>
-            {previewOpen ? 'Hide preview' : 'Preview'}
+            {previewOpen ? t('compose.preview') : t('common.preview')}
           </button>
           <button type="button" className="link-btn" onClick={() => setFullScreen(open => !open)}>
-            {fullScreen ? 'Exit full screen' : 'Full screen'}
+            {fullScreen ? t('common.exit') : t('common.fullscreen')}
           </button>
-          {hasDraft && <button type="button" className="link-btn danger" onClick={discardDraft}>Discard draft</button>}
+          {hasDraft && <button type="button" className="link-btn danger" onClick={discardDraft}>{t('compose.discardDraft')}</button>}
           {board.anonymousAllowed && (
             <label className="inline-toggle">
               <input type="checkbox" checked={anonymous} onChange={e => setAnonymous(e.target.checked)} />
-              Anonymous
+              {t('compose.anonymous')}
             </label>
           )}
         </div>
@@ -171,11 +177,11 @@ export function NewThreadPage({ token, board, currentUsername, onCreated, onBack
           <AttachmentComposer attachments={attachments} onChange={setAttachments} disabled={busy} />
         )}
         {error && <p className="error">{error}</p>}
-        <div className="form-actions">
+      <div className="form-actions">
           <button type="submit" disabled={busy || !title.trim() || !body.trim()}>
-            {busy ? '…' : 'Create thread'}
+            {busy ? '…' : t('compose.create')}
           </button>
-          <button type="button" className="link-btn" onClick={onBack}>Cancel</button>
+          <button type="button" className="link-btn" onClick={onBack}>{t('common.cancel')}</button>
         </div>
       </form>
     </div>

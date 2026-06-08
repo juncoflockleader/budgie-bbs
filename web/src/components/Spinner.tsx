@@ -1,3 +1,6 @@
+import { useI18n } from '../i18n'
+
 export function Spinner() {
-  return <span className="spinner" aria-label="Loading…">⏳</span>
+  const { t } = useI18n()
+  return <span className="spinner" aria-label={t('common.loading')}>⏳</span>
 }

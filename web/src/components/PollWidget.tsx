@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Poll } from '../api/types'
+import { useI18n } from '../i18n'
 
 interface Props {
   poll: Poll
@@ -8,11 +9,13 @@ interface Props {
 }
 
 export function PollWidget({ poll, onVote, onPublishResult }: Props) {
+  const { t } = useI18n()
   const [voting, setVoting] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
 
   const expired = poll.expiresAt ? poll.expiresAt < Date.now() : false
   const totalVotes = poll.options.reduce((s, o) => s + o.voteCount, 0)
+  const voteSuffix = totalVotes > 1 ? 's' : ''
 
   async function handleVote(optionId: string) {
     if (expired) return
@@ -48,7 +51,9 @@ export function PollWidget({ poll, onVote, onPublishResult }: Props) {
             <div
               key={opt.id}
               className={`poll-option${isVoted ? ' poll-option--voted' : ''}${!expired ? ' poll-option--clickable' : ''}`}
-              onClick={() => { if (!expired) handleVote(opt.id) }}
+              onClick={() => {
+                if (!expired) handleVote(opt.id)
+              }}
             >
               {showResults && (
                 <div className="poll-bar" style={{ width: `${pct}%` }} />
@@ -67,13 +72,13 @@ export function PollWidget({ poll, onVote, onPublishResult }: Props) {
       </div>
       <div className="poll-footer muted">
         <span>
-          {totalVotes} vote{totalVotes !== 1 ? 's' : ''}
-          {expired && ' · Closed'}
-          {poll.expiresAt && !expired && ` · Closes ${new Date(poll.expiresAt).toLocaleString()}`}
+          {t('pollWidget.totalVotes', { count: totalVotes, plural: voteSuffix })}
+          {expired && ` · ${t('pollWidget.closed')}`}
+          {poll.expiresAt && !expired && ` · ${t('pollWidget.closesAt', { time: new Date(poll.expiresAt).toLocaleString() })}`}
         </span>
         {onPublishResult && (
           <button type="button" className="link-btn" onClick={handlePublishResult} disabled={publishing}>
-            {publishing ? 'Publishing...' : 'Publish result'}
+            {publishing ? t('pollWidget.publishing') : t('pollWidget.publishResult')}
           </button>
         )}
       </div>

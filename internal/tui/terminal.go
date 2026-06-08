@@ -10,6 +10,7 @@ import (
 type terminalProfile struct {
 	supportsANSI bool
 	baudDelay    time.Duration
+	locale       localeCode
 }
 
 func terminalProfileFromEnviron(env []string) terminalProfile {
@@ -17,6 +18,7 @@ func terminalProfileFromEnviron(env []string) terminalProfile {
 	return terminalProfile{
 		supportsANSI: supportsANSI(values),
 		baudDelay:    baudDelayFromSetting(values["BUDGIE_BAUD"]),
+		locale:       localeFromEnviron(env),
 	}
 }
 

@@ -100,9 +100,10 @@ type (
 
 // model is the root bubbletea model.
 type model struct {
-	c     *core.Core
-	actor *core.User
-	sub   *core.Subscription
+	c      *core.Core
+	actor  *core.User
+	sub    *core.Subscription
+	locale localeCode
 
 	page      page
 	pageStack []page // navigation history for back/esc
@@ -203,16 +204,19 @@ func (m *model) postSignatureSepLine() string {
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool) model {
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode) model {
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
 	sub := c.Subscribe(scopes)
+	threadTitlePlaceholder := trLocale(locale, msgPlaceholderThreadTitle)
+	chatMessagePlaceholder := trLocale(locale, msgPlaceholderChatMessage)
+	composeBodyPlaceholder := trLocale(locale, msgPlaceholderComposeBody)
 
 	ti := textinput.New()
-	ti.Placeholder = "Thread title…"
+	ti.Placeholder = threadTitlePlaceholder
 	ti.CharLimit = 200
 
 	ci := textinput.New()
-	ci.Placeholder = "Say something…"
+	ci.Placeholder = chatMessagePlaceholder
 	ci.Prompt = "> "
 	ci.CharLimit = 1000
 	ci.Width = width - 4
@@ -236,6 +240,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		postPolls:     make(map[string]*core.Poll),
 		authorNames:   make(map[string]string),
 		supportsANSI:  supportsANSI,
+		locale:        locale,
 	}
 
 	m.list = list.New(nil, newBBSListDelegate(), width, sectionContentHeightFor(height))
@@ -248,7 +253,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	m.vp.Style = lipgloss.NewStyle()
 
 	m.compose = textarea.New()
-	m.compose.Placeholder = "Write your post… (Ctrl+S to submit, Esc to cancel)"
+	m.compose.Placeholder = composeBodyPlaceholder
 	m.compose.SetWidth(width - 4)
 	m.compose.SetHeight(height / 3)
 	m.profileEditor = textarea.New()
@@ -299,7 +304,7 @@ func (m model) Init() tea.Cmd {
 		m.fetchBoards(),
 		m.fetchNotificationStatus(),
 		m.fetchPollPermission(),
-		m.setPresence("active", "tui", "", "", "Main Menu"),
+		m.setPresence("active", "tui", "", "", m.tr(msgTitleMainMenu)),
 		m.awaitEvent(),
 	)
 }
@@ -342,7 +347,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.posts = msg.posts
 		m.hydratePostAuthorNames(m.posts)
 		if err := m.hydrateReactionState(); err != nil {
-			m.statusMsg = "error: " + err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": err.Error()})
 			return m, nil
 		}
 		m.postPolls = make(map[string]*core.Poll)
@@ -359,7 +364,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case postPollsMsg:
 		if msg.err != nil {
-			m.statusMsg = "error: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 			return m, nil
 		}
 		if msg.thread != m.currentThread {
@@ -373,7 +378,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case chatLinesMsg:
 		if msg.err != nil {
-			m.statusMsg = "error: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 			return m, nil
 		}
 		m.chat = make([]chatLine, 0, len(msg.lines))
@@ -389,11 +394,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pollMsg:
 		if msg.err != nil {
-			m.statusMsg = "error: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 			return m, nil
 		}
 		if msg.poll == nil {
-			m.statusMsg = "selected post has no active poll"
+			m.statusMsg = m.tr(msgStatusPollNoActive)
 			return m, nil
 		}
 		m.postPolls[msg.postID] = msg.poll
@@ -418,7 +423,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case profileMsg:
 		if msg.err != nil {
-			m.statusMsg = "error: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 			return m, nil
 		}
 		m.profile = msg.profile
@@ -429,12 +434,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case profileSavedMsg:
 		if msg.err != nil {
-			m.statusMsg = "error: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 			return m, nil
 		}
 		m.profile = msg.profile
 		m.cacheProfileDisplayName(msg.profile)
-		m.statusMsg = "profile saved"
+		m.statusMsg = m.tr(msgStatusProfileSaved)
 		if m.page == pageProfileEdit {
 			m.popPage()
 		}
@@ -444,7 +449,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case onlineUsersMsg:
 		if msg.err != nil {
-			m.statusMsg = "error: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 			return m, nil
 		}
 		m.onlineUsers = msg.users
@@ -454,7 +459,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case presenceSetMsg:
 		if msg.err != nil {
-			m.statusMsg = "presence: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusPresence, map[string]string{"message": msg.err.Error()})
 		}
 
 	case eventMsg:
@@ -462,7 +467,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.handleEvent(msg.evt)...)
 
 	case disconnectMsg:
-		m.statusMsg = "disconnected"
+		m.statusMsg = m.tr(msgStatusDisconnected)
 
 	case postSubmittedMsg:
 		m.finishCompose()
@@ -473,11 +478,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentThread = msg.thread
 			cmds = append(cmds, m.fetchPosts(msg.thread))
 		}
-		m.statusMsg = "post submitted"
+		m.statusMsg = m.tr(msgStatusPostSubmitted)
 		cmds = append(cmds, m.fetchNotificationStatus())
 
 	case chatSentMsg:
-		m.statusMsg = "chat sent"
+		m.statusMsg = m.tr(msgStatusChatSent)
 
 	case threadSubmittedMsg:
 		m.finishCompose()
@@ -495,15 +500,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pushPage(pageThread)
 			cmds = append(cmds, m.fetchPosts(msg.thread), m.resubscribeThread(msg.thread))
 		}
-		m.statusMsg = "thread submitted"
+		m.statusMsg = m.tr(msgStatusThreadSubmitted)
 		cmds = append(cmds, m.fetchNotificationStatus())
 
 	case errMsg:
-		m.statusMsg = "error: " + msg.err.Error()
+		m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 
 	case pollPermissionMsg:
 		if msg.err != nil {
-			m.statusMsg = "error: " + msg.err.Error()
+			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": msg.err.Error()})
 			m.canCreatePoll = false
 			m.trustLoaded = true
 			return m, nil
@@ -628,7 +633,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "4", "/":
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
-			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+			m.vp.SetContent(m.styled(styleDim, m.tr(msgPlaceholderSearchPrompt)))
 		case "5", "p":
 			return m.enterProfile()
 		case "6", "o":
@@ -660,7 +665,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "/":
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
-			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+			m.vp.SetContent(m.styled(styleDim, m.tr(msgPlaceholderSearchPrompt)))
 		case "esc", "left":
 			if !m.popPage() {
 				m.page = pageMainMenu
@@ -680,37 +685,37 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		case "r":
 			if m.currentBoard == "" {
-				m.statusMsg = "no board selected"
+				m.statusMsg = m.tr(msgStatusNoBoardSelected)
 				return nil
 			}
-			m.statusMsg = "refreshing threads"
+			m.statusMsg = m.tr(msgStatusRefreshing)
 			return m.fetchThreads(m.currentBoard, m.threadOffset)
 		case "ctrl+up":
 			if m.currentBoard == "" {
-				m.statusMsg = "no board selected"
+				m.statusMsg = m.tr(msgStatusNoBoardSelected)
 				return nil
 			}
 			if m.threadOffset == 0 {
-				m.statusMsg = "already at first page"
+				m.statusMsg = m.tr(msgStatusFirstPage)
 				return nil
 			}
 			nextOffset := m.threadOffset - threadPageSize
 			if nextOffset < 0 {
 				nextOffset = 0
 			}
-			m.statusMsg = fmt.Sprintf("loading threads %d-%d", nextOffset+1, nextOffset+threadPageSize)
+			m.statusMsg = m.tr(msgStatusLoadingThreads, map[string]string{"from": fmt.Sprintf("%d", nextOffset+1), "to": fmt.Sprintf("%d", nextOffset+threadPageSize)})
 			return m.fetchThreads(m.currentBoard, nextOffset)
 		case "ctrl+down":
 			if m.currentBoard == "" {
-				m.statusMsg = "no board selected"
+				m.statusMsg = m.tr(msgStatusNoBoardSelected)
 				return nil
 			}
 			if len(m.threads) < threadPageSize {
-				m.statusMsg = "already at last page"
+				m.statusMsg = m.tr(msgStatusLastPage)
 				return nil
 			}
 			nextOffset := m.threadOffset + threadPageSize
-			m.statusMsg = fmt.Sprintf("loading threads %d-%d", nextOffset+1, nextOffset+threadPageSize)
+			m.statusMsg = m.tr(msgStatusLoadingThreads, map[string]string{"from": fmt.Sprintf("%d", nextOffset+1), "to": fmt.Sprintf("%d", nextOffset+threadPageSize)})
 			return m.fetchThreads(m.currentBoard, nextOffset)
 		case "n":
 			m.composingNewThread = true
@@ -722,7 +727,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "/":
 			m.pushPage(pageSearch)
 			m.searchQuery = ""
-			m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+			m.vp.SetContent(m.styled(styleDim, m.tr(msgPlaceholderSearchPrompt)))
 		case "esc", "left":
 			if !m.popPage() {
 				m.page = pageMainMenu
@@ -755,7 +760,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "r":
 			postID := m.selectedPostID()
 			if postID == "" {
-				m.statusMsg = "no post to react"
+				m.statusMsg = m.tr(msgStatusNoPostToReact)
 				return nil
 			}
 			if m.postReactions[postID] {
@@ -774,14 +779,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "p":
 			postID := m.selectedPostID()
 			if postID == "" {
-				m.statusMsg = "no post selected"
+				m.statusMsg = m.tr(msgStatusNoPostToMark)
 				return nil
 			}
 			return m.openPoll(postID)
 		case "P":
 			postID := m.selectedPostID()
 			if postID == "" {
-				m.statusMsg = "no post selected"
+				m.statusMsg = m.tr(msgStatusNoPostToMark)
 				return nil
 			}
 			return m.openPoll(postID)
@@ -805,12 +810,24 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			idx := int(key[0]-'0') - 1
 			poll := m.currentPollData()
 			if poll == nil {
-				m.statusMsg = "poll not found"
+				m.statusMsg = m.tr(msgStatusChatNotFound)
 				return nil
 			}
 			expired := poll.ExpiresAt != 0 && poll.ExpiresAt < time.Now().UnixMilli()
 			if expired || poll.Voted != "" {
-				m.statusMsg = "poll already voted or closed"
+				status := m.tr(msgListOpen)
+				if poll.Voted != "" {
+					status = m.tr(msgStatusPollVotedOrClosed)
+				} else {
+					status = m.tr(msgStatusPollClosed)
+				}
+				if poll.Voted != "" {
+					status = m.tr(msgStatusPollVotedOrClosed)
+				}
+				if expired {
+					status = m.tr(msgStatusPollClosed)
+				}
+				m.statusMsg = m.tr(msgStatusPollVotedOrClosed, map[string]string{"status": status})
 				return nil
 			}
 			if idx < 0 || idx >= len(poll.Options) {
@@ -824,14 +841,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "ctrl+p":
 			if !m.canCreatePoll {
 				if m.trustLoaded {
-					m.statusMsg = "polls require trust level 2+"
+					m.statusMsg = m.tr(msgStatusPollNeedTrust)
 				} else {
-					m.statusMsg = "checking poll permission…"
+					m.statusMsg = m.tr(msgStatusPollChecking)
 				}
 				return nil
 			}
 			if m.composingNewThread && m.titleInput.Focused() {
-				m.statusMsg = "focus body first"
+				m.statusMsg = m.tr(msgStatusFocusBodyFirst)
 				return nil
 			}
 			m.insertPollTemplate()
@@ -839,14 +856,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "ctrl+e":
 			if !m.canCreatePoll {
 				if m.trustLoaded {
-					m.statusMsg = "polls require trust level 2+"
+					m.statusMsg = m.tr(msgStatusPollNeedTrust)
 				} else {
-					m.statusMsg = "checking poll permission…"
+					m.statusMsg = m.tr(msgStatusPollChecking)
 				}
 				return nil
 			}
 			if m.composingNewThread && m.titleInput.Focused() {
-				m.statusMsg = "focus body first"
+				m.statusMsg = m.tr(msgStatusFocusBodyFirst)
 				return nil
 			}
 			m.insertPollTemplateWithExpires("1h")
@@ -854,14 +871,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "ctrl+d":
 			if !m.canCreatePoll {
 				if m.trustLoaded {
-					m.statusMsg = "polls require trust level 2+"
+					m.statusMsg = m.tr(msgStatusPollNeedTrust)
 				} else {
-					m.statusMsg = "checking poll permission…"
+					m.statusMsg = m.tr(msgStatusPollChecking)
 				}
 				return nil
 			}
 			if m.composingNewThread && m.titleInput.Focused() {
-				m.statusMsg = "focus body first"
+				m.statusMsg = m.tr(msgStatusFocusBodyFirst)
 				return nil
 			}
 			m.insertPollTemplateWithExpires("1d")
@@ -869,14 +886,14 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "ctrl+w":
 			if !m.canCreatePoll {
 				if m.trustLoaded {
-					m.statusMsg = "polls require trust level 2+"
+					m.statusMsg = m.tr(msgStatusPollNeedTrust)
 				} else {
-					m.statusMsg = "checking poll permission…"
+					m.statusMsg = m.tr(msgStatusPollChecking)
 				}
 				return nil
 			}
 			if m.composingNewThread && m.titleInput.Focused() {
-				m.statusMsg = "focus body first"
+				m.statusMsg = m.tr(msgStatusFocusBodyFirst)
 				return nil
 			}
 			m.insertPollTemplateWithExpires("1w")
@@ -887,7 +904,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				if m.titleInput.Focused() {
 					title := strings.TrimSpace(m.titleInput.Value())
 					if title == "" {
-						m.statusMsg = "title is required"
+						m.statusMsg = m.tr(msgStatusTitleRequired)
 						return nil
 					}
 					m.titleInput.Blur()
@@ -926,7 +943,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 			m.chatInput.Reset()
-			m.statusMsg = "sending chat…"
+			m.statusMsg = m.tr(msgStatusSendingChat)
 			return m.sendChatLine(text)
 		case "esc", "left":
 			if !m.popPage() {
@@ -946,7 +963,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "backspace":
 			if len(m.searchQuery) > 0 {
 				m.searchQuery = m.searchQuery[:len(m.searchQuery)-1]
-				m.vp.SetContent(m.styled(styleTitle, "Search: ") + m.searchQuery + "▌")
+				m.vp.SetContent(m.styled(styleTitle, m.tr(msgPlaceholderSearchInput)) + m.searchQuery + "▌")
 			}
 		case "esc", "left":
 			if !m.popPage() {
@@ -956,7 +973,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			rawKey := msg.String()
 			if len(rawKey) == 1 {
 				m.searchQuery += rawKey
-				m.vp.SetContent(m.styled(styleTitle, "Search: ") + m.searchQuery + "▌")
+				m.vp.SetContent(m.styled(styleTitle, m.tr(msgPlaceholderSearchInput)) + m.searchQuery + "▌")
 			}
 		}
 	case pageNotifications:
@@ -967,7 +984,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 			if err := m.c.MarkNotificationRead(selection.ID, m.actor.ID); err != nil {
-				m.statusMsg = "failed to mark notification read"
+				m.statusMsg = m.tr(msgStatusFailedRead)
 				return func() tea.Msg { return errMsg{err} }
 			}
 			for i := range m.notifications {
@@ -980,10 +997,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				}
 			}
 			m.rebuildList()
-			m.statusMsg = "notification marked as read"
+			m.statusMsg = m.tr(msgStatusNotificationMarked)
 		case "a":
 			if err := m.c.MarkAllNotificationsRead(m.actor.ID); err != nil {
-				m.statusMsg = "failed to mark notifications read"
+				m.statusMsg = m.tr(msgStatusFailedReadAll)
 				return func() tea.Msg { return errMsg{err} }
 			}
 			for i := range m.notifications {
@@ -997,7 +1014,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			}
 			if err := m.c.DeleteNotification(selection.ID, m.actor.ID); err != nil {
-				m.statusMsg = "failed to delete notification"
+				m.statusMsg = m.tr(msgStatusFailedDelete)
 				return func() tea.Msg { return errMsg{err} }
 			}
 			next := m.notifications[:0]
@@ -1012,10 +1029,10 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.notifications = next
 			m.rebuildList()
-			m.statusMsg = "notification deleted"
+			m.statusMsg = m.tr(msgStatusDeleted)
 		case "x":
 			if err := m.c.DeleteReadNotifications(m.actor.ID); err != nil {
-				m.statusMsg = "failed to clear read notifications"
+				m.statusMsg = m.tr(msgStatusFailedClearRead)
 				return func() tea.Msg { return errMsg{err} }
 			}
 			next := m.notifications[:0]
@@ -1026,16 +1043,16 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.notifications = next
 			m.rebuildList()
-			m.statusMsg = "read notifications cleared"
+			m.statusMsg = m.tr(msgStatusClearRead)
 		case "c":
 			if err := m.c.DeleteAllNotifications(m.actor.ID); err != nil {
-				m.statusMsg = "failed to clear notifications"
+				m.statusMsg = m.tr(msgStatusFailedClearAll)
 				return func() tea.Msg { return errMsg{err} }
 			}
 			m.notifications = nil
 			m.unreadNotifs = 0
 			m.rebuildList()
-			m.statusMsg = "notifications cleared"
+			m.statusMsg = m.tr(msgStatusClearedAll)
 		case "esc", "left":
 			if !m.popPage() {
 				m.page = pageMainMenu
@@ -1083,7 +1100,7 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			if user == nil {
 				return nil
 			}
-			m.statusMsg = formatOnlineUserStatus(*user)
+			m.statusMsg = m.onlineUserStatus(*user)
 		case "esc", "left":
 			if !m.popPage() {
 				m.page = pageMainMenu
@@ -1247,11 +1264,11 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			}
 		}
 		if m.page == pageThread {
-			action := "locked"
+			action := m.tr(msgStatusLocked)
 			if !p.Locked {
-				action = "unlocked"
+				action = m.tr(msgStatusUnlocked)
 			}
-			m.statusMsg = fmt.Sprintf("thread %s by %s", action, p.By)
+			m.statusMsg = m.tr(msgStatusThreadAction, map[string]string{"action": action, "by": p.By})
 		}
 		cmds = append(cmds, m.fetchNotificationStatus())
 
@@ -1268,48 +1285,52 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 }
 
 func (m model) View() string {
-	headerLabel := fmt.Sprintf(" BudgieBBS | %s | %s ", m.actor.Name, m.headerTitle())
+	headerLabel := m.tr(msgHeaderFormat, map[string]string{
+		"app":   m.tr(msgHeaderAppName),
+		"user":  m.actor.Name,
+		"title": m.headerTitle(),
+	})
 	if m.unreadNotifs > 0 {
-		headerLabel += fmt.Sprintf(" ● %d unread", m.unreadNotifs)
+		headerLabel += m.tr(msgHeaderUnread, map[string]string{"count": fmt.Sprintf("%d", m.unreadNotifs)})
 	}
 	if strings.TrimSpace(m.statusMsg) != "" {
-		headerLabel += " | " + strings.TrimSpace(m.statusMsg)
+		headerLabel += m.tr(msgHeaderStatus, map[string]string{"status": strings.TrimSpace(m.statusMsg)})
 	}
 	header := m.fullWidth(styleHeader, headerLabel)
 
 	var body string
 	switch m.page {
 	case pageMainMenu:
-		body = m.renderSection("Main Menu", m.renderMainMenu(), "enter/→=open  1-7=jump  p=profile  o=online  q=quit")
+		body = m.renderSection(m.tr(msgTitleMainMenu), m.renderMainMenu(), m.tr(msgHelpMainMenu))
 	case pageBoardList:
-		body = m.renderSection("Boards", m.list.View(), "enter/→=open board  c=chat  N=notifications  /=search  esc/←=menu  q=quit")
+		body = m.renderSection(m.tr(msgTitleBoards), m.list.View(), m.tr(msgHelpBoardList))
 	case pageThreadList:
-		body = m.renderSection(m.boardTitleOrFallback(), m.list.View(), "enter/→=open thread  n=new thread  r=refresh  Ctrl+↑/↓=page  /=search  esc/←=back  q=quit")
+		body = m.renderSection(m.boardTitleOrFallback(), m.list.View(), m.tr(msgHelpThreadList))
 	case pageNotifications:
-		body = m.renderSection("Notifications", m.list.View(), "enter/→=mark read  a=mark all read  d=delete  x=clear read  c=clear all  esc/←=back")
+		body = m.renderSection(m.tr(msgTitleNotifications), m.list.View(), m.tr(msgHelpNotifications))
 	case pageProfile:
-		body = m.renderSection("My Profile", m.renderProfileSettings(), "enter/→=edit  r=refresh  esc/←=menu  q=quit")
+		body = m.renderSection(m.tr(msgTitleProfile), m.renderProfileSettings(), m.tr(msgHelpProfile))
 	case pageProfileEdit:
-		body = m.renderSection(m.profileEditorHeader(), m.renderProfileEditor(), "Ctrl+S=save  Esc=cancel")
+		body = m.renderSection(m.profileEditorHeader(), m.renderProfileEditor(), m.tr(msgHelpProfileEdit))
 	case pageOnline:
-		body = m.renderSection("Who is Online", m.renderOnlineUsers(), "r=refresh  enter/→=details  esc/←=menu  q=quit")
+		body = m.renderSection(m.tr(msgTitleOnlineUsers), m.renderOnlineUsers(), m.tr(msgHelpOnline))
 	case pageThread:
-		help := "↑/↓=thread  Ctrl+↑/↓=line  Space/PgDn,b/PgUp=page  Home/End  n=reply  r=react  p=poll  esc/←=back"
+		help := m.tr(msgHelpThreadReader)
 		if m.actor.IsMod() {
-			help = "↑/↓=thread  Ctrl+↑/↓=line  Space/PgDn,b/PgUp=page  Home/End  n=reply  L=lock  r=react  p=poll  esc/←=back"
+			help = m.tr(msgHelpThreadReaderMod)
 		}
 		body = m.renderSection(m.boardTitleOrFallback(), m.vp.View(), help)
 	case pagePoll:
 		poll := m.currentPollData()
 		if poll == nil {
-			body = m.styled(styleDim, "No poll loaded")
+			body = m.styled(styleDim, m.tr(msgTitleNoPoll))
 		} else {
-			help := "1-9 vote · esc/←=back"
+			help := m.tr(msgHelpPoll)
 			if poll.ExpiresAt > 0 && poll.ExpiresAt < time.Now().UnixMilli() {
-				help = "poll closed · esc/←=back"
+				help = m.tr(msgHelpPollClosed)
 			}
 			if poll.Voted != "" {
-				help = "already voted · " + help
+				help = m.tr(msgHelpPollVoted)
 			}
 			total := 0
 			for _, opt := range poll.Options {
@@ -1337,41 +1358,43 @@ func (m model) View() string {
 				}
 				b.WriteString(line + "\n")
 			}
-			expires := "open"
+			expires := m.tr(msgListOpen)
 			if poll.ExpiresAt > 0 {
 				if poll.ExpiresAt < time.Now().UnixMilli() {
-					expires = "closed"
+					expires = m.tr(msgListCloses)
 				} else {
-					expires = "closes " + time.UnixMilli(poll.ExpiresAt).Format("2006-01-02 15:04")
+					expires = m.tr(msgListClosesAt, map[string]string{"time": time.UnixMilli(poll.ExpiresAt).Format("2006-01-02 15:04")})
 				}
 			}
-			b.WriteString("\n" + m.styled(styleDim, fmt.Sprintf("%d vote%s · %s", total, func() string {
-				if total == 1 {
-					return ""
-				}
-				return "s"
-			}(), expires)) + "\n")
-			body = m.renderSection("Poll", b.String(), help)
+			plural := m.tr(msgCommonVoteSuffix)
+			if total != 1 {
+				plural = m.tr(msgCommonVotePluralSuffix)
+			}
+			b.WriteString("\n" + m.styled(styleDim, m.tr(msgListReplyVoteVotes, map[string]string{
+				"count":  fmt.Sprintf("%d", total),
+				"plural": plural,
+			})+" · "+expires) + "\n")
+			body = m.renderSection(m.tr(msgTitlePoll), b.String(), help)
 		}
 		if body == "" {
-			body = m.styled(styleDim, "No poll loaded")
+			body = m.styled(styleDim, m.tr(msgTitleNoPoll))
 		}
 	case pageCompose:
 		if m.composingNewThread {
-			titleSection := m.styled(styleDim, "Title: ") + m.titleInput.View() + "\n\n" +
+			titleSection := m.styled(styleDim, m.tr(msgComposeTitlePrefix)) + m.titleInput.View() + "\n\n" +
 				m.compose.View()
 			if m.titleInput.Focused() {
-				body = m.renderSection("New Thread", titleSection, "enter/tab=body  ctrl+s=body  esc=cancel")
+				body = m.renderSection(m.tr(msgTitleNewThread), titleSection, m.tr(msgHelpNewThread))
 			} else {
-				body = m.renderSection("New Thread", titleSection, composeHelpLine(m.canCreatePoll, m.trustLoaded))
+				body = m.renderSection(m.tr(msgTitleNewThread), titleSection, m.composeHelpLine())
 			}
 		} else {
-			body = m.renderSection("New Reply", m.compose.View(), composeHelpLine(m.canCreatePoll, m.trustLoaded))
+			body = m.renderSection(m.tr(msgTitleNewReply), m.compose.View(), m.composeHelpLine())
 		}
 	case pageChat:
-		body = m.renderSection("Live Chat - #lobby", m.chatSectionContent(), "enter=send  esc/←=back")
+		body = m.renderSection(m.tr(msgTitleLiveChat), m.chatSectionContent(), m.tr(msgHelpChat))
 	case pageSearch:
-		body = m.renderSection("Search", m.vp.View(), "type query  enter=search  esc/←=back")
+		body = m.renderSection(m.tr(msgTitleSearch), m.vp.View(), m.tr(msgHelpSearch))
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body)
@@ -1379,7 +1402,7 @@ func (m model) View() string {
 
 func (m model) renderMainMenu() string {
 	var b strings.Builder
-	b.WriteString(m.styled(styleDim, "A server-hosted campus BBS over SSH") + "\n\n")
+	b.WriteString(m.styled(styleDim, m.tr(msgTagline)) + "\n\n")
 	b.WriteString(m.list.View())
 	return b.String()
 }
@@ -1399,16 +1422,16 @@ func (m model) renderProfileSettings() string {
 	if strings.TrimSpace(displayName) == "" {
 		displayName = name
 	}
-	b.WriteString(fmt.Sprintf("%s %s\n", m.styled(styleDim, "User:"), name))
-	b.WriteString(fmt.Sprintf("%s %s\n", m.styled(styleDim, "Display:"), displayName))
-	b.WriteString(fmt.Sprintf("%s %s", m.styled(styleDim, "Role:"), role))
+	b.WriteString(fmt.Sprintf("%s %s\n", m.styled(styleDim, m.tr(msgLabelUser)), name))
+	b.WriteString(fmt.Sprintf("%s %s\n", m.styled(styleDim, m.tr(msgLabelDisplay)), displayName))
+	b.WriteString(fmt.Sprintf("%s %s", m.styled(styleDim, m.tr(msgLabelRole)), role))
 	if m.profile != nil {
 		b.WriteString(fmt.Sprintf("  %s %d  %s %d",
-			m.styled(styleDim, "Trust:"), m.profile.TrustLevel,
-			m.styled(styleDim, "Posts:"), m.profile.PostsCreated,
+			m.styled(styleDim, m.tr(msgLabelTrust)), m.profile.TrustLevel,
+			m.styled(styleDim, m.tr(msgLabelPosts)), m.profile.PostsCreated,
 		))
 	} else {
-		b.WriteString("  " + m.styled(styleDim, "Loading profile…"))
+		b.WriteString("  " + m.styled(styleDim, m.tr(msgLabelLoading)))
 	}
 	b.WriteString("\n\n")
 	b.WriteString(m.list.View())
@@ -1418,7 +1441,7 @@ func (m model) renderProfileSettings() string {
 func (m model) renderProfileEditor() string {
 	field := m.profileField
 	if field.key == "" {
-		return m.styled(styleDim, "No profile field selected.")
+		return m.styled(styleDim, m.tr(msgLabelNoProfileField))
 	}
 	var b strings.Builder
 	if field.desc != "" {
@@ -1435,9 +1458,9 @@ func (m model) renderProfileEditor() string {
 
 func (m model) renderOnlineUsers() string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%s %d\n\n", m.styled(styleDim, "Visible sessions:"), len(m.onlineUsers)))
+	b.WriteString(fmt.Sprintf("%s %d\n\n", m.styled(styleDim, m.tr(msgLabelVisible)), len(m.onlineUsers)))
 	if len(m.onlineUsers) == 0 {
-		b.WriteString(m.styled(styleDim, "No visible users online. Press r to refresh.") + "\n")
+		b.WriteString(m.styled(styleDim, m.tr(msgOnlineNoUsers)) + "\n")
 		return b.String()
 	}
 	b.WriteString(m.list.View())
@@ -1579,47 +1602,47 @@ func (m model) boardTitleOrFallback() string {
 		title = m.currentBoard
 	}
 	if title == "" {
-		title = "Board"
+		title = m.tr(msgTitleBoardFallback)
 	}
 	return title
 }
 
 func (m model) profileEditorHeader() string {
 	if strings.TrimSpace(m.profileField.label) == "" {
-		return "Edit Profile"
+		return m.tr(msgProfileSettingsTitle)
 	}
-	return "Edit " + m.profileField.label
+	return m.tr(msgComposeTitlePrefix) + m.profileField.label
 }
 
 func (m model) headerTitle() string {
 	switch m.page {
 	case pageMainMenu:
-		return "Main Menu"
+		return m.tr(msgTitleMainMenu)
 	case pageBoardList:
-		return "Boards"
+		return m.tr(msgTitleBoards)
 	case pageThreadList, pageThread:
 		return m.boardTitleOrFallback()
 	case pageNotifications:
-		return "Notifications"
+		return m.tr(msgTitleNotifications)
 	case pageProfile:
-		return "My Profile"
+		return m.tr(msgTitleProfile)
 	case pageProfileEdit:
 		return m.profileEditorHeader()
 	case pageOnline:
-		return "Who is Online"
+		return m.tr(msgTitleOnlineUsers)
 	case pagePoll:
-		return "Poll"
+		return m.tr(msgTitlePoll)
 	case pageCompose:
 		if m.composingNewThread {
-			return "New Thread"
+			return m.tr(msgTitleNewThread)
 		}
-		return "New Reply"
+		return m.tr(msgTitleNewReply)
 	case pageChat:
-		return "Live Chat - #lobby"
+		return m.tr(msgTitleLiveChat)
 	case pageSearch:
-		return "Search"
+		return m.tr(msgTitleSearch)
 	default:
-		return pageName(m.page)
+		return m.pageName(m.page)
 	}
 }
 
@@ -1692,6 +1715,7 @@ func (i boardItem) FilterValue() string { return i.b.Name }
 type threadItem struct {
 	index int
 	t     core.Thread
+	desc  string
 }
 
 func (i threadItem) Title() string {
@@ -1701,30 +1725,39 @@ func (i threadItem) Title() string {
 	return i.t.Title
 }
 func (i threadItem) Description() string {
-	return fmt.Sprintf("by %s · %d posts", i.t.Author, i.t.PostCount)
+	return i.desc
 }
 func (i threadItem) FilterValue() string { return i.t.Title }
 
-type notificationItem struct{ n core.Notification }
+type notificationItem struct {
+	n     core.Notification
+	title string
+}
 
-func notificationKindLabel(kind string) string {
+func (m *model) notificationKindLabel(kind string) string {
 	switch kind {
 	case "mention":
-		return "@ mention"
+		return m.tr(msgNotifMention)
 	case "reply":
-		return "↩ reply"
+		return m.tr(msgNotifReply)
 	case "watched":
-		return "👁 watched"
+		return m.tr(msgNotifWatched)
 	default:
 		return kind
 	}
 }
 
-func (i notificationItem) Title() string {
-	if i.n.Read {
-		return fmt.Sprintf("%s in %s", notificationKindLabel(i.n.Kind), i.n.ThreadID)
+func (m *model) notificationItemTitle(n core.Notification) string {
+	label := m.notificationKindLabel(n.Kind)
+	line := m.tr(msgCommonPostFormat, map[string]string{"label": label, "thread": n.ThreadID})
+	if n.Read {
+		return line
 	}
-	return "● " + fmt.Sprintf("%s in %s", notificationKindLabel(i.n.Kind), i.n.ThreadID)
+	return "● " + line
+}
+
+func (i notificationItem) Title() string {
+	return i.title
 }
 
 func (i notificationItem) Description() string {
@@ -1769,19 +1802,22 @@ func (i profileFieldItem) Description() string {
 
 func (i profileFieldItem) FilterValue() string { return i.field.label + " " + i.value }
 
-func profileFields() []profileField {
+func (m *model) profileFields() []profileField {
 	return []profileField{
-		{key: "displayName", label: "Display name", desc: "Shown on your public profile"},
-		{key: "title", label: "Title", desc: "Short BBS title or rank"},
-		{key: "bio", label: "Bio", desc: "Public profile introduction", multiline: true},
-		{key: "avatar", label: "Avatar", desc: "Emoji or short avatar text"},
-		{key: "homepage", label: "Homepage", desc: "Personal URL or homepage"},
-		{key: "plan", label: "Plan", desc: "Classic BBS plan text", multiline: true},
-		{key: "signature", label: "Signature", desc: "Default post signature", multiline: true},
+		{key: "displayName", label: m.tr(msgProfileDisplayName), desc: m.tr(msgProfileDisplayDesc)},
+		{key: "title", label: m.tr(msgProfileTitle), desc: m.tr(msgProfileTitleDesc)},
+		{key: "bio", label: m.tr(msgProfileBio), desc: m.tr(msgProfileBioDesc), multiline: true},
+		{key: "avatar", label: m.tr(msgProfileAvatar), desc: m.tr(msgProfileAvatarDesc)},
+		{key: "homepage", label: m.tr(msgProfileHomepage), desc: m.tr(msgProfileHomepageDesc)},
+		{key: "plan", label: m.tr(msgProfilePlan), desc: m.tr(msgProfilePlanDesc), multiline: true},
+		{key: "signature", label: m.tr(msgProfileSignature), desc: m.tr(msgProfileSignatureDesc), multiline: true},
 	}
 }
 
-type onlineUserItem struct{ u core.SocialUser }
+type onlineUserItem struct {
+	u    core.SocialUser
+	desc string
+}
 
 func (i onlineUserItem) Title() string {
 	name := i.u.DisplayName
@@ -1797,19 +1833,19 @@ func (i onlineUserItem) Title() string {
 	return name
 }
 
-func (i onlineUserItem) Description() string { return formatOnlineUserStatus(i.u) }
+func (i onlineUserItem) Description() string { return i.desc }
 
 func (i onlineUserItem) FilterValue() string {
 	return i.u.Name + " " + i.u.DisplayName + " " + i.u.Status + " " + i.u.Mode + " " + i.u.BoardName + " " + i.u.LocationLabel
 }
 
-func formatOnlineUserStatus(user core.SocialUser) string {
+func (m *model) onlineUserStatus(user core.SocialUser) string {
 	mode := strings.TrimSpace(user.Mode)
 	if mode == "" {
 		mode = strings.TrimSpace(user.Status)
 	}
 	if mode == "" {
-		mode = "online"
+		mode = m.tr(msgCommonOnline)
 	}
 	location := strings.TrimSpace(user.LocationLabel)
 	if location == "" && strings.TrimSpace(user.BoardName) != "" {
@@ -1819,14 +1855,14 @@ func formatOnlineUserStatus(user core.SocialUser) string {
 		location = user.BoardID
 	}
 	if location == "" && strings.TrimSpace(user.ThreadID) != "" {
-		location = "thread " + user.ThreadID
+		location = m.tr(msgCommonStatusIn, map[string]string{"id": user.ThreadID})
 	}
 	parts := []string{mode}
 	if location != "" {
 		parts = append(parts, location)
 	}
 	if user.IdleSeconds > 0 {
-		parts = append(parts, "idle "+formatIdle(user.IdleSeconds))
+		parts = append(parts, m.tr(msgOnlineModeIdleTemplate, map[string]string{"idle": formatIdle(user.IdleSeconds)}))
 	}
 	if user.Role != "" && user.Role != "user" {
 		parts = append(parts, user.Role)
@@ -1855,55 +1891,63 @@ func (m *model) rebuildList() {
 	switch m.page {
 	case pageMainMenu:
 		m.list.SetItems([]list.Item{
-			mainMenuItem{key: "1", title: "Boards", desc: "Browse boards and threads"},
-			mainMenuItem{key: "2", title: "Live Chat", desc: "Join the lobby chat"},
-			mainMenuItem{key: "3", title: "Notifications", desc: "Read mentions, replies, watched threads"},
-			mainMenuItem{key: "4", title: "Search", desc: "Search posts"},
-			mainMenuItem{key: "5", title: "Profile", desc: "Edit your public profile and signature"},
-			mainMenuItem{key: "6", title: "Online", desc: "See who is online right now"},
-			mainMenuItem{key: "7", title: "Exit", desc: "Leave BudgieBBS"},
+			mainMenuItem{key: "1", title: m.tr(msgPageBoard), desc: m.tr(msgPageBoardsDesc)},
+			mainMenuItem{key: "2", title: m.tr(msgTitleLiveChat), desc: m.tr(msgPageChatDesc)},
+			mainMenuItem{key: "3", title: m.tr(msgTitleNotifications), desc: m.tr(msgPageNotificationsDesc)},
+			mainMenuItem{key: "4", title: m.tr(msgTitleSearch), desc: m.tr(msgPageSearchDesc)},
+			mainMenuItem{key: "5", title: m.tr(msgTitleProfile), desc: m.tr(msgPageProfileDesc)},
+			mainMenuItem{key: "6", title: m.tr(msgTitleOnlineUsers), desc: m.tr(msgPageOnlineDesc)},
+			mainMenuItem{key: "7", title: m.tr(msgPageExit), desc: m.tr(msgPageExitDesc)},
 		})
-		m.list.Title = "Main Menu"
+		m.list.Title = m.tr(msgTitleMainMenu)
 	case pageBoardList:
 		items := make([]list.Item, len(m.boards))
 		for i, b := range m.boards {
 			items[i] = boardItem{b}
 		}
 		m.list.SetItems(items)
-		m.list.Title = "Boards"
+		m.list.Title = m.tr(msgTitleBoards)
 	case pageThreadList:
 		items := make([]list.Item, len(m.threads))
 		for i, t := range m.threads {
-			items[i] = threadItem{index: m.threadOffset + i + 1, t: t}
+			author := strings.TrimSpace(t.Author)
+			if author == "" {
+				author = m.tr(msgCommonUnknown)
+			}
+			desc := m.tr(msgListByPosts, map[string]string{
+				"author": author,
+				"count":  fmt.Sprintf("%d", t.PostCount),
+			})
+			items[i] = threadItem{index: m.threadOffset + i + 1, t: t, desc: desc}
 		}
 		m.list.SetItems(items)
 		if len(m.threads) == 0 {
-			m.list.Title = fmt.Sprintf("%s [empty]", m.currentBoard)
+			m.list.Title = fmt.Sprintf("%s [%s]", m.currentBoard, m.tr(msgMenuThreadListEmpty))
 		} else {
 			m.list.Title = fmt.Sprintf("%s [%d-%d]", m.currentBoard, m.threadOffset+1, m.threadOffset+len(m.threads))
 		}
 	case pageNotifications:
 		items := make([]list.Item, len(m.notifications))
 		for i, n := range m.notifications {
-			items[i] = notificationItem{n}
+			items[i] = notificationItem{n, m.notificationItemTitle(n)}
 		}
 		m.list.SetItems(items)
-		m.list.Title = "Notifications"
+		m.list.Title = m.tr(msgTitleNotifications)
 	case pageProfile:
-		fields := profileFields()
+		fields := m.profileFields()
 		items := make([]list.Item, len(fields))
 		for i, field := range fields {
 			items[i] = profileFieldItem{field: field, value: m.profileFieldValue(field)}
 		}
 		m.list.SetItems(items)
-		m.list.Title = "Profile Settings"
+		m.list.Title = m.tr(msgProfileSettingsTitle)
 	case pageOnline:
 		items := make([]list.Item, len(m.onlineUsers))
 		for i, user := range m.onlineUsers {
-			items[i] = onlineUserItem{u: user}
+			items[i] = onlineUserItem{u: user, desc: m.onlineUserStatus(user)}
 		}
 		m.list.SetItems(items)
-		m.list.Title = "Online Users"
+		m.list.Title = m.tr(msgPageOnline)
 	}
 }
 
@@ -1926,7 +1970,7 @@ func (m *model) openMainMenuSelection() tea.Cmd {
 	case "4":
 		m.pushPage(pageSearch)
 		m.searchQuery = ""
-		m.vp.SetContent(m.styled(styleDim, "Type your query and press Enter to search…"))
+		m.vp.SetContent(m.styled(styleDim, m.tr(msgPlaceholderSearchPrompt)))
 	case "5":
 		return m.enterProfile()
 	case "6":
@@ -1956,7 +2000,7 @@ func (m *model) openProfileField() {
 		return
 	}
 	if m.profile == nil {
-		m.statusMsg = "profile loading"
+		m.statusMsg = m.tr(msgStatusProfileLoading)
 		return
 	}
 	m.profileField = item.field
@@ -1980,7 +2024,7 @@ func (m *model) enterOnline() tea.Cmd {
 	m.onlineUsers = nil
 	m.rebuildList()
 	return tea.Batch(
-		m.setPresence("active", "online", "", "", "Online users"),
+		m.setPresence("active", "online", "", "", m.tr(msgTitleOnlineUsers)),
 		m.fetchOnlineUsers(),
 	)
 }
@@ -2067,7 +2111,7 @@ func (m *model) navigateAdjacentThread(delta int) tea.Cmd {
 		return nil
 	}
 	if len(m.threads) == 0 {
-		m.statusMsg = "thread list not loaded"
+		m.statusMsg = m.tr(msgStatusThreadNotLoaded)
 		return nil
 	}
 	currentIndex := -1
@@ -2078,16 +2122,16 @@ func (m *model) navigateAdjacentThread(delta int) tea.Cmd {
 		}
 	}
 	if currentIndex < 0 {
-		m.statusMsg = "current thread not in board list"
+		m.statusMsg = m.tr(msgStatusThreadNotInBoard)
 		return nil
 	}
 	nextIndex := currentIndex + delta
 	if nextIndex < 0 {
-		m.statusMsg = "already at first thread"
+		m.statusMsg = m.tr(msgStatusThreadListFirst)
 		return nil
 	}
 	if nextIndex >= len(m.threads) {
-		m.statusMsg = "already at last thread"
+		m.statusMsg = m.tr(msgStatusThreadListLast)
 		return nil
 	}
 	m.list.Select(nextIndex)
@@ -2096,7 +2140,7 @@ func (m *model) navigateAdjacentThread(delta int) tea.Cmd {
 
 func (m *model) openThread(thread core.Thread) tea.Cmd {
 	if strings.TrimSpace(thread.ID) == "" {
-		m.statusMsg = "thread not found"
+		m.statusMsg = m.tr(msgStatusChatNotFound)
 		return nil
 	}
 	m.currentThread = thread.ID
@@ -2104,7 +2148,7 @@ func (m *model) openThread(thread core.Thread) tea.Cmd {
 	m.postPolls = make(map[string]*core.Poll)
 	m.currentPoll = ""
 	m.selectedPost = -1
-	m.vp.SetContent(m.styled(styleDim, "Loading thread..."))
+	m.vp.SetContent(m.styled(styleDim, m.tr(msgStatusLoadingThread)))
 	m.vp.GotoTop()
 	return tea.Batch(
 		m.fetchPosts(thread.ID),
@@ -2172,7 +2216,7 @@ func (m *model) rebuildPostView() {
 	ordinals := make(map[string]string, len(m.posts))
 	for i, p := range m.posts {
 		if p.ID != "" {
-			ordinals[p.ID] = postOrdinal(i)
+			ordinals[p.ID] = m.postOrdinal(i)
 		}
 	}
 	for i, p := range m.posts {
@@ -2183,7 +2227,7 @@ func (m *model) rebuildPostView() {
 		b.WriteString(m.postInnerSepLine() + "\n")
 		body := ""
 		if p.Redacted {
-			body = m.styled(styleRedacted, "[removed by moderator]")
+			body = m.styled(styleRedacted, m.tr(msgPostRedacted))
 		} else {
 			body = m.renderMarkup(p.Body)
 		}
@@ -2198,25 +2242,25 @@ func (m *model) rebuildPostView() {
 }
 
 func (m model) postHeaderLines(index int, p core.Post, ordinals map[string]string) []string {
-	ordinal := postOrdinal(index)
+	ordinal := m.postOrdinal(index)
 	authorLine := fmt.Sprintf(
 		"%-4s  %s %s  %s %s",
 		ordinal,
-		m.styled(styleDim, "Author:"),
+		m.styled(styleDim, m.tr(msgLabelAuthor)),
 		m.postAuthorLabel(p),
-		m.styled(styleDim, "Time:"),
+		m.styled(styleDim, m.tr(msgLabelTime)),
 		m.postTimeLabel(p),
 	)
 	if index != 0 {
 		return []string{authorLine}
 	}
 	headerLines := []string{
-		fmt.Sprintf("%-4s  %s %s", ordinal, m.styled(styleDim, "Title:"), m.postTitle(p)),
+		fmt.Sprintf("%-4s  %s %s", ordinal, m.styled(styleDim, m.tr(msgLabelTitle)), m.postTitle(p)),
 		fmt.Sprintf(
 			"      %s %s  %s %s",
-			m.styled(styleDim, "Author:"),
+			m.styled(styleDim, m.tr(msgLabelAuthor)),
 			m.postAuthorLabel(p),
-			m.styled(styleDim, "Time:"),
+			m.styled(styleDim, m.tr(msgLabelTime)),
 			m.postTimeLabel(p),
 		),
 	}
@@ -2245,13 +2289,13 @@ func (m model) postTitle(p core.Post) string {
 	if threadID != "" {
 		return threadID
 	}
-	return "(untitled)"
+	return m.tr(msgCommonUntitled)
 }
 
 func (m model) postAuthorLabel(p core.Post) string {
 	name := strings.TrimSpace(p.Author)
 	if name == "" {
-		name = "(unknown)"
+		name = m.tr(msgCommonUnknown)
 	}
 	displayName := ""
 	if m.authorNames != nil {
@@ -2272,66 +2316,66 @@ func (m model) postTimeLabel(p core.Post) string {
 		return time.UnixMilli(p.CreatedAt).Format("2006-01-02 15:04")
 	}
 	if p.CreatedSeq > 0 {
-		return fmt.Sprintf("seq #%d", p.CreatedSeq)
+		return m.tr(msgPostPrefixSeq, map[string]string{"seq": fmt.Sprintf("%d", p.CreatedSeq)})
 	}
-	return "unknown"
+	return m.tr(msgCommonUnknown)
 }
 
 func (m model) postMetadata(p core.Post, ordinals map[string]string) []string {
 	var meta []string
 	if p.CreatedSeq > 0 {
-		meta = append(meta, fmt.Sprintf("Seq: #%d", p.CreatedSeq))
+		meta = append(meta, m.tr(msgPostPrefixSeq, map[string]string{"seq": fmt.Sprintf("%d", p.CreatedSeq)}))
 	}
 	if p.UpdatedSeq > 0 && p.UpdatedSeq != p.CreatedSeq {
-		meta = append(meta, fmt.Sprintf("Updated: #%d", p.UpdatedSeq))
+		meta = append(meta, m.tr(msgPostPrefixUpdated, map[string]string{"seq": fmt.Sprintf("%d", p.UpdatedSeq)}))
 	}
 	if p.Version > 1 {
-		meta = append(meta, fmt.Sprintf("Version: v%d", p.Version))
+		meta = append(meta, m.tr(msgPostPrefixVersion, map[string]string{"version": fmt.Sprintf("%d", p.Version)}))
 	}
 	if p.UpdatedAt > 1_000_000_000_000 && p.CreatedAt > 1_000_000_000_000 && p.UpdatedAt != p.CreatedAt {
-		meta = append(meta, "Edited: "+time.UnixMilli(p.UpdatedAt).Format("2006-01-02 15:04"))
+		meta = append(meta, m.tr(msgPostPrefixEdited, map[string]string{"time": time.UnixMilli(p.UpdatedAt).Format("2006-01-02 15:04")}))
 	}
 	if p.ReplyTo != "" {
 		target := ordinals[p.ReplyTo]
 		if target == "" {
 			target = p.ReplyTo
 		}
-		meta = append(meta, "Reply: "+target)
+		meta = append(meta, m.tr(msgPostPrefixReply, map[string]string{"reply": target}))
 	}
 	if p.ContentType != "" {
-		meta = append(meta, "Type: "+p.ContentType)
+		meta = append(meta, m.tr(msgPostPrefixType, map[string]string{"type": p.ContentType}))
 	}
 	if p.ReactionCount > 0 {
-		meta = append(meta, fmt.Sprintf("♥ %d", p.ReactionCount))
+		meta = append(meta, m.tr(msgPostReaction, map[string]string{"count": fmt.Sprintf("%d", p.ReactionCount)}))
 	}
 	if _, ok := m.postPolls[p.ID]; ok {
-		meta = append(meta, "[poll]")
+		meta = append(meta, m.tr(msgPostPollTag))
 	}
 	if len(p.Attachments) > 0 {
-		meta = append(meta, fmt.Sprintf("Attachments: %d", len(p.Attachments)))
+		meta = append(meta, m.tr(msgPostAttachments, map[string]string{"count": fmt.Sprintf("%d", len(p.Attachments))}))
 	}
 	if p.Marked {
-		meta = append(meta, "Marked")
+		meta = append(meta, m.tr(msgPostMarked))
 	}
 	if p.Recommended {
-		meta = append(meta, "Recommended")
+		meta = append(meta, m.tr(msgPostRecommended))
 	}
 	if p.NoReply {
-		meta = append(meta, "No reply")
+		meta = append(meta, m.tr(msgPostNoReply))
 	}
 	if p.TeX {
-		meta = append(meta, "TeX")
+		meta = append(meta, m.tr(msgPostTex))
 	}
 	if p.MailBack {
-		meta = append(meta, "Mail back")
+		meta = append(meta, m.tr(msgPostMailBack))
 	}
 	if p.Redacted {
-		meta = append(meta, "Redacted")
+		meta = append(meta, m.tr(msgPostRedacted))
 	}
 	if p.SourceTitle != "" {
-		meta = append(meta, "Source: "+p.SourceTitle)
+		meta = append(meta, m.tr(msgPostSource, map[string]string{"source": p.SourceTitle}))
 	} else if p.SourceThread != "" {
-		meta = append(meta, "Source: "+p.SourceThread)
+		meta = append(meta, m.tr(msgPostSource, map[string]string{"source": p.SourceThread}))
 	}
 	return meta
 }
@@ -2341,8 +2385,8 @@ func (m model) wrapPostMetadata(meta []string) []string {
 	if width <= 0 {
 		width = 80
 	}
-	prefix := "      Meta: "
-	continuation := "            "
+	prefix := m.tr(msgPostMetaLinePrefix)
+	continuation := m.tr(msgPostMetaContinuation)
 	lines := []string{prefix}
 	current := prefix
 	for _, item := range meta {
@@ -2368,9 +2412,9 @@ func (m model) wrapPostMetadata(meta []string) []string {
 	return lines
 }
 
-func postOrdinal(index int) string {
+func (m model) postOrdinal(index int) string {
 	if index == 0 {
-		return "OP"
+		return m.tr(msgPostOp)
 	}
 	return fmt.Sprintf("[%d]", index)
 }
@@ -2389,7 +2433,7 @@ func (m model) blockLine(style lipgloss.Style, value string) string {
 func (m *model) rebuildChatView() {
 	var b strings.Builder
 	if len(m.chat) == 0 {
-		b.WriteString(m.styled(styleDim, "No messages yet. Say hello!") + "\n")
+		b.WriteString(m.styled(styleDim, m.tr(msgTitleNoMessages)) + "\n")
 		m.vp.SetContent(b.String())
 		return
 	}
@@ -2628,15 +2672,17 @@ func (m *model) insertPollTemplateWithExpires(expiresAt string) {
 	m.compose.InsertString("\n\n" + template)
 }
 
-func composeHelpLine(canCreatePoll, trustLoaded bool) string {
-	base := "Ctrl+S=submit  Esc=cancel"
-	if canCreatePoll {
-		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll  Ctrl+W=1w poll"
+func (m *model) composeHelpLine() string {
+	if m.canCreatePoll {
+		if m.trustLoaded {
+			return m.tr(msgComposeHelpPollChecked)
+		}
+		return m.tr(msgComposeHelpPollCheck)
 	}
-	if trustLoaded {
-		return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll  Ctrl+W=1w poll (trust level 2+ required)"
+	if m.trustLoaded {
+		return m.tr(msgComposeHelpPollTrust)
 	}
-	return base + "  Ctrl+P=add poll template  Ctrl+E=1h poll  Ctrl+D=1d poll  Ctrl+W=1w poll (checking permission…)"
+	return m.tr(msgComposeHelpPollCheck)
 }
 
 func keyString(msg tea.KeyMsg) string {
@@ -2839,7 +2885,7 @@ func (m *model) submitProfileField() tea.Cmd {
 		value = m.profileEditor.Value()
 	}
 	if field.key == "title" && len(strings.TrimSpace(value)) > 80 {
-		m.statusMsg = "title must be 80 characters or less"
+		m.statusMsg = m.tr(msgStatusTitleTooLong)
 		return nil
 	}
 	next := m.profileWithField(field, value)
@@ -2869,13 +2915,29 @@ func (m *model) submitProfileField() tea.Cmd {
 
 func (m *model) rebuildSearchView(posts []core.Post) {
 	var b strings.Builder
-	b.WriteString(m.styled(styleDim, fmt.Sprintf("Results: %d", len(posts))) + "\n\n")
+	plural := ""
+	if len(posts) != 1 {
+		plural = "s"
+	}
+	b.WriteString(m.styled(styleDim, m.tr(msgSearchResults, map[string]string{
+		"count":  fmt.Sprintf("%d", len(posts)),
+		"plural": plural,
+	})+"\n\n"))
 	if len(posts) == 0 {
-		b.WriteString(m.styled(styleDim, "No results found."))
+		if strings.TrimSpace(m.searchQuery) != "" {
+			b.WriteString(m.styled(styleDim, m.tr(msgSearchNoResults, map[string]string{"query": m.searchQuery})))
+		} else {
+			b.WriteString(m.styled(styleDim, m.tr(msgSearchNoResultText)))
+		}
+		m.vp.SetContent(b.String())
+		return
 	}
 	for _, p := range posts {
 		author := m.styled(styleAuthor, p.Author)
-		b.WriteString(fmt.Sprintf("%s in thread %s\n", author, m.styled(styleDim, p.Thread)))
+		b.WriteString(m.tr(msgSearchAuthorsInThread, map[string]string{
+			"author": author,
+			"thread": m.styled(styleDim, p.Thread),
+		}) + "\n")
 		b.WriteString(m.renderMarkup(p.Body))
 		b.WriteString("\n" + m.postSepLine() + "\n")
 	}
@@ -2902,32 +2964,32 @@ func (m model) toggleThreadLock() tea.Cmd {
 	}
 }
 
-func pageName(p page) string {
+func (m model) pageName(p page) string {
 	switch p {
 	case pageMainMenu:
-		return "Main Menu"
+		return m.tr(msgTitleMainMenu)
 	case pageBoardList:
-		return "Boards"
+		return m.tr(msgTitleBoards)
 	case pageThreadList:
-		return "Threads"
+		return m.tr(msgCommonThread)
 	case pageThread:
-		return "Thread"
+		return m.tr(msgCommonThread)
 	case pagePoll:
-		return "Poll"
+		return m.tr(msgTitlePoll)
 	case pageCompose:
-		return "Compose"
+		return m.tr(msgTitleNewReply)
 	case pageChat:
-		return "Chat"
+		return m.tr(msgTitleLiveChat)
 	case pageSearch:
-		return "Search"
+		return m.tr(msgTitleSearch)
 	case pageNotifications:
-		return "Notifications"
+		return m.tr(msgTitleNotifications)
 	case pageProfile:
-		return "Profile"
+		return m.tr(msgTitleProfile)
 	case pageProfileEdit:
-		return "Profile Edit"
+		return m.tr(msgTitleProfileEdit)
 	case pageOnline:
-		return "Online"
+		return m.tr(msgTitleOnlineUsers)
 	}
 	return ""
 }

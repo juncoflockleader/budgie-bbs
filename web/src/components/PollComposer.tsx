@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { formatDateTime } from '../i18n/format'
+import { useI18n } from '../i18n'
 
 interface Props {
   disabled?: boolean
@@ -22,6 +24,7 @@ function toDatetimeLocalOffset(date: Date): string {
 }
 
 export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
+  const { t, locale } = useI18n()
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
   const [options, setOptions] = useState(['', ''])
@@ -72,7 +75,7 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
         onClick={() => setOpen(true)}
         title={disabledHint}
       >
-        Add Poll
+        {t('compose.addPoll')}
       </button>
     )
   }
@@ -81,55 +84,55 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
     <div className="poll-composer">
       <div className="compose-field">
         <label>
-          Poll question
+          {t('compose.pollQuestion')}
           <input
             value={question}
             onChange={e => setQuestion(e.target.value)}
-            placeholder="What do you want to ask?"
+            placeholder={t('compose.pollQuestionHint')}
           />
         </label>
       </div>
       <div className="compose-field">
         <label>
-          Close at (optional)
+          {t('compose.pollCloseLabel')}
           <input
             type="datetime-local"
             value={expiresAt}
             onChange={e => setExpiresAt(e.target.value)}
-            title={expiresAt ? `Closes at ${new Date(expiresAt).toLocaleString()}` : 'Leave blank for no close time'}
+            title={expiresAt ? t('compose.pollCloseAtHint', { at: formatDateTime(new Date(expiresAt).getTime(), locale) }) : t('compose.pollCloseLeaveBlank')}
           />
           <div className="poll-composer-quick-times">
             <button type="button" className="link-btn" onClick={() => setExpiresAt(toDatetimeLocalOffset(new Date(Date.now() + 60 * 60 * 1000)))}>
-              +1h
+              {t('compose.pollCloseTime1h')}
             </button>
             <button type="button" className="link-btn" onClick={() => setExpiresAt(toDatetimeLocalOffset(new Date(Date.now() + 24 * 60 * 60 * 1000)))}>
-              +1d
+              {t('compose.pollCloseTime1d')}
             </button>
             <button type="button" className="link-btn" onClick={() => setExpiresAt(toDatetimeLocalOffset(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)))}>
-              +1w
+              {t('compose.pollCloseTime1w')}
             </button>
             <button type="button" className="link-btn" onClick={() => setExpiresAt('')}>
-              clear
+              {t('compose.pollCloseClear')}
             </button>
           </div>
         </label>
       </div>
       <div className="compose-field">
-        <label>Options</label>
+        <label>{t('compose.options')}</label>
         <div className="poll-composer-options">
           {options.map((value, index) => (
             <div key={index} className="poll-composer-option-row">
               <input
                 value={value}
                 onChange={e => updateOption(index, e.target.value)}
-                placeholder={`Option ${index + 1}`}
+                placeholder={t('compose.option', { index: index + 1 })}
               />
               <button
                 type="button"
                 className="link-btn"
                 onClick={() => removeOption(index)}
                 disabled={options.length <= 2}
-                title={options.length <= 2 ? 'Need at least two options' : 'Remove option'}
+                title={options.length <= 2 ? t('compose.pollNeedTwoOption') : t('compose.optionRemove')}
               >
                 ×
               </button>
@@ -142,7 +145,7 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
           type="button"
           onClick={addOption}
         >
-          + Add Option
+          {t('compose.optionAdd')}
         </button>
         <button
           type="button"
@@ -150,20 +153,20 @@ export function PollComposer({ disabled, disabledHint, onInsert }: Props) {
           disabled={!canInsert}
           className="link-btn"
         >
-          Insert Poll Into Draft
+          {t('compose.insertPoll')}
         </button>
         <button
           type="button"
           className="link-btn"
           onClick={() => { setOpen(false); resetBuilder() }}
         >
-          Cancel
+          {t('compose.cancel')}
         </button>
-        <span className="muted compose-hint">{optionCount} valid options</span>
+        <span className="muted compose-hint">{t('compose.validOptions', { count: optionCount })}</span>
       </div>
       {!canInsert && (
         <p className="muted compose-hint">
-          Poll needs a question and at least two options.
+          {t('compose.pollNeeds')}
         </p>
       )}
     </div>

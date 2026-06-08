@@ -123,7 +123,7 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 	}
 
 	caps := terminalProfileFromEnviron(sess.Environ())
-	m := newModel(s.core, user, width, height, caps.supportsANSI)
+	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale)
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithEnvironment(sess.Environ()),

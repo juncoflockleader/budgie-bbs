@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
 import type { Board, FavoriteFolder, FavoriteTree, ThreadSummary } from '../api/types'
 import { Spinner } from '../components/Spinner'
+import { useI18n } from '../i18n'
 
 interface Props {
   token: string
@@ -18,6 +19,7 @@ export function UnreadPage({ token, onBack, onOpenThread }: Props) {
   const [folder, setFolder] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { t } = useI18n()
 
   const folderOptions = useMemo(() => flattenFolders(favoriteTree.folders), [favoriteTree.folders])
 
@@ -62,23 +64,23 @@ export function UnreadPage({ token, onBack, onOpenThread }: Props) {
   return (
     <div className="unread-page">
       <div className="page-header">
-        <button onClick={onBack}>Back</button>
-        <h2>Unread</h2>
+        <button onClick={onBack}>{t('common.back')}</button>
+        <h2>{t('unread.title')}</h2>
       </div>
       {error && <p className="error">{error}</p>}
       <div className="unread-filter-row">
-        <button className={scope === 'all' ? 'private-tab private-tab--active' : 'private-tab'} onClick={() => { setScope('all'); setFolder('') }}>All Boards</button>
-        <button className={scope === 'favorites' ? 'private-tab private-tab--active' : 'private-tab'} onClick={() => setScope('favorites')}>Favorites</button>
+        <button className={scope === 'all' ? 'private-tab private-tab--active' : 'private-tab'} onClick={() => { setScope('all'); setFolder('') }}>{t('unread.allBoards')}</button>
+        <button className={scope === 'favorites' ? 'private-tab private-tab--active' : 'private-tab'} onClick={() => setScope('favorites')}>{t('unread.favorites')}</button>
         {scope === 'favorites' && (
-          <select value={folder} onChange={e => setFolder(e.currentTarget.value)} aria-label="Favorite folder unread scope">
-            <option value="">All Favorites</option>
+          <select value={folder} onChange={e => setFolder(e.currentTarget.value)} aria-label={t('unread.favoriteScope')}>
+            <option value="">{t('unread.favoriteScopeAll')}</option>
             {folderOptions.map(option => (
               <option key={option.id} value={option.id}>{option.label}</option>
             ))}
           </select>
         )}
       </div>
-      {threads.length === 0 && <p className="muted">No unread threads.</p>}
+      {threads.length === 0 && <p className="muted">{t('unread.noUnreadThreads')}</p>}
       <div className="unread-thread-list">
         {threads.map(thread => (
           <div key={thread.id} className="unread-thread-row">

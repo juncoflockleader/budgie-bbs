@@ -3,6 +3,7 @@ import * as api from '../api/client'
 import type { Board, Post, Thread } from '../api/types'
 import { Markup } from '../components/Markup'
 import { Spinner } from '../components/Spinner'
+import { useI18n } from '../i18n'
 
 interface Props {
   token: string
@@ -17,6 +18,7 @@ export function ResidentFeedPage({ token, onBack, onOpenThread }: Props) {
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { t } = useI18n()
 
   useEffect(() => {
     let cancelled = false
@@ -60,16 +62,16 @@ export function ResidentFeedPage({ token, onBack, onOpenThread }: Props) {
   return (
     <div className="author-posts-page">
       <div className="page-header">
-        <button className="back-btn" onClick={onBack}>Back</button>
-        <h2>Resident Boards</h2>
-        <button className="link-btn" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Prev</button>
-        <button className="link-btn" disabled={posts.length < PAGE_SIZE} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</button>
+        <button className="back-btn" onClick={onBack}>{t('common.back')}</button>
+        <h2>{t('resident.title')}</h2>
+        <button className="link-btn" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>{t('resident.prev')}</button>
+        <button className="link-btn" disabled={posts.length < PAGE_SIZE} onClick={() => setOffset(offset + PAGE_SIZE)}>{t('resident.next')}</button>
       </div>
       {error && <p className="error">{error}</p>}
       {loading ? (
         <Spinner />
       ) : posts.length === 0 ? (
-        <p className="muted">No resident board posts found.</p>
+        <p className="muted">{t('resident.noPosts')}</p>
       ) : (
         <div className="author-post-list">
           {posts.map(post => (

@@ -2,6 +2,7 @@ import { type MouseEvent, useEffect, useState } from 'react'
 import * as api from '../api/client'
 import type { Board, BoardSummary, Category, FavoriteBoardEntry, FavoriteFolder, FavoriteTree, RecommendedBoard } from '../api/types'
 import { Spinner } from '../components/Spinner'
+import { useI18n } from '../i18n'
 
 type BoardSortMode = 'name' | 'new' | 'online' | 'posts' | 'activity' | 'unread'
 
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
+  const { t } = useI18n()
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [recommendedBoards, setRecommendedBoards] = useState<RecommendedBoard[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -72,6 +74,16 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name))
   const isAdmin = currentUserRole === 'admin'
+
+  function plural(count: number) {
+    return count === 1 ? '' : 's'
+  }
+
+  function unreadSummary(postCount: number, threadCount: number) {
+    const posts = t('board.postCount', { count: postCount, plural: plural(postCount) })
+    if (threadCount === 0) return posts
+    return `${posts}${t('board.across')} ${t('board.unreadThreads', { count: threadCount, plural: plural(threadCount) })}`
+  }
 
   async function reloadBoards(previousBoards = boards, previousTree = favoriteTree, previousRecommended = recommendedBoards) {
     const [boardsRes, recommendedRes, treeRes, categoriesRes] = await Promise.all([api.listBoardSummaries(token), api.listRecommendedBoards(token), api.listFavoriteTree(token), api.listCategories(token)])
@@ -351,8 +363,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
           <PolicyBadges board={board} />
           {!board.zapped && board.unreadPosts > 0 && (
             <span className="item-meta unread-meta">
-              {board.unreadPosts} unread post{board.unreadPosts === 1 ? '' : 's'}
-              {board.unreadThreads > 0 && ` across ${board.unreadThreads} thread${board.unreadThreads === 1 ? '' : 's'}`}
+              {unreadSummary(board.unreadPosts, board.unreadThreads)}
             </span>
           )}
         </span>
@@ -361,8 +372,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
             <button
               className="board-action-btn"
               onClick={e => markRead(board, e)}
-              title="Mark board read"
-              aria-label={`Mark ${board.name} read`}
+              title={t('board.boardActions.markRead')}
+              aria-label={t('board.actionMarkRead', { board: board.name })}
             >
               ✓
             </button>
@@ -371,8 +382,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
             <button
               className="board-action-btn"
               onClick={e => restoreRead(board, e)}
-              title="Restore read marker"
-              aria-label={`Restore ${board.name} read marker`}
+              title={t('board.boardActions.restoreReadMarker')}
+              aria-label={t('board.actionRestoreReadMarker', { board: board.name })}
             >
               ↶
             </button>
@@ -381,27 +392,29 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
             <button
               className="board-action-btn"
               onClick={e => applyMembership(board, e)}
-              title="Apply for membership"
-              aria-label={`Apply to join ${board.name}`}
+              title={t('board.apply')}
+              aria-label={t('board.applyToJoin', { board: board.name })}
             >
-              Apply
+              {t('board.apply')}
             </button>
           )}
           {board.zapAllowed && (
             <button
               className={`board-action-btn${board.zapped ? ' favorite-btn--active' : ''}`}
               onClick={e => toggleZap(board, e)}
-              title={board.zapped ? 'Show in unread' : 'Hide from unread'}
-              aria-label={board.zapped ? `Show ${board.name} in unread` : `Hide ${board.name} from unread`}
+              title={board.zapped ? t('board.boardActions.showInUnread') : t('board.boardActions.hideFromUnread')}
+              aria-label={board.zapped
+                ? t('board.actionShowInUnread', { board: board.name })
+                : t('board.actionHideFromUnread', { board: board.name })}
             >
-              Zap
+              {t('board.zap')}
             </button>
           )}
           <button
             className={`favorite-btn${isFavorite ? ' favorite-btn--active' : ''}`}
             onClick={e => toggleFavorite(board, e)}
-            title={isFavorite ? 'Remove favorite' : 'Add favorite'}
-            aria-label={isFavorite ? `Remove ${board.name} from favorites` : `Add ${board.name} to favorites`}
+            title={isFavorite ? t('board.boardActions.removeFavorite') : t('board.boardActions.addFavorite')}
+            aria-label={isFavorite ? t('board.actionRemoveFavorite', { board: board.name }) : t('board.actionAddFavorite', { board: board.name })}
           >
             {isFavorite ? '★' : '☆'}
           </button>
@@ -422,8 +435,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
           <PolicyBadges board={summary} />
           {board.unreadPosts > 0 && (
             <span className="item-meta unread-meta">
-              {board.unreadPosts} unread post{board.unreadPosts === 1 ? '' : 's'}
-              {board.unreadThreads > 0 && ` across ${board.unreadThreads} thread${board.unreadThreads === 1 ? '' : 's'}`}
+              {unreadSummary(board.unreadPosts, board.unreadThreads)}
             </span>
           )}
         </span>
@@ -435,30 +447,32 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
             onChange={e => { void moveFavoriteBoard(board, e.currentTarget.value) }}
             aria-label={`Move ${board.name} to favorite folder`}
           >
-            <option value="">Root</option>
+            <option value="">{t('board.root')}</option>
             {folderOptions.map(folder => (
               <option key={folder.id} value={folder.id}>{folder.name}</option>
             ))}
           </select>
-          <button className="board-action-btn" disabled={index <= 0} onClick={e => reorderFavoriteBoard(board, 'up', e)} title="Move up">↑</button>
-          <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => reorderFavoriteBoard(board, 'down', e)} title="Move down">↓</button>
+          <button className="board-action-btn" disabled={index <= 0} onClick={e => reorderFavoriteBoard(board, 'up', e)} title={t('board.favoriteActions.moveCategoryUp')}>↑</button>
+          <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => reorderFavoriteBoard(board, 'down', e)} title={t('board.favoriteActions.moveCategoryDown')}>↓</button>
           {!summary.zapped && summary.unreadPosts > 0 && (
-            <button className="board-action-btn" onClick={e => markRead(summary, e)} title="Mark board read" aria-label={`Mark ${summary.name} read`}>✓</button>
+            <button className="board-action-btn" onClick={e => markRead(summary, e)} title={t('board.boardActions.markRead')} aria-label={t('board.actionMarkRead', { board: summary.name })}>✓</button>
           )}
           {summary.readSeq > 0 && (
-            <button className="board-action-btn" onClick={e => restoreRead(summary, e)} title="Restore read marker" aria-label={`Restore ${summary.name} read marker`}>↶</button>
+            <button className="board-action-btn" onClick={e => restoreRead(summary, e)} title={t('board.boardActions.restoreReadMarker')} aria-label={t('board.actionRestoreReadMarker', { board: summary.name })}>↶</button>
           )}
           {summary.zapAllowed && (
             <button
               className={`board-action-btn${summary.zapped ? ' favorite-btn--active' : ''}`}
               onClick={e => toggleZap(summary, e)}
-              title={summary.zapped ? 'Show in unread' : 'Hide from unread'}
-              aria-label={summary.zapped ? `Show ${summary.name} in unread` : `Hide ${summary.name} from unread`}
+              title={summary.zapped ? t('board.boardActions.showInUnread') : t('board.boardActions.hideFromUnread')}
+              aria-label={summary.zapped
+                ? t('board.actionShowInUnread', { board: summary.name })
+                : t('board.actionHideFromUnread', { board: summary.name })}
             >
-              Zap
+              {t('board.zap')}
             </button>
           )}
-          <button className="favorite-btn favorite-btn--active" onClick={e => toggleFavorite(summary, e)} title="Remove favorite" aria-label={`Remove ${summary.name} from favorites`}>★</button>
+          <button className="favorite-btn favorite-btn--active" onClick={e => toggleFavorite(summary, e)} title={t('board.boardActions.removeFavorite')} aria-label={t('board.actionRemoveFavorite', { board: summary.name })}>★</button>
         </span>
       </li>
     )
@@ -476,7 +490,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
           <PolicyBadges board={summary} />
         </span>
         <span className="board-row-actions">
-          {summary.favorite && <span className="favorite-btn favorite-btn--active" title="Favorite board">★</span>}
+          {summary.favorite && <span className="favorite-btn favorite-btn--active" title={t('board.boardActions.markRead')}>★</span>}
         </span>
       </li>
     )
@@ -493,13 +507,13 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         <div className="favorite-folder-header">
           <span className="favorite-folder-name">{folder.name}</span>
           <span className="favorite-folder-actions">
-            {stats.unreadPosts > 0 && <button className="board-action-btn" onClick={e => markFavoriteScopeRead(folder.id, e)} title="Mark folder read">✓</button>}
-            {stats.hasReadMarker && <button className="board-action-btn" onClick={e => restoreFavoriteScopeRead(folder.id, e)} title="Restore folder read markers">↶</button>}
-            <button className="board-action-btn" onClick={e => createFolder(folder.id, e)} title="New nested folder">＋</button>
-            <button className="board-action-btn" onClick={e => renameFolder(folder, e)} title="Rename folder">✎</button>
-            <button className="board-action-btn" disabled={index <= 0} onClick={e => moveFolder(folder, 'up', e)} title="Move folder up">↑</button>
-            <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => moveFolder(folder, 'down', e)} title="Move folder down">↓</button>
-            <button className="board-action-btn" onClick={e => deleteFolder(folder, e)} title="Delete folder">×</button>
+            {stats.unreadPosts > 0 && <button className="board-action-btn" onClick={e => markFavoriteScopeRead(folder.id, e)} title={t('board.favoriteActions.markRead')}>✓</button>}
+            {stats.hasReadMarker && <button className="board-action-btn" onClick={e => restoreFavoriteScopeRead(folder.id, e)} title={t('board.favoriteActions.restoreReadMarker')}>↶</button>}
+            <button className="board-action-btn" onClick={e => createFolder(folder.id, e)} title={t('board.favoriteActions.newNestedFolder')}>＋</button>
+            <button className="board-action-btn" onClick={e => renameFolder(folder, e)} title={t('board.favoriteActions.renameFolder')}>✎</button>
+            <button className="board-action-btn" disabled={index <= 0} onClick={e => moveFolder(folder, 'up', e)} title={t('board.favoriteActions.moveFolderUp')}>↑</button>
+            <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => moveFolder(folder, 'down', e)} title={t('board.favoriteActions.moveFolderDown')}>↓</button>
+            <button className="board-action-btn" onClick={e => deleteFolder(folder, e)} title={t('board.favoriteActions.deleteFolder')}>×</button>
           </span>
         </div>
         {folderBoards.length > 0 && <ul className="item-list favorite-folder-list">{folderBoards.map(renderFavoriteBoard)}</ul>}
@@ -518,20 +532,20 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     const index = siblings.findIndex(item => item.id === category.id)
     const controls = isAdmin ? (
       <span className="category-admin-actions">
-        <button className="board-action-btn" disabled={index <= 0} onClick={e => moveCategory(category, 'up', e)} title="Move category up">↑</button>
-        <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => moveCategory(category, 'down', e)} title="Move category down">↓</button>
-        <button className="board-action-btn" onClick={e => renameCategory(category, e)} title="Edit category" aria-label={`Edit ${category.name}`}>✎</button>
-        <button className="board-action-btn" onClick={e => reparentCategory(category, e)} title="Move category" aria-label={`Move ${category.name}`}>⇄</button>
+        <button className="board-action-btn" disabled={index <= 0} onClick={e => moveCategory(category, 'up', e)} title={t('board.favoriteActions.moveCategoryUp')}>↑</button>
+        <button className="board-action-btn" disabled={index < 0 || index >= siblings.length - 1} onClick={e => moveCategory(category, 'down', e)} title={t('board.favoriteActions.moveCategoryDown')}>↓</button>
+        <button className="board-action-btn" onClick={e => renameCategory(category, e)} title={t('board.favoriteActions.editCategory')} aria-label={t('board.actionRenameCategory', { category: category.name })}>✎</button>
+        <button className="board-action-btn" onClick={e => reparentCategory(category, e)} title={t('board.favoriteActions.moveCategory')} aria-label={t('board.actionMoveCategory', { category: category.name })}>⇄</button>
         <select
           className="favorite-folder-select"
           value={category.visibility || 'public'}
           onClick={e => e.stopPropagation()}
           onChange={e => updateCategory(category, { visibility: e.target.value })}
-          title="Directory visibility"
+          title={t('board.favoriteActions.directoryVisibility')}
         >
-          <option value="public">Public</option>
-          <option value="staff">Staff</option>
-          <option value="hidden">Hidden</option>
+          <option value="public">{t('board.visibility.public')}</option>
+          <option value="staff">{t('board.visibility.staff')}</option>
+          <option value="hidden">{t('board.visibility.hidden')}</option>
         </select>
       </span>
     ) : null
@@ -565,21 +579,21 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         <input
           value={boardQuery}
           onChange={e => setBoardQuery(e.target.value)}
-          placeholder="Search boards"
-          aria-label="Search boards"
+          placeholder={t('board.searchTitle')}
+          aria-label={t('board.searchTitle')}
         />
-        <select value={boardSort} onChange={e => setBoardSort(e.target.value as BoardSortMode)} aria-label="Sort boards">
-          <option value="name">Name</option>
-          <option value="new">New</option>
-          <option value="online">Online</option>
-          <option value="posts">Articles</option>
-          <option value="activity">Activity</option>
-          <option value="unread">Unread</option>
+        <select value={boardSort} onChange={e => setBoardSort(e.target.value as BoardSortMode)} aria-label={t('board.sortBoards')}>
+          <option value="name">{t('board.nameSort')}</option>
+          <option value="new">{t('board.newSort')}</option>
+          <option value="online">{t('board.onlineSort')}</option>
+          <option value="posts">{t('board.postsSort')}</option>
+          <option value="activity">{t('board.activitySort')}</option>
+          <option value="unread">{t('board.unreadSort')}</option>
         </select>
       </div>
       <section className="board-section">
-        <h3 className="board-section-title">Unread</h3>
-        {unreadBoards.length === 0 && <p className="muted">No unread boards.</p>}
+        <h3 className="board-section-title">{t('board.unreadSection')}</h3>
+        {unreadBoards.length === 0 && <p className="muted">{t('board.noUnreadBoards')}</p>}
         {unreadBoards.length > 0 && (
           <ul className="item-list">
             {unreadBoards.map(renderBoard)}
@@ -587,8 +601,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         )}
       </section>
       <section className="board-section">
-        <h3 className="board-section-title">New Boards</h3>
-        {newBoards.length === 0 && <p className="muted">No new boards.</p>}
+        <h3 className="board-section-title">{t('board.newBoardsSection')}</h3>
+        {newBoards.length === 0 && <p className="muted">{t('board.noNewBoards')}</p>}
         {newBoards.length > 0 && (
           <ul className="item-list">
             {newBoards.map(renderBoard)}
@@ -596,8 +610,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         )}
       </section>
       <section className="board-section">
-        <h3 className="board-section-title">Recommended</h3>
-        {recommendedVisibleBoards.length === 0 && <p className="muted">No recommended boards.</p>}
+        <h3 className="board-section-title">{t('board.recommendedSection')}</h3>
+        {recommendedVisibleBoards.length === 0 && <p className="muted">{t('board.noRecommendedBoards')}</p>}
         {recommendedVisibleBoards.length > 0 && (
           <ul className="item-list">
             {recommendedVisibleBoards.map(renderRecommendedBoard)}
@@ -606,16 +620,16 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
       </section>
       <section className="board-section">
         <div className="board-section-heading">
-          <h3 className="board-section-title">Favorites</h3>
+          <h3 className="board-section-title">{t('board.favoritesSection')}</h3>
           <span className="favorite-folder-actions">
-            {favoriteStats.unreadPosts > 0 && <button className="board-action-btn" onClick={e => markFavoriteScopeRead('', e)} title="Mark all favorites read">✓</button>}
-            {favoriteStats.hasReadMarker && <button className="board-action-btn" onClick={e => restoreFavoriteScopeRead('', e)} title="Restore favorite read markers">↶</button>}
-            <button className="board-action-btn" onClick={exportFavorites} title="Export favorites">Export</button>
-            <button className="board-action-btn" onClick={importFavorites} title="Import favorites">Import</button>
-            <button className="board-action-btn" onClick={e => createFolder('', e)} title="New favorite folder">＋</button>
+            {favoriteStats.unreadPosts > 0 && <button className="board-action-btn" onClick={e => markFavoriteScopeRead('', e)} title={t('board.favoriteActions.markRead')}>✓</button>}
+            {favoriteStats.hasReadMarker && <button className="board-action-btn" onClick={e => restoreFavoriteScopeRead('', e)} title={t('board.favoriteActions.restoreReadMarker')}>↶</button>}
+            <button className="board-action-btn" onClick={exportFavorites} title={t('board.favoriteActions.export')}>{t('board.favoriteActions.export')}</button>
+            <button className="board-action-btn" onClick={importFavorites} title={t('board.favoriteActions.import')}>{t('board.favoriteActions.import')}</button>
+            <button className="board-action-btn" onClick={e => createFolder('', e)} title={t('board.favoriteActions.newFolder')}>＋</button>
           </span>
         </div>
-        {favoriteTree.folders.length === 0 && favoriteTree.boards.length === 0 && <p className="muted">No favorite boards yet.</p>}
+        {favoriteTree.folders.length === 0 && favoriteTree.boards.length === 0 && <p className="muted">{t('board.noFavoriteBoards')}</p>}
         {(favoritesByFolder['']?.length ?? 0) > 0 && (
           <ul className="item-list favorite-folder-list">
             {(favoritesByFolder[''] ?? []).map(renderFavoriteBoard)}
@@ -624,8 +638,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         {(foldersByParent[''] ?? []).map(folder => renderFavoriteFolder(folder))}
       </section>
       <section className="board-section">
-        <h3 className="board-section-title">Directory</h3>
-        {directoryRoots.length === 0 && visibleBoards.length === 0 && <p className="muted">No boards yet.</p>}
+        <h3 className="board-section-title">{t('board.categories')}</h3>
+        {directoryRoots.length === 0 && visibleBoards.length === 0 && <p className="muted">{t('board.noDataRoot')}</p>}
         {directoryRoots.map(category => renderCategory(category))}
         {uncategorizedBoards.length > 0 && (
           <ul className="item-list">
@@ -634,8 +648,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
         )}
       </section>
       <section className="board-section">
-        <h3 className="board-section-title">All Boards</h3>
-        {visibleBoards.length === 0 && <p className="muted">No boards yet.</p>}
+        <h3 className="board-section-title">{t('board.boardsTitle')}</h3>
+        {visibleBoards.length === 0 && <p className="muted">{t('board.noUnreadBoards')}</p>}
         {visibleBoards.length > 0 && (
           <ul className="item-list">
             {visibleBoards.map(renderBoard)}

@@ -283,13 +283,13 @@ func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 	foundExit := false
 	for _, item := range m.list.Items() {
 		menuItem, ok := item.(mainMenuItem)
-		if ok && menuItem.title == "Profile" {
+		if ok && menuItem.title == m.tr(msgTitleProfile) {
 			foundProfile = true
 		}
-		if ok && menuItem.title == "Online" {
+		if ok && menuItem.title == m.tr(msgTitleOnlineUsers) {
 			foundOnline = true
 		}
-		if ok && menuItem.title == "Exit" {
+		if ok && menuItem.title == m.tr(msgPageExit) {
 			foundExit = true
 		}
 	}
@@ -346,7 +346,7 @@ func TestStatusMessageRendersInTopHeader(t *testing.T) {
 	m.rebuildList()
 
 	view := m.View()
-	if !strings.Contains(view, "BudgieBBS | alice | Main Menu  | profile saved") {
+	if !strings.Contains(view, "BudgieBBS | alice | Main Menu | profile saved") {
 		t.Fatalf("expected status message in top header, got: %q", view)
 	}
 }
@@ -362,7 +362,7 @@ func TestMainMenuProfileShortcutOpensProfileSettings(t *testing.T) {
 
 	_ = m.handleKey(keyMsg("5"))
 	if m.page != pageProfile {
-		t.Fatalf("expected profile shortcut to open profile page, got %s", pageName(m.page))
+		t.Fatalf("expected profile shortcut to open profile page, got %s", m.pageName(m.page))
 	}
 	if len(m.list.Items()) == 0 {
 		t.Fatalf("expected profile field items")
@@ -383,7 +383,7 @@ func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newModel(c, actor, 80, 24, false)
+	m := newModel(c, actor, 80, 24, false, localeEN)
 	m.page = pageProfile
 	profile, err := c.UserProfileByName(actor.Name)
 	if err != nil {
@@ -391,10 +391,10 @@ func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 	}
 	m.profile = profile
 	m.rebuildList()
-	m.list.Select(len(profileFields()) - 1)
+	m.list.Select(len(m.profileFields()) - 1)
 	m.openProfileField()
 	if m.page != pageProfileEdit || !m.profileField.multiline {
-		t.Fatalf("expected signature edit page, got page=%s field=%+v", pageName(m.page), m.profileField)
+		t.Fatalf("expected signature edit page, got page=%s field=%+v", m.pageName(m.page), m.profileField)
 	}
 
 	m.profileEditor.SetValue("sig line")
@@ -405,7 +405,7 @@ func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 	updated, _ := m.Update(cmd())
 	got := updated.(model)
 	if got.page != pageProfile {
-		t.Fatalf("expected save to return to profile page, got %s", pageName(got.page))
+		t.Fatalf("expected save to return to profile page, got %s", got.pageName(got.page))
 	}
 	if got.statusMsg != "profile saved" {
 		t.Fatalf("expected saved status, got %q", got.statusMsg)
@@ -430,7 +430,7 @@ func TestMainMenuOnlineShortcutOpensOnlineUsers(t *testing.T) {
 
 	_ = m.handleKey(keyMsg("6"))
 	if m.page != pageOnline {
-		t.Fatalf("expected online shortcut to open online page, got %s", pageName(m.page))
+		t.Fatalf("expected online shortcut to open online page, got %s", m.pageName(m.page))
 	}
 	view := m.View()
 	if !strings.Contains(view, "Who is Online") || !strings.Contains(view, "Visible sessions") {
@@ -833,7 +833,7 @@ func TestLeftArrowFromBoardListReturnsToMainMenu(t *testing.T) {
 
 	_ = m.handleKey(keyMsg("left"))
 	if m.page != pageMainMenu {
-		t.Fatalf("expected left arrow from board list to return to main menu, got %s", pageName(m.page))
+		t.Fatalf("expected left arrow from board list to return to main menu, got %s", m.pageName(m.page))
 	}
 	if _, ok := m.list.Items()[0].(mainMenuItem); !ok {
 		t.Fatalf("expected main menu items after returning from board list, got %#v", m.list.Items())
@@ -880,7 +880,7 @@ func TestRightArrowOpensBoardAndThreadListItems(t *testing.T) {
 
 	_ = m.handleKey(keyMsg("right"))
 	if m.page != pageThreadList {
-		t.Fatalf("expected right arrow on board list to enter thread list, got %s", pageName(m.page))
+		t.Fatalf("expected right arrow on board list to enter thread list, got %s", m.pageName(m.page))
 	}
 	if m.currentBoard != "general" {
 		t.Fatalf("expected current board general, got %q", m.currentBoard)
@@ -894,7 +894,7 @@ func TestRightArrowOpensBoardAndThreadListItems(t *testing.T) {
 	m.rebuildList()
 	_ = m.handleKey(keyMsg("right"))
 	if m.page != pageThread {
-		t.Fatalf("expected right arrow on thread list to enter thread, got %s", pageName(m.page))
+		t.Fatalf("expected right arrow on thread list to enter thread, got %s", m.pageName(m.page))
 	}
 	if m.currentThread != "thr_1" {
 		t.Fatalf("expected current thread thr_1, got %q", m.currentThread)
@@ -916,7 +916,7 @@ func TestPostSubmittedReturnsFromComposeToThread(t *testing.T) {
 	updated, _ := m.Update(postSubmittedMsg{thread: "thr_1"})
 	got := updated.(model)
 	if got.page != pageThread {
-		t.Fatalf("expected post submission to return to thread page, got %s", pageName(got.page))
+		t.Fatalf("expected post submission to return to thread page, got %s", got.pageName(got.page))
 	}
 	if got.compose.Value() != "" {
 		t.Fatalf("expected compose body to reset after submit, got %q", got.compose.Value())
@@ -942,7 +942,7 @@ func TestThreadSubmittedReturnsFromComposeToNewThread(t *testing.T) {
 	updated, _ := m.Update(threadSubmittedMsg{board: "general", thread: "thr_1"})
 	got := updated.(model)
 	if got.page != pageThread {
-		t.Fatalf("expected thread submission to open the new thread page, got %s", pageName(got.page))
+		t.Fatalf("expected thread submission to open the new thread page, got %s", got.pageName(got.page))
 	}
 	if got.currentThread != "thr_1" {
 		t.Fatalf("expected current thread to be set, got %q", got.currentThread)
