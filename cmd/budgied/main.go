@@ -23,6 +23,7 @@ import (
 func main() {
 	var (
 		dbPath     = flag.String("db", "budgie.db", "SQLite database path")
+		storage    = flag.String("storage", "sqlite", "Storage backend: sqlite or postgres")
 		httpAddr   = flag.String("http", ":8080", "HTTP/WebSocket listen address")
 		sshPort    = flag.Int("ssh", 2222, "SSH listen port")
 		hostKey    = flag.String("hostkey", "", "Path to SSH host key (auto-generated if empty)")
@@ -32,12 +33,15 @@ func main() {
 		nntpDomain = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
 		nntpPrefix = flag.String("nntp-prefix", "budgie", "NNTP newsgroup prefix")
 		migratePG  = flag.Bool("migrate-sqlite-to-postgres", false, "Migrate SQLite source DB into PostgreSQL and exit")
-		pgDSN      = flag.String("postgres-dsn", "", "PostgreSQL DSN for migration or future postgres runtime (e.g. postgres://user:pass@127.0.0.1:5432/budgie)")
+		pgDSN      = flag.String("postgres-dsn", "", "PostgreSQL DSN (also read from BUDGIE_POSTGRES_DSN)")
 		rebuild    = flag.Bool("rebuild-projections", false, "Rebuild projection tables from durable events and exit")
 		rebuildSeq = flag.Int64("rebuild-from-seq", 0, "Replay durable events with seq > value during projection rebuild")
 		autoStats  = flag.Bool("auto-stats", true, "Automatically publish the daily BBSLists stats snapshot")
 	)
 	flag.Parse()
+
+	// Resolve storage backend and DSN (reads env var, handles backwards compat).
+	*storage, *pgDSN = resolveStorage(*storage, *pgDSN)
 
 	// JWT secret: use env var, flag, or a fixed dev default.
 	secret := []byte(*jwtSecret)
@@ -47,10 +51,7 @@ func main() {
 
 	if *migratePG {
 		if *pgDSN == "" {
-			*pgDSN = envOr("BUDGIE_POSTGRES_DSN", "")
-		}
-		if *pgDSN == "" {
-			slog.Error("postgres DSN required for migration", "flag", "postgres-dsn")
+			slog.Error("postgres DSN required for migration", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
 			os.Exit(1)
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -64,21 +65,19 @@ func main() {
 	}
 
 	if *rebuild {
-		if *pgDSN != "" {
-			c, err := core.NewPostgres(*pgDSN)
-			if err != nil {
-				slog.Error("core init failed", "err", err)
+		var (
+			c   *core.Core
+			err error
+		)
+		if *storage == "postgres" {
+			if *pgDSN == "" {
+				slog.Error("postgres DSN required", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
 				os.Exit(1)
 			}
-			if err := c.RebuildProjectionsFromEventLog(*rebuildSeq); err != nil {
-				slog.Error("projection rebuild failed", "err", err)
-				os.Exit(1)
-			}
-			slog.Info("projection rebuild completed", "dsn", obfuscateDSN(*pgDSN), "fromSeq", *rebuildSeq)
-			return
+			c, err = core.NewPostgres(*pgDSN)
+		} else {
+			c, err = core.New(*dbPath)
 		}
-
-		c, err := core.New(*dbPath)
 		if err != nil {
 			slog.Error("core init failed", "err", err)
 			os.Exit(1)
@@ -87,67 +86,31 @@ func main() {
 			slog.Error("projection rebuild failed", "err", err)
 			os.Exit(1)
 		}
-		slog.Info("projection rebuild completed", "db", *dbPath, "fromSeq", *rebuildSeq)
+		if *storage == "postgres" {
+			slog.Info("projection rebuild completed", "storage", "postgres", "dsn", obfuscateDSN(*pgDSN), "fromSeq", *rebuildSeq)
+		} else {
+			slog.Info("projection rebuild completed", "storage", "sqlite", "db", *dbPath, "fromSeq", *rebuildSeq)
+		}
 		return
 	}
 
-	if *pgDSN != "" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		c, err := core.NewPostgres(*pgDSN)
-		if err != nil {
-			slog.Error("core init failed", "err", err)
+	// Open core (single path for both storage backends).
+	var (
+		c   *core.Core
+		err error
+	)
+	switch *storage {
+	case "postgres":
+		if *pgDSN == "" {
+			slog.Error("postgres DSN required", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
 			os.Exit(1)
 		}
-		go c.Run(ctx)
-		if *autoStats {
-			startStatsSnapshotScheduler(ctx, c)
-		}
-
-		httpSrv := httpapi.New(c, secret)
-		if root := resolveWebRoot(*webRoot); root != "" {
-			httpSrv.SetWebRoot(root)
-		}
-		wsSrv := wsapi.New(c, secret)
-
-		mux := http.NewServeMux()
-		mux.Handle("/api/v1/ws", wsSrv)
-		mux.Handle("/", httpSrv.Handler())
-
-		srv := &http.Server{Addr: *httpAddr, Handler: mux}
-		go func() {
-			slog.Info("HTTP+WS listening (postgres)", "addr", *httpAddr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("HTTP server error", "err", err)
-			}
-		}()
-
-		hk := hostKeyPath(*hostKey)
-		ensureHostKey(hk)
-		tuiSrv := tui.New(c, *sshPort, hk)
-		go func() {
-			if err := tuiSrv.ListenAndServe(ctx); err != nil {
-				slog.Error("SSH server error", "err", err)
-			}
-		}()
-
-		if *nntpAddr != "" {
-			nntpSrv := nntp.New(c, *nntpAddr, *nntpDomain, *nntpPrefix)
-			go func() {
-				if err := nntpSrv.ListenAndServe(ctx); err != nil {
-					slog.Error("NNTP server error", "err", err)
-				}
-			}()
-		}
-
-		<-ctx.Done()
-		slog.Info("shutting down")
-		srv.Shutdown(context.Background())
-		return
+		slog.Info("starting budgied", "storage", "postgres", "dsn", obfuscateDSN(*pgDSN))
+		c, err = core.NewPostgres(*pgDSN)
+	default:
+		slog.Info("starting budgied", "storage", "sqlite", "db", *dbPath)
+		c, err = core.New(*dbPath)
 	}
-
-	// Open the core.
-	c, err := core.New(*dbPath)
 	if err != nil {
 		slog.Error("core init failed", "err", err)
 		os.Exit(1)
@@ -175,7 +138,7 @@ func main() {
 
 	srv := &http.Server{Addr: *httpAddr, Handler: mux}
 	go func() {
-		slog.Info("HTTP+WS listening", "addr", *httpAddr)
+		slog.Info("HTTP+WS listening", "addr", *httpAddr, "storage", *storage)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "err", err)
 		}
@@ -210,6 +173,20 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// resolveStorage returns the effective storage backend and DSN.
+// It reads the DSN from the BUDGIE_POSTGRES_DSN env var when pgDSN is empty,
+// and infers postgres mode when a DSN is present but storage is still "sqlite"
+// (the default), preserving backwards compatibility with -postgres-dsn usage.
+func resolveStorage(storage, pgDSN string) (resolvedStorage, resolvedDSN string) {
+	if pgDSN == "" {
+		pgDSN = envOr("BUDGIE_POSTGRES_DSN", "")
+	}
+	if pgDSN != "" && storage == "sqlite" {
+		storage = "postgres"
+	}
+	return storage, pgDSN
 }
 
 func resolveWebRoot(path string) string {

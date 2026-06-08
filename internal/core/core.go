@@ -70,10 +70,16 @@ func New(dbPath string) (*Core, error) {
 	return c, nil
 }
 
+// pgAdvisoryLockKey is the application-wide Postgres advisory lock key used to
+// serialize writes across nodes in multi-node Postgres deployments.
+const pgAdvisoryLockKey = int64(1654893721)
+
 // NewPostgres opens a Postgres database and applies the production schema.
 //
 // It is intentionally explicit and minimal: single-writer semantics still live in Core,
 // but SQL execution is normalized to Postgres placeholder style.
+// In Postgres mode a pg_advisory_lock is held for the duration of every command
+// execution, serializing writes across all nodes sharing the same database.
 func NewPostgres(dsn string) (*Core, error) {
 	setSQLFlavor(postgresFlavor)
 	projections.SetSQLFlavor(postgresFlavor)
@@ -88,12 +94,37 @@ func NewPostgres(dsn string) (*Core, error) {
 	}
 
 	bus := NewMemBus()
+	h := newHandler(db, bus)
+	h.SetCommandLock(pgAdvisoryLockFn(db, pgAdvisoryLockKey))
 	c := &Core{
 		DB:      db,
 		Bus:     bus,
-		handler: newHandler(db, bus),
+		handler: h,
 	}
 	return c, nil
+}
+
+// pgAdvisoryLockFn returns a command lock function that acquires a Postgres
+// session-level advisory lock for the duration of each command execution.
+// A dedicated connection is borrowed from the pool per command so the lock
+// is pinned to a single connection and released reliably on unlock.
+func pgAdvisoryLockFn(db *sql.DB, key int64) func(ctx context.Context) (func(), error) {
+	return func(ctx context.Context) (func(), error) {
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("advisory lock: get conn: %w", err)
+		}
+		lockCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(lockCtx, `SELECT pg_advisory_lock($1)`, key); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("advisory lock: pg_advisory_lock: %w", err)
+		}
+		return func() {
+			_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
+			_ = conn.Close()
+		}, nil
+	}
 }
 
 // Run starts the single-writer goroutine. Returns when ctx is cancelled.

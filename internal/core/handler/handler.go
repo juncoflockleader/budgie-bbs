@@ -187,6 +187,7 @@ type Reply struct {
 
 // cmdEnvelope is the internal queue message for the single-writer goroutine.
 type cmdEnvelope struct {
+	ctx     context.Context // caller context; used for lock timeout and cancellation
 	actor   *User
 	name    proto.CommandName
 	payload json.RawMessage
@@ -197,9 +198,10 @@ type cmdEnvelope struct {
 // Handler is the single-writer command handler.
 // All state mutation flows through the Run goroutine.
 type Handler struct {
-	db    *sql.DB
-	bus   Bus
-	queue chan cmdEnvelope
+	db      *sql.DB
+	bus     Bus
+	queue   chan cmdEnvelope
+	lockCmd func(ctx context.Context) (unlock func(), err error)
 }
 
 func New(db *sql.DB, bus Bus) *Handler {
@@ -210,12 +212,23 @@ func New(db *sql.DB, bus Bus) *Handler {
 	}
 }
 
+// SetCommandLock installs an optional function that wraps each command dispatch.
+// Postgres mode uses this to hold a pg_advisory_lock for the duration of every
+// mutating command, serializing writes across nodes.
+func (h *Handler) SetCommandLock(fn func(ctx context.Context) (unlock func(), err error)) {
+	h.lockCmd = fn
+}
+
 // Run processes commands sequentially. Call in a dedicated goroutine.
 func (h *Handler) Run(ctx context.Context) {
 	for {
 		select {
 		case env := <-h.queue:
-			reply := h.dispatch(env.actor, env.name, env.payload, env.cid)
+			if env.ctx.Err() != nil {
+				env.replyCh <- Reply{Err: errDetail(proto.ErrForbidden, "request cancelled", false)}
+				continue
+			}
+			reply := h.dispatchWithLock(env.ctx, env.actor, env.name, env.payload, env.cid)
 			env.replyCh <- reply
 		case <-ctx.Done():
 			return
@@ -223,10 +236,24 @@ func (h *Handler) Run(ctx context.Context) {
 	}
 }
 
+// dispatchWithLock acquires the command lock (if configured) before dispatching.
+func (h *Handler) dispatchWithLock(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string) Reply {
+	if h.lockCmd == nil {
+		return h.dispatch(actor, name, payload, cid)
+	}
+	unlock, err := h.lockCmd(ctx)
+	if err != nil {
+		return Reply{Err: errDetail("lock_unavailable", "write lock unavailable: "+err.Error(), true)}
+	}
+	defer unlock()
+	return h.dispatch(actor, name, payload, cid)
+}
+
 // Execute submits a command and blocks until it is processed.
 func (h *Handler) Execute(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string) Reply {
 	replyCh := make(chan Reply, 1)
 	env := cmdEnvelope{
+		ctx:     ctx,
 		actor:   actor,
 		name:    name,
 		payload: payload,
