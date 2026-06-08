@@ -3,13 +3,22 @@ package core
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
+// currentNodeID identifies this process. Non-empty only in Postgres mode;
+// used to tag pg_notify payloads so other nodes can skip self-originated events.
+var currentNodeID string
+
+func setNodeID(id string) { currentNodeID = id }
+
 // appendEvent writes a new event row and returns its assigned seq.
 // Must be called within a transaction from the single-writer goroutine.
+// In Postgres mode it also issues a pg_notify so other nodes are woken up.
 func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, payload any) (int64, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -34,6 +43,18 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 			return 0, err
 		}
 	}
+
+	// In Postgres mode, notify sibling nodes about this new event.
+	// The NOTIFY is inside the same transaction so it's only delivered on commit.
+	if currentSQLFlavor == postgresFlavor && currentNodeID != "" {
+		notifyPayload := fmt.Sprintf(`{"seq":%d,"event":%q,"node_id":%q,"scopes":%q}`,
+			seq, string(kind), currentNodeID, strings.Join(scopes, ","))
+		if _, err := tx.Exec(`SELECT pg_notify($1, $2)`, pgNotifyChannel, notifyPayload); err != nil {
+			// Non-fatal: LISTEN/NOTIFY is best-effort; W4 gap detection handles misses.
+			slog.Warn("appendEvent: pg_notify failed", "seq", seq, "err", err)
+		}
+	}
+
 	return seq, nil
 }
 

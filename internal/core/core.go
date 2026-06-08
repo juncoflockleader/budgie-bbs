@@ -45,6 +45,11 @@ type Core struct {
 	DB      *sql.DB
 	Bus     Bus
 	handler *Handler
+	// pgDSN and nodeID are non-empty in Postgres mode only.
+	// pgDSN is used to start the cross-node LISTEN goroutine.
+	// nodeID identifies this process in pg_notify payloads.
+	pgDSN  string
+	nodeID string
 }
 
 // New opens the SQLite database, runs migrations, and returns a ready Core.
@@ -93,6 +98,9 @@ func NewPostgres(dsn string) (*Core, error) {
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 
+	nodeID := newID("node_")
+	setNodeID(nodeID)
+
 	bus := NewMemBus()
 	h := newHandler(db, bus)
 	h.SetCommandLock(pgAdvisoryLockFn(db, pgAdvisoryLockKey))
@@ -100,6 +108,8 @@ func NewPostgres(dsn string) (*Core, error) {
 		DB:      db,
 		Bus:     bus,
 		handler: h,
+		pgDSN:   dsn,
+		nodeID:  nodeID,
 	}
 	return c, nil
 }
@@ -129,6 +139,10 @@ func pgAdvisoryLockFn(db *sql.DB, key int64) func(ctx context.Context) (func(), 
 
 // Run starts the single-writer goroutine. Returns when ctx is cancelled.
 func (c *Core) Run(ctx context.Context) {
+	// W3: in Postgres mode, start the cross-node event wakeup listener.
+	if c.pgDSN != "" {
+		startPGListener(ctx, c.pgDSN, c.nodeID, c.DB, c.Bus)
+	}
 	go runOutboxWorker(ctx, c.DB, c.Bus)
 	c.handler.Run(ctx)
 }

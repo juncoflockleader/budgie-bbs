@@ -62,10 +62,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // wsConn is a single WebSocket connection holding its cursor and subscription.
 type wsConn struct {
-	ws    *websocket.Conn
-	core  *core.Core
-	actor *core.User
-	sub   *core.Subscription
+	ws             *websocket.Conn
+	core           *core.Core
+	actor          *core.User
+	sub            *core.Subscription
+	scopes         []string // active subscription scopes; used for gap replay
+	lastDurableSeq int64    // highest durable seq delivered; 0 = none yet
 }
 
 func (c *wsConn) run(ctx context.Context) {
@@ -108,6 +110,7 @@ func (c *wsConn) run(ctx context.Context) {
 	if len(scopes) == 0 {
 		scopes = defaultScopes()
 	}
+	c.scopes = scopes
 	c.sub = c.core.Subscribe(scopes)
 	defer c.core.Unsubscribe(c.sub)
 
@@ -120,6 +123,9 @@ func (c *wsConn) run(ctx context.Context) {
 	for _, evt := range events {
 		if err := c.write(proto.EventToOutbound(evt)); err != nil {
 			return
+		}
+		if evt.IsDurable() && evt.Seq > c.lastDurableSeq {
+			c.lastDurableSeq = evt.Seq
 		}
 	}
 
@@ -158,7 +164,7 @@ func (c *wsConn) run(ctx context.Context) {
 			if !ok {
 				return
 			}
-			if err := c.write(proto.EventToOutbound(evt)); err != nil {
+			if err := c.deliverEvent(evt); err != nil {
 				return
 			}
 
@@ -188,6 +194,7 @@ func (c *wsConn) handleInbound(ctx context.Context, msg proto.InboundMessage) {
 				scopes = defaultScopes()
 			}
 			c.core.Unsubscribe(c.sub)
+			c.scopes = scopes
 			c.sub = c.core.Subscribe(scopes)
 		}
 
@@ -206,6 +213,48 @@ func (c *wsConn) handleInbound(ctx context.Context, msg proto.InboundMessage) {
 func (c *wsConn) write(v any) error {
 	c.ws.SetWriteDeadline(time.Now().Add(writeTimeout))
 	return c.ws.WriteJSON(v)
+}
+
+// deliverEvent writes an event to the client, handling gap detection and
+// deduplication for durable events.
+//
+// For ephemeral events (no Seq) it writes directly. For durable events it:
+//   - skips events the client has already seen (Seq <= lastDurableSeq)
+//   - replays any gap from lastDurableSeq before writing the current event
+//   - updates lastDurableSeq on each delivered durable event
+func (c *wsConn) deliverEvent(evt *proto.Event) error {
+	if !evt.IsDurable() {
+		return c.write(proto.EventToOutbound(evt))
+	}
+	// Duplicate: already delivered (can happen when cross-node NOTIFY arrives
+	// for an event the command handler already published locally).
+	if evt.Seq <= c.lastDurableSeq {
+		return nil
+	}
+	// Gap: one or more durable events were dropped by MemBus (slow-consumer path).
+	if c.lastDurableSeq > 0 && evt.Seq > c.lastDurableSeq+1 {
+		missed, err := c.core.Replay(c.lastDurableSeq, c.scopes, 1000)
+		if err != nil {
+			slog.Warn("ws: gap replay error", "from", c.lastDurableSeq, "to", evt.Seq-1, "err", err)
+		}
+		for _, m := range missed {
+			if m.Seq >= evt.Seq {
+				break // stop before re-delivering the event we're about to deliver
+			}
+			if m.Seq <= c.lastDurableSeq {
+				continue // already delivered (shouldn't happen, but be safe)
+			}
+			if err := c.write(proto.EventToOutbound(m)); err != nil {
+				return err
+			}
+			c.lastDurableSeq = m.Seq
+		}
+	}
+	if err := c.write(proto.EventToOutbound(evt)); err != nil {
+		return err
+	}
+	c.lastDurableSeq = evt.Seq
+	return nil
 }
 
 func (s *Server) validateToken(tok string) (*core.User, error) {
