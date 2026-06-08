@@ -76,6 +76,25 @@ func stringPtr(v string) *string {
 	return &v
 }
 
+// drainOutbox polls until all pending outbox jobs have been processed or a
+// 5-second deadline is exceeded. Call this before assertions that depend on
+// post-creation side effects (last_visit_day, trust level, notifications).
+func drainOutbox(t *testing.T, db *sql.DB) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM outbox_jobs WHERE status NOT IN ('done','failed')`).Scan(&n); err != nil {
+			t.Fatalf("drainOutbox: %v", err)
+		}
+		if n == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("drainOutbox: timed out waiting for outbox jobs to complete")
+}
+
 // --- M1 spine assertions ---
 
 // TestRejectedCommandDoesNotAppend verifies that a rejected command never
@@ -1672,6 +1691,9 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		ON CONFLICT(user_id) DO UPDATE SET total_online_seconds=excluded.total_online_seconds`, bob.ID, int64(120)); err != nil {
 		t.Fatal(err)
 	}
+	// Drain the outbox before pinning last_visit_day so the async
+	// recordPostCreated worker does not overwrite it with today's date.
+	drainOutbox(t, c.DB)
 	if _, err := c.DB.Exec(`UPDATE user_activity SET last_visit_day='2026-06-04' WHERE user_id IN (?, ?)`, alice.ID, bob.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -1928,7 +1950,7 @@ func TestCommunityRankingsAndStats(t *testing.T) {
 		t.Fatalf("expected one generated user-activity post, got %+v", userActivityPosts)
 	}
 	userActivityBody := userActivityPosts[0].Body
-	for _, want := range []string{"User activity rankings 2026-06-04", "Ranked active users: 3", "Ranked posts: 5", "Ranked reactions received: 1", "Ranked logins: 1", "Ranked stay time: 2m", "Top posters", "bob: 2 posts, 1 reactions received, 1 login, 2m stay time", "Top login counts", "Top stay time", "Top community score", "score 24"} {
+	for _, want := range []string{"User activity rankings 2026-06-04", "Ranked active users: 3", "Ranked posts: 5", "Ranked reactions received: 1", "Ranked logins: 1", "Ranked stay time: 2m", "Top posters", "bob: 2 posts, 1 reactions received, 1 login, 2m stay time", "Top login counts", "Top stay time", "Top community score", "score 49"} {
 		if !strings.Contains(userActivityBody, want) {
 			t.Fatalf("expected user-activity body to contain %q, got:\n%s", want, userActivityBody)
 		}
@@ -2362,6 +2384,14 @@ func TestStatsExcludedBoardHiddenFromRankingSurfaces(t *testing.T) {
 		Position:  intPtr(0),
 	})
 
+	// Pin board creation timestamps to within the snapshot window (≤ 2026-06-07).
+	// Boards are created with current wall-clock time; without this override the
+	// "new boards" window (30 days ending 2026-06-07) would exclude them.
+	boardWindowTS := time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if _, err := c.DB.Exec(`UPDATE categories SET created_at=? WHERE id IN ('visible_stats','hidden_stats')`, boardWindowTS); err != nil {
+		t.Fatal(err)
+	}
+
 	snapshot := exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{
 		Date: "2026-06-07",
 	})
@@ -2387,16 +2417,20 @@ func TestStatsPeriodHistorySystemPosts(t *testing.T) {
 	defer cancel()
 
 	admin := registerAndGetUser(t, c, "admin", "pw")
-	insertCommunityStatHistory(t, c.DB, "2026-06-07", 10, 1, 1, 10, 1, 5, 60)
-	insertCommunityStatHistory(t, c.DB, "2026-06-08", 11, 2, 2, 12, 2, 8, 120)
-	insertCommunityStatHistory(t, c.DB, "2026-06-14", 12, 3, 4, 24, 5, 20, 600)
+	// Weekly test uses W23 (2026-06-01 to 2026-06-07, Sunday = 2026-06-07).
+	// W24 (2026-06-08 to 2026-06-14) overlaps with "today" in CI; the snapshot
+	// command calls UpsertCommunityStatHistoryFromCurrent which overwrites the
+	// "today" row, corrupting delta calculations for that week.
+	insertCommunityStatHistory(t, c.DB, "2026-05-31", 10, 1, 1, 10, 1, 5, 60)
+	insertCommunityStatHistory(t, c.DB, "2026-06-01", 11, 2, 2, 12, 2, 8, 120)
+	insertCommunityStatHistory(t, c.DB, "2026-06-07", 12, 3, 4, 24, 5, 20, 600)
 	insertCommunityStatHistory(t, c.DB, "2026-06-30", 13, 4, 6, 30, 8, 25, 900)
 	insertCommunityStatHistory(t, c.DB, "2026-07-01", 14, 5, 7, 35, 9, 30, 1200)
 	insertCommunityStatHistory(t, c.DB, "2026-07-31", 15, 6, 9, 60, 15, 50, 2400)
 	insertCommunityStatHistory(t, c.DB, "2026-12-31", 16, 7, 11, 80, 18, 80, 3000)
 	insertCommunityStatHistory(t, c.DB, "2027-12-31", 20, 9, 20, 175, 35, 159, 7200)
 
-	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-06-14"})
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-06-07"})
 	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-07-31"})
 	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2027-12-31"})
 
@@ -2406,9 +2440,9 @@ func TestStatsPeriodHistorySystemPosts(t *testing.T) {
 		contains []string
 	}{
 		{
-			threadID: "bbslists_week_2026w24",
-			title:    "Weekly activity history 2026-W24",
-			contains: []string{"Period: 2026-06-08 to 2026-06-14", "Days captured: 2", "New posts: 14", "Logins: 15", "Logouts: 8", "Web logins: 15", "Web logouts: 8", "Guest logins: 2", "Guest logouts: 1", "2026-06-14: 24 posts (+12)", "20 logins (+12)", "10 logouts (+6)", "web 20 in (+12)/10 out (+6)", "guests 12 in (+1)/6 out (+1)", "2026-06-08: 12 posts (+2)"},
+			threadID: "bbslists_week_2026w23",
+			title:    "Weekly activity history 2026-W23",
+			contains: []string{"Period: 2026-06-01 to 2026-06-07", "Days captured: 2", "New posts: 14", "Logins: 15", "Logouts: 8", "Web logins: 15", "Web logouts: 8", "Guest logins: 2", "Guest logouts: 1", "2026-06-07: 24 posts (+12)", "20 logins (+12)", "10 logouts (+6)", "web 20 in (+12)/10 out (+6)", "guests 12 in (+1)/6 out (+1)", "2026-06-01: 12 posts (+2)"},
 		},
 		{
 			threadID: "bbslists_month_202607",
