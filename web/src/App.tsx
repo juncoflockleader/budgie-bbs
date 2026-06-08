@@ -169,60 +169,108 @@ export function App() {
     }
   }
 
+  function sidebarItem(pageName: Page['name'], icon: string, label: string, onClick: () => void, badge?: number) {
+    const active = page.name === pageName
+    return (
+      <button
+        key={pageName}
+        className={`sidebar-item${active ? ' sidebar-item--active' : ''}`}
+        onClick={onClick}
+      >
+        <span className="sidebar-icon">{icon}</span>
+        {label}
+        {badge != null && badge > 0 && (
+          <span className="sidebar-badge">{badge > 99 ? '99+' : badge}</span>
+        )}
+      </button>
+    )
+  }
+
   return (
     <div className="app">
-      <nav className="top-nav">
-        <span className="nav-logo" onClick={() => nav({ name: 'boards' })}>🐦 Budgie</span>
-        <form className="nav-search-form" onSubmit={submitSearch}>
+      <aside className="sidebar">
+        {/* Brand */}
+        <div className="sidebar-brand" onClick={() => nav({ name: 'boards' })}>
+          <span className="sidebar-logo">🐦</span>
+          <span className="sidebar-title">Budgie</span>
+        </div>
+
+        {/* Search */}
+        <form className="sidebar-search-form" onSubmit={submitSearch}>
+          <span className="sidebar-search-icon">⌕</span>
           <input
             ref={searchRef}
-            className="nav-search-input"
+            className="sidebar-search-input"
             value={searchDraft}
             onChange={e => setSearchDraft(e.target.value)}
             placeholder={t('nav.searchPlaceholder')}
             aria-label={t('nav.searchAria')}
           />
         </form>
-        <button className="link-btn nav-unread" onClick={() => nav({ name: 'unread' })}>{t('nav.unread')}</button>
-        <button className="link-btn nav-resident" onClick={() => nav({ name: 'resident-feed' })}>{t('nav.resident')}</button>
-        <button className="link-btn nav-chat" onClick={() => nav({ name: 'chat' })}>{t('nav.chat')}</button>
-        <button className="link-btn nav-social" onClick={() => nav({ name: 'social' })}>{t('nav.people')}</button>
-        <button className="link-btn nav-rankings" onClick={() => nav({ name: 'rankings' })}>{t('nav.rankings')}</button>
-        {user.role === 'admin' && <button className="link-btn nav-admin" onClick={() => nav({ name: 'admin' })}>{t('nav.admin')}</button>}
-        <button
-          className={`link-btn nav-private${privateUnreadCount > 0 ? ' nav-private--unread' : ''}`}
-          onClick={() => { nav({ name: 'private' }); setPrivateUnreadCount(0) }}
-        >
-          {t('nav.inbox')}{privateUnreadCount > 0 && <span className="notif-badge">{privateUnreadCount > 99 ? '99+' : privateUnreadCount}</span>}
-        </button>
-        <button
-          className={`link-btn nav-notifications${unreadCount > 0 ? ' nav-notifications--unread' : ''}`}
-          onClick={() => {
-            nav({ name: 'notifications' }); setUnreadCount(0)
-          }}
-          title={t('nav.notifications')}
-        >
-          🔔{unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}
-        </button>
-        <button
-          className="link-btn nav-user"
-          onClick={() => nav({ name: 'user-profile', username: user.name })}
-          title={t('nav.openProfile')}
-        >
-          {user.name}
-        </button>
-        <select
-          className="nav-locale"
-          value={locale}
-          onChange={event => setLocale(event.currentTarget.value as LocaleCode)}
-          aria-label={t('settings.language')}
-        >
-          <option value="en">EN</option>
-          <option value="zh-CN">中文</option>
-          <option value="zh-TW">中文（繁）</option>
-        </select>
-        <button className="link-btn nav-logout" onClick={handleLogout}>{t('nav.logout')}</button>
-      </nav>
+
+        {/* Primary nav */}
+        <nav className="sidebar-nav">
+          <span className="sidebar-section">{t('nav.boards')}</span>
+          {sidebarItem('boards',        '⊞', t('nav.boards'),     () => nav({ name: 'boards' }))}
+          {sidebarItem('unread',        '◉', t('nav.unread'),     () => nav({ name: 'unread' }))}
+          {sidebarItem('resident-feed', '⊛', t('nav.resident'),   () => nav({ name: 'resident-feed' }))}
+
+          <span className="sidebar-section">{t('nav.people')}</span>
+          {sidebarItem('chat',     '◎', t('nav.chat'),    () => nav({ name: 'chat' }))}
+          <button
+            className={`sidebar-item${page.name === 'private' ? ' sidebar-item--active' : ''}`}
+            onClick={() => { nav({ name: 'private' }); setPrivateUnreadCount(0) }}
+          >
+            <span className="sidebar-icon">✉</span>
+            {t('nav.inbox')}
+            {privateUnreadCount > 0 && (
+              <span className="sidebar-badge">{privateUnreadCount > 99 ? '99+' : privateUnreadCount}</span>
+            )}
+          </button>
+          {sidebarItem('social',   '⊘', t('nav.people'),   () => nav({ name: 'social' }))}
+          {sidebarItem('rankings', '◈', t('nav.rankings'), () => nav({ name: 'rankings' }))}
+          {user.role === 'admin' && sidebarItem('admin', '⚙', t('nav.admin'), () => nav({ name: 'admin' }))}
+        </nav>
+
+        {/* Bottom: notifications + user + settings */}
+        <div className="sidebar-bottom">
+          <button
+            className={`sidebar-item${page.name === 'notifications' ? ' sidebar-item--active' : ''}`}
+            onClick={() => { nav({ name: 'notifications' }); setUnreadCount(0) }}
+          >
+            <span className="sidebar-icon">🔔</span>
+            {t('nav.notifications')}
+            {unreadCount > 0 && (
+              <span className="sidebar-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
+            )}
+          </button>
+
+          <button
+            className="sidebar-user-btn"
+            onClick={() => nav({ name: 'user-profile', username: user.name })}
+            title={t('nav.openProfile')}
+          >
+            <span className="sidebar-avatar">{user.name.charAt(0).toUpperCase()}</span>
+            <span className="sidebar-username">{user.name}</span>
+          </button>
+
+          <select
+            className="sidebar-locale"
+            value={locale}
+            onChange={event => setLocale(event.currentTarget.value as LocaleCode)}
+            aria-label={t('settings.language')}
+          >
+            <option value="en">EN</option>
+            <option value="zh-CN">中文</option>
+            <option value="zh-TW">中文（繁）</option>
+          </select>
+
+          <button className="sidebar-item" onClick={handleLogout}>
+            <span className="sidebar-icon">↩</span>
+            {t('nav.logout')}
+          </button>
+        </div>
+      </aside>
 
       <main className="main-content">
         {page.name === 'boards' && (
