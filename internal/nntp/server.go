@@ -114,6 +114,7 @@ func (s *session) handleLine(ctx context.Context, line string) bool {
 		s.writeLine("VERSION 2")
 		s.writeLine("READER")
 		s.writeLine("POST")
+		s.writeLine("NEWNEWS")
 		s.writeLine("AUTHINFO USER")
 		s.writeLine(".")
 	case "QUIT":
@@ -137,6 +138,8 @@ func (s *session) handleLine(ctx context.Context, line string) bool {
 		s.handleGroup(arg)
 	case "OVER", "XOVER":
 		s.handleOverview()
+	case "NEWNEWS":
+		s.handleNewNews(arg)
 	case "POST":
 		s.handlePost(ctx)
 	default:
@@ -269,6 +272,77 @@ func (s *session) handleOverview() {
 		s.writeLine(fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t\t%d\t%d", a.Number, subject, from, date, msgID, len(a.Post.Body), 1))
 	}
 	s.writeLine(".")
+}
+
+// handleNewNews implements the NEWNEWS command (RFC 3977 §7.4).
+// Syntax: NEWNEWS wildmat date time [GMT]
+// wildmat is a newsgroup pattern (we accept * or a specific group).
+// date/time are in YYYYMMDD HHMMSS format.
+// Returns message-IDs of articles created at or after the given time.
+func (s *session) handleNewNews(arg string) {
+	parts := strings.Fields(arg)
+	if len(parts) < 3 {
+		s.writeLine("501 syntax: NEWNEWS wildmat date time [GMT]")
+		return
+	}
+	wildmat := parts[0]  // e.g. "*" or "budgie.general"
+	dateStr := parts[1]  // YYYYMMDD
+	timeStr := parts[2]  // HHMMSS
+	asGMT := len(parts) >= 4 && strings.EqualFold(parts[3], "GMT")
+
+	// Parse the date and time.
+	layout := "20060102 150405"
+	loc := time.Local
+	if asGMT {
+		loc = time.UTC
+	}
+	t, err := time.ParseInLocation(layout, dateStr+" "+timeStr, loc)
+	if err != nil {
+		s.writeLine("501 invalid date/time format; use YYYYMMDD HHMMSS")
+		return
+	}
+	sinceMS := t.UnixMilli()
+
+	// Enumerate boards matching the wildmat pattern.
+	boards, err := s.s.core.ListBoards()
+	if err != nil {
+		s.writeLine("500 internal error")
+		return
+	}
+
+	s.writeLine("230 list of new articles follows")
+	for _, b := range boards {
+		group := s.boardToGroup(b.ID)
+		if !nntpWildmatMatch(wildmat, group) {
+			continue
+		}
+		articles, err := s.loadArticles(b.ID)
+		if err != nil {
+			continue
+		}
+		for _, a := range articles {
+			if a.Post.CreatedAt >= sinceMS {
+				s.writeLine("<" + s.messageID(a.Post.ID) + ">")
+			}
+		}
+	}
+	s.writeLine(".")
+}
+
+// nntpWildmatMatch returns true when the subject matches the NNTP wildmat
+// pattern. Supports only '*' (match everything) and literal equality.
+// A full wildmat implementation would handle '?' and character classes;
+// this covers the common client cases.
+func nntpWildmatMatch(pattern, subject string) bool {
+	if pattern == "*" {
+		return true
+	}
+	// Handle simple prefix wildcard: "budgie.*"
+	if strings.HasSuffix(pattern, ".*") {
+		prefix := strings.TrimSuffix(pattern, ".*")
+		return strings.HasPrefix(subject, prefix+".")
+	}
+	return pattern == subject
 }
 
 func (s *session) handlePost(ctx context.Context) {
