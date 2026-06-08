@@ -37,6 +37,7 @@ func main() {
 		rebuild    = flag.Bool("rebuild-projections", false, "Rebuild projection tables from durable events and exit")
 		rebuildSeq = flag.Int64("rebuild-from-seq", 0, "Replay durable events with seq > value during projection rebuild")
 		autoStats  = flag.Bool("auto-stats", true, "Automatically publish the daily BBSLists stats snapshot")
+		doorsConf  = flag.String("doors", "", "Path to doors.json config file for door games (optional)")
 	)
 	flag.Parse()
 
@@ -148,6 +149,17 @@ func main() {
 	hk := hostKeyPath(*hostKey)
 	ensureHostKey(hk)
 	tuiSrv := tui.New(c, *sshPort, hk)
+	if *doorsConf != "" {
+		doors, err := core.LoadDoorsConfig(*doorsConf)
+		if err != nil {
+			slog.Error("doors config load failed", "path", *doorsConf, "err", err)
+			os.Exit(1)
+		}
+		if doors != nil {
+			tuiSrv.SetDoors(doors)
+			slog.Info("doors loaded", "count", len(doors.Doors), "path", *doorsConf)
+		}
+	}
 	go func() {
 		if err := tuiSrv.ListenAndServe(ctx); err != nil {
 			slog.Error("SSH server error", "err", err)

@@ -25,12 +25,16 @@ type Server struct {
 	core    *core.Core
 	port    int
 	hostKey string
+	doors   *core.DoorsConfig // optional; nil means doors are disabled
 }
 
 // New creates an SSH server. hostKey is the path to the host private key file.
 func New(c *core.Core, port int, hostKey string) *Server {
 	return &Server{core: c, port: port, hostKey: hostKey}
 }
+
+// SetDoors configures the door games available to SSH sessions.
+func (s *Server) SetDoors(cfg *core.DoorsConfig) { s.doors = cfg }
 
 // ListenAndServe starts the SSH server and blocks until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -144,7 +148,11 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 	}()
 
 	caps := terminalProfileFromEnviron(sess.Environ())
-	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh)
+	var doors []core.DoorConfig
+	if s.doors != nil {
+		doors = s.doors.Doors
+	}
+	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh, doors, caps.termName)
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithEnvironment(sess.Environ()),

@@ -11,14 +11,20 @@ type terminalProfile struct {
 	supportsANSI bool
 	baudDelay    time.Duration
 	locale       localeCode
+	termName     string // value of TERM env var; forwarded to door processes
 }
 
 func terminalProfileFromEnviron(env []string) terminalProfile {
 	values := parseEnviron(env)
+	termName := values["TERM"]
+	if termName == "" {
+		termName = "ansi"
+	}
 	return terminalProfile{
 		supportsANSI: supportsANSI(values),
 		baudDelay:    baudDelayFromSetting(values["BUDGIE_BAUD"]),
 		locale:       localeFromEnviron(env),
+		termName:     termName,
 	}
 }
 

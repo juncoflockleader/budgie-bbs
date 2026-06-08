@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ const (
 	pageProfileEdit
 	pageOnline
 	pageNodeSpy
+	pageDoorsMenu
 )
 
 const threadPageSize = 50
@@ -89,6 +91,7 @@ type (
 	disconnectMsg      struct{}
 	sysopMsgMsg        struct{ msg string }
 	nodeListMsg        struct{ nodes []core.NodeEntry }
+	doorExitedMsg      struct{ err error }
 	postSubmittedMsg   struct{ thread string }
 	chatSentMsg        struct{}
 	threadSubmittedMsg struct {
@@ -153,6 +156,8 @@ type model struct {
 	profileField  profileField
 	onlineUsers   []core.SocialUser
 	nodes         []core.NodeEntry // M14: active SSH sessions for sysop panel
+	doors         []core.DoorConfig // M12: configured door games
+	termName      string            // M12: TERM env value forwarded to door processes
 	authorNames   map[string]string
 	supportsANSI  bool
 }
@@ -212,7 +217,7 @@ func (m *model) postSignatureSepLine() string {
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string) model {
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string) model {
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
 	if actor != nil && actor.IsAdmin() {
 		scopes = append(scopes, "system:nodes")
@@ -254,6 +259,8 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		authorNames:   make(map[string]string),
 		supportsANSI:  supportsANSI,
 		locale:        locale,
+		doors:         doors,
+		termName:      termName,
 	}
 
 	m.list = list.New(nil, newBBSListDelegate(), width, sectionContentHeightFor(height))
@@ -500,6 +507,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rebuildList()
 		}
 
+	case doorExitedMsg:
+		if msg.err != nil {
+			m.statusMsg = "door exited with error: " + msg.err.Error()
+		} else {
+			m.statusMsg = "door session ended"
+		}
+		// Return to the doors menu so user can launch another or go back.
+		if m.page != pageDoorsMenu {
+			m.pushPage(pageDoorsMenu)
+			m.rebuildList()
+		}
+
 	case postSubmittedMsg:
 		m.finishCompose()
 		if m.page == pageCompose {
@@ -566,7 +585,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Delegate to the component that was active when the key arrived.
 		switch activePage {
-		case pageMainMenu, pageBoardList, pageThreadList, pageNotifications, pageProfile, pageOnline, pageNodeSpy:
+		case pageMainMenu, pageBoardList, pageThreadList, pageNotifications, pageProfile, pageOnline, pageNodeSpy, pageDoorsMenu:
 			var c tea.Cmd
 			m.list, c = m.list.Update(msg)
 			cmds = append(cmds, c)
@@ -607,7 +626,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Non-key messages also need component updates.
 	switch m.page {
-	case pageMainMenu, pageBoardList, pageThreadList, pageProfile, pageOnline, pageNodeSpy:
+	case pageMainMenu, pageBoardList, pageThreadList, pageProfile, pageOnline, pageNodeSpy, pageDoorsMenu:
 		var c tea.Cmd
 		m.list, c = m.list.Update(msg)
 		cmds = append(cmds, c)
@@ -707,6 +726,11 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			// M14: sysop node spy panel — admin only.
 			if m.actor != nil && m.actor.IsAdmin() {
 				return m.enterNodeSpy()
+			}
+		case "d":
+			// M12: door games — only shown when doors are configured.
+			if len(m.doors) > 0 {
+				return m.enterDoorsMenu()
 			}
 		case "/":
 			m.pushPage(pageSearch)
@@ -1185,6 +1209,22 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.c.Unsubscribe(m.sub)
 			return tea.Quit
 		}
+
+	case pageDoorsMenu:
+		switch key {
+		case "enter", " ", "right":
+			if d := m.selectedDoor(); d != nil {
+				return m.launchDoor(*d)
+			}
+		case "esc", "left":
+			if !m.popPage() {
+				m.page = pageBoardList
+			}
+			m.rebuildList()
+		case "q", "ctrl+c":
+			m.c.Unsubscribe(m.sub)
+			return tea.Quit
+		}
 	}
 	return nil
 }
@@ -1385,6 +1425,9 @@ func (m model) View() string {
 		body = m.renderSection(m.tr(msgTitleMainMenu), m.renderMainMenu(), m.tr(msgHelpMainMenu))
 	case pageBoardList:
 		boardHelp := m.tr(msgHelpBoardList)
+		if len(m.doors) > 0 {
+			boardHelp += "  d=doors"
+		}
 		if m.actor != nil && m.actor.IsAdmin() {
 			boardHelp += "  S=node-spy"
 		}
@@ -1401,6 +1444,8 @@ func (m model) View() string {
 		body = m.renderSection(m.tr(msgTitleOnlineUsers), m.renderOnlineUsers(), m.tr(msgHelpOnline))
 	case pageNodeSpy:
 		body = m.renderSection("Node Spy", m.renderNodeSpy(), "[r]efresh  [k]ick  [esc]back")
+	case pageDoorsMenu:
+		body = m.renderSection("Doors", m.list.View(), "enter=launch  esc/←=back")
 	case pageThread:
 		help := m.tr(msgHelpThreadReader)
 		if m.actor.IsMod() {
@@ -2008,6 +2053,66 @@ func (m model) renderNodeSpy() string {
 	return b.String()
 }
 
+// --- M12 door games helpers ---
+
+// doorItem is a list.Item representing a configured door game.
+type doorItem struct {
+	d core.DoorConfig
+}
+
+func (i doorItem) Title() string {
+	return i.d.Name
+}
+
+func (i doorItem) Description() string {
+	if i.d.Description != "" {
+		return i.d.Description
+	}
+	return i.d.Cmd
+}
+
+func (i doorItem) FilterValue() string {
+	return i.d.ID + " " + i.d.Name
+}
+
+// enterDoorsMenu navigates to the M12 door games list.
+func (m *model) enterDoorsMenu() tea.Cmd {
+	m.pushPage(pageDoorsMenu)
+	m.rebuildList()
+	return nil
+}
+
+// selectedDoor returns the DoorConfig of the currently selected item, or nil.
+func (m *model) selectedDoor() *core.DoorConfig {
+	sel, ok := m.list.SelectedItem().(doorItem)
+	if !ok {
+		return nil
+	}
+	return &sel.d
+}
+
+// launchDoor builds an exec.Cmd for the door and returns a tea.ExecProcess
+// command that suspends the TUI, hands the terminal to the door binary, and
+// resumes when the door exits.
+func (m *model) launchDoor(d core.DoorConfig) tea.Cmd {
+	termName := m.termName
+	if termName == "" {
+		termName = "ansi"
+	}
+
+	cmd := exec.Command(d.Cmd, d.Args...)
+	// Forward the terminal type and size so the door can render correctly.
+	cmd.Env = append(cmd.Environ(),
+		"TERM="+termName,
+		fmt.Sprintf("COLUMNS=%d", m.width),
+		fmt.Sprintf("LINES=%d", m.height),
+	)
+
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return doorExitedMsg{err: err}
+	})
+}
+
 func (m *model) rebuildList() {
 	m.list.SetShowTitle(false)
 	switch m.page {
@@ -2078,6 +2183,14 @@ func (m *model) rebuildList() {
 		}
 		m.list.SetItems(items)
 		m.list.Title = "Node Spy"
+
+	case pageDoorsMenu:
+		items := make([]list.Item, len(m.doors))
+		for i, d := range m.doors {
+			items[i] = doorItem{d: d}
+		}
+		m.list.SetItems(items)
+		m.list.Title = "Doors"
 	}
 }
 
@@ -3188,6 +3301,8 @@ func (m model) pageName(p page) string {
 		return m.tr(msgTitleOnlineUsers)
 	case pageNodeSpy:
 		return "Node Spy"
+	case pageDoorsMenu:
+		return "Doors"
 	}
 	return ""
 }
