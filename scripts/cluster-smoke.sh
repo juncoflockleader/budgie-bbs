@@ -24,9 +24,19 @@
 #
 set -euo pipefail
 
+# External-node mode: when BUDGIE_SMOKE_NODE_A and BUDGIE_SMOKE_NODE_B are set
+# (full base URLs of two already-running nodes, e.g. from docker compose), the
+# script skips building/launching and tests against those nodes directly. The
+# two URLs must share a JWT secret and a Postgres database.
+EXTERNAL=0
+if [[ -n "${BUDGIE_SMOKE_NODE_A:-}" && -n "${BUDGIE_SMOKE_NODE_B:-}" ]]; then
+  EXTERNAL=1
+fi
+
 DSN="${BUDGIE_POSTGRES_DSN:-}"
-if [[ -z "$DSN" ]]; then
-  echo "ERROR: set BUDGIE_POSTGRES_DSN to your Postgres DSN." >&2
+if [[ "$EXTERNAL" -eq 0 && -z "$DSN" ]]; then
+  echo "ERROR: set BUDGIE_POSTGRES_DSN (local mode), or BUDGIE_SMOKE_NODE_A and" >&2
+  echo "       BUDGIE_SMOKE_NODE_B (external mode)." >&2
   echo "  e.g. postgres://budgie:secret@localhost:5432/budgie?sslmode=disable" >&2
   exit 2
 fi
@@ -43,11 +53,16 @@ NODE_A_HTTP="${NODE_A_HTTP:-:18091}"
 NODE_B_HTTP="${NODE_B_HTTP:-:18092}"
 PROPAGATE_WAIT_SEC="${PROPAGATE_WAIT_SEC:-5}"
 # Same JWT secret on both nodes so a token minted on A is valid on B.
-export BUDGIE_JWT_SECRET="cluster-smoke-shared-secret"
-export BUDGIE_POSTGRES_DSN="$DSN"
+export BUDGIE_JWT_SECRET="${BUDGIE_JWT_SECRET:-cluster-smoke-shared-secret}"
+[[ -n "$DSN" ]] && export BUDGIE_POSTGRES_DSN="$DSN"
 
-A_URL="http://localhost${NODE_A_HTTP}"
-B_URL="http://localhost${NODE_B_HTTP}"
+if [[ "$EXTERNAL" -eq 1 ]]; then
+  A_URL="$BUDGIE_SMOKE_NODE_A"
+  B_URL="$BUDGIE_SMOKE_NODE_B"
+else
+  A_URL="http://localhost${NODE_A_HTTP}"
+  B_URL="http://localhost${NODE_B_HTTP}"
+fi
 
 WORK="$(mktemp -d)"
 BIN="${BUDGIE_BIN:-}"
@@ -65,7 +80,7 @@ trap cleanup EXIT
 
 echo "==> workdir: $WORK"
 
-if [[ -z "$BIN" ]]; then
+if [[ "$EXTERNAL" -eq 0 && -z "$BIN" ]]; then
   echo "==> building budgied"
   BIN="$WORK/budgied"
   ( cd "$ROOT" && go build -o "$BIN" ./cmd/budgied )
@@ -90,20 +105,26 @@ wait_ready() {
     fi
     sleep 0.5
   done
-  echo "ERROR: ${name} did not become ready; log:" >&2
-  cat "$WORK/${name}.log" >&2
+  echo "ERROR: ${name} ($url) did not become ready" >&2
+  [[ -f "$WORK/${name}.log" ]] && cat "$WORK/${name}.log" >&2
   return 1
 }
 
-# Start node A first and let it apply the schema before node B joins. Two nodes
-# applying migrations at the exact same moment can race on the system catalogs;
-# bringing the cluster up one node at a time avoids that and mirrors real ops.
-echo "==> starting node A (${NODE_A_HTTP})"
-A_PID="$(start_node nodeA "$NODE_A_HTTP" 12201)"
-wait_ready "$A_URL" nodeA
-echo "==> starting node B (${NODE_B_HTTP})"
-B_PID="$(start_node nodeB "$NODE_B_HTTP" 12202)"
-wait_ready "$B_URL" nodeB
+if [[ "$EXTERNAL" -eq 1 ]]; then
+  echo "==> external mode: node A=$A_URL  node B=$B_URL"
+  wait_ready "$A_URL" nodeA
+  wait_ready "$B_URL" nodeB
+else
+  # Start node A first and let it apply the schema before node B joins. Two nodes
+  # applying migrations at the exact same moment can race on the system catalogs;
+  # bringing the cluster up one node at a time avoids that and mirrors real ops.
+  echo "==> starting node A (${NODE_A_HTTP})"
+  A_PID="$(start_node nodeA "$NODE_A_HTTP" 12201)"
+  wait_ready "$A_URL" nodeA
+  echo "==> starting node B (${NODE_B_HTTP})"
+  B_PID="$(start_node nodeB "$NODE_B_HTTP" 12202)"
+  wait_ready "$B_URL" nodeB
+fi
 
 USER="smoke_$$_${RANDOM}"
 PASS="smokepass123"

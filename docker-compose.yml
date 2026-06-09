@@ -1,0 +1,84 @@
+# A self-contained multi-node BudgieBBS cluster:
+#   nginx load balancer -> 2 API nodes, 1 SSH node, 1 worker node, 1 Postgres.
+# Writes are serialized cluster-wide by a Postgres advisory lock; live events
+# fan out via LISTEN/NOTIFY; the worker node runs background jobs behind leader
+# election. Bring it up with `docker compose up -d` and exercise it with
+# `scripts/compose-cluster-smoke.sh`.
+name: budgie
+
+x-node-env: &node-env
+  BUDGIE_POSTGRES_DSN: "postgres://budgie:budgie@postgres:5432/budgie?sslmode=disable"
+  BUDGIE_JWT_SECRET: "compose-cluster-shared-secret"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: budgie
+      POSTGRES_PASSWORD: budgie
+      POSTGRES_DB: budgie
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U budgie -d budgie"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot: applies the schema before any node starts, so nodes never race on
+  # migrations at first boot.
+  init:
+    build: .
+    command: ["-init-db", "-storage", "postgres"]
+    environment: *node-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api1: &api
+    build: .
+    command: ["-roles", "api", "-storage", "postgres", "-http", ":8080"]
+    environment: *node-env
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/readyz || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api2:
+    <<: *api
+
+  ssh1:
+    build: .
+    command: ["-roles", "ssh", "-storage", "postgres", "-ssh", "2222", "-http", ":8080"]
+    environment: *node-env
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    ports:
+      - "2222:2222"
+
+  worker:
+    build: .
+    command: ["-roles", "worker", "-storage", "postgres", "-http", ":8080"]
+    environment: *node-env
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - api1
+      - api2
+
+volumes:
+  pgdata:
