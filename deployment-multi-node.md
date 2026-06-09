@@ -78,8 +78,14 @@ export BUDGIE_POSTGRES_DSN="postgres://budgie:secret@db.internal:5432/budgie?ssl
 ./budgied -migrate-sqlite-to-postgres -db ./budgie.db -postgres-dsn "$BUDGIE_POSTGRES_DSN"
 ```
 
-For a fresh cluster with no prior data, skip the migration; the first node to
-start applies the schema.
+For a fresh cluster with no prior data, skip the migration. Schema creation is
+serialized by a transaction-level advisory lock, so nodes may be started
+concurrently without racing. To apply the schema explicitly as a one-shot step
+(useful in orchestration before nodes start), run:
+
+```sh
+./budgied -init-db -storage postgres -postgres-dsn "$BUDGIE_POSTGRES_DSN"
+```
 
 ## Run a node
 
@@ -109,6 +115,77 @@ INFO starting budgied storage=postgres dsn=postgres://****@db.internal:5432/budg
 Each process generates its own in-memory `node_id` (logged, and used to skip
 self-notifications). Give each node its own SSH host key file so SSH clients see
 a stable key per node, or front SSH with a single node.
+
+## Runtime roles
+
+A node runs only the roles you give it via `-roles` (comma-separated, default
+`api,ssh,worker,nntp` = everything, which is the single-node behavior):
+
+| Role | What it runs |
+|------|--------------|
+| `api` | HTTP REST + WebSocket + SSE + web SPA on `-http`. |
+| `ssh` | SSH TUI server on `-ssh`. |
+| `nntp` | NNTP gateway (only when `-nntp <addr>` is also set). |
+| `worker` | Background jobs: outbox processing + daily stats (leader-elected). |
+
+Regardless of roles, **every node** runs the command handler (so it can accept
+writes), the Postgres `LISTEN/NOTIFY` listener, and an HTTP listener that always
+serves `GET /healthz`, `/readyz`, and `/metrics` — so load balancers and
+scrapers can reach any node even when it has no `api` role. Non-`api` nodes serve
+**only** those ops endpoints on `-http` (API routes return 404).
+
+Example topology:
+
+```sh
+# API nodes (behind the load balancer)
+./budgied -roles api    -storage postgres -http :8080
+# SSH TUI node
+./budgied -roles ssh    -storage postgres -ssh 2222
+# Worker node (no public transports; only ops endpoints on -http)
+./budgied -roles worker -storage postgres -http :8080
+```
+
+## Background worker and leader election
+
+The `worker` role owns the outbox worker and the daily stats snapshot. To make
+these safe when more than one node carries the `worker` role, the worker is a
+**leader-elected singleton**: each worker node contends for a Postgres advisory
+lock (`pg_leader` key, distinct from the write-serialization lock), and only the
+holder runs the jobs. If the leader dies, Postgres releases the session-scoped
+lock automatically and another worker takes over within a few seconds.
+
+- Run the `worker` role on **at least one** node. Running it on several is safe —
+  exactly one is active at a time, giving automatic failover.
+- The current leader reports `budgie_worker_is_leader 1` in `/metrics`; followers
+  report `0`.
+- Outbox job claims are also transactionally guarded, and the stats command is
+  idempotent (`auto-stats-<date>` cid), so brief leadership overlap during
+  failover cannot double-process or duplicate.
+
+## Docker / docker-compose cluster
+
+A ready-to-run cluster lives in `docker-compose.yml` (nginx LB → 2 API nodes +
+1 SSH node + 1 worker node + Postgres):
+
+```sh
+docker compose up -d --build      # build the image and start the cluster
+curl -fsS http://localhost:8080/readyz   # LB -> an API node
+```
+
+The compose file uses a one-shot `init` service (`budgied -init-db`) that applies
+the schema before the nodes start, an nginx config (`deploy/nginx.conf`) with
+WebSocket upgrade handling and no sticky sessions, and a shared
+`BUDGIE_JWT_SECRET` across nodes.
+
+To prove cross-node delivery against the compose cluster end-to-end:
+
+```sh
+./scripts/compose-cluster-smoke.sh
+```
+
+It brings the stack up, waits for two API nodes to report ready, runs the
+cross-node smoke (write on api1 must reach a live stream on api2), and tears the
+stack down. Requires Docker (with the compose plugin), `curl`, and `jq`.
 
 ## systemd unit (per node)
 
@@ -168,6 +245,7 @@ cluster view is the aggregate. Key series:
 | `budgie_command_latency_ms` | histogram | Command handler execution time. |
 | `budgie_writer_lock_wait_ms` | histogram | Time waiting for the global write lock. |
 | `budgie_outbox_jobs{status}` | gauge | Outbox jobs by status (pending/running/done/dead). |
+| `budgie_worker_is_leader` | gauge | 1 on the active background-worker leader, else 0. |
 
 Watch `budgie_writer_lock_wait_ms` (write contention across nodes) and
 `budgie_remote_wakeup_lag_ms` (cross-node delivery latency; target p95 < 500ms on

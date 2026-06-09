@@ -15,9 +15,10 @@ A single `budgied` process exposes every transport at once:
 - SSH TUI — a second listener.
 - NNTP gateway — optional, off unless `-nntp` is set.
 
-There is currently no role-splitting flag; one binary runs all enabled
-transports. (Splitting `api` / `ssh` / `worker` / `nntp` into separate processes
-is future work — see Workstream 6 in `milestone-scaling-multiple-servers.md`.)
+By default a single process runs all roles (`-roles api,ssh,worker,nntp`), so
+no extra configuration is needed. The same binary can run a subset of roles per
+node in a cluster — see "Runtime roles" in
+[`deployment-multi-node.md`](deployment-multi-node.md).
 
 ## Build
 
