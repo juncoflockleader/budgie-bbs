@@ -60,6 +60,7 @@ func newHTTPTestCore(t *testing.T) *core.Core {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go c.Run(ctx)
+	c.StartOutboxWorker(ctx)
 	t.Cleanup(func() {
 		cancel()
 		_ = c.DB.Close()
@@ -97,6 +98,7 @@ func newHTTPTestCorePostgres(t *testing.T, baseDSN string) *core.Core {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go c.Run(ctx)
+	c.StartOutboxWorker(ctx)
 	t.Cleanup(func() {
 		cancel()
 		if c.DB != nil {

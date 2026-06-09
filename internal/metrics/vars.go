@@ -8,6 +8,10 @@ var (
 	// Connection gauges.
 	WSConnections    = NewGauge("budgie_ws_connections", "Open WebSocket connections on this node.")
 	LocalSubscribers = NewGauge("budgie_bus_local_subscribers", "Active local event-bus subscriptions on this node.")
+
+	// WorkerIsLeader is 1 while this node holds the background-worker leader lock
+	// (and is therefore running the outbox worker + stats scheduler), else 0.
+	WorkerIsLeader = NewGauge("budgie_worker_is_leader", "1 if this node is the active background-worker leader, else 0.")
 	// SSH sessions and outbox counts are exposed via RegisterCollector at
 	// startup (see cmd/budgied), since they are computed on demand.
 

@@ -46,6 +46,9 @@ func newTestCore(t *testing.T) (*core.Core, context.CancelFunc) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go c.Run(ctx)
+	// The outbox worker is no longer started by Run; tests rely on its
+	// post-commit fanout, so start it directly (no leader election).
+	c.StartOutboxWorker(ctx)
 
 	return c, cancel
 }
@@ -88,6 +91,10 @@ func newTestCorePostgres(t *testing.T, baseDSN string) (*core.Core, context.Canc
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go c.Run(ctx)
+	// Run the outbox worker directly (no leader election) so each per-schema
+	// test core processes its own jobs without contending on the cluster-global
+	// leader advisory lock.
+	c.StartOutboxWorker(ctx)
 
 	t.Cleanup(func() {
 		cancel()

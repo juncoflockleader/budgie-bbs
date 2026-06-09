@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -52,7 +53,13 @@ type Core struct {
 	// nodeID identifies this process in pg_notify payloads.
 	pgDSN  string
 	nodeID string
+	// isLeader is true while this node holds the background-worker leader lock.
+	isLeader atomic.Bool
 }
+
+// IsBackgroundLeader reports whether this node currently holds the
+// background-worker leader lock (and is running the outbox worker + stats).
+func (c *Core) IsBackgroundLeader() bool { return c.isLeader.Load() }
 
 // New opens the SQLite database, runs migrations, and returns a ready Core.
 func New(dbPath string) (*Core, error) {
@@ -147,7 +154,10 @@ func (c *Core) Run(ctx context.Context) {
 	if c.pgDSN != "" {
 		startPGListener(ctx, c.pgDSN, c.nodeID, c.DB, c.Bus)
 	}
-	go runOutboxWorker(ctx, c.DB, c.Bus)
+	// The outbox worker is no longer started here: it is owned by the worker
+	// role and runs behind leader election. Callers that want background jobs
+	// invoke StartBackgroundWorker (production) or StartOutboxWorker (single
+	// process / tests).
 	c.handler.Run(ctx)
 }
 

@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -38,8 +39,12 @@ func main() {
 		rebuildSeq = flag.Int64("rebuild-from-seq", 0, "Replay durable events with seq > value during projection rebuild")
 		autoStats  = flag.Bool("auto-stats", true, "Automatically publish the daily BBSLists stats snapshot")
 		doorsConf  = flag.String("doors", "", "Path to doors.json config file for door games (optional)")
+		roleList   = flag.String("roles", "api,ssh,worker,nntp", "Comma-separated node roles: api,ssh,worker,nntp")
+		initDB     = flag.Bool("init-db", false, "Apply the database schema/migrations and exit (use before starting a cluster)")
 	)
 	flag.Parse()
+
+	roles := parseRoles(*roleList)
 
 	// Resolve storage backend and DSN (reads env var, handles backwards compat).
 	*storage, *pgDSN = resolveStorage(*storage, *pgDSN)
@@ -48,6 +53,23 @@ func main() {
 	secret := []byte(*jwtSecret)
 	if len(secret) == 0 {
 		secret = []byte(envOr("BUDGIE_JWT_SECRET", "change-me-in-production"))
+	}
+
+	if *initDB {
+		if *storage != "postgres" || *pgDSN == "" {
+			slog.Error("init-db requires postgres storage and a DSN", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
+			os.Exit(1)
+		}
+		// NewPostgres applies the schema/migrations; opening then closing is
+		// enough to initialize a fresh database.
+		c, err := core.NewPostgres(*pgDSN)
+		if err != nil {
+			slog.Error("init-db failed", "err", err)
+			os.Exit(1)
+		}
+		_ = c.DB.Close()
+		slog.Info("database initialized", "dsn", obfuscateDSN(*pgDSN))
+		return
 	}
 
 	if *migratePG {
@@ -123,53 +145,71 @@ func main() {
 	// Register scrape-time metrics collectors (SSH sessions, outbox counts).
 	c.RegisterMetricsCollectors()
 
-	// Start the single-writer goroutine.
+	broker := "none"
+	if *storage == "postgres" {
+		broker = "postgres-listen-notify"
+	}
+	slog.Info("node configuration",
+		"roles", *roleList, "storage", *storage, "broker", broker,
+		"http", *httpAddr, "ssh", roleAddr(roles["ssh"], *sshPort),
+		"nntp", roleAddr(roles["nntp"] && *nntpAddr != "", *nntpAddr))
+
+	// The command handler and (in Postgres mode) the cross-node listener run on
+	// every node regardless of role.
 	go c.Run(ctx)
-	if *autoStats {
-		startStatsSnapshotScheduler(ctx, c)
+
+	// Worker role: background jobs (outbox + stats), leader-elected in Postgres.
+	if roles["worker"] {
+		c.StartBackgroundWorker(ctx, *autoStats)
 	}
 
-	// HTTP + WebSocket mux.
+	// HTTP listener — always started so /healthz, /readyz, /metrics are reachable
+	// on every node. The full API/WS/SPA is mounted only on the api role.
 	httpSrv := httpapi.New(c, secret)
 	if root := resolveWebRoot(*webRoot); root != "" {
 		httpSrv.SetWebRoot(root)
 	}
-	wsSrv := wsapi.New(c, secret)
-
 	mux := http.NewServeMux()
-	mux.Handle("/api/v1/ws", wsSrv)
-	mux.Handle("/", httpSrv.Handler())
-
+	if roles["api"] {
+		wsSrv := wsapi.New(c, secret)
+		mux.Handle("/api/v1/ws", wsSrv)
+		mux.Handle("/", httpSrv.Handler())
+	} else {
+		mux.Handle("/", httpSrv.OpsHandler())
+	}
 	srv := &http.Server{Addr: *httpAddr, Handler: mux}
 	go func() {
-		slog.Info("HTTP+WS listening", "addr", *httpAddr, "storage", *storage)
+		slog.Info("HTTP listening", "addr", *httpAddr, "api", roles["api"])
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "err", err)
 		}
 	}()
 
-	// SSH TUI server.
-	hk := hostKeyPath(*hostKey)
-	ensureHostKey(hk)
-	tuiSrv := tui.New(c, *sshPort, hk)
-	if *doorsConf != "" {
-		doors, err := core.LoadDoorsConfig(*doorsConf)
-		if err != nil {
-			slog.Error("doors config load failed", "path", *doorsConf, "err", err)
-			os.Exit(1)
+	// SSH TUI server (ssh role).
+	if roles["ssh"] {
+		hk := hostKeyPath(*hostKey)
+		ensureHostKey(hk)
+		tuiSrv := tui.New(c, *sshPort, hk)
+		if *doorsConf != "" {
+			doors, err := core.LoadDoorsConfig(*doorsConf)
+			if err != nil {
+				slog.Error("doors config load failed", "path", *doorsConf, "err", err)
+				os.Exit(1)
+			}
+			if doors != nil {
+				tuiSrv.SetDoors(doors)
+				slog.Info("doors loaded", "count", len(doors.Doors), "path", *doorsConf)
+			}
 		}
-		if doors != nil {
-			tuiSrv.SetDoors(doors)
-			slog.Info("doors loaded", "count", len(doors.Doors), "path", *doorsConf)
-		}
+		go func() {
+			if err := tuiSrv.ListenAndServe(ctx); err != nil {
+				slog.Error("SSH server error", "err", err)
+			}
+		}()
 	}
-	go func() {
-		if err := tuiSrv.ListenAndServe(ctx); err != nil {
-			slog.Error("SSH server error", "err", err)
-		}
-	}()
 
-	if *nntpAddr != "" {
+	// NNTP gateway (nntp role, only when an address is configured).
+	if roles["nntp"] && *nntpAddr != "" {
 		nntpSrv := nntp.New(c, *nntpAddr, *nntpDomain, *nntpPrefix)
 		go func() {
 			if err := nntpSrv.ListenAndServe(ctx); err != nil {
@@ -180,7 +220,9 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("shutting down")
-	srv.Shutdown(context.Background())
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
 }
 
 func envOr(key, fallback string) string {
@@ -188,6 +230,48 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseRoles turns a comma-separated role list into a set, exiting on an
+// unknown role. Known roles: api, ssh, worker, nntp.
+func parseRoles(list string) map[string]bool {
+	known := map[string]bool{"api": true, "ssh": true, "worker": true, "nntp": true}
+	roles := map[string]bool{}
+	for _, raw := range strings.Split(list, ",") {
+		r := strings.ToLower(strings.TrimSpace(raw))
+		if r == "" {
+			continue
+		}
+		if !known[r] {
+			slog.Error("unknown role", "role", r, "known", "api,ssh,worker,nntp")
+			os.Exit(1)
+		}
+		roles[r] = true
+	}
+	if len(roles) == 0 {
+		slog.Error("at least one role is required", "flag", "-roles")
+		os.Exit(1)
+	}
+	return roles
+}
+
+// roleAddr renders an address for the startup summary, or "disabled" when the
+// role is off.
+func roleAddr(enabled bool, addr any) string {
+	if !enabled {
+		return "disabled"
+	}
+	switch a := addr.(type) {
+	case int:
+		return fmt.Sprintf(":%d", a)
+	case string:
+		if a == "" {
+			return "disabled"
+		}
+		return a
+	default:
+		return "enabled"
+	}
 }
 
 // resolveStorage returns the effective storage backend and DSN.
@@ -224,33 +308,6 @@ func hasWebIndex(root string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func startStatsSnapshotScheduler(ctx context.Context, c *core.Core) {
-	publish := func() {
-		result, err := c.PublishDailyStatsSnapshot(ctx, time.Now().UTC())
-		if err != nil {
-			if ctx.Err() == nil {
-				slog.Warn("automatic stats snapshot failed", "err", err)
-			}
-			return
-		}
-		if result != nil {
-			slog.Info("automatic stats snapshot ensured", "thread", result.ID)
-		}
-	}
-	go func() {
-		publish()
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				publish()
-			}
-		}
-	}()
-}
 
 func hostKeyPath(path string) string {
 	if path != "" {

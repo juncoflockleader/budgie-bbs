@@ -29,14 +29,30 @@ func New(c *core.Core, jwtSecret []byte) *Server {
 // to index.html (client-side routing).
 func (s *Server) SetWebRoot(path string) { s.webRoot = path }
 
+// registerOps mounts the unauthenticated liveness/readiness/metrics routes.
+// Shared by the full Handler and the ops-only OpsHandler so every node — even
+// non-api roles — exposes the same probes.
+func (s *Server) registerOps(mux *http.ServeMux) {
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
+}
+
+// OpsHandler returns a handler that serves only /healthz, /readyz, and /metrics.
+// Used on nodes without the api role so load balancers and scrapers can still
+// reach them without exposing the API surface.
+func (s *Server) OpsHandler() http.Handler {
+	mux := http.NewServeMux()
+	s.registerOps(mux)
+	return mux
+}
+
 // Handler returns the root HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Health probes and metrics (no auth required).
-	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("GET /readyz", s.handleReadyz)
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	s.registerOps(mux)
 
 	// Auth (no middleware required)
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)

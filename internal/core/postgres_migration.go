@@ -15,6 +15,13 @@ func OpenPostgres(dsn string) (*sql.DB, error) {
 	return sql.Open("postgres", dsn)
 }
 
+// pgMigrationLockKey serializes schema migration across nodes. When several
+// nodes boot at once they each call ApplyPostgresMigrations; without this lock
+// their concurrent CREATE TABLE / catalog writes can deadlock or error. The
+// lock is transaction-scoped (released on commit/rollback), so the first node
+// migrates while the rest wait, then run the now-idempotent migrations.
+const pgMigrationLockKey = int64(1654893723)
+
 // ApplyPostgresMigrations applies the embedded Postgres migration set.
 func ApplyPostgresMigrations(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
@@ -22,6 +29,11 @@ func ApplyPostgresMigrations(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback() //nolint
+
+	// Serialize concurrent migrators (see pgMigrationLockKey).
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, pgMigrationLockKey); err != nil {
+		return err
+	}
 
 	for _, m := range PostgresMigrations() {
 		if _, err := tx.ExecContext(ctx, m.SQL); err != nil {
