@@ -1,0 +1,12 @@
+*.db
+*.db-shm
+*.db-wal
+/budgied
+budgie_host_key
+/tmp/
+/artifacts/
+.DS_Store
+
+# Web client
+web/node_modules/
+web/dist/

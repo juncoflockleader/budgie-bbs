@@ -1,0 +1,13 @@
+.git
+.github
+*.db
+*.db-shm
+*.db-wal
+budgie_host_key
+budgie_host_key.pub
+web/node_modules
+web/dist
+**/*_test.go
+*.md
+deploy
+scripts

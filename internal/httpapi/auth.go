@@ -1,0 +1,213 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/juncoflockleader/budgie-bbs/internal/core"
+)
+
+type registerRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+type loginRequest struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+type passwordRecoveryRequest struct {
+	Name          string `json:"name"`
+	SubmittedName string `json:"submittedName"`
+	Email         string `json:"email"`
+	Note          string `json:"note"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+type deactivateAccountRequest struct {
+	Password string `json:"password"`
+	Reason   string `json:"reason"`
+}
+
+type authUser struct {
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Role               string `json:"role"`
+	RegistrationStatus string `json:"registrationStatus,omitempty"`
+}
+
+type loginResponse struct {
+	Token     string   `json:"token"`
+	ExpiresAt int64    `json:"expiresAt"`
+	User      authUser `json:"user"`
+}
+
+type pubkeyRequest struct {
+	Pubkey string `json:"pubkey"`
+}
+
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	var req registerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Password == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name and password required", false)
+		return
+	}
+	u, err := s.core.RegisterUser(req.Name, req.Password)
+	if err != nil {
+		writeError(w, http.StatusConflict, "conflict", err.Error(), false)
+		return
+	}
+	if u.RegistrationStatus == "pending" {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status": "pending",
+			"user":   authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
+		})
+		return
+	}
+	if err := s.core.RecordLogin(u.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not record login", true)
+		return
+	}
+	tok, exp, err := s.mintToken(u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
+		return
+	}
+	writeJSON(w, http.StatusCreated, loginResponse{
+		Token: tok, ExpiresAt: exp,
+		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
+	})
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Password == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name and password required", false)
+		return
+	}
+	u, err := s.core.AuthenticateUserFromHost(req.Name, req.Password, requestHost(r))
+	if err != nil {
+		if errors.Is(err, core.ErrAccountDeactivated) {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "account deactivated", false)
+			return
+		}
+		if errors.Is(err, core.ErrAccountPending) {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "account pending approval", false)
+			return
+		}
+		if errors.Is(err, core.ErrAccountRejected) {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "account registration rejected", false)
+			return
+		}
+		if errors.Is(err, core.ErrLoginIPDenied) {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "login host not allowed", false)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
+		return
+	}
+	if err := s.core.RecordLogin(u.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not record login", true)
+		return
+	}
+	tok, exp, err := s.mintToken(u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
+		return
+	}
+	writeJSON(w, http.StatusOK, loginResponse{
+		Token: tok, ExpiresAt: exp,
+		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
+	})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.RecordLogout(); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not record logout", true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleRequestPasswordRecovery(w http.ResponseWriter, r *http.Request) {
+	var req passwordRecoveryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name required", false)
+		return
+	}
+	if _, err := s.core.RequestPasswordRecovery(req.Name, req.SubmittedName, req.Email, req.Note); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not queue recovery request", true)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+}
+
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CurrentPassword == "" || req.NewPassword == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "currentPassword and newPassword required", false)
+		return
+	}
+	if err := s.core.ChangePassword(actor.ID, req.CurrentPassword, req.NewPassword); err != nil {
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeactivateAccount(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	var req deactivateAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "password required", false)
+		return
+	}
+	err := s.core.DeactivateAccount(actor.ID, req.Password, req.Reason)
+	if err == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
+	if errors.Is(err, core.ErrAccountAlreadyClosed) || errors.Is(err, core.ErrAccountDeactivated) {
+		writeError(w, http.StatusConflict, "conflict", "account already deactivated", false)
+		return
+	}
+	if errors.Is(err, core.ErrInvalidCredentials) {
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+}
+
+func (s *Server) handleAddPubkey(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	var req pubkeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Pubkey == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "pubkey required", false)
+		return
+	}
+	if err := s.core.AddPubkey(actor.ID, req.Pubkey); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) mintToken(userID string) (string, int64, error) {
+	exp := time.Now().Add(30 * 24 * time.Hour)
+	claims := jwt.MapClaims{
+		"sub": userID,
+		"exp": exp.Unix(),
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := tok.SignedString(s.jwtSecret)
+	return signed, exp.UnixMilli(), err
+}

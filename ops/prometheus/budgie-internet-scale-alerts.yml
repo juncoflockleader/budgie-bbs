@@ -1,0 +1,142 @@
+groups:
+  - name: budgie-internet-scale-slo
+    rules:
+      - alert: BudgieRemoteDeliveryLagHigh
+        expr: histogram_quantile(0.95, sum(rate(budgie_remote_wakeup_lag_ms_bucket[5m])) by (le)) > 500
+        for: 10m
+        labels:
+          severity: warning
+          slo: live-delivery
+        annotations:
+          summary: Cross-node live delivery p95 is above 500 ms
+          description: NATS or Postgres wakeup delivery is lagging; replay remains authoritative but clients may see delayed live updates.
+
+      - alert: BudgieGatewayQueueSaturation
+        expr: max(budgie_gateway_connection_queue_depth{stat="max"}) / clamp_min(max(budgie_gateway_connection_queue_capacity{stat="max"}), 1) > 0.80
+        for: 5m
+        labels:
+          severity: warning
+          slo: gateway-fanout
+        annotations:
+          summary: Gateway connection queues are near capacity
+          description: Slow clients are filling gateway buffers. Watch gateway drops and replay repairs before adding gateway capacity or tightening client backpressure.
+
+      - alert: BudgieGatewayDropsWithoutReplayRepair
+        expr: sum(rate(budgie_gateway_dropped_sends_total[5m])) > 0 and sum(rate(budgie_gateway_replay_repairs_total[5m])) == 0
+        for: 10m
+        labels:
+          severity: critical
+          slo: gateway-replay
+        annotations:
+          summary: Gateway drops are not being repaired by replay
+          description: Live delivery drops are occurring without matching durable replay repairs. Check event replay, cursor handling, and gateway restart behavior.
+
+      - alert: BudgieProjectionLagHigh
+        expr: max(budgie_derived_view_lag_events) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          slo: projections
+        annotations:
+          summary: A derived projection is more than 1000 events behind
+          description: Global/search/ranking views are lagging behind the durable log. Check processor ownership, event-log backfill, and rebuild runbooks.
+
+      - alert: BudgieCommandLogWriterLagHigh
+        expr: max(budgie_command_partition_lag) > 500
+        for: 10m
+        labels:
+          severity: critical
+          slo: writes
+        annotations:
+          summary: A command-log writer partition is more than 500 commands behind
+          description: Authoritative command-log writers are not draining a partition fast enough. Reassign hot partitions or add writer capacity.
+
+      - alert: BudgieCommandAssignmentLosses
+        expr: increase(budgie_command_log_assignment_losses_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          slo: writes
+        annotations:
+          summary: Command-log writer assignment was lost
+          description: A writer stopped because it no longer owned a partition. Confirm this was an intended rebalance and that lag drains afterward.
+
+      - alert: BudgieCommandLogRetryingReceiptsStuck
+        expr: max(budgie_command_log_receipts{status="retrying"}) > 0 and max(budgie_command_log_receipt_oldest_age_ms{status="retrying"}) > 300000
+        for: 10m
+        labels:
+          severity: warning
+          slo: writes
+        annotations:
+          summary: Command-log retryable failures are not clearing
+          description: A command-log writer keeps retryable failure receipts older than 5 minutes. Check writer dependencies, partition assignment, and command-log lag for the affected stream.
+
+      - alert: BudgieAttachmentBlobStagingExpired
+        expr: sum(budgie_attachment_blob_staging_blobs{state="expired"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          slo: writes
+        annotations:
+          summary: Expired staged attachment blobs are not clearing
+          description: Authoritative upload staging has expired rows. Check command-log writer visibility, retrying command receipts, and the background worker cleanup loop.
+
+      - alert: BudgieWriteRegionProxyFailures
+        expr: increase(budgie_write_region_proxy_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          slo: regional-writes
+        annotations:
+          summary: Regional node cannot reach the authoritative write region
+          description: Mutating HTTP requests are failing before durable acceptance. Check regional networking, write-region health, and load balancer routing.
+
+      - alert: BudgieCommandLatencyHigh
+        expr: histogram_quantile(0.95, sum(rate(budgie_command_latency_ms_bucket[5m])) by (le)) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          slo: writes
+        annotations:
+          summary: Command handler p95 latency is above 1 second
+          description: Command execution is slow. Check database latency, partition lock contention, and outbox side effects.
+
+      - alert: BudgieWriterLockWaitHigh
+        expr: histogram_quantile(0.95, sum(rate(budgie_writer_lock_wait_ms_bucket[5m])) by (le)) > 250
+        for: 10m
+        labels:
+          severity: warning
+          slo: writes
+        annotations:
+          summary: Writer partition lock wait p95 is above 250 ms
+          description: One or more write-ordering partitions are hot. Use hot-partition candidate metrics to split, reassign, or add writer capacity.
+
+      - alert: BudgieOutboxDeadJobs
+        expr: sum(budgie_outbox_jobs{status="dead"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+          slo: workers
+        annotations:
+          summary: Outbox jobs have reached the dead state
+          description: Background worker jobs have exhausted retries. Inspect job payloads and repair processor-specific side effects.
+
+      - alert: BudgieEventLogShadowParityFailure
+        expr: increase(budgie_event_log_shadow_parity_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          slo: event-log-promotion
+        annotations:
+          summary: Shadow event log diverged from the SQL event log
+          description: Broker event-log parity failed. Do not promote the broker event log until parity is repaired.
+
+      - alert: BudgieHotPartitionCandidate
+        expr: max(budgie_hot_partition_candidate) by (kind, key, signal) > 0
+        for: 15m
+        labels:
+          severity: info
+          slo: capacity
+        annotations:
+          summary: Hot partition candidate detected
+          description: Partition {{ $labels.kind }}/{{ $labels.key }} is hot due to {{ $labels.signal }}. Consider split, reassignment, or capacity action.
