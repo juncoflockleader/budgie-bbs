@@ -1,0 +1,98 @@
+<svg width="100%" viewBox="0 0 900 660" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Current BudgieBBS runtime architecture">
+<style>
+  text{font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;}
+  .title{font-size:18px;font-weight:700;}
+  .h{font-size:14px;font-weight:700;}
+  .t{font-size:12px;}
+  .small{font-size:11px;}
+  .box{stroke:#67645f;stroke-width:1;}
+  .opt{stroke-dasharray:6 5;}
+</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="#67645f" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+<rect x="0" y="0" width="900" height="660" fill="#FCFCFB"/>
+<text class="title" x="450" y="34" text-anchor="middle" fill="#232220">BudgieBBS Current Runtime</text>
+
+<rect class="box" x="40" y="62" width="170" height="72" rx="8" fill="#E6F1FB"/>
+<text class="h" x="125" y="88" text-anchor="middle" fill="#0C447C">Browser</text>
+<text class="t" x="125" y="108" text-anchor="middle" fill="#185FA5">REST / WS / SSE</text>
+
+<rect class="box" x="250" y="62" width="170" height="72" rx="8" fill="#EAF6F1"/>
+<text class="h" x="335" y="88" text-anchor="middle" fill="#085041">Terminal</text>
+<text class="t" x="335" y="108" text-anchor="middle" fill="#0F6E56">SSH TUI bytes</text>
+
+<rect class="box" x="460" y="62" width="170" height="72" rx="8" fill="#F7EDE2"/>
+<text class="h" x="545" y="88" text-anchor="middle" fill="#633A11">News Reader</text>
+<text class="t" x="545" y="108" text-anchor="middle" fill="#87551C">NNTP gateway</text>
+
+<rect class="box" x="40" y="178" width="590" height="112" rx="10" fill="#F1EFE8"/>
+<text class="h" x="335" y="204" text-anchor="middle" fill="#2C2C2A">budgied public roles</text>
+<rect class="box" x="66" y="224" width="118" height="42" rx="6" fill="#FFFFFF"/>
+<text class="t" x="125" y="250" text-anchor="middle" fill="#2C2C2A">api</text>
+<rect class="box" x="198" y="224" width="118" height="42" rx="6" fill="#FFFFFF"/>
+<text class="t" x="257" y="250" text-anchor="middle" fill="#2C2C2A">gateway</text>
+<rect class="box" x="330" y="224" width="118" height="42" rx="6" fill="#FFFFFF"/>
+<text class="t" x="389" y="250" text-anchor="middle" fill="#2C2C2A">ssh</text>
+<rect class="box" x="462" y="224" width="118" height="42" rx="6" fill="#FFFFFF"/>
+<text class="t" x="521" y="250" text-anchor="middle" fill="#2C2C2A">nntp</text>
+
+<line x1="125" y1="134" x2="125" y2="176" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="335" y1="134" x2="389" y2="222" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="545" y1="134" x2="521" y2="222" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect class="box" x="40" y="332" width="590" height="154" rx="12" fill="#EEF0FF"/>
+<text class="h" x="335" y="358" text-anchor="middle" fill="#26215C">Core command/read layer</text>
+<rect class="box" x="68" y="384" width="156" height="54" rx="7" fill="#FFFFFF"/>
+<text class="t" x="146" y="405" text-anchor="middle" fill="#26215C">Command handler</text>
+<text class="small" x="146" y="423" text-anchor="middle" fill="#534AB7">auth, validation, rate limits</text>
+<rect class="box" x="244" y="384" width="156" height="54" rx="7" fill="#FFFFFF"/>
+<text class="t" x="322" y="405" text-anchor="middle" fill="#26215C">SQL projections</text>
+<text class="small" x="322" y="423" text-anchor="middle" fill="#534AB7">read models and status</text>
+<rect class="box" x="420" y="384" width="156" height="54" rx="7" fill="#FFFFFF"/>
+<text class="t" x="498" y="405" text-anchor="middle" fill="#26215C">Live bus</text>
+<text class="small" x="498" y="423" text-anchor="middle" fill="#534AB7">local, PG notify, or NATS</text>
+<text class="small" x="335" y="462" text-anchor="middle" fill="#534AB7">connections keep delivery cursors; gaps repair from durable replay</text>
+
+<line x1="335" y1="290" x2="335" y2="330" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect class="box" x="96" y="536" width="478" height="78" rx="10" fill="#FAEEDA"/>
+<text class="h" x="335" y="562" text-anchor="middle" fill="#412402">SQL durable store</text>
+<text class="t" x="335" y="584" text-anchor="middle" fill="#854F0B">SQLite single-node or Postgres cluster</text>
+<text class="small" x="335" y="602" text-anchor="middle" fill="#854F0B">events, projections, command status, watermarks, worker leases</text>
+<line x1="335" y1="486" x2="335" y2="534" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect class="box opt" x="680" y="82" width="180" height="148" rx="10" fill="#F4FBF8"/>
+<text class="h" x="770" y="108" text-anchor="middle" fill="#085041">Optional broker plane</text>
+<rect class="box" x="708" y="130" width="124" height="34" rx="6" fill="#FFFFFF"/>
+<text class="small" x="770" y="151" text-anchor="middle" fill="#085041">NATS / Kafka commands</text>
+<rect class="box" x="708" y="176" width="124" height="34" rx="6" fill="#FFFFFF"/>
+<text class="small" x="770" y="197" text-anchor="middle" fill="#085041">NATS / Kafka events</text>
+
+<rect class="box" x="682" y="288" width="176" height="72" rx="8" fill="#EAF6F1"/>
+<text class="h" x="770" y="315" text-anchor="middle" fill="#085041">writer role</text>
+<text class="small" x="770" y="337" text-anchor="middle" fill="#0F6E56">drains command partitions</text>
+
+<rect class="box" x="682" y="404" width="176" height="82" rx="8" fill="#F7EDE2"/>
+<text class="h" x="770" y="430" text-anchor="middle" fill="#633A11">worker role</text>
+<text class="small" x="770" y="452" text-anchor="middle" fill="#87551C">derived views, search, stats</text>
+<text class="small" x="770" y="470" text-anchor="middle" fill="#87551C">broker projection gates</text>
+
+<line x1="630" y1="240" x2="706" y2="146" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="708" y1="164" x2="770" y2="286" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="770" y1="360" x2="770" y2="402" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="682" y1="446" x2="576" y2="574" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="682" y1="324" x2="576" y2="574" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect class="box opt" x="682" y="536" width="176" height="78" rx="10" fill="#F5F0FA"/>
+<text class="h" x="770" y="562" text-anchor="middle" fill="#40245F">Optional hot stores</text>
+<text class="small" x="770" y="584" text-anchor="middle" fill="#684894">Redis read cache</text>
+<text class="small" x="770" y="602" text-anchor="middle" fill="#684894">NATS KV counters/presence/chat</text>
+
+<line x1="630" y1="420" x2="680" y2="574" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="680" y1="574" x2="576" y2="574" stroke="#67645f" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<text class="small" x="450" y="642" text-anchor="middle" fill="#5F5E5A">Solid boxes are ordinary runtime pieces; dashed boxes are optional scale accelerators and promotion paths.</text>
+</svg>
