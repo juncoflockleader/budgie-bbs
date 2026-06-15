@@ -18,6 +18,7 @@ type BlessingRanking = projections.BlessingRanking
 type ArchiveRanking = projections.ArchiveRanking
 type ContentFilter = projections.ContentFilter
 type BoardAutomodRule = projections.BoardAutomodRule
+type BoardAutomodActivity = projections.BoardAutomodActivity
 type BoardSettings = projections.BoardSettings
 type BoardSettingsPatch = projections.BoardSettingsPatch
 type BoardModerator = projections.BoardModerator

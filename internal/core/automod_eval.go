@@ -49,7 +49,10 @@ func evaluateBoardAutomod(db *sql.DB, boardID, text, authorID string) (*projecti
 			}
 			matched = accountAgeHours >= 0 && accountAgeHours < float64(r.Threshold)
 		case "rate_threshold":
-			continue // deferred to Phase 9 (needs durable counters)
+			if r.Threshold >= 1 && r.WindowSec >= 1 && strings.TrimSpace(authorID) != "" {
+				since := nowMS() - int64(r.WindowSec)*1000
+				matched = automodRecentPostCount(db, boardID, authorID, since) >= r.Threshold
+			}
 		}
 		if matched {
 			return r, nil
@@ -61,12 +64,12 @@ func evaluateBoardAutomod(db *sql.DB, boardID, text, authorID string) (*projecti
 // evaluateBoardAutomodForHandler is the runtime bridge used by the command
 // handler. It returns the matched rule's actionable fields as primitives so the
 // handler package need not import projection types.
-func evaluateBoardAutomodForHandler(db *sql.DB, boardID, text, authorID string) (matched bool, ruleID, action, reason string, durationSec int64, err error) {
+func evaluateBoardAutomodForHandler(db *sql.DB, boardID, text, authorID string) (matched bool, ruleID, matchType, action, reason string, durationSec int64, err error) {
 	rule, err := evaluateBoardAutomod(db, boardID, text, authorID)
 	if err != nil || rule == nil {
-		return false, "", "", "", 0, err
+		return false, "", "", "", "", 0, err
 	}
-	return true, rule.ID, rule.Action, rule.Reason, rule.DurationSec, nil
+	return true, rule.ID, rule.MatchType, rule.Action, rule.Reason, rule.DurationSec, nil
 }
 
 // automodReason builds the audit reason recorded for an automod action.
@@ -92,23 +95,24 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 	reason := automodReason(rule.Reason, rule.ID)
 	by := automodActorID
 	evtID := stableCommandLogDecisionID("evt_", record, startIndex)
+	var actionEvent *EventAppend
 	switch rule.Action {
 	case "manual_review":
 		reviewID := stableCommandLogDecisionID("rev_", record, startIndex)
-		return []EventAppend{{
+		actionEvent = &EventAppend{
 			ID: evtID, Kind: proto.EvtPostFlagged, Scopes: []string{"thread:" + threadID, "board:" + boardID, "moderation:global"},
 			Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "automod", PostID: postID, Thread: threadID, Reporter: by, Reason: reason, TS: ts}, TS: ts,
-		}}, nil
+		}
 	case "redact":
-		return []EventAppend{{
+		actionEvent = &EventAppend{
 			ID: evtID, Kind: proto.EvtPostRedacted, Scopes: []string{"thread:" + threadID, "board:" + boardID},
 			Payload: &proto.PostRedactedPayload{ID: postID, Thread: threadID, By: by, Reason: reason, TS: ts}, TS: ts,
-		}}, nil
+		}
 	case "lock_thread":
-		return []EventAppend{{
+		actionEvent = &EventAppend{
 			ID: evtID, Kind: proto.EvtThreadLocked, Scopes: []string{"board:" + boardID, "thread:" + threadID},
 			Payload: &proto.ThreadLockedPayload{Thread: threadID, Locked: true, By: by, TS: ts}, TS: ts,
-		}}, nil
+		}
 	case "board_mute", "board_ban", "global_mute":
 		kind := "mute"
 		if rule.Action == "board_ban" {
@@ -118,12 +122,24 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 		if rule.Action == "global_mute" {
 			scope = "global"
 		}
-		return []EventAppend{{
+		actionEvent = &EventAppend{
 			ID: evtID, Kind: proto.EvtUserSanctioned, Scopes: []string{"account:" + actorID},
 			Payload: &proto.UserSanctionedPayload{User: actorID, Kind: kind, Scope: scope, DurationSec: rule.DurationSec, By: by, Reason: reason, TS: ts}, TS: ts,
-		}}, nil
+		}
+	default:
+		return nil, nil
 	}
-	return nil, nil
+	auditEvent := EventAppend{
+		ID:     stableCommandLogDecisionID("evt_", record, startIndex+1),
+		Kind:   proto.EvtBoardAutomodTriggered,
+		Scopes: []string{"board:" + boardID, "moderation:global"},
+		Payload: &proto.BoardAutomodTriggeredPayload{
+			ID: stableCommandLogDecisionID("amlog_", record, startIndex+1), Board: boardID, RuleID: rule.ID,
+			MatchType: rule.MatchType, Action: rule.Action, TargetUser: actorID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
+		},
+		TS: ts,
+	}
+	return []EventAppend{*actionEvent, auditEvent}, nil
 }
 
 // maxConsecutiveRun returns the length of the longest run of the same
@@ -153,6 +169,22 @@ var automodLinkRe = regexp.MustCompile(`(?i)https?://`)
 
 func countLinks(text string) int {
 	return len(automodLinkRe.FindAllStringIndex(text, -1))
+}
+
+// automodRecentPostCount counts a user's posts on a board since the given time
+// (unix ms). Derived from the durable posts projection, so it is consistent
+// across API nodes without a separate counter store.
+func automodRecentPostCount(db *sql.DB, boardID, authorID string, sinceMS int64) int {
+	var n int
+	err := qQueryRow(db,
+		`SELECT COUNT(*) FROM posts p JOIN threads t ON t.id=p.thread
+		  WHERE t.board=? AND p.author_id=? AND p.created_at >= ?`,
+		boardID, authorID, sinceMS,
+	).Scan(&n)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func automodAccountAgeHours(db *sql.DB, userID string) float64 {

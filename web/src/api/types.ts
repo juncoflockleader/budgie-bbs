@@ -583,6 +583,20 @@ export interface SecuritySettings {
   updatedAt: number
 }
 
+export interface BoardAutomodActivity {
+  id: string
+  board: string
+  ruleId: string
+  matchType: string
+  action: string
+  targetUserId: string
+  targetUserName?: string
+  postId?: string
+  threadId?: string
+  reason?: string
+  ts: number
+}
+
 export interface BoardAutomodRule {
   id: string
   board: string

@@ -184,6 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/v1/admin/security-settings", auth(http.HandlerFunc(s.handleSetSecuritySettings)))
 	mux.Handle("GET /api/v1/users/{name}/2fa", auth(http.HandlerFunc(s.handleGetUser2FAStatus)))
 	mux.Handle("GET /api/v1/boards/{board}/automod-rules", auth(http.HandlerFunc(s.handleListBoardAutomodRules)))
+	mux.Handle("GET /api/v1/boards/{board}/automod-activity", auth(http.HandlerFunc(s.handleListBoardAutomodActivity)))
 	mux.Handle("PATCH /api/v1/admin/registration-settings", auth(http.HandlerFunc(s.handleSetAccountRegistrationSettings)))
 	mux.Handle("POST /api/v1/admin/registrations/{name}/review", auth(http.HandlerFunc(s.handleReviewAccountRegistration)))
 	mux.Handle("POST /api/v1/admin/password-recovery/{request}/review", auth(http.HandlerFunc(s.handleReviewPasswordRecoveryRequest)))

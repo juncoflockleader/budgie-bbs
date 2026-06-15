@@ -3461,6 +3461,17 @@ func DeleteBoardAutomodRule(tx *sql.Tx, board, id string) error {
 	return err
 }
 
+// InsertAutomodAuditLog records one fired automod rule.
+func InsertAutomodAuditLog(tx *sql.Tx, a BoardAutomodActivity) error {
+	_, err := QExec(tx,
+		`INSERT INTO automod_audit_log (id, board_id, rule_id, match_type, action, target_user_id, post_id, thread_id, reason, ts)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO NOTHING`,
+		a.ID, a.Board, a.RuleID, a.MatchType, a.Action, a.TargetUserID, a.PostID, a.ThreadID, a.Reason, a.TS,
+	)
+	return err
+}
+
 func ResolveModerationReview(tx *sql.Tx, id, actor, resolution string, ts int64) error {
 	res, err := QExec(tx,
 		`UPDATE moderation_reviews SET status='resolved', actor=?, resolution=?, updated_at=? WHERE id=? AND status='open'`,

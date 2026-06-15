@@ -58,6 +58,7 @@ import type {
   TwoFactorStatus,
   SecuritySettings,
   BoardAutomodRule,
+  BoardAutomodActivity,
 } from './types'
 
 const BASE = '/api/v1'
@@ -452,6 +453,13 @@ export async function listBoardAutomodRules(token: string, board: string): Promi
   const r = await json<{ rules: BoardAutomodRule[] }>(res)
   if (r.error) return { error: r.error }
   return { data: r.data?.rules ?? [] }
+}
+
+export async function listBoardAutomodActivity(token: string, board: string): Promise<ApiResponse<BoardAutomodActivity[]>> {
+  const res = await fetch(`${BASE}/boards/${board}/automod-activity`, { headers: authHeaders(token) })
+  const r = await json<{ activity: BoardAutomodActivity[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.activity ?? [] }
 }
 
 export async function logout(token: string): Promise<ApiResponse<unknown>> {

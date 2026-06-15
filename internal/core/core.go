@@ -2931,6 +2931,10 @@ func (c *Core) ListBoardAutomodRules(boardID string) ([]BoardAutomodRule, error)
 	return listBoardAutomodRules(c.DB, boardID)
 }
 
+func (c *Core) ListBoardAutomodActivity(boardID string, limit, offset int) ([]BoardAutomodActivity, error) {
+	return listBoardAutomodActivity(c.DB, boardID, limit, offset)
+}
+
 // UserCanModerateBoard reports whether a user may moderate a board at all: site
 // moderators/admins always can, as can a board's moderators or members with a
 // post or thread moderation capability.

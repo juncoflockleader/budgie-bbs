@@ -373,6 +373,7 @@ func clearProjectionTables(tx *sql.Tx) error {
 		"moderation_reviews",
 		"content_filters",
 		"board_automod_rules",
+		"automod_audit_log",
 		"user_sanctions",
 		"user_activity",
 	}
@@ -1043,6 +1044,10 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		}
 	case *proto.BoardAutomodRuleDeletedPayload:
 		if err := deleteBoardAutomodRule(tx, evt.Board, evt.ID); err != nil {
+			return err
+		}
+	case *proto.BoardAutomodTriggeredPayload:
+		if err := insertAutomodAuditLog(tx, evt); err != nil {
 			return err
 		}
 	case *proto.PostFlaggedPayload:

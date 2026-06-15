@@ -249,6 +249,25 @@ func listBoardAutomodRules(db *sql.DB, boardID string) ([]BoardAutomodRule, erro
 	return projections.ListBoardAutomodRules(db, boardID)
 }
 
+func insertAutomodAuditLog(tx *sql.Tx, p *proto.BoardAutomodTriggeredPayload) error {
+	return projections.InsertAutomodAuditLog(tx, projections.BoardAutomodActivity{
+		ID:           p.ID,
+		Board:        p.Board,
+		RuleID:       p.RuleID,
+		MatchType:    p.MatchType,
+		Action:       p.Action,
+		TargetUserID: p.TargetUser,
+		PostID:       p.PostID,
+		ThreadID:     p.ThreadID,
+		Reason:       p.Reason,
+		TS:           p.TS,
+	})
+}
+
+func listBoardAutomodActivity(db *sql.DB, boardID string, limit, offset int) ([]BoardAutomodActivity, error) {
+	return projections.ListBoardAutomodActivity(db, boardID, limit, offset)
+}
+
 func insertNotification(db *sql.DB, id, userID, kind, threadID, postID, actor string, ts int64) error {
 	return projections.InsertNotification(db, id, userID, kind, threadID, postID, actor, ts)
 }

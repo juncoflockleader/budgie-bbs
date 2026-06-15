@@ -62,7 +62,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	automodMatched, automodRuleID, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, p.Board, p.Title+"\n"+p.Body, actor.ID)
+	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, p.Board, p.Title+"\n"+p.Body, actor.ID)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -147,7 +147,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 	var automodEvents []*proto.Event
 	if automodMatched {
-		automodEvents, err = h.applyAutomodActionTx(tx, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
+		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -319,7 +319,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	automodMatched, automodRuleID, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, thread.Board, rawBody, actor.ID)
+	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, thread.Board, rawBody, actor.ID)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -370,7 +370,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 	var automodEvents []*proto.Event
 	if automodMatched {
-		automodEvents, err = h.applyAutomodActionTx(tx, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, p.Thread, thread.Board, ts)
+		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, p.Thread, thread.Board, ts)
 		if err != nil {
 			return internalErr(err)
 		}

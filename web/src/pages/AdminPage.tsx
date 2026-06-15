@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
-import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule } from '../api/types'
+import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule, BoardAutomodActivity } from '../api/types'
 
 type Props = {
   token: string
@@ -36,15 +36,21 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [role2FA, setRole2FA] = useState<string | null>(null)
   const [automodBoard, setAutomodBoard] = useState('')
   const [automodRules, setAutomodRules] = useState<BoardAutomodRule[] | null>(null)
+  const [automodActivity, setAutomodActivity] = useState<BoardAutomodActivity[]>([])
   const [ruleDraft, setRuleDraft] = useState({ matchType: 'keyword', pattern: '', threshold: '', windowSec: '', action: 'manual_review', durationHours: '', reason: '' })
 
   async function loadAutomod(board: string) {
     setAutomodBoard(board)
     setAutomodRules(null)
+    setAutomodActivity([])
     if (!board) return
-    const res = await api.listBoardAutomodRules(token, board)
-    if (res.error) { setNotice({ kind: 'error', text: res.error.message }); return }
-    setAutomodRules(res.data ?? [])
+    const [rulesRes, activityRes] = await Promise.all([
+      api.listBoardAutomodRules(token, board),
+      api.listBoardAutomodActivity(token, board),
+    ])
+    if (rulesRes.error) { setNotice({ kind: 'error', text: rulesRes.error.message }); return }
+    setAutomodRules(rulesRes.data ?? [])
+    setAutomodActivity(activityRes.data ?? [])
   }
 
   async function addAutomodRule(event: FormEvent) {
@@ -554,6 +560,24 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
                   ))}
                 </ul>
               )
+            )}
+            <div className="admin-section-heading" style={{ marginTop: '0.75rem' }}>
+              <h4>Recent automod activity</h4>
+            </div>
+            {automodActivity.length === 0 ? (
+              <p className="muted">No automod actions recorded for this board yet.</p>
+            ) : (
+              <ul className="admin-sanction-list">
+                {automodActivity.map(a => (
+                  <li key={a.id} className="admin-sanction-row">
+                    <span>
+                      {new Date(a.ts).toLocaleString()} · <strong>{a.action}</strong> ({a.matchType})
+                      {a.targetUserName ? ` · @${a.targetUserName}` : ''}
+                      {a.reason ? ` · ${a.reason}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
           </>
         )}

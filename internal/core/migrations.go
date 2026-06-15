@@ -884,6 +884,26 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_automod_rules_board ON board_automod_rules(board_id, enabled, priority, id)`); err != nil {
 		return fmt.Errorf("ensure board automod rules index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS automod_audit_log (
+		    id             TEXT    PRIMARY KEY,
+		    board_id       TEXT    NOT NULL,
+		    rule_id        TEXT    NOT NULL DEFAULT '',
+		    match_type     TEXT    NOT NULL DEFAULT '',
+		    action         TEXT    NOT NULL DEFAULT '',
+		    target_user_id TEXT    NOT NULL DEFAULT '',
+		    post_id        TEXT    NOT NULL DEFAULT '',
+		    thread_id      TEXT    NOT NULL DEFAULT '',
+		    reason         TEXT    NOT NULL DEFAULT '',
+		    ts             INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure automod audit log table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_automod_audit_board ON automod_audit_log(board_id, ts DESC)`); err != nil {
+		return fmt.Errorf("ensure automod audit log index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts(author_id, created_at)`); err != nil {
+		return fmt.Errorf("ensure posts author/created index: %w", err)
+	}
 
 	ts := nowMS()
 	updates := []string{

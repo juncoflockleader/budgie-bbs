@@ -5127,6 +5127,41 @@ func ListBoardAutomodRules(db *sql.DB, boardID string) ([]BoardAutomodRule, erro
 	return out, rows.Err()
 }
 
+// ListBoardAutomodActivity returns recent automod audit entries for a board,
+// newest first, resolving the target user's display name.
+func ListBoardAutomodActivity(db *sql.DB, boardID string, limit, offset int) ([]BoardAutomodActivity, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := QQuery(db,
+		`SELECT a.id, a.board_id, a.rule_id, a.match_type, a.action, a.target_user_id,
+		        COALESCE(u.name, ''), a.post_id, a.thread_id, a.reason, a.ts
+		   FROM automod_audit_log a
+		   LEFT JOIN users u ON u.id = a.target_user_id
+		  WHERE a.board_id=?
+		  ORDER BY a.ts DESC, a.id
+		  LIMIT ? OFFSET ?`,
+		boardID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BoardAutomodActivity{}
+	for rows.Next() {
+		var a BoardAutomodActivity
+		if err := rows.Scan(&a.ID, &a.Board, &a.RuleID, &a.MatchType, &a.Action, &a.TargetUserID,
+			&a.TargetUserName, &a.PostID, &a.ThreadID, &a.Reason, &a.TS); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func MatchContentFilter(db *sql.DB, boardID, text string) (*ContentFilter, error) {
 	needle := strings.ToLower(strings.TrimSpace(text))
 	if needle == "" {

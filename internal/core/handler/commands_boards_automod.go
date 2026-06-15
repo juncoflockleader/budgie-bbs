@@ -21,8 +21,30 @@ func automodReasonFor(reason, ruleID string) string {
 // applyAutomodActionTx applies a matched automod rule's action inside the
 // post/thread-creation transaction, returning the generated events to publish
 // after commit. targetUserID is the posting author (the sanction target).
-func (h *Handler) applyAutomodActionTx(tx *sql.Tx, action, reason string, durationSec int64, targetUserID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
+func (h *Handler) applyAutomodActionTx(tx *sql.Tx, ruleID, matchType, action, reason string, durationSec int64, targetUserID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
 	by := automodSystemActor
+	generated, err := h.applyAutomodActionEventsTx(tx, action, reason, durationSec, by, targetUserID, postID, threadID, boardID, ts)
+	if err != nil {
+		return nil, err
+	}
+	// Audit-log the fired rule.
+	auditPayload := &proto.BoardAutomodTriggeredPayload{
+		ID: newID("amlog_"), Board: boardID, RuleID: ruleID, MatchType: matchType, Action: action,
+		TargetUser: targetUserID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
+	}
+	auditScopes := []string{"board:" + boardID, "moderation:global"}
+	auditSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardAutomodTriggered, auditScopes, auditPayload)
+	if err != nil {
+		return nil, err
+	}
+	if err := insertAutomodAuditLog(tx, auditPayload); err != nil {
+		return nil, err
+	}
+	generated = append(generated, &proto.Event{Kind: proto.EvtBoardAutomodTriggered, Seq: auditSeq, Scopes: auditScopes, Payload: auditPayload, TS: ts})
+	return generated, nil
+}
+
+func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, durationSec int64, by, targetUserID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
 	switch action {
 	case "manual_review":
 		reviewID := newID("rev_")

@@ -100,6 +100,7 @@ func newHandler(db *sql.DB, bus Bus, counterStore CounterStore, presenceStore Pr
 		UpsertBoardAutomodRule:       upsertBoardAutomodRule,
 		DeleteBoardAutomodRule:       deleteBoardAutomodRule,
 		EvaluateBoardAutomod:         evaluateBoardAutomodForHandler,
+		InsertAutomodAuditLog:        insertAutomodAuditLog,
 		ResolveModerationReview:      resolveModerationReview,
 		SetThreadPref:                setThreadPref,
 		WatchersOfThreadTx:           watchersOfThreadTx,

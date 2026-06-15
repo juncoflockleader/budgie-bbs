@@ -159,6 +159,21 @@ type BoardAutomodRule struct {
 	UpdatedAt   int64  `json:"updatedAt"`
 }
 
+// BoardAutomodActivity is one audit-log entry for a fired automod rule.
+type BoardAutomodActivity struct {
+	ID             string `json:"id"`
+	Board          string `json:"board"`
+	RuleID         string `json:"ruleId"`
+	MatchType      string `json:"matchType"`
+	Action         string `json:"action"`
+	TargetUserID   string `json:"targetUserId"`
+	TargetUserName string `json:"targetUserName,omitempty"`
+	PostID         string `json:"postId,omitempty"`
+	ThreadID       string `json:"threadId,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	TS             int64  `json:"ts"`
+}
+
 type BoardRanking struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`

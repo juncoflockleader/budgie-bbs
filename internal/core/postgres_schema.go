@@ -3066,5 +3066,29 @@ VALUES (75, 'postgres-board-automod-rules', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 76,
+			Name:    "postgres-automod-audit-log",
+			SQL: `
+CREATE TABLE IF NOT EXISTS automod_audit_log (
+    id             TEXT PRIMARY KEY,
+    board_id       TEXT NOT NULL,
+    rule_id        TEXT NOT NULL DEFAULT '',
+    match_type     TEXT NOT NULL DEFAULT '',
+    action         TEXT NOT NULL DEFAULT '',
+    target_user_id TEXT NOT NULL DEFAULT '',
+    post_id        TEXT NOT NULL DEFAULT '',
+    thread_id      TEXT NOT NULL DEFAULT '',
+    reason         TEXT NOT NULL DEFAULT '',
+    ts             BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_automod_audit_board ON automod_audit_log(board_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_author_created ON posts(author_id, created_at);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (76, 'postgres-automod-audit-log', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

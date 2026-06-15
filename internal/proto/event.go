@@ -21,6 +21,7 @@ const (
 	EvtContentFilterSet                EventKind = "content_filter.set"
 	EvtBoardAutomodRuleSet             EventKind = "board.automod_rule_set"
 	EvtBoardAutomodRuleDeleted         EventKind = "board.automod_rule_deleted"
+	EvtBoardAutomodTriggered           EventKind = "board.automod_triggered"
 	EvtRoleGranted                     EventKind = "role.granted"
 	EvtRoleRevoked                     EventKind = "role.revoked"
 	EvtBoardCreated                    EventKind = "board.created"
@@ -112,7 +113,7 @@ func (e *Event) IsDurable() bool {
 	switch e.Kind {
 	case EvtThreadNew, EvtPostAppended, EvtPostAttachmentAdded, EvtPostEdited, EvtPostRedacted,
 		EvtPostFlagsSet, EvtPostRestored, EvtPostDeletionCleared, EvtPostPurged, EvtThreadTitleSet, EvtThreadLocked, EvtThreadMoved,
-		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtBoardAutomodRuleSet, EvtBoardAutomodRuleDeleted, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated, EvtBoardSettingsSet, EvtBoardMemberRequirementsSet, EvtBoardModeratorSet, EvtBoardMemberSet, EvtBoardMemberApplicationSubmitted, EvtBoardMemberApplicationReviewed,
+		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtBoardAutomodRuleSet, EvtBoardAutomodRuleDeleted, EvtBoardAutomodTriggered, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated, EvtBoardSettingsSet, EvtBoardMemberRequirementsSet, EvtBoardModeratorSet, EvtBoardMemberSet, EvtBoardMemberApplicationSubmitted, EvtBoardMemberApplicationReviewed,
 		EvtBoardRecommendedSet, EvtBoardFavoriteSet, EvtFavoriteFolderCreated, EvtFavoriteFolderUpdated, EvtFavoriteFolderDeleted, EvtFavoriteTreeImported, EvtBoardZapSet,
 		EvtMailSent, EvtMailAttachmentAdded, EvtMailGroupSet, EvtMailGroupDeleted, EvtMailCopyUpdated,
 		EvtDirectMessageSent, EvtDirectMessageRead, EvtDirectMessageDeleted, EvtDirectMessageSettingsSet,
@@ -343,6 +344,20 @@ type BoardAutomodRuleDeletedPayload struct {
 	Board string `json:"board"`
 	By    string `json:"by"`
 	TS    int64  `json:"ts"`
+}
+
+// BoardAutomodTriggeredPayload audits a fired automod rule.
+type BoardAutomodTriggeredPayload struct {
+	ID         string `json:"id"`
+	Board      string `json:"board"`
+	RuleID     string `json:"ruleId"`
+	MatchType  string `json:"matchType"`
+	Action     string `json:"action"`
+	TargetUser string `json:"targetUser"`
+	PostID     string `json:"postId,omitempty"`
+	ThreadID   string `json:"threadId,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	TS         int64  `json:"ts"`
 }
 
 type RoleGrantedPayload struct {

@@ -262,6 +262,27 @@ func (s *Server) handleListBoardAutomodRules(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
 }
 
+func (s *Server) handleListBoardAutomodActivity(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	boardID := r.PathValue("board")
+	ok, err := s.core.UserCanModerateBoard(actor.ID, actor.Role, boardID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, proto.ErrForbidden, "board moderation permission required", false)
+		return
+	}
+	limit, offset := paginate(r)
+	activity, err := s.core.ListBoardAutomodActivity(boardID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"activity": activity})
+}
+
 func (s *Server) handleListBoardModeratorHistory(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	if !s.ensureLocalReadFresh(w, r) {

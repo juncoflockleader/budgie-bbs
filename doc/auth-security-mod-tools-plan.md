@@ -39,6 +39,14 @@ Not yet present:
 
 ## Progress
 
+2026-06-15 (Phase 9 — board rate limits + automod audit reporting):
+
+- `rate_threshold` automod rules now enforce. Implemented in `evaluateBoardAutomod` by counting the author's recent posts on the board within the rule's window (derived from the durable posts projection — consistent across API nodes, no separate counter store, deterministic per board partition). Added a `posts(author_id, created_at)` index. This completes the match type deferred from Phase 8.
+- Automod audit log: every fired rule emits `EvtBoardAutomodTriggered` into a new `automod_audit_log` table (board, rule id, match type, action, target user, post/thread, reason, ts; SQLite + Postgres migration 76), in both the legacy handler and the native command-log decider. Read via `GET /api/v1/boards/{board}/automod-activity` (board-mod/admin gated); the AdminPage Automod panel shows a "Recent automod activity" feed.
+- Tests: `TestBoardAutomodRateThreshold` (3rd post within window is auto-actioned), audit assertions in `TestBoardAutomodExecution`. Verified on the running binary: a rate-limited author is board-muted and the activity feed records `board_mute (rate_threshold)`.
+
+This is the final phase of the plan — all of Phases 1–9 (plus SSH self-registration) are now complete.
+
 2026-06-15 (Phase 8 — automod execution):
 
 - Board automod rules are now evaluated when a thread/post is created. Shared `evaluateBoardAutomod` (internal/core/automod_eval.go) matches the first enabled rule by priority. Match types evaluated now: keyword, regex, repeated_text (longest same-rune run), link_count, account_age (author account younger than N hours). `rate_threshold` is deferred to Phase 9 (needs durable counters) and is skipped during evaluation.

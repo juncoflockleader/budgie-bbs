@@ -317,6 +317,8 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.BoardAutomodRuleSetPayload)
 	case proto.EvtBoardAutomodRuleDeleted:
 		dst = new(proto.BoardAutomodRuleDeletedPayload)
+	case proto.EvtBoardAutomodTriggered:
+		dst = new(proto.BoardAutomodTriggeredPayload)
 	case proto.EvtRoleGranted:
 		dst = new(proto.RoleGrantedPayload)
 	case proto.EvtRoleRevoked:
