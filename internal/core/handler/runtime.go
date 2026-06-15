@@ -542,6 +542,10 @@ func deleteBoardAutomodRule(tx *sql.Tx, board, id string) error {
 	return currentRuntime().DeleteBoardAutomodRule(tx, board, id)
 }
 
+func evaluateBoardAutomod(db *sql.DB, boardID, text, authorID string) (bool, string, string, string, int64, error) {
+	return currentRuntime().EvaluateBoardAutomod(db, boardID, text, authorID)
+}
+
 func pgNotifyEphemeral(db *sql.DB, event, eid, scopes string) {
 	if fn := currentRuntime().PGNotifyEphemeral; fn != nil {
 		fn(db, event, eid, scopes)

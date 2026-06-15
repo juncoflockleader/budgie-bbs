@@ -39,6 +39,14 @@ Not yet present:
 
 ## Progress
 
+2026-06-15 (Phase 8 — automod execution):
+
+- Board automod rules are now evaluated when a thread/post is created. Shared `evaluateBoardAutomod` (internal/core/automod_eval.go) matches the first enabled rule by priority. Match types evaluated now: keyword, regex, repeated_text (longest same-rune run), link_count, account_age (author account younger than N hours). `rate_threshold` is deferred to Phase 9 (needs durable counters) and is skipped during evaluation.
+- Actions applied: manual_review (flags the post + opens a moderation review), redact (removes the just-created post), lock_thread, board_mute / board_ban / global_mute (sanctions the author via the same EvtUserSanctioned path as a manual sanction). One action per matched rule (first match wins).
+- Hooked into BOTH execution paths to stay consistent: the legacy handler (`appendPost` + `createThread`, applying events + projection mutations in-tx) and the native command-log decider (`decideAppendPost` + `decideCreateThread`, emitting the same events for downstream apply). Mirrors the existing content-filter precedent.
+- Tests: core `TestBoardAutomodExecution` (redact removes post; link_count→board_mute then subsequent post blocked with ErrMuted; keyword→manual_review opens a review), `TestNativeAutomodEmitsActionEvents` (native decider emits the action event).
+- NOTE: automod is not exempted for staff/board-moderators in v1 (rules apply to all posters on the board). `rate_threshold` execution + audit reporting land in Phase 9.
+
 2026-06-15 (Phase 7 — board automod rule storage + APIs):
 
 - Board-owned automod rule model (separate from the admin-only site content filters). Table `board_automod_rules` (schema/migrations + Postgres migration 75) storing all plan match types (keyword/regex/repeated_text/link_count/account_age/rate_threshold) and actions (manual_review/redact/lock_thread/board_mute/board_ban/global_mute), with priority, duration, public reason, and private note.

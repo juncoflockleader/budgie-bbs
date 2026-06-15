@@ -81,6 +81,7 @@ type Runtime struct {
 	UpsertContentFilter          func(tx *sql.Tx, id, pattern, scope string, active bool, createdBy string, ts int64) error
 	UpsertBoardAutomodRule       func(tx *sql.Tx, p *proto.BoardAutomodRuleSetPayload) error
 	DeleteBoardAutomodRule       func(tx *sql.Tx, board, id string) error
+	EvaluateBoardAutomod         func(db *sql.DB, boardID, text, authorID string) (matched bool, ruleID, action, reason string, durationSec int64, err error)
 	ResolveModerationReview      func(tx *sql.Tx, id, actor, resolution string, ts int64) error
 	SetThreadPref                func(db *sql.DB, userID, threadID, level string) error
 	WatchersOfThreadTx           func(tx *sql.Tx, threadID, excludeUserID string) ([]string, error)

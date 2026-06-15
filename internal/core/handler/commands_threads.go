@@ -62,6 +62,10 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
+	automodMatched, automodRuleID, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, p.Board, p.Title+"\n"+p.Body, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
 
 	ct := contentType(p.ContentType)
 	ts := nowMS()
@@ -141,6 +145,13 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 			return internalErr(err)
 		}
 	}
+	var automodEvents []*proto.Event
+	if automodMatched {
+		automodEvents, err = h.applyAutomodActionTx(tx, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
+		if err != nil {
+			return internalErr(err)
+		}
+	}
 	if pollBlock != nil && cleanBody != p.Body {
 		pollID := newID("pol_")
 		if err := insertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
@@ -176,6 +187,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 		h.bus.Publish(filterEvent)
 	}
 	h.publishGeneratedEvents(filterGeneratedEvents)
+	h.publishGeneratedEvents(automodEvents)
 
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }
@@ -307,6 +319,10 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
+	automodMatched, automodRuleID, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, thread.Board, rawBody, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -352,6 +368,13 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 			return internalErr(err)
 		}
 	}
+	var automodEvents []*proto.Event
+	if automodMatched {
+		automodEvents, err = h.applyAutomodActionTx(tx, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, p.Thread, thread.Board, ts)
+		if err != nil {
+			return internalErr(err)
+		}
+	}
 	mailBackEvent, err := h.appendArticleMailBackTx(tx, actor, authorName, authorID, mailBackTarget, thread, postID, cleanBody, ts)
 	if err != nil {
 		return internalErr(err)
@@ -392,6 +415,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		h.bus.Publish(mailBackEvent)
 	}
 	h.publishGeneratedEvents(filterGeneratedEvents)
+	h.publishGeneratedEvents(automodEvents)
 
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
 }
