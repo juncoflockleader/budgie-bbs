@@ -69,6 +69,10 @@ type Core struct {
 	emailVerifyEnabled bool
 	// emailVerifyBaseURL is the public site URL used to build verification links.
 	emailVerifyBaseURL string
+	// emailDevInboxURL, when set, points at a local SMTP catcher's web inbox
+	// (e.g. mailpit on :8025). Surfaced in the auth policy so the signup UI can
+	// link to captured mail during local testing. Empty in production.
+	emailDevInboxURL string
 
 	eventLogShadow          EventStore
 	eventLogShadowReporter  EventParityReporter

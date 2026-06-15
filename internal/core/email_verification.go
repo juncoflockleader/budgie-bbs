@@ -49,6 +49,21 @@ func (c *Core) EmailVerificationEnabled() bool {
 	return c != nil && c.emailVerifyEnabled
 }
 
+// SetMailDevInbox records the web-inbox URL of a local SMTP catcher (mailpit)
+// so the signup UI can link to captured verification mail during local testing.
+// Empty disables the hint; never set this for a real provider.
+func (c *Core) SetMailDevInbox(url string) {
+	c.emailDevInboxURL = strings.TrimRight(strings.TrimSpace(url), "/")
+}
+
+// MailDevInboxURL returns the local SMTP-catcher inbox URL, or "" if none.
+func (c *Core) MailDevInboxURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.emailDevInboxURL
+}
+
 // StartEmailVerification marks a user unverified, records the email, mints a
 // single-use token, and enqueues the verification email. Idempotent enough to
 // double as "resend": old tokens for the user are cleared first.

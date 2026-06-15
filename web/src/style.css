@@ -1923,3 +1923,12 @@ button.ranking-row:hover { border-color: var(--c-accent); opacity: 1 }
 .captcha-image { display: flex; align-items: center; gap: 0.5rem; }
 .captcha-image img { border: 1px solid var(--border-color, #d1d5db); border-radius: 4px; background: #f3f4f6; }
 .captcha-refresh { font-size: 1.15rem; line-height: 1; padding: 0 0.3rem; }
+
+.dev-inbox-hint {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px dashed var(--border-color, #d1d5db);
+  border-radius: 4px;
+}

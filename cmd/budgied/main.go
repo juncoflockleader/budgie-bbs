@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -52,6 +53,7 @@ func main() {
 		smtpPassword                        = flag.String("smtp-password", "", "SMTP relay password (also BUDGIE_SMTP_PASSWORD)")
 		requireEmailVerify                  = flag.Bool("require-email-verification", true, "Require email verification before login when a mailer is configured")
 		publicURL                           = flag.String("public-url", "", "Public base URL for email verification links (also BUDGIE_PUBLIC_URL)")
+		mailInboxURL                        = flag.String("mail-inbox-url", "", "Web inbox URL of a local SMTP catcher to surface in the signup UI; auto-set to http://localhost:8025 (mailpit) when the relay host is loopback (also BUDGIE_MAIL_INBOX_URL)")
 		webRoot                             = flag.String("web", "", "Path to web/dist directory for SPA serving (optional)")
 		nntpAddr                            = flag.String("nntp", "", "NNTP listen address (optional, e.g. :1190)")
 		nntpDomain                          = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
@@ -1393,8 +1395,25 @@ func main() {
 		os.Exit(1)
 	}
 	c.SetMailer(mailerInstance, mailFromResolved, *requireEmailVerify, envOr2(*publicURL, "BUDGIE_PUBLIC_URL"))
-	if mailerInstance != nil {
-		slog.Info("outbound email enabled", "mode", mailModeResolved, "from", mailFromResolved, "verification", *requireEmailVerify)
+	// Classify the backend so verification defaults make sense per environment:
+	//   no mailer        -> verification stays off (nothing can be sent)
+	//   loopback relay   -> mailpit-style dev catcher; surface its web inbox
+	//   remote relay/MX  -> real provider; verification enforced by default
+	if mailerInstance == nil {
+		if *requireEmailVerify {
+			slog.Info("email verification requested but no mailer configured; verification disabled (set -mail-from to enable)")
+		}
+	} else {
+		devInbox := envOr2(*mailInboxURL, "BUDGIE_MAIL_INBOX_URL")
+		loopbackRelay := mailModeResolved == mailer.ModeRelay && isLoopbackHost(smtpHostResolved)
+		if devInbox == "" && loopbackRelay {
+			devInbox = "http://localhost:8025" // mailpit's default web inbox
+		}
+		c.SetMailDevInbox(devInbox)
+		slog.Info("outbound email enabled", "mode", mailModeResolved, "from", mailFromResolved, "verification", c.EmailVerificationEnabled())
+		if devInbox != "" {
+			slog.Info("email: local SMTP catcher in use; view captured mail", "inbox", devInbox)
+		}
 	}
 
 	// Register scrape-time metrics collectors (SSH sessions, outbox counts).
@@ -1810,6 +1829,23 @@ func envOr2(flagVal, envKey string) string {
 		return flagVal
 	}
 	return os.Getenv(envKey)
+}
+
+// isLoopbackHost reports whether host names the local machine — the marker of a
+// dev SMTP catcher (mailpit) rather than a real provider/relay.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func defaultCommandLogWorkerID() string {

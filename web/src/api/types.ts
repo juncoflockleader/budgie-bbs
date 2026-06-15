@@ -578,6 +578,8 @@ export interface AuthPolicy {
   }
   emailVerification: {
     required: boolean
+    /** Local SMTP-catcher (mailpit) web inbox, present only in dev. */
+    devInboxUrl?: string
   }
 }
 

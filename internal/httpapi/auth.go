@@ -133,9 +133,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // handleAuthPolicy exposes unauthenticated signup policy (currently captcha
 // config) so the client can render the right challenge before registering.
 func (s *Server) handleAuthPolicy(w http.ResponseWriter, r *http.Request) {
+	emailVerification := map[string]any{"required": s.core.EmailVerificationEnabled()}
+	if inbox := s.core.MailDevInboxURL(); inbox != "" {
+		// Local SMTP catcher (mailpit) — let the signup UI link to captured mail.
+		emailVerification["devInboxUrl"] = inbox
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"captcha":           s.core.CaptchaPolicy(),
-		"emailVerification": map[string]any{"required": s.core.EmailVerificationEnabled()},
+		"emailVerification": emailVerification,
 	})
 }
 

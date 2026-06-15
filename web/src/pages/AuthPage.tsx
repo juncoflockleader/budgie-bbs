@@ -33,6 +33,7 @@ export function AuthPage({ onLogin }: Props) {
   const [captchaToken, setCaptchaToken] = useState('')
   const [emailRequired, setEmailRequired] = useState(false)
   const [verificationSent, setVerificationSent] = useState(false)
+  const [devInboxUrl, setDevInboxUrl] = useState('')
 
   const loadChallenge = useCallback(async () => {
     const res = await api.getCaptchaChallenge()
@@ -58,6 +59,7 @@ export function AuthPage({ onLogin }: Props) {
       setCaptchaProvider(c.provider ?? '')
       setCaptchaSiteKey(c.siteKey ?? '')
       setEmailRequired(res.data.emailVerification?.required ?? false)
+      setDevInboxUrl(res.data.emailVerification?.devInboxUrl ?? '')
       if (c.mode === 'native') loadChallenge()
     })
     return () => { cancelled = true }
@@ -145,6 +147,12 @@ export function AuthPage({ onLogin }: Props) {
         <div className="auth-form">
           <h2>Check your email</h2>
           <p>We sent a verification link to {email || 'your email'}. Open it to finish creating your account, then sign in.</p>
+          {devInboxUrl && (
+            <p className="dev-inbox-hint">
+              Dev mode: emails are captured locally —{' '}
+              <a href={devInboxUrl} target="_blank" rel="noreferrer">open the inbox ↗</a>
+            </p>
+          )}
           {error && <p className="error">{error}</p>}
           <button type="button" disabled={busy} onClick={resend}>{busy ? '…' : 'Resend email'}</button>
           <button
