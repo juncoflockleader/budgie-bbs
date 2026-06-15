@@ -134,7 +134,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 // config) so the client can render the right challenge before registering.
 func (s *Server) handleAuthPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"captcha": s.core.CaptchaPolicy(),
+		"captcha":           s.core.CaptchaPolicy(),
+		"emailVerification": map[string]any{"required": s.core.EmailVerificationEnabled()},
 	})
 }
 

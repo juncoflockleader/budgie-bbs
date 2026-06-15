@@ -31,12 +31,21 @@ export function AuthPage({ onLogin }: Props) {
   const [challenge, setChallenge] = useState<CaptchaChallenge | null>(null)
   const [captchaAnswer, setCaptchaAnswer] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
+  const [emailRequired, setEmailRequired] = useState(false)
+  const [verificationSent, setVerificationSent] = useState(false)
 
   const loadChallenge = useCallback(async () => {
     const res = await api.getCaptchaChallenge()
     setChallenge(res.data ?? null)
     setCaptchaAnswer('')
   }, [])
+
+  async function resend() {
+    setBusy(true)
+    await api.resendVerification(name)
+    setBusy(false)
+    setError('Verification email resent.')
+  }
 
   // Load captcha policy when entering register mode.
   useEffect(() => {
@@ -48,6 +57,7 @@ export function AuthPage({ onLogin }: Props) {
       setCaptchaMode(c.mode)
       setCaptchaProvider(c.provider ?? '')
       setCaptchaSiteKey(c.siteKey ?? '')
+      setEmailRequired(res.data.emailVerification?.required ?? false)
       if (c.mode === 'native') loadChallenge()
     })
     return () => { cancelled = true }
@@ -95,9 +105,10 @@ export function AuthPage({ onLogin }: Props) {
     const res = mode === 'login'
       ? await api.login(name, password)
       : await api.register(name, password, {
-          challengeId: challenge?.id,
-          answer: captchaAnswer,
-          token: captchaToken,
+          email: email.trim(),
+          captchaChallengeId: challenge?.id,
+          captchaAnswer,
+          captchaToken,
         })
 
     setBusy(false)
@@ -105,6 +116,8 @@ export function AuthPage({ onLogin }: Props) {
       setError(t('common.errorPrefix', { message: res.error.message }))
       // A used/failed native challenge is consumed; fetch a fresh one.
       if (mode === 'register' && captchaMode === 'native') loadChallenge()
+    } else if (mode === 'register' && res.data?.status === 'verification_required') {
+      setVerificationSent(true)
     } else if (res.data?.status === 'pending' || !res.data?.token) {
       setError(t('auth.registrationPending'))
     } else if (res.data) {
@@ -128,6 +141,21 @@ export function AuthPage({ onLogin }: Props) {
           <option value="zh-TW">中文（繁）</option>
         </select>
       </div>
+      {verificationSent ? (
+        <div className="auth-form">
+          <h2>Check your email</h2>
+          <p>We sent a verification link to {email || 'your email'}. Open it to finish creating your account, then sign in.</p>
+          {error && <p className="error">{error}</p>}
+          <button type="button" disabled={busy} onClick={resend}>{busy ? '…' : 'Resend email'}</button>
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => { setVerificationSent(false); setMode('login'); setError(null) }}
+          >
+            {t('auth.switchSignIn')}
+          </button>
+        </div>
+      ) : (
       <form className="auth-form" onSubmit={submit}>
         <h2>{mode === 'login' ? t('auth.modeSignIn') : mode === 'register' ? t('auth.modeRegister') : t('auth.modeRecover')}</h2>
         <label>
@@ -141,6 +169,17 @@ export function AuthPage({ onLogin }: Props) {
             maxLength={64}
           />
         </label>
+        {mode === 'register' && emailRequired && (
+          <label>
+            {t('auth.email')}
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              required
+            />
+          </label>
+        )}
         {mode === 'recover' ? (
           <>
             <label>
@@ -221,6 +260,7 @@ export function AuthPage({ onLogin }: Props) {
           </button>
         )}
       </form>
+      )}
     </div>
   )
 }

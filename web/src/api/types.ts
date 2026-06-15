@@ -576,6 +576,9 @@ export interface AuthPolicy {
     provider?: string
     siteKey?: string
   }
+  emailVerification: {
+    required: boolean
+  }
 }
 
 export interface CaptchaChallenge {

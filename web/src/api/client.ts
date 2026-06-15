@@ -315,7 +315,7 @@ export async function getCaptchaChallenge(): Promise<ApiResponse<CaptchaChalleng
 export async function register(
   name: string,
   password: string,
-  captcha?: { challengeId?: string; answer?: string; token?: string },
+  extras?: { email?: string; captchaChallengeId?: string; captchaAnswer?: string; captchaToken?: string },
 ): Promise<ApiResponse<AuthResponse>> {
   const res = await fetch(`${BASE}/auth/register`, {
     method: 'POST',
@@ -323,12 +323,22 @@ export async function register(
     body: JSON.stringify({
       name,
       password,
-      captchaChallengeId: captcha?.challengeId,
-      captchaAnswer: captcha?.answer,
-      captchaToken: captcha?.token,
+      email: extras?.email,
+      captchaChallengeId: extras?.captchaChallengeId,
+      captchaAnswer: extras?.captchaAnswer,
+      captchaToken: extras?.captchaToken,
     }),
   })
   return json<AuthResponse>(res)
+}
+
+export async function resendVerification(name: string): Promise<ApiResponse<unknown>> {
+  const res = await fetch(`${BASE}/auth/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  return json<unknown>(res)
 }
 
 export async function login(name: string, password: string): Promise<ApiResponse<AuthResponse>> {
