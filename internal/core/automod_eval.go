@@ -19,6 +19,11 @@ const automodActorID = "automod"
 // rate_threshold type is not evaluated here (it requires durable counters,
 // landing in Phase 9).
 func evaluateBoardAutomod(db *sql.DB, boardID, text, authorID string) (*projections.BoardAutomodRule, error) {
+	// Staff are exempt: a user who can moderate the board is never auto-actioned
+	// by that board's own rules.
+	if userExemptFromAutomod(db, boardID, authorID) {
+		return nil, nil
+	}
 	rules, err := projections.ListBoardAutomodRules(db, boardID)
 	if err != nil || len(rules) == 0 {
 		return nil, err
@@ -94,52 +99,59 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 	}
 	reason := automodReason(rule.Reason, rule.ID)
 	by := automodActorID
-	evtID := stableCommandLogDecisionID("evt_", record, startIndex)
-	var actionEvent *EventAppend
-	switch rule.Action {
-	case "manual_review":
-		reviewID := stableCommandLogDecisionID("rev_", record, startIndex)
-		actionEvent = &EventAppend{
-			ID: evtID, Kind: proto.EvtPostFlagged, Scopes: []string{"thread:" + threadID, "board:" + boardID, "moderation:global"},
-			Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "automod", PostID: postID, Thread: threadID, Reporter: by, Reason: reason, TS: ts}, TS: ts,
+	var events []EventAppend
+	idx := startIndex
+	for _, action := range proto.ParseAutomodActions(rule.Action) {
+		evtID := stableCommandLogDecisionID("evt_", record, idx)
+		var actionEvent *EventAppend
+		switch action {
+		case "manual_review":
+			reviewID := stableCommandLogDecisionID("rev_", record, idx)
+			actionEvent = &EventAppend{
+				ID: evtID, Kind: proto.EvtPostFlagged, Scopes: []string{"thread:" + threadID, "board:" + boardID, "moderation:global"},
+				Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "automod", PostID: postID, Thread: threadID, Reporter: by, Reason: reason, TS: ts}, TS: ts,
+			}
+		case "redact":
+			actionEvent = &EventAppend{
+				ID: evtID, Kind: proto.EvtPostRedacted, Scopes: []string{"thread:" + threadID, "board:" + boardID},
+				Payload: &proto.PostRedactedPayload{ID: postID, Thread: threadID, By: by, Reason: reason, TS: ts}, TS: ts,
+			}
+		case "lock_thread":
+			actionEvent = &EventAppend{
+				ID: evtID, Kind: proto.EvtThreadLocked, Scopes: []string{"board:" + boardID, "thread:" + threadID},
+				Payload: &proto.ThreadLockedPayload{Thread: threadID, Locked: true, By: by, TS: ts}, TS: ts,
+			}
+		case "board_mute", "board_ban", "global_mute":
+			kind := "mute"
+			if action == "board_ban" {
+				kind = "ban"
+			}
+			scope := boardID
+			if action == "global_mute" {
+				scope = "global"
+			}
+			actionEvent = &EventAppend{
+				ID: evtID, Kind: proto.EvtUserSanctioned, Scopes: []string{"account:" + actorID},
+				Payload: &proto.UserSanctionedPayload{User: actorID, Kind: kind, Scope: scope, DurationSec: rule.DurationSec, By: by, Reason: reason, TS: ts}, TS: ts,
+			}
+		default:
+			continue
 		}
-	case "redact":
-		actionEvent = &EventAppend{
-			ID: evtID, Kind: proto.EvtPostRedacted, Scopes: []string{"thread:" + threadID, "board:" + boardID},
-			Payload: &proto.PostRedactedPayload{ID: postID, Thread: threadID, By: by, Reason: reason, TS: ts}, TS: ts,
-		}
-	case "lock_thread":
-		actionEvent = &EventAppend{
-			ID: evtID, Kind: proto.EvtThreadLocked, Scopes: []string{"board:" + boardID, "thread:" + threadID},
-			Payload: &proto.ThreadLockedPayload{Thread: threadID, Locked: true, By: by, TS: ts}, TS: ts,
-		}
-	case "board_mute", "board_ban", "global_mute":
-		kind := "mute"
-		if rule.Action == "board_ban" {
-			kind = "ban"
-		}
-		scope := boardID
-		if rule.Action == "global_mute" {
-			scope = "global"
-		}
-		actionEvent = &EventAppend{
-			ID: evtID, Kind: proto.EvtUserSanctioned, Scopes: []string{"account:" + actorID},
-			Payload: &proto.UserSanctionedPayload{User: actorID, Kind: kind, Scope: scope, DurationSec: rule.DurationSec, By: by, Reason: reason, TS: ts}, TS: ts,
-		}
-	default:
-		return nil, nil
+		events = append(events, *actionEvent)
+		idx++
+		events = append(events, EventAppend{
+			ID:     stableCommandLogDecisionID("evt_", record, idx),
+			Kind:   proto.EvtBoardAutomodTriggered,
+			Scopes: []string{"board:" + boardID, "moderation:global"},
+			Payload: &proto.BoardAutomodTriggeredPayload{
+				ID: stableCommandLogDecisionID("amlog_", record, idx), Board: boardID, RuleID: rule.ID,
+				MatchType: rule.MatchType, Action: action, TargetUser: actorID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
+			},
+			TS: ts,
+		})
+		idx++
 	}
-	auditEvent := EventAppend{
-		ID:     stableCommandLogDecisionID("evt_", record, startIndex+1),
-		Kind:   proto.EvtBoardAutomodTriggered,
-		Scopes: []string{"board:" + boardID, "moderation:global"},
-		Payload: &proto.BoardAutomodTriggeredPayload{
-			ID: stableCommandLogDecisionID("amlog_", record, startIndex+1), Board: boardID, RuleID: rule.ID,
-			MatchType: rule.MatchType, Action: rule.Action, TargetUser: actorID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
-		},
-		TS: ts,
-	}
-	return []EventAppend{*actionEvent, auditEvent}, nil
+	return events, nil
 }
 
 // maxConsecutiveRun returns the length of the longest run of the same
@@ -185,6 +197,30 @@ func automodRecentPostCount(db *sql.DB, boardID, authorID string, sinceMS int64)
 		return 0
 	}
 	return n
+}
+
+// userExemptFromAutomod reports whether a user moderates the board (site
+// mod/admin, board moderator, or member with a post/thread moderation
+// capability) and is therefore exempt from its automod rules.
+func userExemptFromAutomod(db *sql.DB, boardID, userID string) bool {
+	if strings.TrimSpace(userID) == "" {
+		return false
+	}
+	var role string
+	if err := qQueryRow(db, `SELECT role FROM users WHERE id=?`, userID).Scan(&role); err == nil {
+		if role == "admin" || role == "moderator" {
+			return true
+		}
+	}
+	var x int
+	if err := qQueryRow(db, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&x); err == nil {
+		return true
+	}
+	var posts, threads int
+	if err := qQueryRow(db, `SELECT can_moderate_posts, can_moderate_threads FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&posts, &threads); err == nil {
+		return posts != 0 || threads != 0
+	}
+	return false
 }
 
 func automodAccountAgeHours(db *sql.DB, userID string) float64 {

@@ -39,6 +39,12 @@ Not yet present:
 
 ## Progress
 
+2026-06-15 (automod enhancements — multi-action rules + staff exemption):
+
+- A rule may now carry several comma-separated actions (e.g. `redact,board_ban`), applied together in order when it matches; each action is authorized independently (union of requirements) and gets its own audit-log entry. Implemented across the proto validator (`ParseAutomodActions`), both execution paths, and the AdminPage form (action checkboxes instead of a single select). Single-action rules are unaffected.
+- Staff are exempt from automod: `evaluateBoardAutomod` skips users who can moderate the board (site mod/admin, board moderator, or member with can_moderate_posts/threads), so moderators are never auto-actioned by their own board's rules.
+- Tests: `TestBoardAutomodMultipleActions` (redact+ban → post redacted, author banned, both audited) and `TestBoardAutomodStaffExempt` (moderator exempt, ordinary user still actioned). Verified on the running binary.
+
 2026-06-15 (Phase 9 — board rate limits + automod audit reporting):
 
 - `rate_threshold` automod rules now enforce. Implemented in `evaluateBoardAutomod` by counting the author's recent posts on the board within the rule's window (derived from the durable posts projection — consistent across API nodes, no separate counter store, deterministic per board partition). Added a `posts(author_id, created_at)` index. This completes the match type deferred from Phase 8.

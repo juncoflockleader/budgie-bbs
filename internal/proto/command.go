@@ -213,6 +213,20 @@ var AutomodActions = map[string]bool{
 	"board_mute": true, "board_ban": true, "global_mute": true,
 }
 
+// ParseAutomodActions splits a rule's action field into individual actions. A
+// rule may carry several comma-separated actions (e.g. "redact,board_ban"),
+// applied together in priority order when the rule matches.
+func ParseAutomodActions(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // ValidateAutomodRule checks rule fields and returns a validation message, or ""
 // if the rule is valid. Shared by the command handler and the native
 // command-log decider so both paths validate identically.
@@ -221,8 +235,14 @@ func ValidateAutomodRule(p SetBoardAutomodRulePayload) string {
 	if !AutomodMatchTypes[matchType] {
 		return "unknown match type"
 	}
-	if !AutomodActions[strings.TrimSpace(p.Action)] {
-		return "unknown action"
+	actions := ParseAutomodActions(p.Action)
+	if len(actions) == 0 {
+		return "at least one action is required"
+	}
+	for _, a := range actions {
+		if !AutomodActions[a] {
+			return "unknown action: " + a
+		}
 	}
 	pattern := strings.TrimSpace(p.Pattern)
 	switch matchType {

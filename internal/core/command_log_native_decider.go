@@ -2241,7 +2241,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardAutomodRule(ctx context
 	if msg := proto.ValidateAutomodRule(payload); msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
-	action := strings.TrimSpace(payload.Action)
+	actions := proto.ParseAutomodActions(payload.Action)
+	action := strings.Join(actions, ",") // normalized
 	actor, errDetail := e.loadNativeDecisionActor(record.ActorID)
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
@@ -2253,22 +2254,24 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardAutomodRule(ctx context
 	if !exists {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
 	}
-	switch action {
-	case "global_mute":
-		if !actor.IsAdmin() {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "only admins can create global-sanction rules", false)
-		}
-	case "lock_thread":
-		if ok, err := e.core.userCanModerateBoardCap(actor.ID, actor.Role, board, "can_moderate_threads"); err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		} else if !ok {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread moderation permission required", false)
-		}
-	default:
-		if ok, err := e.core.userCanModerateBoardCap(actor.ID, actor.Role, board, "can_moderate_posts"); err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		} else if !ok {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "post moderation permission required", false)
+	for _, a := range actions {
+		switch a {
+		case "global_mute":
+			if !actor.IsAdmin() {
+				return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "only admins can create global-sanction rules", false)
+			}
+		case "lock_thread":
+			if ok, err := e.core.userCanModerateBoardCap(actor.ID, actor.Role, board, "can_moderate_threads"); err != nil {
+				return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+			} else if !ok {
+				return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread moderation permission required", false)
+			}
+		default:
+			if ok, err := e.core.userCanModerateBoardCap(actor.ID, actor.Role, board, "can_moderate_posts"); err != nil {
+				return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+			} else if !ok {
+				return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "post moderation permission required", false)
+			}
 		}
 	}
 	ruleID := strings.TrimSpace(payload.ID)

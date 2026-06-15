@@ -91,6 +91,78 @@ func TestBoardAutomodExecution(t *testing.T) {
 	}
 }
 
+func TestBoardAutomodMultipleActions(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "combo", Name: "Combo"})
+	// One rule, two actions: redact the post AND ban the author.
+	exec(t, c, admin, proto.CmdSetBoardAutomodRule, proto.SetBoardAutomodRulePayload{
+		Board: "combo", MatchType: "keyword", Pattern: "badword", Action: "redact,board_ban", Reason: "banned word",
+	})
+	base := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "combo", Title: "topic", Body: "welcome"})
+
+	exec(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{Thread: base.ID, Body: "contains badword here"})
+	posts, _ := c.ListPosts(base.ID, 50, 0)
+	redacted := 0
+	for _, p := range posts {
+		if p.Redacted {
+			redacted++
+		}
+	}
+	if redacted != 1 {
+		t.Fatalf("expected the offending post redacted, got %d redacted of %+v", redacted, posts)
+	}
+	// alice was also banned -> her next post is rejected.
+	execExpectErr(t, c, alice, proto.CmdAppendPost, proto.AppendPostPayload{Thread: base.ID, Body: "hello again"}, proto.ErrBanned)
+
+	activity, _ := c.ListBoardAutomodActivity("combo", 50, 0)
+	var actions []string
+	for _, a := range activity {
+		actions = append(actions, a.Action)
+	}
+	for _, want := range []string{"redact", "board_ban"} {
+		seen := false
+		for _, a := range actions {
+			if a == want {
+				seen = true
+			}
+		}
+		if !seen {
+			t.Fatalf("audit log missing %q from multi-action rule; got %v", want, actions)
+		}
+	}
+}
+
+func TestBoardAutomodStaffExempt(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw") // board moderator
+	dave := registerAndGetUser(t, c, "dave", "pw")   // ordinary user
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "vip", Name: "VIP"})
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{Board: "vip", User: carol.ID, Moderator: true})
+	exec(t, c, admin, proto.CmdSetBoardAutomodRule, proto.SetBoardAutomodRulePayload{
+		Board: "vip", MatchType: "keyword", Pattern: "nope", Action: "redact",
+	})
+
+	// The board moderator is exempt: her matching post is NOT redacted.
+	modThread := exec(t, c, carol, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "vip", Title: "mod post", Body: "this says nope"})
+	modPosts, _ := c.ListPosts(modThread.ID, 10, 0)
+	if len(modPosts) != 1 || modPosts[0].Redacted {
+		t.Fatalf("board moderator should be exempt from automod: %+v", modPosts)
+	}
+	// An ordinary user's matching post is still redacted.
+	userThread := exec(t, c, dave, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "vip", Title: "user post", Body: "this says nope"})
+	userPosts, _ := c.ListPosts(userThread.ID, 10, 0)
+	if len(userPosts) != 1 || !userPosts[0].Redacted {
+		t.Fatalf("ordinary user's matching post should be redacted: %+v", userPosts)
+	}
+}
+
 func TestBoardAutomodRateThreshold(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

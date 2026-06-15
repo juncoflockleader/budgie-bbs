@@ -1976,3 +1976,12 @@ button.ranking-row:hover { border-color: var(--c-accent); opacity: 1 }
 }
 .twofa-enroll { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
 .twofa-qr { width: 180px; height: 180px; align-self: flex-start; background: #fff; padding: 6px; border-radius: 4px; }
+
+.automod-actions {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1rem;
+  border: 1px solid var(--border-color, #d1d5db); border-radius: 4px;
+  padding: 0.5rem 0.75rem; margin: 0.25rem 0;
+}
+.automod-actions legend { font-size: 0.85rem; opacity: 0.75; padding: 0 0.3rem; }
+.automod-action-option { display: flex; flex-direction: row; align-items: center; gap: 0.35rem; font-size: 0.9rem; }
+.automod-action-option input { width: auto; }

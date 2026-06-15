@@ -18,29 +18,33 @@ func automodReasonFor(reason, ruleID string) string {
 	return "Automod rule " + ruleID
 }
 
-// applyAutomodActionTx applies a matched automod rule's action inside the
+// applyAutomodActionTx applies a matched automod rule's action(s) inside the
 // post/thread-creation transaction, returning the generated events to publish
-// after commit. targetUserID is the posting author (the sanction target).
+// after commit. A rule may carry several comma-separated actions, applied in
+// order; each gets its own audit-log entry. targetUserID is the posting author.
 func (h *Handler) applyAutomodActionTx(tx *sql.Tx, ruleID, matchType, action, reason string, durationSec int64, targetUserID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
 	by := automodSystemActor
-	generated, err := h.applyAutomodActionEventsTx(tx, action, reason, durationSec, by, targetUserID, postID, threadID, boardID, ts)
-	if err != nil {
-		return nil, err
+	var generated []*proto.Event
+	for _, act := range proto.ParseAutomodActions(action) {
+		events, err := h.applyAutomodActionEventsTx(tx, act, reason, durationSec, by, targetUserID, postID, threadID, boardID, ts)
+		if err != nil {
+			return nil, err
+		}
+		generated = append(generated, events...)
+		auditPayload := &proto.BoardAutomodTriggeredPayload{
+			ID: newID("amlog_"), Board: boardID, RuleID: ruleID, MatchType: matchType, Action: act,
+			TargetUser: targetUserID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
+		}
+		auditScopes := []string{"board:" + boardID, "moderation:global"}
+		auditSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardAutomodTriggered, auditScopes, auditPayload)
+		if err != nil {
+			return nil, err
+		}
+		if err := insertAutomodAuditLog(tx, auditPayload); err != nil {
+			return nil, err
+		}
+		generated = append(generated, &proto.Event{Kind: proto.EvtBoardAutomodTriggered, Seq: auditSeq, Scopes: auditScopes, Payload: auditPayload, TS: ts})
 	}
-	// Audit-log the fired rule.
-	auditPayload := &proto.BoardAutomodTriggeredPayload{
-		ID: newID("amlog_"), Board: boardID, RuleID: ruleID, MatchType: matchType, Action: action,
-		TargetUser: targetUserID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
-	}
-	auditScopes := []string{"board:" + boardID, "moderation:global"}
-	auditSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardAutomodTriggered, auditScopes, auditPayload)
-	if err != nil {
-		return nil, err
-	}
-	if err := insertAutomodAuditLog(tx, auditPayload); err != nil {
-		return nil, err
-	}
-	generated = append(generated, &proto.Event{Kind: proto.EvtBoardAutomodTriggered, Seq: auditSeq, Scopes: auditScopes, Payload: auditPayload, TS: ts})
 	return generated, nil
 }
 
@@ -126,7 +130,8 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	matchType := strings.TrimSpace(p.MatchType)
-	action := strings.TrimSpace(p.Action)
+	actions := proto.ParseAutomodActions(p.Action)
+	action := strings.Join(actions, ",") // normalized
 	pattern := strings.TrimSpace(p.Pattern)
 
 	tx, err := h.db.Begin()
@@ -142,7 +147,7 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 		return internalErr(err)
 	}
 
-	if reply := h.authorizeAutomodAction(tx, actor, board, action); reply.Err != nil {
+	if reply := h.authorizeAutomodActions(tx, actor, board, actions); reply.Err != nil {
 		return reply
 	}
 
@@ -176,19 +181,23 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 	return Reply{Result: &proto.AckResult{ID: ruleID, Seq: seq}}
 }
 
-func (h *Handler) authorizeAutomodAction(tx *sql.Tx, actor *User, board, action string) Reply {
-	switch action {
-	case "global_mute":
-		if !actor.IsAdmin() {
-			return Reply{Err: errDetail(proto.ErrForbidden, "only admins can create global-sanction rules", false)}
-		}
-	case "lock_thread":
-		if !h.actorCanModerateBoardThreadsTx(tx, actor, board) {
-			return Reply{Err: errDetail(proto.ErrForbidden, "thread moderation permission required", false)}
-		}
-	default: // manual_review, redact, board_mute, board_ban
-		if !h.actorCanModerateBoardPostsTx(tx, actor, board) {
-			return Reply{Err: errDetail(proto.ErrForbidden, "post moderation permission required", false)}
+// authorizeAutomodActions requires the actor to hold the permission for every
+// action a rule will take (the union of per-action requirements).
+func (h *Handler) authorizeAutomodActions(tx *sql.Tx, actor *User, board string, actions []string) Reply {
+	for _, action := range actions {
+		switch action {
+		case "global_mute":
+			if !actor.IsAdmin() {
+				return Reply{Err: errDetail(proto.ErrForbidden, "only admins can create global-sanction rules", false)}
+			}
+		case "lock_thread":
+			if !h.actorCanModerateBoardThreadsTx(tx, actor, board) {
+				return Reply{Err: errDetail(proto.ErrForbidden, "thread moderation permission required", false)}
+			}
+		default: // manual_review, redact, board_mute, board_ban
+			if !h.actorCanModerateBoardPostsTx(tx, actor, board) {
+				return Reply{Err: errDetail(proto.ErrForbidden, "post moderation permission required", false)}
+			}
 		}
 	}
 	return Reply{}

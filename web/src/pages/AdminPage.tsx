@@ -37,7 +37,11 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [automodBoard, setAutomodBoard] = useState('')
   const [automodRules, setAutomodRules] = useState<BoardAutomodRule[] | null>(null)
   const [automodActivity, setAutomodActivity] = useState<BoardAutomodActivity[]>([])
-  const [ruleDraft, setRuleDraft] = useState({ matchType: 'keyword', pattern: '', threshold: '', windowSec: '', action: 'manual_review', durationHours: '', reason: '' })
+  const [ruleDraft, setRuleDraft] = useState<{ matchType: string; pattern: string; threshold: string; windowSec: string; actions: string[]; durationHours: string; reason: string }>({ matchType: 'keyword', pattern: '', threshold: '', windowSec: '', actions: ['manual_review'], durationHours: '', reason: '' })
+
+  function toggleRuleAction(action: string) {
+    setRuleDraft(p => ({ ...p, actions: p.actions.includes(action) ? p.actions.filter(a => a !== action) : [...p.actions, action] }))
+  }
 
   async function loadAutomod(board: string) {
     setAutomodBoard(board)
@@ -57,11 +61,12 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
     event.preventDefault()
     if (!automodBoard) { setNotice({ kind: 'error', text: 'Select a board first.' }); return }
     const d = ruleDraft
-    const payload: Record<string, unknown> = { board: automodBoard, matchType: d.matchType, action: d.action }
+    if (d.actions.length === 0) { setNotice({ kind: 'error', text: 'Select at least one action.' }); return }
+    const payload: Record<string, unknown> = { board: automodBoard, matchType: d.matchType, action: d.actions.join(',') }
     if (d.matchType === 'keyword' || d.matchType === 'regex') payload.pattern = d.pattern.trim()
     if (['repeated_text', 'link_count', 'account_age', 'rate_threshold'].includes(d.matchType)) payload.threshold = Number(d.threshold) || 0
     if (d.matchType === 'rate_threshold') payload.windowSec = Number(d.windowSec) || 0
-    if (['board_mute', 'board_ban', 'global_mute'].includes(d.action) && d.durationHours.trim()) payload.durationSec = Math.round(Number(d.durationHours) * 3600)
+    if (d.actions.some(a => ['board_mute', 'board_ban', 'global_mute'].includes(a)) && d.durationHours.trim()) payload.durationSec = Math.round(Number(d.durationHours) * 3600)
     if (d.reason.trim()) payload.reason = d.reason.trim()
     setSaving('automod')
     setNotice(null)
@@ -512,18 +517,23 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
                     <input value={ruleDraft.windowSec} onChange={e => setRuleDraft(p => ({ ...p, windowSec: e.target.value }))} inputMode="numeric" />
                   </label>
                 )}
-                <label>
-                  Action
-                  <select value={ruleDraft.action} onChange={e => setRuleDraft(p => ({ ...p, action: e.target.value }))}>
-                    <option value="manual_review">manual review</option>
-                    <option value="redact">redact post</option>
-                    <option value="lock_thread">lock thread</option>
-                    <option value="board_mute">board mute</option>
-                    <option value="board_ban">board ban</option>
-                    <option value="global_mute">global mute</option>
-                  </select>
-                </label>
-                {['board_mute', 'board_ban', 'global_mute'].includes(ruleDraft.action) && (
+                <fieldset className="automod-actions">
+                  <legend>Actions</legend>
+                  {[
+                    ['manual_review', 'manual review'],
+                    ['redact', 'redact post'],
+                    ['lock_thread', 'lock thread'],
+                    ['board_mute', 'board mute'],
+                    ['board_ban', 'board ban'],
+                    ['global_mute', 'global mute'],
+                  ].map(([value, label]) => (
+                    <label key={value} className="automod-action-option">
+                      <input type="checkbox" checked={ruleDraft.actions.includes(value)} onChange={() => toggleRuleAction(value)} />
+                      {label}
+                    </label>
+                  ))}
+                </fieldset>
+                {ruleDraft.actions.some(a => ['board_mute', 'board_ban', 'global_mute'].includes(a)) && (
                   <label>
                     Duration (hrs)
                     <input value={ruleDraft.durationHours} onChange={e => setRuleDraft(p => ({ ...p, durationHours: e.target.value }))} placeholder="blank = permanent" />
