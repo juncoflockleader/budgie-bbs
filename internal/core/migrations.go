@@ -55,6 +55,8 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"users", "reviewed_at", "reviewed_at INTEGER NOT NULL DEFAULT 0"},
 		{"users", "reviewed_by", "reviewed_by TEXT NOT NULL DEFAULT ''"},
 		{"users", "review_reason", "review_reason TEXT NOT NULL DEFAULT ''"},
+		{"users", "email_verified", "email_verified INTEGER NOT NULL DEFAULT 1"},
+		{"users", "email_verified_at", "email_verified_at INTEGER NOT NULL DEFAULT 0"},
 		{"board_favorites", "folder_id", "folder_id TEXT NOT NULL DEFAULT ''"},
 		{"user_activity", "login_count", "login_count INTEGER NOT NULL DEFAULT 0"},
 		{"user_activity", "total_online_seconds", "total_online_seconds INTEGER NOT NULL DEFAULT 0"},
@@ -816,6 +818,18 @@ func applySQLiteMigrations(db *sql.DB) error {
 	}
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_captcha_challenges_expires ON captcha_challenges(expires_at)`); err != nil {
 		return fmt.Errorf("ensure captcha challenges index: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS email_verification_tokens (
+		    token      TEXT    PRIMARY KEY,
+		    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    email      TEXT    NOT NULL DEFAULT '',
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    expires_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure email verification tokens table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user ON email_verification_tokens(user_id)`); err != nil {
+		return fmt.Errorf("ensure email verification tokens index: %w", err)
 	}
 
 	ts := nowMS()

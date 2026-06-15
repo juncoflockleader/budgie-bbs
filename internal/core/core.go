@@ -64,6 +64,11 @@ type Core struct {
 	isLeader atomic.Bool
 	// captcha holds signup-captcha configuration; nil means disabled.
 	captcha *captchaRuntime
+	// emailVerifyEnabled is true when a mailer is configured and email
+	// verification is enforced for new accounts.
+	emailVerifyEnabled bool
+	// emailVerifyBaseURL is the public site URL used to build verification links.
+	emailVerifyBaseURL string
 
 	eventLogShadow          EventStore
 	eventLogShadowReporter  EventParityReporter
@@ -1327,6 +1332,11 @@ func (c *Core) AuthenticateUser(name, password string) (*User, error) {
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)); err != nil {
 		return nil, ErrInvalidCredentials
+	}
+	// Accounts that began email verification (email_verified=0) must confirm
+	// before logging in. Existing/bootstrap accounts default to verified.
+	if !c.emailVerified(u.ID) {
+		return nil, ErrEmailNotVerified
 	}
 	return u, nil
 }

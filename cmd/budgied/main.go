@@ -21,6 +21,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
+	"github.com/juncoflockleader/budgie-bbs/internal/mailer"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/natsconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/nntp"
@@ -43,6 +44,14 @@ func main() {
 		captchaSiteKey                      = flag.String("captcha-site-key", "", "Public captcha site key (also BUDGIE_CAPTCHA_SITE_KEY)")
 		captchaSecret                       = flag.String("captcha-secret", "", "Captcha provider secret / native HMAC key (also BUDGIE_CAPTCHA_SECRET)")
 		captchaVerifyURL                    = flag.String("captcha-verify-url", "", "Override captcha provider verify URL (optional)")
+		mailMode                            = flag.String("mail-mode", "", "Outbound email: off, direct (to MX), or relay (also BUDGIE_MAIL_MODE; defaults to relay if -smtp-host set, else direct when -mail-from set)")
+		mailFromAddr                        = flag.String("mail-from", "", "From address for outbound email; required to send (also BUDGIE_MAIL_FROM)")
+		smtpHost                            = flag.String("smtp-host", "", "SMTP relay host (also BUDGIE_SMTP_HOST); how an email provider/ESP is wired in")
+		smtpPort                            = flag.Int("smtp-port", 587, "SMTP relay port")
+		smtpUser                            = flag.String("smtp-user", "", "SMTP relay username (also BUDGIE_SMTP_USER)")
+		smtpPassword                        = flag.String("smtp-password", "", "SMTP relay password (also BUDGIE_SMTP_PASSWORD)")
+		requireEmailVerify                  = flag.Bool("require-email-verification", true, "Require email verification before login when a mailer is configured")
+		publicURL                           = flag.String("public-url", "", "Public base URL for email verification links (also BUDGIE_PUBLIC_URL)")
 		webRoot                             = flag.String("web", "", "Path to web/dist directory for SPA serving (optional)")
 		nntpAddr                            = flag.String("nntp", "", "NNTP listen address (optional, e.g. :1190)")
 		nntpDomain                          = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
@@ -1354,6 +1363,39 @@ func main() {
 		Secret:    capSecret,
 		VerifyURL: *captchaVerifyURL,
 	})
+
+	// Outbound email + verification (off unless a From address is configured).
+	// Default transport is direct-to-MX; an SMTP relay (BUDGIE_SMTP_HOST) takes
+	// over when set, which is also how an ESP is wired in.
+	mailModeResolved := envOr2(*mailMode, "BUDGIE_MAIL_MODE")
+	mailFromResolved := envOr2(*mailFromAddr, "BUDGIE_MAIL_FROM")
+	smtpHostResolved := envOr2(*smtpHost, "BUDGIE_SMTP_HOST")
+	if mailModeResolved == "" {
+		switch {
+		case mailFromResolved == "":
+			mailModeResolved = mailer.ModeOff
+		case smtpHostResolved != "":
+			mailModeResolved = mailer.ModeRelay
+		default:
+			mailModeResolved = mailer.ModeDirect
+		}
+	}
+	mailerInstance, err := mailer.New(mailer.Config{
+		Mode:     mailModeResolved,
+		From:     mailFromResolved,
+		Host:     smtpHostResolved,
+		Port:     *smtpPort,
+		Username: envOr2(*smtpUser, "BUDGIE_SMTP_USER"),
+		Password: envOr2(*smtpPassword, "BUDGIE_SMTP_PASSWORD"),
+	})
+	if err != nil {
+		slog.Error("mailer configuration invalid", "err", err)
+		os.Exit(1)
+	}
+	c.SetMailer(mailerInstance, mailFromResolved, *requireEmailVerify, envOr2(*publicURL, "BUDGIE_PUBLIC_URL"))
+	if mailerInstance != nil {
+		slog.Info("outbound email enabled", "mode", mailModeResolved, "from", mailFromResolved, "verification", *requireEmailVerify)
+	}
 
 	// Register scrape-time metrics collectors (SSH sessions, outbox counts).
 	c.RegisterMetricsCollectors()

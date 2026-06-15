@@ -75,6 +75,8 @@ func (s *Server) Handler() http.Handler {
 	// Auth (no middleware required)
 	mux.HandleFunc("GET /api/v1/auth/policy", s.handleAuthPolicy)
 	mux.HandleFunc("GET /api/v1/auth/captcha", s.handleCaptchaChallenge)
+	mux.HandleFunc("GET /api/v1/auth/verify-email", s.handleVerifyEmail)
+	mux.HandleFunc("POST /api/v1/auth/resend-verification", s.handleResendVerification)
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/password-recovery", s.handleRequestPasswordRecovery)

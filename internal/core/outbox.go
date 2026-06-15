@@ -228,6 +228,12 @@ func processOutboxJob(db *sql.DB, bus Bus, job *outboxJob) error {
 			return err
 		}
 		return processCommunityStatSnapshotJob(db, payload)
+	case outboxEmailSend:
+		var payload emailSendJob
+		if err := json.Unmarshal([]byte(job.Payload), &payload); err != nil {
+			return err
+		}
+		return processEmailSendJob(payload)
 	default:
 		return fmt.Errorf("unknown outbox job kind %q", job.Kind)
 	}

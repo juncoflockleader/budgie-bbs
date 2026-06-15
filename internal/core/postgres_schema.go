@@ -2971,5 +2971,26 @@ VALUES (71, 'postgres-captcha-challenges', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 72,
+			Name:    "postgres-email-verification",
+			SQL: `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at BIGINT NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    token      TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email      TEXT NOT NULL DEFAULT '',
+    created_at BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user ON email_verification_tokens(user_id);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (72, 'postgres-email-verification', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

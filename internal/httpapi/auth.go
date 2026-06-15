@@ -3,7 +3,10 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -13,6 +16,7 @@ import (
 type registerRequest struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
+	Email    string `json:"email"`
 	// Captcha (when enabled): native challenges send challenge id + answer;
 	// provider challenges send a single token.
 	CaptchaChallengeID string `json:"captchaChallengeId"`
@@ -82,14 +86,31 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "captcha check failed", true)
 		return
 	}
+	if s.core.EmailVerificationEnabled() && !strings.Contains(req.Email, "@") {
+		writeError(w, http.StatusUnprocessableEntity, "email_required", "a valid email is required", false)
+		return
+	}
 	u, err := s.core.RegisterUser(req.Name, req.Password)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", err.Error(), false)
 		return
 	}
+	if s.core.EmailVerificationEnabled() {
+		if err := s.core.StartEmailVerification(u.ID, req.Email); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not start email verification", true)
+			return
+		}
+	}
 	if u.RegistrationStatus == "pending" {
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"status": "pending",
+			"user":   authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
+		})
+		return
+	}
+	if s.core.EmailVerificationEnabled() {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status": "verification_required",
 			"user":   authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
 		})
 		return
@@ -127,6 +148,44 @@ func (s *Server) handleCaptchaChallenge(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, ch)
 }
 
+// handleVerifyEmail confirms an account email from the single-use link in the
+// verification email. It renders a small HTML page since it is opened in a
+// browser.
+func (s *Server) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	_, err := s.core.VerifyEmailToken(r.URL.Query().Get("token"))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, verifyEmailPage("Verification failed", "This link is invalid or has expired. Request a new one from the sign-in page."))
+		return
+	}
+	fmt.Fprint(w, verifyEmailPage("Email verified", "Your email is confirmed — you can now sign in."))
+}
+
+type resendVerificationRequest struct {
+	Name string `json:"name"`
+}
+
+// handleResendVerification re-issues a verification email. It always returns ok
+// so it does not reveal whether an account exists or its verification state.
+func (s *Server) handleResendVerification(w http.ResponseWriter, r *http.Request) {
+	var req resendVerificationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name required", false)
+		return
+	}
+	_ = s.core.ResendEmailVerification(req.Name)
+	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+}
+
+func verifyEmailPage(title, body string) string {
+	return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+		"<title>" + html.EscapeString(title) + "</title></head>" +
+		"<body style=\"font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;text-align:center\">" +
+		"<h1 style=\"font-weight:500\">" + html.EscapeString(title) + "</h1>" +
+		"<p>" + html.EscapeString(body) + "</p></body></html>"
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.Password == "" {
@@ -141,6 +200,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, core.ErrAccountPending) {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "account pending approval", false)
+			return
+		}
+		if errors.Is(err, core.ErrEmailNotVerified) {
+			writeError(w, http.StatusUnauthorized, "email_not_verified", "email not verified", false)
 			return
 		}
 		if errors.Is(err, core.ErrAccountRejected) {
