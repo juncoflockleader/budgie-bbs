@@ -153,6 +153,65 @@ Three unauthenticated endpoints are exposed on the HTTP listener:
 Restrict `/metrics` and the health endpoints at the network layer if the node is
 internet-facing; they carry no auth.
 
+## Signup hardening: captcha and email verification
+
+Both are off by default. The public, unauthenticated `GET /api/v1/auth/policy`
+endpoint reports what's enabled so the web client renders the right fields.
+
+### Captcha
+
+| Flag (or `BUDGIE_CAPTCHA_*` env) | Purpose |
+|------|---------|
+| `-captcha-mode` | `off` (default), `native`, or `provider`. |
+| `-captcha-provider` | `recaptcha`, `hcaptcha`, or `turnstile` (provider mode). |
+| `-captcha-site-key` | Public site key (exposed via the policy endpoint). |
+| `-captcha-secret` | Provider secret / native HMAC key. Defaults to the JWT secret for native. |
+
+- `native` self-hosts a distorted-text SVG challenge (no third party). The client
+  fetches `GET /api/v1/auth/captcha` and submits the challenge id + answer.
+- `provider` verifies a token against the provider's siteverify API.
+
+### Email verification
+
+When a From address is configured, new accounts must confirm their email before
+they can log in. The admin bootstrap account and all pre-existing accounts stay
+verified, so enabling it never locks anyone out.
+
+| Flag (or env) | Purpose |
+|------|---------|
+| `-mail-from` (`BUDGIE_MAIL_FROM`) | From address. **Setting this enables outbound email.** |
+| `-mail-mode` (`BUDGIE_MAIL_MODE`) | `direct` (to the recipient's MX), `relay`, or `off`. Defaults to `relay` when `-smtp-host` is set, else `direct`. |
+| `-smtp-host` / `-smtp-port` / `-smtp-user` / `-smtp-password` (`BUDGIE_SMTP_*`) | Relay endpoint and auth. This is also how an email service provider (SendGrid/SES/Postmark) is wired in — point it at the ESP's SMTP. |
+| `-require-email-verification` | Enforce verification before login (default `true` when a mailer is configured). |
+| `-public-url` (`BUDGIE_PUBLIC_URL`) | Base URL used to build the verification link, e.g. `https://bbs.example`. |
+
+Signup returns `202 verification_required` (no token), the worker delivers a
+single-use 24h link, and login returns `email_not_verified` until the user opens
+`GET /api/v1/auth/verify-email?token=…`. `POST /api/v1/auth/resend-verification`
+re-issues the email.
+
+**Direct-to-MX has poor deliverability** (no SPF/DKIM/reputation — mail usually
+lands in spam). For real deployments use a relay/ESP.
+
+### Testing email locally with mailpit
+
+[mailpit](https://github.com/axllent/mailpit) is a tiny local SMTP server with a
+web inbox — ideal for seeing verification emails without sending real mail.
+
+```sh
+brew install mailpit              # or download a release binary
+mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025 &
+
+./budgied \
+  -mail-mode relay -smtp-host localhost -smtp-port 1025 \
+  -mail-from no-reply@budgie.local \
+  -public-url http://localhost:8080
+```
+
+Register an account, then open the inbox at <http://localhost:8025> to read the
+email and click the verification link. (A `dest.test`-style fake recipient domain
+will fail to deliver — use any address; mailpit accepts them all.)
+
 ## systemd unit
 
 ```ini
