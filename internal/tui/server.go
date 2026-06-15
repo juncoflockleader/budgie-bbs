@@ -22,10 +22,11 @@ import (
 
 // Server wraps a wish SSH server.
 type Server struct {
-	core    *core.Core
-	port    int
-	hostKey string
-	doors   *core.DoorsConfig // optional; nil means doors are disabled
+	core              *core.Core
+	port              int
+	hostKey           string
+	doors             *core.DoorsConfig // optional; nil means doors are disabled
+	allowRegistration bool              // opt-in guest self-registration over SSH
 }
 
 // New creates an SSH server. hostKey is the path to the host private key file.
@@ -35,6 +36,9 @@ func New(c *core.Core, port int, hostKey string) *Server {
 
 // SetDoors configures the door games available to SSH sessions.
 func (s *Server) SetDoors(cfg *core.DoorsConfig) { s.doors = cfg }
+
+// SetAllowRegistration enables the guest "create account" flow in the TUI.
+func (s *Server) SetAllowRegistration(v bool) { s.allowRegistration = v }
 
 // ListenAndServe starts the SSH server and blocks until ctx is cancelled.
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -152,7 +156,7 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 	if s.doors != nil {
 		doors = s.doors.Doors
 	}
-	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh, doors, caps.termName)
+	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh, doors, caps.termName, s.allowRegistration)
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithEnvironment(sess.Environ()),

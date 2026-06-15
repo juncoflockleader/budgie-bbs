@@ -55,6 +55,7 @@ func main() {
 		publicURL                           = flag.String("public-url", "", "Public base URL for email verification links (also BUDGIE_PUBLIC_URL)")
 		mailInboxURL                        = flag.String("mail-inbox-url", "", "Web inbox URL of a local SMTP catcher to surface in the signup UI; auto-set to http://localhost:8025 (mailpit) when the relay host is loopback (also BUDGIE_MAIL_INBOX_URL)")
 		requirePolicyAccept                 = flag.Bool("require-policy-acceptance", false, "Require signup to record explicit privacy-policy acceptance (also BUDGIE_REQUIRE_POLICY_ACCEPTANCE)")
+		allowSSHRegistration                = flag.Bool("allow-ssh-registration", false, "Allow guests to create an account from the SSH TUI (no captcha over SSH; off by default)")
 		webRoot                             = flag.String("web", "", "Path to web/dist directory for SPA serving (optional)")
 		nntpAddr                            = flag.String("nntp", "", "NNTP listen address (optional, e.g. :1190)")
 		nntpDomain                          = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
@@ -1789,6 +1790,7 @@ func main() {
 		hk := hostKeyPath(*hostKey)
 		ensureHostKey(hk)
 		tuiSrv := tui.New(c, *sshPort, hk)
+		tuiSrv.SetAllowRegistration(*allowSSHRegistration)
 		if *doorsConf != "" {
 			doors, err := core.LoadDoorsConfig(*doorsConf)
 			if err != nil {

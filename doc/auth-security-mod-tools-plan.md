@@ -46,7 +46,7 @@ Not yet present:
 - `GET /api/v1/auth/policy` reports `privacyPolicy{required,version}`; when `-require-policy-acceptance` (BUDGIE_REQUIRE_POLICY_ACCEPTANCE) is set, `handleRegister` rejects signup without acceptance (`422 policy_acceptance_required`).
 - Admin review: `AccountRegistration` + `ListAccountRegistrations`/`GetAccountRegistrationByID` now LEFT JOIN the private profile to surface email/realName/affiliation/note; rendered in AdminPage and UserProfilePage pending-registration rows.
 - Web: AuthPage adds the optional intake fields and a required privacy-policy acceptance checkbox with an inline policy viewer. Tests: `internal/policy` guard + version tests, httpapi `TestSignupPrivacyPolicyAcceptance`.
-- Still open for a later pass: TUI registration path does not yet collect intake/acceptance (enforcement currently lives in the HTTP signup handler).
+- SSH TUI self-registration (follow-up): the TUI was previously login/guest-only with no signup. Added an opt-in guest "create account" wizard (`internal/tui/signup.go`) gated behind `-allow-ssh-registration` (default off, since captcha can't run over SSH). It collects username/password, optional intake, and scrollable privacy-policy acceptance, then mirrors the HTTP handler (RegisterUser + SaveRegistrationIntake + StartEmailVerification when enabled). Tests: `TestSSHSignupFlow`, `TestSSHSignupDisabledByDefault`; verified end-to-end over real SSH.
 
 2026-06-14 (Phase 6 — mod/admin sanction UI):
 

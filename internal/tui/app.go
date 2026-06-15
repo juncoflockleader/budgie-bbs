@@ -37,6 +37,7 @@ const (
 	pageOnline
 	pageNodeSpy
 	pageDoorsMenu
+	pageSignup
 )
 
 const threadPageSize = 50
@@ -165,6 +166,12 @@ type model struct {
 	termName      string            // M12: TERM env value forwarded to door processes
 	authorNames   map[string]string
 	supportsANSI  bool
+
+	// SSH self-registration (opt-in via -allow-ssh-registration).
+	allowRegistration bool
+	signup            *signupState
+	signupInput       textinput.Model
+	signupVP          viewport.Model
 }
 
 type chatLine struct {
@@ -222,7 +229,7 @@ func (m *model) postSignatureSepLine() string {
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string) model {
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string, allowRegistration bool) model {
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
 	if actor != nil && actor.IsAdmin() {
 		scopes = append(scopes, "system:nodes")
@@ -247,25 +254,26 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	pi.Width = width - 4
 
 	m := model{
-		c:             c,
-		actor:         actor,
-		sub:           sub,
-		nodeID:        nodeID,
-		msgCh:         msgCh,
-		page:          pageMainMenu,
-		width:         width,
-		height:        height,
-		titleInput:    ti,
-		chatInput:     ci,
-		profileInput:  pi,
-		selectedPost:  -1,
-		postReactions: make(map[string]bool),
-		postPolls:     make(map[string]*core.Poll),
-		authorNames:   make(map[string]string),
-		supportsANSI:  supportsANSI,
-		locale:        locale,
-		doors:         doors,
-		termName:      termName,
+		c:                 c,
+		actor:             actor,
+		sub:               sub,
+		nodeID:            nodeID,
+		msgCh:             msgCh,
+		page:              pageMainMenu,
+		width:             width,
+		height:            height,
+		titleInput:        ti,
+		chatInput:         ci,
+		profileInput:      pi,
+		selectedPost:      -1,
+		postReactions:     make(map[string]bool),
+		postPolls:         make(map[string]*core.Poll),
+		authorNames:       make(map[string]string),
+		supportsANSI:      supportsANSI,
+		locale:            locale,
+		doors:             doors,
+		termName:          termName,
+		allowRegistration: allowRegistration,
 	}
 
 	m.list = list.New(nil, newBBSListDelegate(), width, sectionContentHeightFor(height))
@@ -276,6 +284,13 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 
 	m.vp = viewport.New(width, sectionContentHeightFor(height))
 	m.vp.Style = lipgloss.NewStyle()
+
+	si := textinput.New()
+	si.CharLimit = 200
+	si.Width = width - 4
+	m.signupInput = si
+	m.signupVP = viewport.New(width, sectionContentHeightFor(height))
+	m.signupVP.Style = lipgloss.NewStyle()
 
 	m.compose = textarea.New()
 	m.compose.Placeholder = composeBodyPlaceholder
@@ -355,6 +370,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.profileInput.Width = msg.Width - 4
 		m.profileEditor.SetWidth(msg.Width - 4)
 		m.profileEditor.SetHeight(msg.Height / 3)
+		m.signupInput.Width = msg.Width - 4
+		m.signupVP.Width = msg.Width
 
 	case boardsMsg:
 		m.boards = msg.boards
@@ -475,6 +492,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.page == pageProfile {
 			m.rebuildList()
 		}
+
+	case signupResultMsg:
+		m.applySignupResult(msg)
+		return m, nil
 
 	case onlineUsersMsg:
 		if msg.err != nil {
@@ -642,6 +663,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.profileInput, c = m.profileInput.Update(msg)
 				cmds = append(cmds, c)
 			}
+		case pageSignup:
+			if m.signup != nil && m.signup.step == signupPolicy {
+				var c tea.Cmd
+				m.signupVP, c = m.signupVP.Update(msg)
+				cmds = append(cmds, c)
+			} else if m.signup != nil && m.signup.step.isInput() {
+				var c tea.Cmd
+				m.signupInput, c = m.signupInput.Update(msg)
+				cmds = append(cmds, c)
+			}
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -722,9 +753,16 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return m.enterOnline()
 		case "7":
 			return m.quit()
+		case "c":
+			if m.canRegister() {
+				return m.enterSignup()
+			}
 		case "q", "ctrl+c":
 			return m.quit()
 		}
+
+	case pageSignup:
+		return m.handleSignupKey(key)
 
 	case pageBoardList:
 		switch key {
@@ -1444,7 +1482,11 @@ func (m model) View() string {
 	var body string
 	switch m.page {
 	case pageMainMenu:
-		body = m.renderSection(m.tr(msgTitleMainMenu), m.renderMainMenu(), m.tr(msgHelpMainMenu))
+		mainHelp := m.tr(msgHelpMainMenu)
+		if m.canRegister() {
+			mainHelp += "  c=register"
+		}
+		body = m.renderSection(m.tr(msgTitleMainMenu), m.renderMainMenu(), mainHelp)
 	case pageBoardList:
 		boardHelp := m.tr(msgHelpBoardList)
 		if len(m.doors) > 0 {
@@ -1468,6 +1510,8 @@ func (m model) View() string {
 		body = m.renderSection("Node Spy", m.renderNodeSpy(), "[r]efresh  [k]ick  [esc]back")
 	case pageDoorsMenu:
 		body = m.renderSection("Doors", m.list.View(), "enter=launch  esc/←=back")
+	case pageSignup:
+		body = m.renderSignup()
 	case pageThread:
 		help := m.tr(msgHelpThreadReader)
 		if m.actor.IsMod() {
@@ -2139,7 +2183,7 @@ func (m *model) rebuildList() {
 	m.list.SetShowTitle(false)
 	switch m.page {
 	case pageMainMenu:
-		m.list.SetItems([]list.Item{
+		items := []list.Item{
 			mainMenuItem{key: "1", title: m.tr(msgPageBoard), desc: m.tr(msgPageBoardsDesc)},
 			mainMenuItem{key: "2", title: m.tr(msgTitleLiveChat), desc: m.tr(msgPageChatDesc)},
 			mainMenuItem{key: "3", title: m.tr(msgTitleNotifications), desc: m.tr(msgPageNotificationsDesc)},
@@ -2147,7 +2191,11 @@ func (m *model) rebuildList() {
 			mainMenuItem{key: "5", title: m.tr(msgTitleProfile), desc: m.tr(msgPageProfileDesc)},
 			mainMenuItem{key: "6", title: m.tr(msgTitleOnlineUsers), desc: m.tr(msgPageOnlineDesc)},
 			mainMenuItem{key: "7", title: m.tr(msgPageExit), desc: m.tr(msgPageExitDesc)},
-		})
+		}
+		if m.canRegister() {
+			items = append(items, mainMenuItem{key: "c", title: "Create account", desc: "Register a new account"})
+		}
+		m.list.SetItems(items)
 		m.list.Title = m.tr(msgTitleMainMenu)
 	case pageBoardList:
 		items := make([]list.Item, len(m.boards))
@@ -2268,6 +2316,10 @@ func (m *model) openMainMenuSelection() tea.Cmd {
 		return m.enterOnline()
 	case "7":
 		return m.quit()
+	case "c":
+		if m.canRegister() {
+			return m.enterSignup()
+		}
 	}
 	return nil
 }
@@ -3350,6 +3402,8 @@ func (m model) pageName(p page) string {
 		return "Node Spy"
 	case pageDoorsMenu:
 		return "Doors"
+	case pageSignup:
+		return "Create account"
 	}
 	return ""
 }
