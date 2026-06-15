@@ -173,9 +173,18 @@ endpoint reports what's enabled so the web client renders the right fields.
 
 ### Email verification
 
-When a From address is configured, new accounts must confirm their email before
-they can log in. The admin bootstrap account and all pre-existing accounts stay
-verified, so enabling it never locks anyone out.
+Email verification turns itself on or off based on whether outbound email is
+configured, so the default is always sensible:
+
+- **No mailer** (no `-mail-from`) → verification is **off**; signup needs no
+  email and login is never gated. (`-require-email-verification` is ignored with
+  a log note, since nothing can be sent.)
+- **Mailer configured** (local catcher or real provider) → verification is **on**
+  by default. Disable with `-require-email-verification=false`.
+
+When enabled, new accounts must confirm their email before they can log in. The
+admin bootstrap account and all pre-existing accounts stay verified, so turning
+it on never locks anyone out.
 
 | Flag (or env) | Purpose |
 |------|---------|
@@ -184,6 +193,7 @@ verified, so enabling it never locks anyone out.
 | `-smtp-host` / `-smtp-port` / `-smtp-user` / `-smtp-password` (`BUDGIE_SMTP_*`) | Relay endpoint and auth. This is also how an email service provider (SendGrid/SES/Postmark) is wired in — point it at the ESP's SMTP. |
 | `-require-email-verification` | Enforce verification before login (default `true` when a mailer is configured). |
 | `-public-url` (`BUDGIE_PUBLIC_URL`) | Base URL used to build the verification link, e.g. `https://bbs.example`. |
+| `-mail-inbox-url` (`BUDGIE_MAIL_INBOX_URL`) | Local SMTP-catcher web inbox to surface in the signup UI. Auto-set to `http://localhost:8025` (mailpit) when the relay host is loopback. |
 
 Signup returns `202 verification_required` (no token), the worker delivers a
 single-use 24h link, and login returns `email_not_verified` until the user opens
@@ -192,6 +202,43 @@ re-issues the email.
 
 **Direct-to-MX has poor deliverability** (no SPF/DKIM/reputation — mail usually
 lands in spam). For real deployments use a relay/ESP.
+
+### Reaching real inboxes (Gmail, etc.)
+
+Mailbox providers like Gmail score inbound mail on signals that direct-to-MX from
+an arbitrary host can't satisfy, so those messages get rejected or junked:
+
+- **SPF / DKIM / DMARC** — DNS records on the *From* domain that authorize the
+  sending IPs and cryptographically sign the message. Gmail effectively requires
+  all three. They only exist for a domain **you own and control**.
+- **IP reputation + reverse DNS** — a warmed, well-regarded sending IP with
+  matching PTR. Fresh/residential/cloud IPs have none.
+- **Outbound port 25** is blocked by default on most ISPs and clouds, so
+  direct-to-MX often can't even connect.
+
+The practical path is an **email service provider** (Amazon SES, Postmark,
+SendGrid, Mailgun, Resend, …). They send from reputable IPs, DKIM-sign for you,
+and give you the SPF/DKIM/DMARC records to publish on your domain. In Budgie this
+is just the relay flags pointed at the ESP's SMTP — no code change:
+
+```sh
+./budgied \
+  -mail-mode relay \
+  -smtp-host smtp.sendgrid.net -smtp-port 587 \
+  -smtp-user apikey -smtp-password "$SENDGRID_API_KEY" \
+  -mail-from no-reply@yourdomain.com \
+  -public-url https://yourdomain.com
+```
+
+(Same shape for SES/Postmark/Mailgun — only the host and credentials differ.)
+Steps: own a domain → create an ESP account → add the SPF/DKIM/DMARC DNS records
+it gives you and verify the domain → point the relay flags at it. Free/cheap
+tiers (e.g. SES ~$0.10/1k emails, Postmark/SendGrid free tiers) cover typical
+transactional volume.
+
+Self-hosting a mail server that reaches Gmail is possible but a real undertaking
+(static unblocked-port-25 IP, your own SPF/DKIM/DMARC + PTR, reputation warm-up);
+an ESP does that work for you.
 
 ### Testing email locally with mailpit
 
@@ -211,6 +258,13 @@ mailpit --listen 127.0.0.1:8025 --smtp 127.0.0.1:1025 &
 Register an account, then open the inbox at <http://localhost:8025> to read the
 email and click the verification link. (A `dest.test`-style fake recipient domain
 will fail to deliver — use any address; mailpit accepts them all.)
+
+Because the relay host is loopback, budgied recognizes this as a local catcher:
+it logs `local SMTP catcher in use … inbox=http://localhost:8025` at startup and
+the signup UI shows a **"Dev mode: emails are captured locally — open the inbox"**
+link on the "Check your email" screen. Override the inbox URL (e.g. a non-default
+mailpit web port) with `-mail-inbox-url` / `BUDGIE_MAIL_INBOX_URL`. A real
+provider relay (a remote host) is never treated as dev and shows no such link.
 
 ## systemd unit
 
