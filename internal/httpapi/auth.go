@@ -61,9 +61,10 @@ type authUser struct {
 }
 
 type loginResponse struct {
-	Token     string   `json:"token"`
-	ExpiresAt int64    `json:"expiresAt"`
-	User      authUser `json:"user"`
+	Token         string   `json:"token"`
+	ExpiresAt     int64    `json:"expiresAt"`
+	User          authUser `json:"user"`
+	MustEnroll2FA bool     `json:"mustEnroll2fa,omitempty"`
 }
 
 type pubkeyRequest struct {
@@ -263,6 +264,34 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
 		return
 	}
+	// Staff 2FA: when enrolled and enforced, return a challenge (no token yet);
+	// the client completes it via POST /auth/2fa/verify.
+	required, err := s.core.TwoFactorRequiredForLogin(u.ID, u.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "two-factor check failed", true)
+		return
+	}
+	if required {
+		challenge, cerr := s.mintChallengeToken(u.ID)
+		if cerr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "could not issue challenge", true)
+			return
+		}
+		st, _ := s.core.TwoFactorStatus(u.ID)
+		methods := []string{}
+		if st.TOTPEnrolled {
+			methods = append(methods, "totp")
+		}
+		if st.EmailEnrolled {
+			methods = append(methods, "email")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":         "2fa_required",
+			"challengeToken": challenge,
+			"methods":        methods,
+		})
+		return
+	}
 	if err := s.core.RecordLogin(u.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not record login", true)
 		return
@@ -272,9 +301,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
 		return
 	}
+	mustEnroll, _ := s.core.StaffShouldEnroll2FA(u.ID, u.Role)
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, ExpiresAt: exp,
-		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
+		User:          authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
+		MustEnroll2FA: mustEnroll,
 	})
 }
 

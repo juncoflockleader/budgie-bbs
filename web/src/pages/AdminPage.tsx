@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
-import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction } from '../api/types'
+import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings } from '../api/types'
 
 type Props = {
   token: string
@@ -32,22 +32,25 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [sanctionHours, setSanctionHours] = useState('')
   const [sanctionReason, setSanctionReason] = useState('')
   const [sanctions, setSanctions] = useState<UserSanction[] | null>(null)
+  const [securitySettings, setSecuritySettings] = useState<SecuritySettings | null>(null)
+  const [role2FA, setRole2FA] = useState<string | null>(null)
 
   const categoryOptions = useMemo(() => buildCategoryOptions(categories), [categories])
 
   async function loadAdminData() {
     if (currentUserRole !== 'admin') return
     setLoading(true)
-    const [boardsRes, categoriesRes, settingsRes, registrationsRes, recoveryRes] = await Promise.all([
+    const [boardsRes, categoriesRes, settingsRes, registrationsRes, recoveryRes, securityRes] = await Promise.all([
       api.listBoardSummaries(token),
       api.listCategories(token),
       api.getAccountRegistrationSettings(token),
       api.listAccountRegistrations(token, 'pending', 50, 0),
       api.listPasswordRecoveryRequests(token, 'pending', 50, 0),
+      api.getSecuritySettings(token),
     ])
     setLoading(false)
 
-    const error = boardsRes.error ?? categoriesRes.error ?? settingsRes.error ?? registrationsRes.error ?? recoveryRes.error
+    const error = boardsRes.error ?? categoriesRes.error ?? settingsRes.error ?? registrationsRes.error ?? recoveryRes.error ?? securityRes.error
     if (error) {
       setNotice({ kind: 'error', text: error.message })
     }
@@ -56,6 +59,36 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
     if (settingsRes.data) setRegistrationSettings(settingsRes.data)
     if (registrationsRes.data) setPendingRegistrations(registrationsRes.data)
     if (recoveryRes.data) setPasswordRecoveryRequests(recoveryRes.data)
+    if (securityRes.data) setSecuritySettings(securityRes.data)
+  }
+
+  async function setStaff2FARequired(required: boolean) {
+    setSaving('security')
+    setNotice(null)
+    const res = await api.setSecuritySettings(token, required)
+    setSaving(null)
+    if (res.error) {
+      setNotice({ kind: 'error', text: res.error.message })
+      return
+    }
+    setSecuritySettings(res.data ?? null)
+    setNotice({ kind: 'ok', text: required ? 'Staff 2FA is now required.' : 'Staff 2FA requirement disabled.' })
+  }
+
+  async function checkRole2FA() {
+    const username = roleDraft.username.trim()
+    if (!username) return
+    setRole2FA('checking…')
+    const res = await api.getUserTwoFactorStatus(token, username)
+    if (res.error) {
+      setRole2FA(`could not check: ${res.error.message}`)
+      return
+    }
+    const s = res.data
+    const enrolled = s && (s.totpEnrolled || s.emailEnrolled)
+    setRole2FA(enrolled
+      ? `${username} has 2FA enrolled (${[s?.totpEnrolled && 'authenticator', s?.emailEnrolled && 'email'].filter(Boolean).join(', ')}).`
+      : `${username} has NOT enrolled 2FA — they would be locked out only if they cannot enroll.`)
   }
 
   useEffect(() => {
@@ -366,8 +399,26 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
           <div className="form-actions">
             <button type="submit" disabled={saving === 'role'}>{saving === 'role' ? 'Saving...' : 'Set role'}</button>
             <button type="button" className="link-btn danger" onClick={resetRole} disabled={saving === 'role'}>Reset to user</button>
+            <button type="button" className="link-btn" onClick={checkRole2FA}>Check 2FA</button>
           </div>
+          {role2FA && <p className="muted">{role2FA}</p>}
         </form>
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <h3>Security</h3>
+        </div>
+        <label className="inline-toggle">
+          <input
+            type="checkbox"
+            checked={Boolean(securitySettings?.staff2faRequired)}
+            disabled={saving === 'security' || !securitySettings}
+            onChange={e => setStaff2FARequired(e.target.checked)}
+          />
+          Require two-factor authentication for staff (admins &amp; moderators)
+        </label>
+        <p className="muted">Enrolled staff are prompted for a code at login. Confirm staff have enrolled (use “Check 2FA” above) before enabling, to avoid surprises.</p>
       </section>
 
       <section className="admin-panel">

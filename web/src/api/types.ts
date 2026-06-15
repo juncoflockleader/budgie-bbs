@@ -567,6 +567,20 @@ export interface AuthResponse {
   expiresAt?: number
   status?: string
   user: { id: string; name: string; role: string; registrationStatus?: string }
+  mustEnroll2fa?: boolean
+  /** Present when status === '2fa_required'. */
+  challengeToken?: string
+  methods?: string[]
+}
+
+export interface TwoFactorStatus {
+  totpEnrolled: boolean
+  emailEnrolled: boolean
+}
+
+export interface SecuritySettings {
+  staff2faRequired: boolean
+  updatedAt: number
 }
 
 export interface AuthPolicy {

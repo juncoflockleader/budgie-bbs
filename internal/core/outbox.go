@@ -228,7 +228,7 @@ func processOutboxJob(db *sql.DB, bus Bus, job *outboxJob) error {
 			return err
 		}
 		return processCommunityStatSnapshotJob(db, payload)
-	case outboxEmailSend:
+	case outboxEmailSend, outboxEmail2FACode:
 		var payload emailSendJob
 		if err := json.Unmarshal([]byte(job.Payload), &payload); err != nil {
 			return err

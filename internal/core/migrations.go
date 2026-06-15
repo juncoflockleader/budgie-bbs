@@ -833,6 +833,34 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user ON email_verification_tokens(user_id)`); err != nil {
 		return fmt.Errorf("ensure email verification tokens index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS security_settings (
+		    id                TEXT    PRIMARY KEY DEFAULT 'default',
+		    staff_2fa_required INTEGER NOT NULL DEFAULT 0,
+		    updated_at        INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure security settings table: %w", err)
+	}
+	if _, err := qExec(db, `INSERT OR IGNORE INTO security_settings (id, staff_2fa_required, updated_at) VALUES ('default', 0, 0)`); err != nil {
+		return fmt.Errorf("seed security settings: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_2fa_settings (
+		    user_id        TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		    totp_secret    TEXT    NOT NULL DEFAULT '',
+		    totp_pending   TEXT    NOT NULL DEFAULT '',
+		    totp_enrolled  INTEGER NOT NULL DEFAULT 0,
+		    email_enrolled INTEGER NOT NULL DEFAULT 0,
+		    updated_at     INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure user 2fa settings table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS two_factor_email_codes (
+		    user_id    TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		    code_hash  TEXT    NOT NULL,
+		    created_at INTEGER NOT NULL DEFAULT 0,
+		    expires_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure two factor email codes table: %w", err)
+	}
 
 	ts := nowMS()
 	updates := []string{

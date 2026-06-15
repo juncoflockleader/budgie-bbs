@@ -55,6 +55,8 @@ import type {
   ContentFilter,
   PollMap,
   UserSanction,
+  TwoFactorStatus,
+  SecuritySettings,
 } from './types'
 
 const BASE = '/api/v1'
@@ -369,6 +371,79 @@ export async function login(name: string, password: string): Promise<ApiResponse
     body: JSON.stringify({ name, password }),
   })
   return json<AuthResponse>(res)
+}
+
+// ── Two-factor authentication ────────────────────────────────────────────────
+
+export async function verifyTwoFactor(challengeToken: string, method: string, code: string): Promise<ApiResponse<AuthResponse>> {
+  const res = await fetch(`${BASE}/auth/2fa/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challengeToken, method, code }),
+  })
+  return json<AuthResponse>(res)
+}
+
+export async function requestEmailTwoFactor(challengeToken: string): Promise<ApiResponse<{ ok: boolean }>> {
+  const res = await fetch(`${BASE}/auth/2fa/email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challengeToken }),
+  })
+  return json<{ ok: boolean }>(res)
+}
+
+export async function getTwoFactorStatus(token: string): Promise<ApiResponse<TwoFactorStatus>> {
+  const res = await fetch(`${BASE}/account/2fa`, { headers: authHeaders(token) })
+  return json<TwoFactorStatus>(res)
+}
+
+export async function initTOTP(token: string): Promise<ApiResponse<{ secret: string; otpauthUri: string; qr: string }>> {
+  const res = await fetch(`${BASE}/account/2fa/totp`, { method: 'POST', headers: authHeaders(token) })
+  return json<{ secret: string; otpauthUri: string; qr: string }>(res)
+}
+
+export async function confirmTOTP(token: string, code: string): Promise<ApiResponse<{ ok: boolean }>> {
+  const res = await fetch(`${BASE}/account/2fa/totp/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ code }),
+  })
+  return json<{ ok: boolean }>(res)
+}
+
+export async function disableTOTP(token: string): Promise<ApiResponse<{ ok: boolean }>> {
+  const res = await fetch(`${BASE}/account/2fa/totp`, { method: 'DELETE', headers: authHeaders(token) })
+  return json<{ ok: boolean }>(res)
+}
+
+export async function enableEmailTwoFactor(token: string): Promise<ApiResponse<{ ok: boolean }>> {
+  const res = await fetch(`${BASE}/account/2fa/email`, { method: 'POST', headers: authHeaders(token) })
+  return json<{ ok: boolean }>(res)
+}
+
+export async function disableEmailTwoFactor(token: string): Promise<ApiResponse<{ ok: boolean }>> {
+  const res = await fetch(`${BASE}/account/2fa/email`, { method: 'DELETE', headers: authHeaders(token) })
+  return json<{ ok: boolean }>(res)
+}
+
+export async function getSecuritySettings(token: string): Promise<ApiResponse<SecuritySettings>> {
+  const res = await fetch(`${BASE}/admin/security-settings`, { headers: authHeaders(token) })
+  return json<SecuritySettings>(res)
+}
+
+export async function setSecuritySettings(token: string, staff2faRequired: boolean): Promise<ApiResponse<SecuritySettings>> {
+  const res = await fetch(`${BASE}/admin/security-settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ staff2faRequired }),
+  })
+  return json<SecuritySettings>(res)
+}
+
+export async function getUserTwoFactorStatus(token: string, name: string): Promise<ApiResponse<TwoFactorStatus>> {
+  const res = await fetch(`${BASE}/users/${name}/2fa`, { headers: authHeaders(token) })
+  return json<TwoFactorStatus>(res)
 }
 
 export async function logout(token: string): Promise<ApiResponse<unknown>> {

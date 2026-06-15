@@ -117,6 +117,43 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
   const [deleteReason, setDeleteReason] = useState('')
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null)
   const [deleteSaving, setDeleteSaving] = useState(false)
+  const [twoFAStatus, setTwoFAStatus] = useState<{ totpEnrolled: boolean; emailEnrolled: boolean } | null>(null)
+  const [totpEnroll, setTotpEnroll] = useState<{ secret: string; otpauthUri: string; qr: string } | null>(null)
+  const [totpCode, setTotpCode] = useState('')
+  const [twoFANotice, setTwoFANotice] = useState<string | null>(null)
+
+  async function loadTwoFA() {
+    if (!isOwnProfile) return
+    const res = await api.getTwoFactorStatus(token)
+    if (res.data) setTwoFAStatus(res.data)
+  }
+  async function beginTOTP() {
+    setTwoFANotice(null)
+    const res = await api.initTOTP(token)
+    if (res.error) { setTwoFANotice(res.error.message); return }
+    setTotpEnroll(res.data ?? null)
+    setTotpCode('')
+  }
+  async function confirmTOTPCode() {
+    const res = await api.confirmTOTP(token, totpCode.trim())
+    if (res.error) { setTwoFANotice('Invalid code — try again.'); return }
+    setTotpEnroll(null)
+    setTotpCode('')
+    setTwoFANotice('Authenticator app enrolled.')
+    await loadTwoFA()
+  }
+  async function removeTOTP() {
+    const res = await api.disableTOTP(token)
+    if (res.error) { setTwoFANotice(res.error.message); return }
+    setTwoFANotice('Authenticator app removed.')
+    await loadTwoFA()
+  }
+  async function toggleEmail2FA(enable: boolean) {
+    const res = enable ? await api.enableEmailTwoFactor(token) : await api.disableEmailTwoFactor(token)
+    if (res.error) { setTwoFANotice(res.error.message); return }
+    setTwoFANotice(enable ? 'Email codes enabled.' : 'Email codes disabled.')
+    await loadTwoFA()
+  }
 
   async function loadProfile() {
     setLoading(true)
@@ -266,6 +303,7 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
     loadPrivateProfile()
     loadPersonalFiles()
     loadRegistrationAdmin()
+    loadTwoFA()
   }, [token, username, isOwnProfile, currentUserRole])
 
   async function submitProfile(event: FormEvent) {
@@ -877,6 +915,46 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
             }}>Cancel</button>
           </div>
         </form>
+      )}
+
+      {isOwnProfile && (
+        <section className="profile-edit-form">
+          <div className="profile-section-heading">
+            <h4>Two-factor authentication</h4>
+          </div>
+          {twoFANotice && <p className="muted">{twoFANotice}</p>}
+          <div className="twofa-row">
+            <span>Authenticator app (TOTP)</span>
+            {twoFAStatus?.totpEnrolled ? (
+              <button type="button" className="link-btn danger" onClick={removeTOTP}>Remove</button>
+            ) : totpEnroll ? (
+              <span className="muted">enrolling…</span>
+            ) : (
+              <button type="button" onClick={beginTOTP}>Set up</button>
+            )}
+          </div>
+          {totpEnroll && !twoFAStatus?.totpEnrolled && (
+            <div className="twofa-enroll">
+              <p className="muted">Scan this with your authenticator app, then enter the 6-digit code to confirm.</p>
+              <img className="twofa-qr" alt="2FA QR code" src={totpEnroll.qr} />
+              <p className="muted">Or enter this key manually: <code>{totpEnroll.secret}</code></p>
+              <input value={totpCode} onChange={e => setTotpCode(e.target.value)} inputMode="numeric" placeholder="123456" autoComplete="one-time-code" />
+              <div className="form-actions">
+                <button type="button" onClick={confirmTOTPCode}>Confirm</button>
+                <button type="button" className="link-btn" onClick={() => { setTotpEnroll(null); setTotpCode('') }}>Cancel</button>
+              </div>
+            </div>
+          )}
+          <div className="twofa-row">
+            <span>Email codes</span>
+            {twoFAStatus?.emailEnrolled ? (
+              <button type="button" className="link-btn danger" onClick={() => toggleEmail2FA(false)}>Disable</button>
+            ) : (
+              <button type="button" onClick={() => toggleEmail2FA(true)}>Enable</button>
+            )}
+          </div>
+          <p className="muted">Staff accounts may be required to use two-factor authentication by an administrator.</p>
+        </section>
       )}
 
       {isOwnProfile && (

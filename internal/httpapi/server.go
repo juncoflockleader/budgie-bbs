@@ -80,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/resend-verification", s.handleResendVerification)
 	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/2fa/verify", s.handleVerify2FA)
+	mux.HandleFunc("POST /api/v1/auth/2fa/email", s.handleRequestEmail2FACode)
 	mux.HandleFunc("POST /api/v1/auth/password-recovery", s.handleRequestPasswordRecovery)
 	mux.HandleFunc("POST /api/v1/presence/guest", s.handleSetGuestPresence)
 
@@ -172,6 +174,15 @@ func (s *Server) Handler() http.Handler {
 
 	// Authenticated write endpoints
 	mux.Handle("POST /api/v1/auth/pubkey", auth(http.HandlerFunc(s.handleAddPubkey)))
+	mux.Handle("GET /api/v1/account/2fa", auth(http.HandlerFunc(s.handleGet2FA)))
+	mux.Handle("POST /api/v1/account/2fa/totp", auth(http.HandlerFunc(s.handleInitTOTP)))
+	mux.Handle("POST /api/v1/account/2fa/totp/confirm", auth(http.HandlerFunc(s.handleConfirmTOTP)))
+	mux.Handle("DELETE /api/v1/account/2fa/totp", auth(http.HandlerFunc(s.handleDisableTOTP)))
+	mux.Handle("POST /api/v1/account/2fa/email", auth(http.HandlerFunc(s.handleEnableEmail2FA)))
+	mux.Handle("DELETE /api/v1/account/2fa/email", auth(http.HandlerFunc(s.handleDisableEmail2FA)))
+	mux.Handle("GET /api/v1/admin/security-settings", auth(http.HandlerFunc(s.handleGetSecuritySettings)))
+	mux.Handle("PATCH /api/v1/admin/security-settings", auth(http.HandlerFunc(s.handleSetSecuritySettings)))
+	mux.Handle("GET /api/v1/users/{name}/2fa", auth(http.HandlerFunc(s.handleGetUser2FAStatus)))
 	mux.Handle("PATCH /api/v1/admin/registration-settings", auth(http.HandlerFunc(s.handleSetAccountRegistrationSettings)))
 	mux.Handle("POST /api/v1/admin/registrations/{name}/review", auth(http.HandlerFunc(s.handleReviewAccountRegistration)))
 	mux.Handle("POST /api/v1/admin/password-recovery/{request}/review", auth(http.HandlerFunc(s.handleReviewPasswordRecoveryRequest)))

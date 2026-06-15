@@ -43,6 +43,33 @@ export function AuthPage({ onLogin }: Props) {
   const [policyText, setPolicyText] = useState<string | null>(null)
   const [policyOpen, setPolicyOpen] = useState(false)
 
+  // Two-factor login challenge.
+  const [twoFAChallenge, setTwoFAChallenge] = useState('')
+  const [twoFAMethods, setTwoFAMethods] = useState<string[]>([])
+  const [twoFAMethod, setTwoFAMethod] = useState('totp')
+  const [twoFACode, setTwoFACode] = useState('')
+  const [twoFANotice, setTwoFANotice] = useState('')
+
+  async function sendEmail2FACode() {
+    setTwoFANotice('')
+    await api.requestEmailTwoFactor(twoFAChallenge)
+    setTwoFANotice('A code has been emailed to you.')
+  }
+
+  async function verify2FA(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    const res = await api.verifyTwoFactor(twoFAChallenge, twoFAMethod, twoFACode.trim())
+    setBusy(false)
+    if (res.error) {
+      setError(t('common.errorPrefix', { message: res.error.message }))
+      setTwoFACode('')
+    } else if (res.data?.token) {
+      onLogin(res.data.token, res.data.user)
+    }
+  }
+
   async function togglePolicy() {
     if (!policyOpen && policyText === null) {
       const res = await api.getPrivacyPolicy()
@@ -143,6 +170,13 @@ export function AuthPage({ onLogin }: Props) {
       if (mode === 'register' && captchaMode === 'native') loadChallenge()
     } else if (mode === 'register' && res.data?.status === 'verification_required') {
       setVerificationSent(true)
+    } else if (res.data?.status === '2fa_required') {
+      const methods = res.data.methods ?? ['totp']
+      setTwoFAChallenge(res.data.challengeToken ?? '')
+      setTwoFAMethods(methods)
+      setTwoFAMethod(methods[0] ?? 'totp')
+      setTwoFACode('')
+      setTwoFANotice('')
     } else if (res.data?.status === 'pending' || !res.data?.token) {
       setError(t('auth.registrationPending'))
     } else if (res.data) {
@@ -166,7 +200,51 @@ export function AuthPage({ onLogin }: Props) {
           <option value="zh-TW">中文（繁）</option>
         </select>
       </div>
-      {verificationSent ? (
+      {twoFAChallenge ? (
+        <form className="auth-form" onSubmit={verify2FA}>
+          <h2>Two-factor verification</h2>
+          {twoFAMethods.length > 1 && (
+            <div className="twofa-methods">
+              {twoFAMethods.includes('totp') && (
+                <button type="button" className={`link-btn${twoFAMethod === 'totp' ? ' twofa-active' : ''}`} onClick={() => setTwoFAMethod('totp')}>Authenticator app</button>
+              )}
+              {twoFAMethods.includes('email') && (
+                <button type="button" className={`link-btn${twoFAMethod === 'email' ? ' twofa-active' : ''}`} onClick={() => setTwoFAMethod('email')}>Email code</button>
+              )}
+            </div>
+          )}
+          <p className="muted">
+            {twoFAMethod === 'email'
+              ? 'Enter the 6-digit code sent to your email.'
+              : 'Enter the 6-digit code from your authenticator app.'}
+          </p>
+          {twoFAMethod === 'email' && (
+            <button type="button" className="link-btn" onClick={sendEmail2FACode}>Send a code to my email</button>
+          )}
+          {twoFANotice && <p className="muted">{twoFANotice}</p>}
+          <label>
+            Code
+            <input
+              autoFocus
+              value={twoFACode}
+              onChange={e => setTwoFACode(e.target.value)}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="123456"
+              required
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit" disabled={busy}>{busy ? '…' : 'Verify'}</button>
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => { setTwoFAChallenge(''); setTwoFACode(''); setError(null) }}
+          >
+            Cancel
+          </button>
+        </form>
+      ) : verificationSent ? (
         <div className="auth-form">
           <h2>Check your email</h2>
           <p>We sent a verification link to {email || 'your email'}. Open it to finish creating your account, then sign in.</p>

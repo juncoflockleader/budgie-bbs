@@ -39,6 +39,15 @@ Not yet present:
 
 ## Progress
 
+2026-06-15 (Phase 5 — staff 2FA):
+
+- Added `internal/totp` (RFC 6238, stdlib only; verified against the RFC test vectors) for authenticator-app codes, and a pure-Go QR (`skip2/go-qrcode`) for enrollment.
+- Storage (schema.go + SQLite migrations + Postgres migration 74): `security_settings` (staff_2fa_required), `user_2fa_settings` (totp_secret/pending/enrolled, email_enrolled), `two_factor_email_codes` (hashed, TTL).
+- Core (`internal/core/twofactor.go`): security settings get/set; TOTP enroll/confirm/disable; email-code enable/disable + send (outbox `email.2fa`) + verify; `TwoFactorRequiredForLogin` (staff + enforced + enrolled), `StaffShouldEnroll2FA` nudge.
+- HTTP: `handleLogin` returns `202`-style `{status:"2fa_required", challengeToken, methods}` for enrolled staff under enforcement; `POST /auth/2fa/verify` (short-lived challenge JWT) issues the session token; `POST /auth/2fa/email` sends a code; self-service `/account/2fa*`; admin `/admin/security-settings`; `GET /users/{name}/2fa`. SSH password auth is refused for 2FA-required staff (their key is the second factor).
+- Web: AuthPage 2FA challenge step (authenticator + email-code, method toggle); profile enrollment section (QR + secret + confirm, email toggle); AdminPage "Require staff 2FA" toggle + "Check 2FA" in role grant.
+- Tests: `internal/totp` RFC vectors; core `TestTwoFactorTOTPEnrollAndVerify` + `TestTwoFactorEnforcement`; httpapi `TestStaffTwoFactorLoginChallenge`. Browser-verified the full enroll → enforce → challenge → verify loop.
+
 2026-06-14 (Phase 2 finish — rich signup intake + privacy acceptance):
 
 - Bundled the default privacy policy into the binary (`internal/policy`, go:embed + content-hash version) and served it at `GET /api/v1/auth/privacy-policy`; a guard test keeps it identical to `doc/default-privacy-policy.md`.

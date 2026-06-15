@@ -12,6 +12,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/lib/pq v1.12.3
 	github.com/nats-io/nats.go v1.38.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/twmb/franz-go v1.21.3
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	golang.org/x/crypto v0.52.0

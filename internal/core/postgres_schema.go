@@ -3004,5 +3004,38 @@ VALUES (73, 'postgres-registration-policy-acceptance', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 74,
+			Name:    "postgres-staff-2fa",
+			SQL: `
+CREATE TABLE IF NOT EXISTS security_settings (
+    id                 TEXT PRIMARY KEY DEFAULT 'default',
+    staff_2fa_required INTEGER NOT NULL DEFAULT 0,
+    updated_at         BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO security_settings (id, staff_2fa_required, updated_at)
+VALUES ('default', 0, 0) ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS user_2fa_settings (
+    user_id        TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    totp_secret    TEXT NOT NULL DEFAULT '',
+    totp_pending   TEXT NOT NULL DEFAULT '',
+    totp_enrolled  INTEGER NOT NULL DEFAULT 0,
+    email_enrolled INTEGER NOT NULL DEFAULT 0,
+    updated_at     BIGINT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS two_factor_email_codes (
+    user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL,
+    created_at BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL DEFAULT 0
+);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (74, 'postgres-staff-2fa', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

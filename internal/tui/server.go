@@ -106,6 +106,13 @@ func (s *Server) authPassword(ctx ssh.Context, password string) bool {
 		slog.Warn("ssh: password auth failed", "user", username, "err", err)
 		return false
 	}
+	// When staff 2FA is enforced, an enrolled staff member cannot use password
+	// auth over SSH (there is no interactive second-factor prompt); their SSH key
+	// is the second factor, so require public-key auth instead.
+	if required, err := s.core.TwoFactorRequiredForLogin(user.ID, user.Role); err == nil && required {
+		slog.Warn("ssh: password auth blocked, 2FA enforced; use a public key", "user", username)
+		return false
+	}
 	if err := s.core.RecordLogin(user.ID); err != nil {
 		slog.Error("ssh: could not record login", "user", username, "err", err)
 		return false
