@@ -3437,6 +3437,30 @@ func UpsertContentFilter(tx *sql.Tx, id, pattern, scope string, active bool, cre
 	return err
 }
 
+// UpsertBoardAutomodRule inserts or updates a board automod rule. created_by /
+// created_at are preserved on update (only set on first insert).
+func UpsertBoardAutomodRule(tx *sql.Tx, r BoardAutomodRule) error {
+	_, err := QExec(tx,
+		`INSERT INTO board_automod_rules
+		   (id, board_id, enabled, priority, match_type, pattern, threshold, window_sec, action, duration_sec, reason, note, created_by, created_at, updated_by, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   enabled=excluded.enabled, priority=excluded.priority, match_type=excluded.match_type,
+		   pattern=excluded.pattern, threshold=excluded.threshold, window_sec=excluded.window_sec,
+		   action=excluded.action, duration_sec=excluded.duration_sec, reason=excluded.reason,
+		   note=excluded.note, updated_by=excluded.updated_by, updated_at=excluded.updated_at`,
+		r.ID, r.Board, boolInt(r.Enabled), r.Priority, r.MatchType, r.Pattern, r.Threshold, r.WindowSec,
+		r.Action, r.DurationSec, r.Reason, r.Note, r.CreatedBy, r.CreatedAt, r.UpdatedBy, r.UpdatedAt,
+	)
+	return err
+}
+
+// DeleteBoardAutomodRule removes a board automod rule scoped to its board.
+func DeleteBoardAutomodRule(tx *sql.Tx, board, id string) error {
+	_, err := QExec(tx, `DELETE FROM board_automod_rules WHERE id=? AND board_id=?`, id, board)
+	return err
+}
+
 func ResolveModerationReview(tx *sql.Tx, id, actor, resolution string, ts int64) error {
 	res, err := QExec(tx,
 		`UPDATE moderation_reviews SET status='resolved', actor=?, resolution=?, updated_at=? WHERE id=? AND status='open'`,

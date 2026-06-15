@@ -313,6 +313,10 @@ func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
 		dst = new(proto.UserSanctionClearedPayload)
 	case proto.EvtContentFilterSet:
 		dst = new(proto.ContentFilterSetPayload)
+	case proto.EvtBoardAutomodRuleSet:
+		dst = new(proto.BoardAutomodRuleSetPayload)
+	case proto.EvtBoardAutomodRuleDeleted:
+		dst = new(proto.BoardAutomodRuleDeletedPayload)
 	case proto.EvtRoleGranted:
 		dst = new(proto.RoleGrantedPayload)
 	case proto.EvtRoleRevoked:

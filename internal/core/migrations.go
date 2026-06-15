@@ -861,6 +861,29 @@ func applySQLiteMigrations(db *sql.DB) error {
 		)`); err != nil {
 		return fmt.Errorf("ensure two factor email codes table: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS board_automod_rules (
+		    id           TEXT    PRIMARY KEY,
+		    board_id     TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+		    enabled      INTEGER NOT NULL DEFAULT 1,
+		    priority     INTEGER NOT NULL DEFAULT 0,
+		    match_type   TEXT    NOT NULL,
+		    pattern      TEXT    NOT NULL DEFAULT '',
+		    threshold    INTEGER NOT NULL DEFAULT 0,
+		    window_sec   INTEGER NOT NULL DEFAULT 0,
+		    action       TEXT    NOT NULL,
+		    duration_sec INTEGER NOT NULL DEFAULT 0,
+		    reason       TEXT    NOT NULL DEFAULT '',
+		    note         TEXT    NOT NULL DEFAULT '',
+		    created_by   TEXT    NOT NULL DEFAULT '',
+		    created_at   INTEGER NOT NULL DEFAULT 0,
+		    updated_by   TEXT    NOT NULL DEFAULT '',
+		    updated_at   INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure board automod rules table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_board_automod_rules_board ON board_automod_rules(board_id, enabled, priority, id)`); err != nil {
+		return fmt.Errorf("ensure board automod rules index: %w", err)
+	}
 
 	ts := nowMS()
 	updates := []string{

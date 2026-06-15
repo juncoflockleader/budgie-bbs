@@ -5097,6 +5097,36 @@ func ListContentFilters(db *sql.DB, scope string, includeInactive bool, limit, o
 	return out, rows.Err()
 }
 
+// ListBoardAutomodRules returns all automod rules for a board, ordered by
+// priority then recency.
+func ListBoardAutomodRules(db *sql.DB, boardID string) ([]BoardAutomodRule, error) {
+	rows, err := QQuery(db,
+		`SELECT id, board_id, enabled, priority, match_type, pattern, threshold, window_sec,
+		        action, duration_sec, reason, note, created_by, created_at, updated_by, updated_at
+		   FROM board_automod_rules
+		  WHERE board_id=?
+		  ORDER BY priority, updated_at DESC, id`,
+		boardID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BoardAutomodRule{}
+	for rows.Next() {
+		var r BoardAutomodRule
+		var enabled int
+		if err := rows.Scan(&r.ID, &r.Board, &enabled, &r.Priority, &r.MatchType, &r.Pattern,
+			&r.Threshold, &r.WindowSec, &r.Action, &r.DurationSec, &r.Reason, &r.Note,
+			&r.CreatedBy, &r.CreatedAt, &r.UpdatedBy, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		r.Enabled = enabled != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func MatchContentFilter(db *sql.DB, boardID, text string) (*ContentFilter, error) {
 	needle := strings.ToLower(strings.TrimSpace(text))
 	if needle == "" {

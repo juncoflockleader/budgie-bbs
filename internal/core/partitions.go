@@ -100,6 +100,8 @@ var commandPartitionSpecs = map[proto.CommandName]commandPartitionSpec{
 	proto.CmdSanctionUser:               fieldPartition(partitionUser, "user", "scope"),
 	proto.CmdClearUserSanction:          fieldPartition(partitionUser, "user", "scope"),
 	proto.CmdSetContentFilter:           fieldPartition(partitionBoard, "scope").withFallback(partitionGlobal),
+	proto.CmdSetBoardAutomodRule:        fieldPartition(partitionBoard, "board"),
+	proto.CmdDeleteBoardAutomodRule:     fieldPartition(partitionBoard, "board"),
 	proto.CmdGrantRole:                  fieldPartition(partitionUser, "user"),
 	proto.CmdRevokeRole:                 fieldPartition(partitionUser, "user"),
 	proto.CmdPublishStatsSnapshot:       globalPartition(),

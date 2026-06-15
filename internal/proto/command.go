@@ -1,5 +1,10 @@
 package proto
 
+import (
+	"regexp"
+	"strings"
+)
+
 // CommandName identifies which command a client is sending.
 type CommandName string
 
@@ -96,6 +101,10 @@ const (
 	// Modern forum moderation
 	CmdFlagPost      CommandName = "flagPost"
 	CmdResolveReview CommandName = "resolveReview"
+
+	// Board automod rules
+	CmdSetBoardAutomodRule    CommandName = "setBoardAutomodRule"
+	CmdDeleteBoardAutomodRule CommandName = "deleteBoardAutomodRule"
 )
 
 type CreateBoardPayload struct {
@@ -168,6 +177,90 @@ type SetContentFilterPayload struct {
 	Pattern string `json:"pattern"`
 	Scope   string `json:"scope,omitempty"` // board id or "global"
 	Active  *bool  `json:"active,omitempty"`
+}
+
+// SetBoardAutomodRulePayload creates or updates a board automod rule. Empty ID
+// creates a new rule.
+type SetBoardAutomodRulePayload struct {
+	ID          string `json:"id,omitempty"`
+	Board       string `json:"board"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+	Priority    int    `json:"priority,omitempty"`
+	MatchType   string `json:"matchType"`             // keyword|regex|repeated_text|link_count|account_age|rate_threshold
+	Pattern     string `json:"pattern,omitempty"`     // keyword/regex text
+	Threshold   int    `json:"threshold,omitempty"`   // repeated/link/age/rate count
+	WindowSec   int    `json:"windowSec,omitempty"`   // rate_threshold window
+	Action      string `json:"action"`                // manual_review|redact|lock_thread|board_mute|board_ban|global_mute
+	DurationSec int64  `json:"durationSec,omitempty"` // for mute/ban actions, 0 = permanent
+	Reason      string `json:"reason,omitempty"`      // public/audit reason
+	Note        string `json:"note,omitempty"`        // private moderator note
+}
+
+// DeleteBoardAutomodRulePayload removes a board automod rule.
+type DeleteBoardAutomodRulePayload struct {
+	ID    string `json:"id"`
+	Board string `json:"board"`
+}
+
+// AutomodMatchTypes and AutomodActions are the valid automod rule enums.
+var AutomodMatchTypes = map[string]bool{
+	"keyword": true, "regex": true, "repeated_text": true,
+	"link_count": true, "account_age": true, "rate_threshold": true,
+}
+
+var AutomodActions = map[string]bool{
+	"manual_review": true, "redact": true, "lock_thread": true,
+	"board_mute": true, "board_ban": true, "global_mute": true,
+}
+
+// ValidateAutomodRule checks rule fields and returns a validation message, or ""
+// if the rule is valid. Shared by the command handler and the native
+// command-log decider so both paths validate identically.
+func ValidateAutomodRule(p SetBoardAutomodRulePayload) string {
+	matchType := strings.TrimSpace(p.MatchType)
+	if !AutomodMatchTypes[matchType] {
+		return "unknown match type"
+	}
+	if !AutomodActions[strings.TrimSpace(p.Action)] {
+		return "unknown action"
+	}
+	pattern := strings.TrimSpace(p.Pattern)
+	switch matchType {
+	case "keyword", "regex":
+		if pattern == "" {
+			return "pattern is required for keyword/regex rules"
+		}
+		if len(pattern) > 500 {
+			return "pattern must be 500 characters or less"
+		}
+		if matchType == "regex" {
+			if _, err := regexp.Compile(pattern); err != nil {
+				return "invalid regular expression"
+			}
+		}
+	case "repeated_text":
+		if p.Threshold < 2 {
+			return "repeated_text threshold must be at least 2"
+		}
+	case "link_count", "account_age":
+		if p.Threshold < 1 {
+			return "threshold must be at least 1"
+		}
+	case "rate_threshold":
+		if p.Threshold < 1 || p.WindowSec < 1 {
+			return "rate_threshold needs a positive threshold and window"
+		}
+	}
+	if len(strings.TrimSpace(p.Reason)) > 500 {
+		return "reason must be 500 characters or less"
+	}
+	if len(strings.TrimSpace(p.Note)) > 1000 {
+		return "note must be 1000 characters or less"
+	}
+	if p.DurationSec < 0 {
+		return "duration cannot be negative"
+	}
+	return ""
 }
 
 type ApplyBoardMembershipPayload struct {

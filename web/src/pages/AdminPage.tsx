@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
-import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings } from '../api/types'
+import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule } from '../api/types'
 
 type Props = {
   token: string
@@ -34,6 +34,47 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [sanctions, setSanctions] = useState<UserSanction[] | null>(null)
   const [securitySettings, setSecuritySettings] = useState<SecuritySettings | null>(null)
   const [role2FA, setRole2FA] = useState<string | null>(null)
+  const [automodBoard, setAutomodBoard] = useState('')
+  const [automodRules, setAutomodRules] = useState<BoardAutomodRule[] | null>(null)
+  const [ruleDraft, setRuleDraft] = useState({ matchType: 'keyword', pattern: '', threshold: '', windowSec: '', action: 'manual_review', durationHours: '', reason: '' })
+
+  async function loadAutomod(board: string) {
+    setAutomodBoard(board)
+    setAutomodRules(null)
+    if (!board) return
+    const res = await api.listBoardAutomodRules(token, board)
+    if (res.error) { setNotice({ kind: 'error', text: res.error.message }); return }
+    setAutomodRules(res.data ?? [])
+  }
+
+  async function addAutomodRule(event: FormEvent) {
+    event.preventDefault()
+    if (!automodBoard) { setNotice({ kind: 'error', text: 'Select a board first.' }); return }
+    const d = ruleDraft
+    const payload: Record<string, unknown> = { board: automodBoard, matchType: d.matchType, action: d.action }
+    if (d.matchType === 'keyword' || d.matchType === 'regex') payload.pattern = d.pattern.trim()
+    if (['repeated_text', 'link_count', 'account_age', 'rate_threshold'].includes(d.matchType)) payload.threshold = Number(d.threshold) || 0
+    if (d.matchType === 'rate_threshold') payload.windowSec = Number(d.windowSec) || 0
+    if (['board_mute', 'board_ban', 'global_mute'].includes(d.action) && d.durationHours.trim()) payload.durationSec = Math.round(Number(d.durationHours) * 3600)
+    if (d.reason.trim()) payload.reason = d.reason.trim()
+    setSaving('automod')
+    setNotice(null)
+    const res = await api.execCommandResolved(token, 'setBoardAutomodRule', payload)
+    setSaving(null)
+    if (res.error) { setNotice({ kind: 'error', text: res.error.message }); return }
+    setNotice({ kind: 'ok', text: 'Automod rule added.' })
+    setRuleDraft({ ...d, pattern: '', threshold: '', windowSec: '', durationHours: '', reason: '' })
+    await loadAutomod(automodBoard)
+  }
+
+  async function deleteAutomodRule(id: string) {
+    setSaving(`rule:${id}`)
+    setNotice(null)
+    const res = await api.execCommandResolved(token, 'deleteBoardAutomodRule', { board: automodBoard, id })
+    setSaving(null)
+    if (res.error) { setNotice({ kind: 'error', text: res.error.message }); return }
+    await loadAutomod(automodBoard)
+  }
 
   const categoryOptions = useMemo(() => buildCategoryOptions(categories), [categories])
 
@@ -419,6 +460,103 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
           Require two-factor authentication for staff (admins &amp; moderators)
         </label>
         <p className="muted">Enrolled staff are prompted for a code at login. Confirm staff have enrolled (use “Check 2FA” above) before enabling, to avoid surprises.</p>
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <h3>Automod rules</h3>
+        </div>
+        <label>
+          Board
+          <select value={automodBoard} onChange={e => loadAutomod(e.target.value)}>
+            <option value="">— select a board —</option>
+            {boards.map(b => <option key={b.id} value={b.id}>{b.name} ({b.id})</option>)}
+          </select>
+        </label>
+        {automodBoard && (
+          <>
+            <form className="admin-form" onSubmit={addAutomodRule}>
+              <div className="admin-form-grid">
+                <label>
+                  Match
+                  <select value={ruleDraft.matchType} onChange={e => setRuleDraft(p => ({ ...p, matchType: e.target.value }))}>
+                    <option value="keyword">keyword</option>
+                    <option value="regex">regex</option>
+                    <option value="repeated_text">repeated text</option>
+                    <option value="link_count">link count</option>
+                    <option value="account_age">account age (hrs)</option>
+                    <option value="rate_threshold">rate threshold</option>
+                  </select>
+                </label>
+                {(ruleDraft.matchType === 'keyword' || ruleDraft.matchType === 'regex') && (
+                  <label>
+                    Pattern
+                    <input value={ruleDraft.pattern} onChange={e => setRuleDraft(p => ({ ...p, pattern: e.target.value }))} />
+                  </label>
+                )}
+                {['repeated_text', 'link_count', 'account_age', 'rate_threshold'].includes(ruleDraft.matchType) && (
+                  <label>
+                    Threshold
+                    <input value={ruleDraft.threshold} onChange={e => setRuleDraft(p => ({ ...p, threshold: e.target.value }))} inputMode="numeric" />
+                  </label>
+                )}
+                {ruleDraft.matchType === 'rate_threshold' && (
+                  <label>
+                    Window (sec)
+                    <input value={ruleDraft.windowSec} onChange={e => setRuleDraft(p => ({ ...p, windowSec: e.target.value }))} inputMode="numeric" />
+                  </label>
+                )}
+                <label>
+                  Action
+                  <select value={ruleDraft.action} onChange={e => setRuleDraft(p => ({ ...p, action: e.target.value }))}>
+                    <option value="manual_review">manual review</option>
+                    <option value="redact">redact post</option>
+                    <option value="lock_thread">lock thread</option>
+                    <option value="board_mute">board mute</option>
+                    <option value="board_ban">board ban</option>
+                    <option value="global_mute">global mute</option>
+                  </select>
+                </label>
+                {['board_mute', 'board_ban', 'global_mute'].includes(ruleDraft.action) && (
+                  <label>
+                    Duration (hrs)
+                    <input value={ruleDraft.durationHours} onChange={e => setRuleDraft(p => ({ ...p, durationHours: e.target.value }))} placeholder="blank = permanent" />
+                  </label>
+                )}
+              </div>
+              <label>
+                Reason
+                <input value={ruleDraft.reason} onChange={e => setRuleDraft(p => ({ ...p, reason: e.target.value }))} placeholder="optional, public/audit reason" maxLength={500} />
+              </label>
+              <div className="form-actions">
+                <button type="submit" disabled={saving === 'automod'}>{saving === 'automod' ? 'Saving...' : 'Add rule'}</button>
+              </div>
+            </form>
+            {automodRules !== null && (
+              automodRules.length === 0 ? (
+                <p className="muted">No automod rules for this board.</p>
+              ) : (
+                <ul className="admin-sanction-list">
+                  {automodRules.map(r => (
+                    <li key={r.id} className="admin-sanction-row">
+                      <span>
+                        <strong>{r.matchType}</strong>
+                        {r.pattern ? ` “${r.pattern}”` : ''}
+                        {r.threshold ? ` ≥${r.threshold}` : ''}
+                        {r.windowSec ? `/${r.windowSec}s` : ''}
+                        {' → '}{r.action}
+                        {r.durationSec ? ` ${Math.round(r.durationSec / 3600)}h` : ''}
+                        {r.enabled ? '' : ' · disabled'}
+                        {r.reason ? ` · ${r.reason}` : ''}
+                      </span>
+                      <button type="button" className="link-btn danger" onClick={() => deleteAutomodRule(r.id)} disabled={saving === `rule:${r.id}`}>Delete</button>
+                    </li>
+                  ))}
+                </ul>
+              )
+            )}
+          </>
+        )}
       </section>
 
       <section className="admin-panel">

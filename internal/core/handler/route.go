@@ -220,6 +220,20 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.setContentFilter(actor, p)
 
+	case proto.CmdSetBoardAutomodRule:
+		var p proto.SetBoardAutomodRulePayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.setBoardAutomodRule(actor, p)
+
+	case proto.CmdDeleteBoardAutomodRule:
+		var p proto.DeleteBoardAutomodRulePayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.deleteBoardAutomodRule(actor, p)
+
 	case proto.CmdCreateBoard:
 		var p proto.CreateBoardPayload
 		if err := json.Unmarshal(payload, &p); err != nil {

@@ -57,6 +57,7 @@ import type {
   UserSanction,
   TwoFactorStatus,
   SecuritySettings,
+  BoardAutomodRule,
 } from './types'
 
 const BASE = '/api/v1'
@@ -444,6 +445,13 @@ export async function setSecuritySettings(token: string, staff2faRequired: boole
 export async function getUserTwoFactorStatus(token: string, name: string): Promise<ApiResponse<TwoFactorStatus>> {
   const res = await fetch(`${BASE}/users/${name}/2fa`, { headers: authHeaders(token) })
   return json<TwoFactorStatus>(res)
+}
+
+export async function listBoardAutomodRules(token: string, board: string): Promise<ApiResponse<BoardAutomodRule[]>> {
+  const res = await fetch(`${BASE}/boards/${board}/automod-rules`, { headers: authHeaders(token) })
+  const r = await json<{ rules: BoardAutomodRule[] }>(res)
+  if (r.error) return { error: r.error }
+  return { data: r.data?.rules ?? [] }
 }
 
 export async function logout(token: string): Promise<ApiResponse<unknown>> {
@@ -2356,6 +2364,7 @@ export async function clearUserSanction(
 export type CommandName =
   | 'createThread' | 'appendPost' | 'repostPost' | 'postBoardMail' | 'editPost' | 'setPostFlag' | 'redactPost' | 'restorePost'
   | 'setThreadTitle' | 'lockThread' | 'moveThread' | 'sanctionUser' | 'clearUserSanction' | 'setContentFilter' | 'grantRole' | 'revokeRole' | 'publishStatsSnapshot'
+  | 'setBoardAutomodRule' | 'deleteBoardAutomodRule'
   | 'sendChatLine' | 'setPresence' | 'createBoard' | 'purgePost'
   | 'setBoardSettings' | 'setBoardMemberRequirements' | 'setBoardModerator'
   | 'setBoardMember' | 'applyBoardMembership' | 'reviewBoardMembership' | 'leaveBoardMembership'

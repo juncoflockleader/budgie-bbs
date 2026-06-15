@@ -185,6 +185,10 @@ func (e *CommandLogNativeDecisionExecutor) decide(ctx context.Context, record Co
 		return e.decideMoveThread(ctx, record)
 	case proto.CmdSetContentFilter:
 		return e.decideSetContentFilter(ctx, record)
+	case proto.CmdSetBoardAutomodRule:
+		return e.decideSetBoardAutomodRule(ctx, record)
+	case proto.CmdDeleteBoardAutomodRule:
+		return e.decideDeleteBoardAutomodRule(ctx, record)
 	case proto.CmdPublishPollResult:
 		return e.decidePublishPollResult(ctx, record)
 	case proto.CmdFlagPost:
@@ -2203,6 +2207,131 @@ func (e *CommandLogNativeDecisionExecutor) decideSetContentFilter(ctx context.Co
 	}
 	return nativeCommandDecision{
 		reply:  Reply{Result: &proto.AckResult{ID: filterID}},
+		events: []EventAppend{event},
+	}, nil
+}
+
+func (e *CommandLogNativeDecisionExecutor) decideSetBoardAutomodRule(ctx context.Context, record CommandLogRecord) (nativeCommandDecision, *proto.ErrorDetail) {
+	if record.Offset <= 0 {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "command offset is required", false)
+	}
+	var payload proto.SetBoardAutomodRulePayload
+	if err := json.Unmarshal(record.Payload, &payload); err != nil {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "invalid setBoardAutomodRule payload", false)
+	}
+	board := strings.TrimSpace(payload.Board)
+	if board == "" {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "board is required", false)
+	}
+	partition := record.Partition.Normalize()
+	if partition != (LogPartition{Kind: partitionBoard, Key: board}) {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, fmt.Sprintf("command log partition mismatch: record=%s/%s expected=%s/%s",
+			partition.Kind, partition.Key, partitionBoard, board), false)
+	}
+	if msg := proto.ValidateAutomodRule(payload); msg != "" {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
+	}
+	action := strings.TrimSpace(payload.Action)
+	actor, errDetail := e.loadNativeDecisionActor(record.ActorID)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
+	}
+	exists, err := nativeBoardExists(e.core.DB, board)
+	if err != nil {
+		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+	}
+	if !exists {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	}
+	switch action {
+	case "global_mute":
+		if !actor.IsAdmin() {
+			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "only admins can create global-sanction rules", false)
+		}
+	case "lock_thread":
+		if ok, err := e.core.userCanModerateBoardCap(actor.ID, actor.Role, board, "can_moderate_threads"); err != nil {
+			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+		} else if !ok {
+			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread moderation permission required", false)
+		}
+	default:
+		if ok, err := e.core.userCanModerateBoardCap(actor.ID, actor.Role, board, "can_moderate_posts"); err != nil {
+			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+		} else if !ok {
+			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "post moderation permission required", false)
+		}
+	}
+	ruleID := strings.TrimSpace(payload.ID)
+	if ruleID == "" {
+		ruleID = stableCommandLogDecisionID("rule_", record, 0)
+	}
+	enabled := true
+	if payload.Enabled != nil {
+		enabled = *payload.Enabled
+	}
+	ts := record.EnqueuedAt
+	if ts <= 0 {
+		ts = nowMS()
+	}
+	event := EventAppend{
+		ID:     stableCommandLogDecisionID("evt_", record, 0),
+		Kind:   proto.EvtBoardAutomodRuleSet,
+		Scopes: []string{"board:" + board},
+		Payload: &proto.BoardAutomodRuleSetPayload{
+			ID: ruleID, Board: board, Enabled: enabled, Priority: payload.Priority,
+			MatchType: strings.TrimSpace(payload.MatchType), Pattern: strings.TrimSpace(payload.Pattern),
+			Threshold: payload.Threshold, WindowSec: payload.WindowSec, Action: action,
+			DurationSec: payload.DurationSec, Reason: strings.TrimSpace(payload.Reason),
+			Note: strings.TrimSpace(payload.Note), By: actor.ID, TS: ts,
+		},
+		TS: ts,
+	}
+	return nativeCommandDecision{
+		reply:  Reply{Result: &proto.AckResult{ID: ruleID}},
+		events: []EventAppend{event},
+	}, nil
+}
+
+func (e *CommandLogNativeDecisionExecutor) decideDeleteBoardAutomodRule(ctx context.Context, record CommandLogRecord) (nativeCommandDecision, *proto.ErrorDetail) {
+	if record.Offset <= 0 {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "command offset is required", false)
+	}
+	var payload proto.DeleteBoardAutomodRulePayload
+	if err := json.Unmarshal(record.Payload, &payload); err != nil {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "invalid deleteBoardAutomodRule payload", false)
+	}
+	board := strings.TrimSpace(payload.Board)
+	id := strings.TrimSpace(payload.ID)
+	if board == "" || id == "" {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "board and id are required", false)
+	}
+	partition := record.Partition.Normalize()
+	if partition != (LogPartition{Kind: partitionBoard, Key: board}) {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, fmt.Sprintf("command log partition mismatch: record=%s/%s expected=%s/%s",
+			partition.Kind, partition.Key, partitionBoard, board), false)
+	}
+	actor, errDetail := e.loadNativeDecisionActor(record.ActorID)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
+	}
+	if ok, err := e.core.UserCanModerateBoard(actor.ID, actor.Role, board); err != nil {
+		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+	} else if !ok {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board moderation permission required", false)
+	}
+	ts := record.EnqueuedAt
+	if ts <= 0 {
+		ts = nowMS()
+	}
+	event := EventAppend{
+		ID:      stableCommandLogDecisionID("evt_", record, 0),
+		Kind:    proto.EvtBoardAutomodRuleDeleted,
+		Scopes:  []string{"board:" + board},
+		Payload: &proto.BoardAutomodRuleDeletedPayload{ID: id, Board: board, By: actor.ID, TS: ts},
+		TS:      ts,
+	}
+	return nativeCommandDecision{
+		reply:  Reply{Result: &proto.AckResult{ID: id}},
 		events: []EventAppend{event},
 	}, nil
 }

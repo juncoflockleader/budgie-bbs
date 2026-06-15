@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 var asyncPostSearchCommands atomic.Bool
@@ -217,6 +218,35 @@ func insertModerationReview(tx *sql.Tx, id, kind, targetID, targetKind, reporter
 
 func upsertContentFilter(tx *sql.Tx, id, pattern, scope string, active bool, createdBy string, ts int64) error {
 	return projections.UpsertContentFilter(tx, id, pattern, scope, active, createdBy, ts)
+}
+
+func upsertBoardAutomodRule(tx *sql.Tx, p *proto.BoardAutomodRuleSetPayload) error {
+	return projections.UpsertBoardAutomodRule(tx, projections.BoardAutomodRule{
+		ID:          p.ID,
+		Board:       p.Board,
+		Enabled:     p.Enabled,
+		Priority:    p.Priority,
+		MatchType:   p.MatchType,
+		Pattern:     p.Pattern,
+		Threshold:   p.Threshold,
+		WindowSec:   p.WindowSec,
+		Action:      p.Action,
+		DurationSec: p.DurationSec,
+		Reason:      p.Reason,
+		Note:        p.Note,
+		CreatedBy:   p.By,
+		CreatedAt:   p.TS,
+		UpdatedBy:   p.By,
+		UpdatedAt:   p.TS,
+	})
+}
+
+func deleteBoardAutomodRule(tx *sql.Tx, board, id string) error {
+	return projections.DeleteBoardAutomodRule(tx, board, id)
+}
+
+func listBoardAutomodRules(db *sql.DB, boardID string) ([]BoardAutomodRule, error) {
+	return projections.ListBoardAutomodRules(db, boardID)
 }
 
 func insertNotification(db *sql.DB, id, userID, kind, threadID, postID, actor string, ts int64) error {

@@ -39,6 +39,15 @@ Not yet present:
 
 ## Progress
 
+2026-06-15 (Phase 7 — board automod rule storage + APIs):
+
+- Board-owned automod rule model (separate from the admin-only site content filters). Table `board_automod_rules` (schema/migrations + Postgres migration 75) storing all plan match types (keyword/regex/repeated_text/link_count/account_age/rate_threshold) and actions (manual_review/redact/lock_thread/board_mute/board_ban/global_mute), with priority, duration, public reason, and private note.
+- Commands `setBoardAutomodRule` / `deleteBoardAutomodRule` (handler + native command-log decider + partition specs by board) with action-based authz: global_mute → admin, lock_thread → thread moderation, others → post moderation; delete by any board moderator. Shared `proto.ValidateAutomodRule` keeps handler and decider validation identical. Projection + event-log replay (rebuild) wired.
+- HTTP `GET /boards/{board}/automod-rules` (board-moderator/admin gated via `Core.UserCanModerateBoard`); rules created/deleted via the generic command endpoint.
+- Web: AdminPage "Automod rules" panel — board picker, add rule (match type / pattern / threshold / window / action / duration / reason), list, delete.
+- Tests: core `TestBoardAutomodRuleCRUDAndAuthz` (CRUD + authz + rebuild), httpapi `TestBoardAutomodRulesHTTP`. Browser-verified the admin panel end to end.
+- NOTE: Phase 7 is storage + management only — rules are NOT yet evaluated against posts/threads. That is Phase 8 (automod execution).
+
 2026-06-15 (Phase 5 — staff 2FA):
 
 - Added `internal/totp` (RFC 6238, stdlib only; verified against the RFC test vectors) for authenticator-app codes, and a pure-Go QR (`skip2/go-qrcode`) for enrollment.

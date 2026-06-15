@@ -138,6 +138,27 @@ type ContentFilter struct {
 	UpdatedAt int64  `json:"updatedAt"`
 }
 
+// BoardAutomodRule is a board-owned automoderation rule. Stored, listed, and
+// (in a later phase) evaluated against new threads/posts.
+type BoardAutomodRule struct {
+	ID          string `json:"id"`
+	Board       string `json:"board"`
+	Enabled     bool   `json:"enabled"`
+	Priority    int    `json:"priority"`
+	MatchType   string `json:"matchType"`
+	Pattern     string `json:"pattern"`
+	Threshold   int    `json:"threshold"`
+	WindowSec   int    `json:"windowSec"`
+	Action      string `json:"action"`
+	DurationSec int64  `json:"durationSec"`
+	Reason      string `json:"reason"`
+	Note        string `json:"note"`
+	CreatedBy   string `json:"createdBy"`
+	CreatedAt   int64  `json:"createdAt"`
+	UpdatedBy   string `json:"updatedBy"`
+	UpdatedAt   int64  `json:"updatedAt"`
+}
+
 type BoardRanking struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`

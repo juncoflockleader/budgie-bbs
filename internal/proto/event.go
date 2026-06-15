@@ -19,6 +19,8 @@ const (
 	EvtUserSanctioned                  EventKind = "user.sanctioned"
 	EvtUserSanctionCleared             EventKind = "user.sanction_cleared"
 	EvtContentFilterSet                EventKind = "content_filter.set"
+	EvtBoardAutomodRuleSet             EventKind = "board.automod_rule_set"
+	EvtBoardAutomodRuleDeleted         EventKind = "board.automod_rule_deleted"
 	EvtRoleGranted                     EventKind = "role.granted"
 	EvtRoleRevoked                     EventKind = "role.revoked"
 	EvtBoardCreated                    EventKind = "board.created"
@@ -110,7 +112,7 @@ func (e *Event) IsDurable() bool {
 	switch e.Kind {
 	case EvtThreadNew, EvtPostAppended, EvtPostAttachmentAdded, EvtPostEdited, EvtPostRedacted,
 		EvtPostFlagsSet, EvtPostRestored, EvtPostDeletionCleared, EvtPostPurged, EvtThreadTitleSet, EvtThreadLocked, EvtThreadMoved,
-		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated, EvtBoardSettingsSet, EvtBoardMemberRequirementsSet, EvtBoardModeratorSet, EvtBoardMemberSet, EvtBoardMemberApplicationSubmitted, EvtBoardMemberApplicationReviewed,
+		EvtUserSanctioned, EvtUserSanctionCleared, EvtContentFilterSet, EvtBoardAutomodRuleSet, EvtBoardAutomodRuleDeleted, EvtRoleGranted, EvtRoleRevoked, EvtBoardCreated, EvtBoardSettingsSet, EvtBoardMemberRequirementsSet, EvtBoardModeratorSet, EvtBoardMemberSet, EvtBoardMemberApplicationSubmitted, EvtBoardMemberApplicationReviewed,
 		EvtBoardRecommendedSet, EvtBoardFavoriteSet, EvtFavoriteFolderCreated, EvtFavoriteFolderUpdated, EvtFavoriteFolderDeleted, EvtFavoriteTreeImported, EvtBoardZapSet,
 		EvtMailSent, EvtMailAttachmentAdded, EvtMailGroupSet, EvtMailGroupDeleted, EvtMailCopyUpdated,
 		EvtDirectMessageSent, EvtDirectMessageRead, EvtDirectMessageDeleted, EvtDirectMessageSettingsSet,
@@ -317,6 +319,30 @@ type ContentFilterSetPayload struct {
 	Active  bool   `json:"active"`
 	By      string `json:"by"`
 	TS      int64  `json:"ts"`
+}
+
+type BoardAutomodRuleSetPayload struct {
+	ID          string `json:"id"`
+	Board       string `json:"board"`
+	Enabled     bool   `json:"enabled"`
+	Priority    int    `json:"priority"`
+	MatchType   string `json:"matchType"`
+	Pattern     string `json:"pattern,omitempty"`
+	Threshold   int    `json:"threshold,omitempty"`
+	WindowSec   int    `json:"windowSec,omitempty"`
+	Action      string `json:"action"`
+	DurationSec int64  `json:"durationSec,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	Note        string `json:"note,omitempty"`
+	By          string `json:"by"`
+	TS          int64  `json:"ts"`
+}
+
+type BoardAutomodRuleDeletedPayload struct {
+	ID    string `json:"id"`
+	Board string `json:"board"`
+	By    string `json:"by"`
+	TS    int64  `json:"ts"`
 }
 
 type RoleGrantedPayload struct {

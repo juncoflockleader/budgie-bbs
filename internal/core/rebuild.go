@@ -372,6 +372,7 @@ func clearProjectionTables(tx *sql.Tx) error {
 		"blessings",
 		"moderation_reviews",
 		"content_filters",
+		"board_automod_rules",
 		"user_sanctions",
 		"user_activity",
 	}
@@ -1034,6 +1035,14 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			scope = "global"
 		}
 		if err := upsertContentFilter(tx, evt.ID, evt.Pattern, scope, evt.Active, evt.By, evt.TS); err != nil {
+			return err
+		}
+	case *proto.BoardAutomodRuleSetPayload:
+		if err := upsertBoardAutomodRule(tx, evt); err != nil {
+			return err
+		}
+	case *proto.BoardAutomodRuleDeletedPayload:
+		if err := deleteBoardAutomodRule(tx, evt.Board, evt.ID); err != nil {
 			return err
 		}
 	case *proto.PostFlaggedPayload:

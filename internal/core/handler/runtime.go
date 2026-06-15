@@ -534,6 +534,14 @@ func upsertContentFilter(tx *sql.Tx, id, pattern, scope string, active bool, cre
 	return currentRuntime().UpsertContentFilter(tx, id, pattern, scope, active, createdBy, ts)
 }
 
+func upsertBoardAutomodRule(tx *sql.Tx, p *proto.BoardAutomodRuleSetPayload) error {
+	return currentRuntime().UpsertBoardAutomodRule(tx, p)
+}
+
+func deleteBoardAutomodRule(tx *sql.Tx, board, id string) error {
+	return currentRuntime().DeleteBoardAutomodRule(tx, board, id)
+}
+
 func pgNotifyEphemeral(db *sql.DB, event, eid, scopes string) {
 	if fn := currentRuntime().PGNotifyEphemeral; fn != nil {
 		fn(db, event, eid, scopes)

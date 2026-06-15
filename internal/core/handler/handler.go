@@ -79,6 +79,8 @@ type Runtime struct {
 	UserIgnores                  func(db *sql.DB, userID, targetUserID string) (bool, error)
 	InsertModerationReview       func(tx *sql.Tx, id, kind, targetID, targetKind, reporter, reason string, ts int64) error
 	UpsertContentFilter          func(tx *sql.Tx, id, pattern, scope string, active bool, createdBy string, ts int64) error
+	UpsertBoardAutomodRule       func(tx *sql.Tx, p *proto.BoardAutomodRuleSetPayload) error
+	DeleteBoardAutomodRule       func(tx *sql.Tx, board, id string) error
 	ResolveModerationReview      func(tx *sql.Tx, id, actor, resolution string, ts int64) error
 	SetThreadPref                func(db *sql.DB, userID, threadID, level string) error
 	WatchersOfThreadTx           func(tx *sql.Tx, threadID, excludeUserID string) ([]string, error)

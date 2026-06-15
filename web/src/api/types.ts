@@ -583,6 +583,25 @@ export interface SecuritySettings {
   updatedAt: number
 }
 
+export interface BoardAutomodRule {
+  id: string
+  board: string
+  enabled: boolean
+  priority: number
+  matchType: string
+  pattern: string
+  threshold: number
+  windowSec: number
+  action: string
+  durationSec: number
+  reason: string
+  note: string
+  createdBy: string
+  createdAt: number
+  updatedBy: string
+  updatedAt: number
+}
+
 export interface AuthPolicy {
   captcha: {
     enabled: boolean

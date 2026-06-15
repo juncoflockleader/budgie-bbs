@@ -2927,6 +2927,49 @@ func (c *Core) ListContentFilters(scope string, includeInactive bool, limit, off
 	return listContentFilters(c.DB, scope, includeInactive, limit, offset)
 }
 
+func (c *Core) ListBoardAutomodRules(boardID string) ([]BoardAutomodRule, error) {
+	return listBoardAutomodRules(c.DB, boardID)
+}
+
+// UserCanModerateBoard reports whether a user may moderate a board at all: site
+// moderators/admins always can, as can a board's moderators or members with a
+// post or thread moderation capability.
+func (c *Core) UserCanModerateBoard(userID, role, boardID string) (bool, error) {
+	if ok, err := c.userCanModerateBoardCap(userID, role, boardID, "can_moderate_posts"); err != nil || ok {
+		return ok, err
+	}
+	return c.userCanModerateBoardCap(userID, role, boardID, "can_moderate_threads")
+}
+
+// userCanModerateBoardCap reports whether a user holds a specific board
+// moderation capability ("can_moderate_posts" or "can_moderate_threads"). Site
+// moderators/admins and board moderators always qualify.
+func (c *Core) userCanModerateBoardCap(userID, role, boardID, column string) (bool, error) {
+	if role == "admin" || role == "moderator" {
+		return true, nil
+	}
+	if column != "can_moderate_posts" && column != "can_moderate_threads" {
+		return false, nil
+	}
+	var x int
+	err := qQueryRow(c.DB, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&x)
+	if err == nil {
+		return true, nil
+	}
+	if err != sql.ErrNoRows {
+		return false, err
+	}
+	var v int
+	err = qQueryRow(c.DB, `SELECT `+column+` FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&v)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return v != 0, nil
+}
+
 func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]UserSanction, error) {
 	return listUserSanctions(c.DB, userID, limit, offset)
 }
