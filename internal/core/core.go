@@ -62,6 +62,8 @@ type Core struct {
 	crossNodeViaBus bool
 	// isLeader is true while this node holds the background-worker leader lock.
 	isLeader atomic.Bool
+	// captcha holds signup-captcha configuration; nil means disabled.
+	captcha *captchaRuntime
 
 	eventLogShadow          EventStore
 	eventLogShadowReporter  EventParityReporter

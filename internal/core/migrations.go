@@ -806,6 +806,17 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_recommended_boards_position ON recommended_boards(position, updated_at DESC, board_id)`); err != nil {
 		return fmt.Errorf("ensure recommended boards index: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS captcha_challenges (
+		    id          TEXT    PRIMARY KEY,
+		    answer_hash TEXT    NOT NULL,
+		    created_at  INTEGER NOT NULL DEFAULT 0,
+		    expires_at  INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure captcha challenges table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_captcha_challenges_expires ON captcha_challenges(expires_at)`); err != nil {
+		return fmt.Errorf("ensure captcha challenges index: %w", err)
+	}
 
 	ts := nowMS()
 	updates := []string{

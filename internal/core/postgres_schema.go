@@ -2954,5 +2954,22 @@ VALUES (70, 'postgres-event-scalar-offsets', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 71,
+			Name:    "postgres-captcha-challenges",
+			SQL: `
+CREATE TABLE IF NOT EXISTS captcha_challenges (
+    id          TEXT PRIMARY KEY,
+    answer_hash TEXT NOT NULL,
+    created_at  BIGINT NOT NULL DEFAULT 0,
+    expires_at  BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_captcha_challenges_expires ON captcha_challenges(expires_at);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (71, 'postgres-captcha-challenges', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

@@ -38,6 +38,11 @@ func main() {
 		sshPort                             = flag.Int("ssh", 2222, "SSH listen port")
 		hostKey                             = flag.String("hostkey", "", "Path to SSH host key (auto-generated if empty)")
 		jwtSecret                           = flag.String("jwt-secret", "", "JWT signing secret (random if empty)")
+		captchaMode                         = flag.String("captcha-mode", "", "Signup captcha mode: off, native, or provider (also BUDGIE_CAPTCHA_MODE)")
+		captchaProvider                     = flag.String("captcha-provider", "", "Captcha provider for -captcha-mode provider: recaptcha, hcaptcha, or turnstile (also BUDGIE_CAPTCHA_PROVIDER)")
+		captchaSiteKey                      = flag.String("captcha-site-key", "", "Public captcha site key (also BUDGIE_CAPTCHA_SITE_KEY)")
+		captchaSecret                       = flag.String("captcha-secret", "", "Captcha provider secret / native HMAC key (also BUDGIE_CAPTCHA_SECRET)")
+		captchaVerifyURL                    = flag.String("captcha-verify-url", "", "Override captcha provider verify URL (optional)")
 		webRoot                             = flag.String("web", "", "Path to web/dist directory for SPA serving (optional)")
 		nntpAddr                            = flag.String("nntp", "", "NNTP listen address (optional, e.g. :1190)")
 		nntpDomain                          = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
@@ -1335,6 +1340,21 @@ func main() {
 		return
 	}
 
+	// Signup captcha (off unless configured). Native mode reuses the JWT secret
+	// as its HMAC key when no dedicated captcha secret is set, so challenge
+	// hashes verify on any node.
+	capSecret := envOr2(*captchaSecret, "BUDGIE_CAPTCHA_SECRET")
+	if capSecret == "" {
+		capSecret = string(secret)
+	}
+	c.SetCaptcha(core.CaptchaConfig{
+		Mode:      envOr2(*captchaMode, "BUDGIE_CAPTCHA_MODE"),
+		Provider:  envOr2(*captchaProvider, "BUDGIE_CAPTCHA_PROVIDER"),
+		SiteKey:   envOr2(*captchaSiteKey, "BUDGIE_CAPTCHA_SITE_KEY"),
+		Secret:    capSecret,
+		VerifyURL: *captchaVerifyURL,
+	})
+
 	// Register scrape-time metrics collectors (SSH sessions, outbox counts).
 	c.RegisterMetricsCollectors()
 	core.RegisterCommandLogMetricsCollector(commandLogMetrics, *commandLogWorkerLimit)
@@ -1740,6 +1760,14 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envOr2 prefers a non-empty flag value, falling back to an env var.
+func envOr2(flagVal, envKey string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	return os.Getenv(envKey)
 }
 
 func defaultCommandLogWorkerID() string {

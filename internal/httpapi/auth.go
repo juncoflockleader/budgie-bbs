@@ -13,6 +13,11 @@ import (
 type registerRequest struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
+	// Captcha (when enabled): native challenges send challenge id + answer;
+	// provider challenges send a single token.
+	CaptchaChallengeID string `json:"captchaChallengeId"`
+	CaptchaAnswer      string `json:"captchaAnswer"`
+	CaptchaToken       string `json:"captchaToken"`
 }
 
 type loginRequest struct {
@@ -60,6 +65,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name and password required", false)
 		return
 	}
+	if err := s.core.VerifyCaptcha(r.Context(), core.CaptchaSubmission{
+		ChallengeID: req.CaptchaChallengeID,
+		Answer:      req.CaptchaAnswer,
+		Token:       req.CaptchaToken,
+		RemoteIP:    requestHost(r),
+	}); err != nil {
+		if errors.Is(err, core.ErrCaptchaRequired) {
+			writeError(w, http.StatusBadRequest, "captcha_required", "captcha is required", false)
+			return
+		}
+		if errors.Is(err, core.ErrCaptchaFailed) {
+			writeError(w, http.StatusBadRequest, "captcha_failed", "captcha verification failed", false)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "captcha check failed", true)
+		return
+	}
 	u, err := s.core.RegisterUser(req.Name, req.Password)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", err.Error(), false)
@@ -85,6 +107,24 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Token: tok, ExpiresAt: exp,
 		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
 	})
+}
+
+// handleAuthPolicy exposes unauthenticated signup policy (currently captcha
+// config) so the client can render the right challenge before registering.
+func (s *Server) handleAuthPolicy(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"captcha": s.core.CaptchaPolicy(),
+	})
+}
+
+// handleCaptchaChallenge issues a fresh native captcha challenge (id + SVG).
+func (s *Server) handleCaptchaChallenge(w http.ResponseWriter, r *http.Request) {
+	ch, err := s.core.IssueCaptchaChallenge()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "captcha_unavailable", "native captcha is not enabled", false)
+		return
+	}
+	writeJSON(w, http.StatusOK, ch)
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
