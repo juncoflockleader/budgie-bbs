@@ -316,7 +316,17 @@ export async function getCaptchaChallenge(): Promise<ApiResponse<CaptchaChalleng
 export async function register(
   name: string,
   password: string,
-  extras?: { email?: string; captchaChallengeId?: string; captchaAnswer?: string; captchaToken?: string },
+  extras?: {
+    email?: string
+    realName?: string
+    affiliation?: string
+    note?: string
+    acceptPolicy?: boolean
+    policyVersion?: string
+    captchaChallengeId?: string
+    captchaAnswer?: string
+    captchaToken?: string
+  },
 ): Promise<ApiResponse<AuthResponse>> {
   const res = await fetch(`${BASE}/auth/register`, {
     method: 'POST',
@@ -325,12 +335,22 @@ export async function register(
       name,
       password,
       email: extras?.email,
+      realName: extras?.realName,
+      affiliation: extras?.affiliation,
+      note: extras?.note,
+      acceptPolicy: extras?.acceptPolicy,
+      policyVersion: extras?.policyVersion,
       captchaChallengeId: extras?.captchaChallengeId,
       captchaAnswer: extras?.captchaAnswer,
       captchaToken: extras?.captchaToken,
     }),
   })
   return json<AuthResponse>(res)
+}
+
+export async function getPrivacyPolicy(): Promise<ApiResponse<{ markdown: string; version: string }>> {
+  const res = await fetch(`${BASE}/auth/privacy-policy`)
+  return json<{ markdown: string; version: string }>(res)
 }
 
 export async function resendVerification(name: string): Promise<ApiResponse<unknown>> {

@@ -34,6 +34,22 @@ export function AuthPage({ onLogin }: Props) {
   const [emailRequired, setEmailRequired] = useState(false)
   const [verificationSent, setVerificationSent] = useState(false)
   const [devInboxUrl, setDevInboxUrl] = useState('')
+  const [realName, setRealName] = useState('')
+  const [affiliation, setAffiliation] = useState('')
+  const [joinNote, setJoinNote] = useState('')
+  const [policyRequired, setPolicyRequired] = useState(false)
+  const [policyVersion, setPolicyVersion] = useState('')
+  const [policyAccepted, setPolicyAccepted] = useState(false)
+  const [policyText, setPolicyText] = useState<string | null>(null)
+  const [policyOpen, setPolicyOpen] = useState(false)
+
+  async function togglePolicy() {
+    if (!policyOpen && policyText === null) {
+      const res = await api.getPrivacyPolicy()
+      setPolicyText(res.data?.markdown ?? 'Could not load the policy.')
+    }
+    setPolicyOpen(o => !o)
+  }
 
   const loadChallenge = useCallback(async () => {
     const res = await api.getCaptchaChallenge()
@@ -60,6 +76,8 @@ export function AuthPage({ onLogin }: Props) {
       setCaptchaSiteKey(c.siteKey ?? '')
       setEmailRequired(res.data.emailVerification?.required ?? false)
       setDevInboxUrl(res.data.emailVerification?.devInboxUrl ?? '')
+      setPolicyRequired(res.data.privacyPolicy?.required ?? false)
+      setPolicyVersion(res.data.privacyPolicy?.version ?? '')
       if (c.mode === 'native') loadChallenge()
     })
     return () => { cancelled = true }
@@ -108,6 +126,11 @@ export function AuthPage({ onLogin }: Props) {
       ? await api.login(name, password)
       : await api.register(name, password, {
           email: email.trim(),
+          realName: realName.trim(),
+          affiliation: affiliation.trim(),
+          note: joinNote.trim(),
+          acceptPolicy: policyAccepted,
+          policyVersion,
           captchaChallengeId: challenge?.id,
           captchaAnswer,
           captchaToken,
@@ -216,6 +239,35 @@ export function AuthPage({ onLogin }: Props) {
           </label>
         )}
 
+        {mode === 'register' && (
+          <>
+            <label>
+              Real name <span className="auth-optional">(optional)</span>
+              <input value={realName} onChange={e => setRealName(e.target.value)} maxLength={200} />
+            </label>
+            <label>
+              School or affiliation <span className="auth-optional">(optional)</span>
+              <input value={affiliation} onChange={e => setAffiliation(e.target.value)} maxLength={200} />
+            </label>
+            <label>
+              Reason for joining <span className="auth-optional">(optional)</span>
+              <textarea value={joinNote} onChange={e => setJoinNote(e.target.value)} rows={2} maxLength={1000} />
+            </label>
+          </>
+        )}
+
+        {mode === 'register' && policyRequired && (
+          <div className="policy-block">
+            <label className="policy-accept">
+              <input type="checkbox" checked={policyAccepted} onChange={e => setPolicyAccepted(e.target.checked)} />
+              <span>I have read and accept the{' '}
+                <button type="button" className="link-btn" onClick={togglePolicy}>privacy policy</button>.
+              </span>
+            </label>
+            {policyOpen && <pre className="policy-text">{policyText ?? '…'}</pre>}
+          </div>
+        )}
+
         {showCaptcha && captchaMode === 'native' && (
           <div className="captcha-block">
             <span className="captcha-label">Verification</span>
@@ -248,7 +300,7 @@ export function AuthPage({ onLogin }: Props) {
         )}
 
         {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={busy}>
+        <button type="submit" disabled={busy || (mode === 'register' && policyRequired && !policyAccepted)}>
           {busy ? '…' : mode === 'login' ? t('auth.modeSignIn') : mode === 'register' ? t('auth.register') : t('auth.submitRequest')}
         </button>
         <button

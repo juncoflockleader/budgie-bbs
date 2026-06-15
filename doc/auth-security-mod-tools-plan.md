@@ -39,6 +39,15 @@ Not yet present:
 
 ## Progress
 
+2026-06-14 (Phase 2 finish — rich signup intake + privacy acceptance):
+
+- Bundled the default privacy policy into the binary (`internal/policy`, go:embed + content-hash version) and served it at `GET /api/v1/auth/privacy-policy`; a guard test keeps it identical to `doc/default-privacy-policy.md`.
+- Signup now collects optional private intake (real name, school/affiliation, reason for joining) into `user_private_profiles`, and records explicit privacy-policy acceptance (`policy_accepted_at` + `policy_version`; new SQLite columns + Postgres migration 73).
+- `GET /api/v1/auth/policy` reports `privacyPolicy{required,version}`; when `-require-policy-acceptance` (BUDGIE_REQUIRE_POLICY_ACCEPTANCE) is set, `handleRegister` rejects signup without acceptance (`422 policy_acceptance_required`).
+- Admin review: `AccountRegistration` + `ListAccountRegistrations`/`GetAccountRegistrationByID` now LEFT JOIN the private profile to surface email/realName/affiliation/note; rendered in AdminPage and UserProfilePage pending-registration rows.
+- Web: AuthPage adds the optional intake fields and a required privacy-policy acceptance checkbox with an inline policy viewer. Tests: `internal/policy` guard + version tests, httpapi `TestSignupPrivacyPolicyAcceptance`.
+- Still open for a later pass: TUI registration path does not yet collect intake/acceptance (enforcement currently lives in the HTTP signup handler).
+
 2026-06-14 (Phase 6 — mod/admin sanction UI):
 
 - Extended board-scoped sanction authorization: a board's moderators (site mods/admins, board moderators, or members with `can_moderate_posts`) can now apply and clear board-scoped mutes/bans for that board; global sanctions still require the site moderator role. (`sanctionUser`/`clearUserSanction` in `internal/core/handler/commands_admin.go`, mirroring `actorCanModerateBoardPostsTx`.)

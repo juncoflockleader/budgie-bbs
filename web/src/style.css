@@ -1933,6 +1933,22 @@ button.ranking-row:hover { border-color: var(--c-accent); opacity: 1 }
   border-radius: 4px;
 }
 
+.auth-optional { font-weight: 400; opacity: 0.6; font-size: 0.85em; }
+.policy-block { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.25rem; }
+.policy-accept { display: flex; flex-direction: row; align-items: flex-start; gap: 0.5rem; font-size: 0.9rem; }
+.policy-accept input { width: auto; margin-top: 0.15rem; }
+.policy-text {
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 4px;
+  opacity: 0.9;
+}
+
 .admin-sanction-list {
   list-style: none;
   margin: 0.6rem 0 0;

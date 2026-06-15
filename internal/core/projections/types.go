@@ -716,6 +716,11 @@ type AccountRegistration struct {
 	ReviewedBy     string `json:"reviewedBy"`
 	ReviewedByName string `json:"reviewedByName,omitempty"`
 	ReviewReason   string `json:"reviewReason"`
+	// Private signup intake, surfaced to admins for review.
+	Email       string `json:"email,omitempty"`
+	RealName    string `json:"realName,omitempty"`
+	Affiliation string `json:"affiliation,omitempty"`
+	Note        string `json:"note,omitempty"`
 }
 
 type PasswordRecoveryRequest struct {

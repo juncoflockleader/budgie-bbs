@@ -1003,6 +1003,8 @@ CREATE TABLE IF NOT EXISTS user_private_profiles (
     birthday           TEXT NOT NULL DEFAULT '',
     school             TEXT NOT NULL DEFAULT '',
     contact_note       TEXT NOT NULL DEFAULT '',
+    policy_accepted_at INTEGER NOT NULL DEFAULT 0,
+    policy_version     TEXT NOT NULL DEFAULT '',
     updated_at         INTEGER NOT NULL DEFAULT 0
 );
 

@@ -54,6 +54,7 @@ func main() {
 		requireEmailVerify                  = flag.Bool("require-email-verification", true, "Require email verification before login when a mailer is configured")
 		publicURL                           = flag.String("public-url", "", "Public base URL for email verification links (also BUDGIE_PUBLIC_URL)")
 		mailInboxURL                        = flag.String("mail-inbox-url", "", "Web inbox URL of a local SMTP catcher to surface in the signup UI; auto-set to http://localhost:8025 (mailpit) when the relay host is loopback (also BUDGIE_MAIL_INBOX_URL)")
+		requirePolicyAccept                 = flag.Bool("require-policy-acceptance", false, "Require signup to record explicit privacy-policy acceptance (also BUDGIE_REQUIRE_POLICY_ACCEPTANCE)")
 		webRoot                             = flag.String("web", "", "Path to web/dist directory for SPA serving (optional)")
 		nntpAddr                            = flag.String("nntp", "", "NNTP listen address (optional, e.g. :1190)")
 		nntpDomain                          = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
@@ -1414,6 +1415,13 @@ func main() {
 		if devInbox != "" {
 			slog.Info("email: local SMTP catcher in use; view captured mail", "inbox", devInbox)
 		}
+	}
+
+	// Privacy policy acceptance gate (off unless required).
+	requirePolicy := *requirePolicyAccept || strings.EqualFold(os.Getenv("BUDGIE_REQUIRE_POLICY_ACCEPTANCE"), "true")
+	c.SetPrivacyPolicy(requirePolicy)
+	if requirePolicy {
+		slog.Info("signup requires privacy policy acceptance")
 	}
 
 	// Register scrape-time metrics collectors (SSH sessions, outbox counts).

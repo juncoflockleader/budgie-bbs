@@ -4565,9 +4565,11 @@ func ListAccountRegistrations(db *sql.DB, status string, limit, offset int) ([]A
 	}
 	rows, err := QQuery(db,
 		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(u.registration_status,''), 'approved'),
-		        u.created, COALESCE(u.reviewed_at,0), COALESCE(u.reviewed_by,''), COALESCE(r.name,''), COALESCE(u.review_reason,'')
+		        u.created, COALESCE(u.reviewed_at,0), COALESCE(u.reviewed_by,''), COALESCE(r.name,''), COALESCE(u.review_reason,''),
+		        COALESCE(p.registration_email,''), COALESCE(p.real_name,''), COALESCE(p.school,''), COALESCE(p.contact_note,'')
 		   FROM users u
 		   LEFT JOIN users r ON r.id = u.reviewed_by
+		   LEFT JOIN user_private_profiles p ON p.user_id = u.id
 		  WHERE (?='all' OR COALESCE(NULLIF(u.registration_status,''), 'approved')=?)
 		  ORDER BY CASE COALESCE(NULLIF(u.registration_status,''), 'approved') WHEN 'pending' THEN 0 ELSE 1 END,
 		           u.created DESC, u.name
@@ -4581,7 +4583,8 @@ func ListAccountRegistrations(db *sql.DB, status string, limit, offset int) ([]A
 	out := []AccountRegistration{}
 	for rows.Next() {
 		var row AccountRegistration
-		if err := rows.Scan(&row.ID, &row.Name, &row.Role, &row.Status, &row.Created, &row.ReviewedAt, &row.ReviewedBy, &row.ReviewedByName, &row.ReviewReason); err != nil {
+		if err := rows.Scan(&row.ID, &row.Name, &row.Role, &row.Status, &row.Created, &row.ReviewedAt, &row.ReviewedBy, &row.ReviewedByName, &row.ReviewReason,
+			&row.Email, &row.RealName, &row.Affiliation, &row.Note); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
@@ -4593,12 +4596,15 @@ func GetAccountRegistrationByID(db *sql.DB, userID string) (*AccountRegistration
 	row := &AccountRegistration{}
 	err := QQueryRow(db,
 		`SELECT u.id, u.name, u.role, COALESCE(NULLIF(u.registration_status,''), 'approved'),
-		        u.created, COALESCE(u.reviewed_at,0), COALESCE(u.reviewed_by,''), COALESCE(r.name,''), COALESCE(u.review_reason,'')
+		        u.created, COALESCE(u.reviewed_at,0), COALESCE(u.reviewed_by,''), COALESCE(r.name,''), COALESCE(u.review_reason,''),
+		        COALESCE(p.registration_email,''), COALESCE(p.real_name,''), COALESCE(p.school,''), COALESCE(p.contact_note,'')
 		   FROM users u
 		   LEFT JOIN users r ON r.id = u.reviewed_by
+		   LEFT JOIN user_private_profiles p ON p.user_id = u.id
 		  WHERE u.id=?`,
 		userID,
-	).Scan(&row.ID, &row.Name, &row.Role, &row.Status, &row.Created, &row.ReviewedAt, &row.ReviewedBy, &row.ReviewedByName, &row.ReviewReason)
+	).Scan(&row.ID, &row.Name, &row.Role, &row.Status, &row.Created, &row.ReviewedAt, &row.ReviewedBy, &row.ReviewedByName, &row.ReviewReason,
+		&row.Email, &row.RealName, &row.Affiliation, &row.Note)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

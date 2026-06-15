@@ -2992,5 +2992,17 @@ VALUES (72, 'postgres-email-verification', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 73,
+			Name:    "postgres-registration-policy-acceptance",
+			SQL: `
+ALTER TABLE user_private_profiles ADD COLUMN IF NOT EXISTS policy_accepted_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE user_private_profiles ADD COLUMN IF NOT EXISTS policy_version TEXT NOT NULL DEFAULT '';
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (73, 'postgres-registration-policy-acceptance', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

@@ -17,6 +17,13 @@ type registerRequest struct {
 	Name     string `json:"name"`
 	Password string `json:"password"`
 	Email    string `json:"email"`
+	// Optional private intake fields (stored in the private profile, never public).
+	RealName    string `json:"realName"`
+	Affiliation string `json:"affiliation"`
+	Note        string `json:"note"`
+	// Privacy policy acceptance (required when the site enables it).
+	AcceptPolicy  bool   `json:"acceptPolicy"`
+	PolicyVersion string `json:"policyVersion"`
 	// Captcha (when enabled): native challenges send challenge id + answer;
 	// provider challenges send a single token.
 	CaptchaChallengeID string `json:"captchaChallengeId"`
@@ -90,9 +97,27 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "email_required", "a valid email is required", false)
 		return
 	}
+	if s.core.PrivacyPolicyRequired() && !req.AcceptPolicy {
+		writeError(w, http.StatusUnprocessableEntity, "policy_acceptance_required", "you must accept the privacy policy", false)
+		return
+	}
+	if len(req.RealName) > 200 || len(req.Affiliation) > 200 || len(req.Note) > 1000 {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "registration fields are too long", false)
+		return
+	}
 	u, err := s.core.RegisterUser(req.Name, req.Password)
 	if err != nil {
 		writeError(w, http.StatusConflict, "conflict", err.Error(), false)
+		return
+	}
+	if err := s.core.SaveRegistrationIntake(u.ID, core.RegistrationIntake{
+		RealName:       req.RealName,
+		Affiliation:    req.Affiliation,
+		Note:           req.Note,
+		PolicyAccepted: req.AcceptPolicy,
+		PolicyVersion:  req.PolicyVersion,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not save registration details", true)
 		return
 	}
 	if s.core.EmailVerificationEnabled() {
@@ -138,9 +163,24 @@ func (s *Server) handleAuthPolicy(w http.ResponseWriter, r *http.Request) {
 		// Local SMTP catcher (mailpit) — let the signup UI link to captured mail.
 		emailVerification["devInboxUrl"] = inbox
 	}
+	_, policyVersion := s.core.PrivacyPolicy()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"captcha":           s.core.CaptchaPolicy(),
 		"emailVerification": emailVerification,
+		"privacyPolicy": map[string]any{
+			"required": s.core.PrivacyPolicyRequired(),
+			"version":  policyVersion,
+		},
+	})
+}
+
+// handlePrivacyPolicy serves the bundled privacy policy markdown so the signup
+// UI can display it before the user accepts. Public, unauthenticated.
+func (s *Server) handlePrivacyPolicy(w http.ResponseWriter, r *http.Request) {
+	markdown, version := s.core.PrivacyPolicy()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"markdown": markdown,
+		"version":  version,
 	})
 }
 

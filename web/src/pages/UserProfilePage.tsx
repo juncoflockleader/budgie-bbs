@@ -1109,6 +1109,10 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
                 <div>
                   <strong>{row.name}</strong>
                   <p className="muted">{new Date(row.created).toLocaleString()}</p>
+                  {(row.realName || row.affiliation || row.email) && (
+                    <p className="muted">{[row.realName, row.affiliation, row.email].filter(Boolean).join(' · ')}</p>
+                  )}
+                  {row.note && <p className="muted">{row.note}</p>}
                 </div>
                 <div className="form-actions profile-form-actions">
                   <button type="button" onClick={() => reviewRegistration(row.name, 'approved')} disabled={registrationSaving}>Approve</button>

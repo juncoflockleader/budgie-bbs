@@ -95,6 +95,8 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"user_presence", "thread_id", "thread_id TEXT NOT NULL DEFAULT ''"},
 		{"user_presence", "location_label", "location_label TEXT NOT NULL DEFAULT ''"},
 		{"user_presence", "from_host", "from_host TEXT NOT NULL DEFAULT ''"},
+		{"user_private_profiles", "policy_accepted_at", "policy_accepted_at INTEGER NOT NULL DEFAULT 0"},
+		{"user_private_profiles", "policy_version", "policy_version TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, c := range columns {
 		if err := ensureColumn(db, c.table, c.name, c.ddl); err != nil {

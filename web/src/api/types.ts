@@ -581,6 +581,10 @@ export interface AuthPolicy {
     /** Local SMTP-catcher (mailpit) web inbox, present only in dev. */
     devInboxUrl?: string
   }
+  privacyPolicy?: {
+    required: boolean
+    version: string
+  }
 }
 
 export interface CaptchaChallenge {
@@ -817,6 +821,10 @@ export interface AccountRegistration {
   reviewedBy: string
   reviewedByName?: string
   reviewReason: string
+  email?: string
+  realName?: string
+  affiliation?: string
+  note?: string
 }
 
 export interface PasswordRecoveryRequest {

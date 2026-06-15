@@ -73,6 +73,9 @@ type Core struct {
 	// (e.g. mailpit on :8025). Surfaced in the auth policy so the signup UI can
 	// link to captured mail during local testing. Empty in production.
 	emailDevInboxURL string
+	// privacyPolicyRequired gates whether signup must record explicit acceptance
+	// of the privacy policy before creating an account.
+	privacyPolicyRequired bool
 
 	eventLogShadow          EventStore
 	eventLogShadowReporter  EventParityReporter
