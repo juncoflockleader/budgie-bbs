@@ -589,6 +589,17 @@ export interface CaptchaChallenge {
   expiresAt: number
 }
 
+export interface UserSanction {
+  id: string
+  userId: string
+  kind: 'mute' | 'ban'
+  scope: string // board id or "global"
+  expiresAt: number // unix ms, 0 = permanent
+  by: string // actor user id
+  reason: string
+  seq: number
+}
+
 // ── Events (incoming from WS/SSE) ─────────────────────────────────────────
 
 export type EventKind =

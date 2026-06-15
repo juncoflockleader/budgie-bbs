@@ -580,6 +580,32 @@ export function ThreadPage({
     if (res.error) alert(res.error.message)
   }
 
+  async function sanctionAuthor(post: Post, kind: 'mute' | 'ban') {
+    const label = kind === 'ban' ? 'Ban' : 'Mute'
+    const hoursStr = prompt(`${label} @${post.author} from this board.\nDuration in hours (leave blank for permanent):`, '')
+    if (hoursStr === null) return
+    let durationSec = 0
+    if (hoursStr.trim()) {
+      const hours = Number(hoursStr.trim())
+      if (!Number.isFinite(hours) || hours <= 0) {
+        alert('Enter a positive number of hours, or leave blank for permanent.')
+        return
+      }
+      durationSec = Math.round(hours * 3600)
+    }
+    const reason = prompt('Reason (optional):', '') ?? ''
+    const res = await api.sanctionUser(token, post.author, { kind, scope: thread.board, durationSec, reason: reason.trim() })
+    if (res.error) { alert(res.error.message); return }
+    alert(`${label} applied to @${post.author} in this board.`)
+  }
+
+  async function liftBoardSanction(post: Post) {
+    if (!confirm(`Lift this board's mutes and bans for @${post.author}?`)) return
+    const res = await api.clearUserSanction(token, post.author, { scope: thread.board })
+    if (res.error) { alert(res.error.message); return }
+    alert(`Board sanctions lifted for @${post.author}.`)
+  }
+
   async function purgePost(postId: string) {
     const reason = prompt('Reason for GDPR purge (permanently removes post body):')
     if (reason === null) return
@@ -1061,6 +1087,13 @@ export function ThreadPage({
                   )}
                   {isAdmin && post.redacted && (
                     <button className="link-btn danger" title="GDPR purge — permanently removes body" onClick={() => purgePost(post.id)}>Purge</button>
+                  )}
+                  {canModeratePosts && post.authorId && post.author !== 'Anonymous' && post.authorId !== currentUserId && (
+                    <>
+                      <button className="link-btn danger" title="Mute this user in this board" onClick={() => sanctionAuthor(post, 'mute')}>Mute</button>
+                      <button className="link-btn danger" title="Ban this user from this board" onClick={() => sanctionAuthor(post, 'ban')}>Ban</button>
+                      <button className="link-btn" title="Lift this board's sanctions for this user" onClick={() => liftBoardSanction(post)}>Lift</button>
+                    </>
                   )}
                 </span>
               </div>

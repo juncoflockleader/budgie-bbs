@@ -345,9 +345,6 @@ func validatePresenceText(status, sessionID, mode, boardID, threadID, location, 
 }
 
 func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
-	if !actor.IsMod() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
-	}
 	p.Reason = strings.TrimSpace(p.Reason)
 	if len(p.Reason) > 500 {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "reason must be 500 characters or less", false)}
@@ -388,13 +385,21 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrForbidden, "only admins can sanction moderators", false)}
 	}
 
-	// Validate scope is "global" or an existing board.
-	if scope != "global" {
+	// Authorize by scope: a global sanction requires the site moderator role;
+	// a board sanction is also available to that board's moderators.
+	if scope == "global" {
+		if !actor.IsMod() {
+			return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
+		}
+	} else {
 		var boardName string
 		if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
 			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		} else if err != nil {
 			return internalErr(err)
+		}
+		if !h.actorCanModerateBoardPostsTx(tx, actor, scope) {
+			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
 		}
 	}
 
@@ -427,9 +432,6 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 }
 
 func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayload) Reply {
-	if !actor.IsMod() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
-	}
 	userRef := strings.TrimSpace(p.User)
 	if userRef == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "user is required", false)}
@@ -463,12 +465,21 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 	if target.IsMod() && !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "only admins can clear moderator sanctions", false)}
 	}
-	if scope != "global" {
+	// Authorize by scope: a global sanction requires the site moderator role;
+	// a board sanction is also clearable by that board's moderators.
+	if scope == "global" {
+		if !actor.IsMod() {
+			return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
+		}
+	} else {
 		var boardName string
 		if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
 			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		} else if err != nil {
 			return internalErr(err)
+		}
+		if !h.actorCanModerateBoardPostsTx(tx, actor, scope) {
+			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
 		}
 	}
 

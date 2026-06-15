@@ -9414,3 +9414,52 @@ func TestRebuildProjectionsFromEventLog(t *testing.T) {
 		}
 	}
 }
+
+// TestBoardModeratorCanSanctionWithinBoard verifies the Phase 6 authz change:
+// a board's moderator (no site role) may apply and clear board-scoped sanctions
+// for that board, but not global sanctions nor sanctions on other boards, and an
+// ordinary user may not sanction at all.
+func TestBoardModeratorCanSanctionWithinBoard(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	carol := registerAndGetUser(t, c, "carol", "pw") // board moderator, no site role
+	bob := registerAndGetUser(t, c, "bob", "pw")     // ordinary user
+	dave := registerAndGetUser(t, c, "dave", "pw")   // sanction target
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "garden", Name: "Garden"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "kitchen", Name: "Kitchen"})
+	exec(t, c, admin, proto.CmdSetBoardModerator, proto.SetBoardModeratorPayload{
+		Board: "garden", User: carol.ID, Moderator: true,
+	})
+
+	// Board moderator may apply a board-scoped sanction for their board.
+	exec(t, c, carol, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User: dave.ID, Kind: "mute", Scope: "garden", Reason: "spam",
+	})
+	// ...but not a global one.
+	execExpectErr(t, c, carol, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User: dave.ID, Kind: "ban", Scope: "global",
+	}, proto.ErrForbidden)
+	// ...nor a board they do not moderate.
+	execExpectErr(t, c, carol, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User: dave.ID, Kind: "mute", Scope: "kitchen",
+	}, proto.ErrForbidden)
+	// An ordinary user may not sanction even within the board.
+	execExpectErr(t, c, bob, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User: dave.ID, Kind: "mute", Scope: "garden",
+	}, proto.ErrForbidden)
+
+	// The board moderator can clear the board-scoped sanction they applied.
+	exec(t, c, carol, proto.CmdClearUserSanction, proto.ClearUserSanctionPayload{
+		User: dave.ID, Kind: "mute", Scope: "garden",
+	})
+	// ...but cannot clear a global sanction.
+	exec(t, c, admin, proto.CmdSanctionUser, proto.SanctionUserPayload{
+		User: dave.ID, Kind: "ban", Scope: "global",
+	})
+	execExpectErr(t, c, carol, proto.CmdClearUserSanction, proto.ClearUserSanctionPayload{
+		User: dave.ID, Kind: "ban", Scope: "global",
+	}, proto.ErrForbidden)
+}

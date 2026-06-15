@@ -54,6 +54,7 @@ import type {
   ModerationReview,
   ContentFilter,
   PollMap,
+  UserSanction,
 } from './types'
 
 const BASE = '/api/v1'
@@ -2210,6 +2211,19 @@ export async function setContentFilter(
     body: JSON.stringify(payload),
   })
   return jsonResolvedAck(token, res)
+}
+
+export async function listUserSanctions(
+  token: string,
+  username: string,
+  limit = 50,
+  offset = 0,
+): Promise<ApiResponse<{ sanctions: UserSanction[] }>> {
+  const res = await fetch(
+    `${BASE}/users/${username}/sanctions?limit=${limit}&offset=${offset}`,
+    { headers: authHeaders(token) },
+  )
+  return json<{ sanctions: UserSanction[] }>(res)
 }
 
 export async function sanctionUser(

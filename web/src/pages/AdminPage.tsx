@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
-import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest } from '../api/types'
+import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction } from '../api/types'
 
 type Props = {
   token: string
@@ -27,6 +27,11 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [notice, setNotice] = useState<Notice | null>(null)
   const [boardDraft, setBoardDraft] = useState({ id: '', name: '', description: '', parentId: '', position: '' })
   const [roleDraft, setRoleDraft] = useState<{ username: string; role: RoleName }>({ username: '', role: 'admin' })
+  const [sanctionUserName, setSanctionUserName] = useState('')
+  const [sanctionKind, setSanctionKind] = useState<'mute' | 'ban'>('mute')
+  const [sanctionHours, setSanctionHours] = useState('')
+  const [sanctionReason, setSanctionReason] = useState('')
+  const [sanctions, setSanctions] = useState<UserSanction[] | null>(null)
 
   const categoryOptions = useMemo(() => buildCategoryOptions(categories), [categories])
 
@@ -125,6 +130,74 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
       return
     }
     setNotice({ kind: 'ok', text: `${username} reset to user.` })
+  }
+
+  async function lookupSanctions() {
+    const username = sanctionUserName.trim()
+    if (!username) {
+      setNotice({ kind: 'error', text: 'Username is required.' })
+      return
+    }
+    setSaving('sanction')
+    setNotice(null)
+    const res = await api.listUserSanctions(token, username)
+    setSaving(null)
+    if (res.error) {
+      setNotice({ kind: 'error', text: res.error.message })
+      setSanctions(null)
+      return
+    }
+    setSanctions(res.data?.sanctions ?? [])
+  }
+
+  async function applySiteSanction(event: FormEvent) {
+    event.preventDefault()
+    const username = sanctionUserName.trim()
+    if (!username) {
+      setNotice({ kind: 'error', text: 'Username is required.' })
+      return
+    }
+    let durationSec = 0
+    if (sanctionHours.trim()) {
+      const hours = Number(sanctionHours.trim())
+      if (!Number.isFinite(hours) || hours <= 0) {
+        setNotice({ kind: 'error', text: 'Duration must be a positive number of hours, or blank for permanent.' })
+        return
+      }
+      durationSec = Math.round(hours * 3600)
+    }
+    setSaving('sanction')
+    setNotice(null)
+    const res = await api.sanctionUser(token, username, { kind: sanctionKind, scope: 'global', durationSec, reason: sanctionReason.trim() })
+    setSaving(null)
+    if (res.error) {
+      setNotice({ kind: 'error', text: res.error.message })
+      return
+    }
+    setNotice({ kind: 'ok', text: `${sanctionKind === 'ban' ? 'Ban' : 'Mute'} applied to ${username} site-wide.` })
+    setSanctionReason('')
+    setSanctionHours('')
+    await lookupSanctions()
+  }
+
+  async function clearSanction(target: UserSanction) {
+    const username = sanctionUserName.trim()
+    if (!username) return
+    setSaving(`sanction:${target.id}`)
+    setNotice(null)
+    const res = await api.clearUserSanction(token, username, { kind: target.kind, scope: target.scope })
+    setSaving(null)
+    if (res.error) {
+      setNotice({ kind: 'error', text: res.error.message })
+      return
+    }
+    setNotice({ kind: 'ok', text: `Lifted ${target.kind} for ${username}.` })
+    await lookupSanctions()
+  }
+
+  function scopeLabel(scope: string): string {
+    if (scope === 'global') return 'site-wide'
+    return `board: ${boards.find(b => b.id === scope)?.name ?? scope}`
   }
 
   async function setRegistrationApprovalMode(requireApproval: boolean) {
@@ -295,6 +368,70 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
             <button type="button" className="link-btn danger" onClick={resetRole} disabled={saving === 'role'}>Reset to user</button>
           </div>
         </form>
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <h3>Sanctions</h3>
+        </div>
+        <form className="admin-form" onSubmit={applySiteSanction}>
+          <div className="admin-form-grid admin-form-grid--role">
+            <label>
+              User
+              <input
+                value={sanctionUserName}
+                onChange={e => { setSanctionUserName(e.target.value); setSanctions(null) }}
+                placeholder="username"
+              />
+            </label>
+            <label>
+              Kind
+              <select value={sanctionKind} onChange={e => setSanctionKind(e.target.value as 'mute' | 'ban')}>
+                <option value="mute">mute</option>
+                <option value="ban">ban</option>
+              </select>
+            </label>
+            <label>
+              Duration (hours)
+              <input
+                value={sanctionHours}
+                onChange={e => setSanctionHours(e.target.value)}
+                placeholder="blank = permanent"
+              />
+            </label>
+          </div>
+          <label>
+            Reason
+            <input
+              value={sanctionReason}
+              onChange={e => setSanctionReason(e.target.value)}
+              placeholder="optional, recorded in the audit log"
+              maxLength={500}
+            />
+          </label>
+          <div className="form-actions">
+            <button type="submit" disabled={saving === 'sanction'}>{saving === 'sanction' ? 'Saving...' : 'Apply site sanction'}</button>
+            <button type="button" className="link-btn" onClick={lookupSanctions} disabled={saving === 'sanction'}>View active</button>
+          </div>
+        </form>
+        {sanctions !== null && (
+          sanctions.length === 0 ? (
+            <p className="muted">No active sanctions for {sanctionUserName.trim()}.</p>
+          ) : (
+            <ul className="admin-sanction-list">
+              {sanctions.map(s => (
+                <li key={s.id} className="admin-sanction-row">
+                  <span>
+                    <strong>{s.kind}</strong> · {scopeLabel(s.scope)}
+                    {s.expiresAt ? ` · until ${new Date(s.expiresAt).toLocaleString()}` : ' · permanent'}
+                    {s.reason ? ` · ${s.reason}` : ''}
+                  </span>
+                  <button type="button" className="link-btn danger" onClick={() => clearSanction(s)} disabled={saving === `sanction:${s.id}`}>Lift</button>
+                </li>
+              ))}
+            </ul>
+          )
+        )}
       </section>
 
       <section className="admin-panel">
