@@ -1916,3 +1916,10 @@ button.ranking-row:hover { border-color: var(--c-accent); opacity: 1 }
   .admin-board-row { grid-template-columns: 1fr; gap: 0.2rem }
   .admin-form-grid--role { grid-template-columns: 1fr }
 }
+
+/* signup captcha */
+.captcha-block { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.25rem; }
+.captcha-label { font-size: 0.85rem; opacity: 0.75; }
+.captcha-image { display: flex; align-items: center; gap: 0.5rem; }
+.captcha-image img { border: 1px solid var(--border-color, #d1d5db); border-radius: 4px; background: #f3f4f6; }
+.captcha-refresh { font-size: 1.15rem; line-height: 1; padding: 0 0.3rem; }

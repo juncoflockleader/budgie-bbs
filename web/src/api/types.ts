@@ -569,6 +569,21 @@ export interface AuthResponse {
   user: { id: string; name: string; role: string; registrationStatus?: string }
 }
 
+export interface AuthPolicy {
+  captcha: {
+    enabled: boolean
+    mode: 'off' | 'native' | 'provider'
+    provider?: string
+    siteKey?: string
+  }
+}
+
+export interface CaptchaChallenge {
+  id: string
+  svg: string
+  expiresAt: number
+}
+
 // ── Events (incoming from WS/SSE) ─────────────────────────────────────────
 
 export type EventKind =

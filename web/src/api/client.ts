@@ -3,6 +3,8 @@ import type {
   ApiResponse,
   AttachmentPayload,
   AuthResponse,
+  AuthPolicy,
+  CaptchaChallenge,
   Board,
   BoardInfo,
   BoardMemberApplication,
@@ -300,11 +302,31 @@ async function jsonResolvedAck(
   return resolveCommandResult(token, ack.data, options)
 }
 
-export async function register(name: string, password: string): Promise<ApiResponse<AuthResponse>> {
+export async function getAuthPolicy(): Promise<ApiResponse<AuthPolicy>> {
+  const res = await fetch(`${BASE}/auth/policy`)
+  return json<AuthPolicy>(res)
+}
+
+export async function getCaptchaChallenge(): Promise<ApiResponse<CaptchaChallenge>> {
+  const res = await fetch(`${BASE}/auth/captcha`)
+  return json<CaptchaChallenge>(res)
+}
+
+export async function register(
+  name: string,
+  password: string,
+  captcha?: { challengeId?: string; answer?: string; token?: string },
+): Promise<ApiResponse<AuthResponse>> {
   const res = await fetch(`${BASE}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({
+      name,
+      password,
+      captchaChallengeId: captcha?.challengeId,
+      captchaAnswer: captcha?.answer,
+      captchaToken: captcha?.token,
+    }),
   })
   return json<AuthResponse>(res)
 }
