@@ -59,9 +59,20 @@ func (s *Server) handleVerify2FA(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "challengeToken and code required", false)
 		return
 	}
+	ipKey := "2fa-ip:" + requestHost(r)
+	if wait := maxRetryAfter(s.twoFactorLimiter, ipKey); wait > 0 {
+		writeRateLimited(w, wait)
+		return
+	}
 	uid, err := s.parseChallengeToken(req.ChallengeToken)
 	if err != nil {
+		s.twoFactorLimiter.fail(ipKey)
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid or expired challenge", false)
+		return
+	}
+	userKey := "2fa-user:" + uid
+	if wait := maxRetryAfter(s.twoFactorLimiter, userKey); wait > 0 {
+		writeRateLimited(w, wait)
 		return
 	}
 	var verr error
@@ -74,9 +85,13 @@ func (s *Server) handleVerify2FA(w http.ResponseWriter, r *http.Request) {
 		verr = s.core.VerifyTOTP(uid, req.Code)
 	}
 	if verr != nil {
+		s.twoFactorLimiter.fail(ipKey)
+		s.twoFactorLimiter.fail(userKey)
 		writeError(w, http.StatusUnauthorized, "two_factor_failed", "invalid verification code", false)
 		return
 	}
+	s.twoFactorLimiter.reset(ipKey)
+	s.twoFactorLimiter.reset(userKey)
 	u, err := s.core.UserByID(uid)
 	if err != nil || u == nil {
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "user not found", false)

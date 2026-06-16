@@ -240,8 +240,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name and password required", false)
 		return
 	}
+	ipKey := "login-ip:" + requestHost(r)
+	nameKey := "login-name:" + strings.ToLower(strings.TrimSpace(req.Name))
+	if wait := maxRetryAfter(s.loginLimiter, ipKey, nameKey); wait > 0 {
+		writeRateLimited(w, wait)
+		return
+	}
 	u, err := s.core.AuthenticateUserFromHost(req.Name, req.Password, requestHost(r))
 	if err != nil {
+		s.loginLimiter.fail(ipKey)
+		s.loginLimiter.fail(nameKey)
 		if errors.Is(err, core.ErrAccountDeactivated) {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "account deactivated", false)
 			return
@@ -265,6 +273,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
 		return
 	}
+	// Correct credentials — clear the brute-force counters for this IP/account.
+	s.loginLimiter.reset(ipKey)
+	s.loginLimiter.reset(nameKey)
 	// Staff 2FA: when enrolled and enforced, return a challenge (no token yet);
 	// the client completes it via POST /auth/2fa/verify.
 	required, err := s.core.TwoFactorRequiredForLogin(u.ID, u.Role)
@@ -327,6 +338,12 @@ func (s *Server) handleRequestPasswordRecovery(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name required", false)
 		return
 	}
+	recoveryKey := "recovery-ip:" + requestHost(r)
+	if wait := maxRetryAfter(s.recoveryLimiter, recoveryKey); wait > 0 {
+		writeRateLimited(w, wait)
+		return
+	}
+	s.recoveryLimiter.fail(recoveryKey) // every request counts toward the per-IP cap
 	if _, err := s.core.RequestPasswordRecovery(req.Name, req.SubmittedName, req.Email, req.Note); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not queue recovery request", true)
 		return
@@ -341,10 +358,17 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "currentPassword and newPassword required", false)
 		return
 	}
+	cpKey := "changepw:" + actor.ID
+	if wait := maxRetryAfter(s.loginLimiter, cpKey); wait > 0 {
+		writeRateLimited(w, wait)
+		return
+	}
 	if err := s.core.ChangePassword(actor.ID, req.CurrentPassword, req.NewPassword); err != nil {
+		s.loginLimiter.fail(cpKey)
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
 		return
 	}
+	s.loginLimiter.reset(cpKey)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

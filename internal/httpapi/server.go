@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 )
@@ -20,11 +21,27 @@ type Server struct {
 	writeRegionURL   string
 	// webRoot, if non-empty, serves a SPA from this filesystem path.
 	webRoot string
+
+	// Brute-force limiters for credential/verification endpoints (per process).
+	loginLimiter     *failureLimiter // login + change-password (per IP and per account)
+	twoFactorLimiter *failureLimiter // 2FA code verification (per user and per IP)
+	recoveryLimiter  *failureLimiter // password-recovery requests (per IP)
 }
 
 // New creates an HTTP server.
 func New(c *core.Core, jwtSecret []byte) *Server {
-	return &Server{core: c, jwtSecret: jwtSecret}
+	return &Server{
+		core:      c,
+		jwtSecret: jwtSecret,
+		// 10 failures / 15 min → escalating 15 min lockout. Login is keyed per IP
+		// and per account so neither a single source nor a single target can be
+		// hammered.
+		loginLimiter: newFailureLimiter(10, 15*time.Minute, 15*time.Minute),
+		// 2FA codes are short, so be stricter: 6 tries then a 15 min lockout.
+		twoFactorLimiter: newFailureLimiter(6, 15*time.Minute, 15*time.Minute),
+		// Password recovery is unauthenticated and side-effectful; cap per-IP spam.
+		recoveryLimiter: newFailureLimiter(10, time.Hour, 30*time.Minute),
+	}
 }
 
 // SetWebRoot configures a directory to serve the web SPA from.
