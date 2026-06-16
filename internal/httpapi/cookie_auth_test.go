@@ -60,6 +60,24 @@ func TestSessionCookieAuthAndCSRF(t *testing.T) {
 		t.Fatalf("cookie auth should work on GET, got %d %s", got.Code, got.Body.String())
 	}
 
+	// /auth/me bootstraps the SPA session from the cookie alone.
+	me := withCookie(http.MethodGet, "/api/v1/auth/me", nil)
+	if me.Code != http.StatusOK {
+		t.Fatalf("/auth/me via cookie should return the user, got %d %s", me.Code, me.Body.String())
+	}
+	var meBody map[string]any
+	_ = json.Unmarshal(me.Body.Bytes(), &meBody)
+	if meBody["name"] != "dora" {
+		t.Fatalf("/auth/me should return the current user, got %s", me.Body.String())
+	}
+	// Unauthenticated /auth/me is rejected.
+	if anon := httptest.NewRecorder(); true {
+		h.ServeHTTP(anon, httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil))
+		if anon.Code != http.StatusUnauthorized {
+			t.Fatalf("/auth/me without auth should be 401, got %d", anon.Code)
+		}
+	}
+
 	// A cookie-authenticated mutation from a cross-origin context is blocked (CSRF).
 	if got := withCookie(http.MethodPost, "/api/v1/auth/logout", map[string]string{"Origin": "http://evil.example"}); got.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin cookie mutation should be blocked, got %d %s", got.Code, got.Body.String())

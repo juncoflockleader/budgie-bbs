@@ -326,6 +326,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleMe returns the authenticated user, letting the SPA bootstrap its session
+// from the HttpOnly cookie without ever reading the token in JavaScript.
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	writeJSON(w, http.StatusOK, authUser{
+		ID: actor.ID, Name: actor.Name, Role: actor.Role, RegistrationStatus: actor.RegistrationStatus,
+	})
+}
+
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	clearSessionCookie(w, r)
 	if err := s.core.RecordLogout(); err != nil {

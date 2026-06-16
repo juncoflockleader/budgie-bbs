@@ -247,6 +247,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/v1/users/me/login-acl/rules/{rule}", auth(http.HandlerFunc(s.handleUpdateOwnLoginACLRule)))
 	mux.Handle("DELETE /api/v1/users/me/login-acl/rules/{rule}", auth(http.HandlerFunc(s.handleDeleteOwnLoginACLRule)))
 	mux.Handle("PATCH /api/v1/users/me", auth(http.HandlerFunc(s.handleUpdateOwnProfile)))
+	mux.Handle("GET /api/v1/auth/me", auth(http.HandlerFunc(s.handleMe)))
 	mux.Handle("POST /api/v1/auth/logout", auth(http.HandlerFunc(s.handleLogout)))
 	mux.Handle("POST /api/v1/auth/logout-all", auth(http.HandlerFunc(s.handleLogoutAll)))
 	mux.Handle("POST /api/v1/boards", auth(http.HandlerFunc(s.handleCreateBoard)))
