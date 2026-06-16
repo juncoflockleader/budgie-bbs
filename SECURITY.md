@@ -40,10 +40,13 @@ The defaults are safe-by-default where possible, but a production deployment
   apply the same account-state and login-host-ACL gates.
 - **Two-factor:** TOTP (single-use per time-step, replay-protected), email codes,
   and single-use backup codes; all 2FA verification is rate-limited.
-- **Brute-force protection:** in-memory per-IP and per-account rate limiting with
-  escalating lockout on login, 2FA verification, change-password, and
-  password-recovery (HTTP and SSH). It is process-local; for cluster-wide limits
-  back it with a shared store.
+- **Brute-force protection:** per-IP and per-account rate limiting with escalating
+  lockout on login, 2FA verification, change-password, and password-recovery (HTTP
+  and SSH). Per-process by default; when Redis is configured (`-redis` /
+  `BUDGIE_REDIS_URL`) the budgets are enforced **cluster-wide** via a shared
+  Redis-backed store, so an attacker cannot reset the budget by spreading attempts
+  across nodes. A Redis outage degrades to per-node limiting (fail-open), never to
+  no limiting.
 - **Session revocation:** changing or resetting a password invalidates existing
   session tokens.
 - **Authorization:** board read-access (member-read-mode/private boards) is

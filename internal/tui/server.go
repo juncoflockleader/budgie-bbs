@@ -43,6 +43,15 @@ func New(c *core.Core, port int, hostKey string) *Server {
 	}
 }
 
+// EnableClusterRateLimiting attaches a shared (e.g. Redis) backend so SSH
+// password brute-force is throttled cluster-wide, consistent with the HTTP
+// login limiter. Local limiting stays active as a fallback.
+func (s *Server) EnableClusterRateLimiting(store ratelimit.Store) {
+	if store != nil {
+		s.pwLimiter.SetStore(store)
+	}
+}
+
 // SetDoors configures the door games available to SSH sessions.
 func (s *Server) SetDoors(cfg *core.DoorsConfig) { s.doors = cfg }
 

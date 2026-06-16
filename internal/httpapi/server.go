@@ -45,6 +45,19 @@ func New(c *core.Core, jwtSecret []byte) *Server {
 	}
 }
 
+// EnableClusterRateLimiting attaches a shared (e.g. Redis) backend to the
+// credential limiters so brute-force budgets are enforced cluster-wide rather
+// than per-process — an attacker can't reset the budget by spreading attempts
+// across nodes. Local in-memory limiting stays active as a fallback.
+func (s *Server) EnableClusterRateLimiting(store ratelimit.Store) {
+	if store == nil {
+		return
+	}
+	s.loginLimiter.SetStore(store)
+	s.twoFactorLimiter.SetStore(store)
+	s.recoveryLimiter.SetStore(store)
+}
+
 // SetWebRoot configures a directory to serve the web SPA from.
 // All non-API requests are served from this directory; unknown paths fall back
 // to index.html (client-side routing).

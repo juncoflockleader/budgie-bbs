@@ -21,6 +21,29 @@ type Limiter struct {
 	lockout   time.Duration
 	now       func() time.Time
 	lastPrune time.Time
+	store     Store // optional shared (cluster-wide) backend
+}
+
+// Store is an optional shared backend (e.g. Redis) that makes limiting
+// cluster-wide: every node consults the same counters/lockouts so an attacker
+// cannot reset the budget by spreading attempts across nodes. The local
+// in-memory state is always kept too, so a Store outage degrades to per-node
+// limiting rather than no limiting (the Limiter fails open to local on errors).
+type Store interface {
+	// Fail records a failure for key and returns the remaining lockout (>0 when
+	// the key is now locked) using the given policy.
+	Fail(key string, threshold int, window, lockout time.Duration) (time.Duration, error)
+	// RetryAfter returns the remaining lockout for key, or 0 if not locked.
+	RetryAfter(key string) (time.Duration, error)
+	// Reset clears the key after a successful attempt.
+	Reset(key string) error
+}
+
+// SetStore attaches a shared backend, upgrading this limiter to cluster-wide.
+func (l *Limiter) SetStore(s Store) {
+	if l != nil {
+		l.store = s
+	}
 }
 
 type entry struct {
@@ -47,6 +70,16 @@ func (l *Limiter) RetryAfter(key string) time.Duration {
 	if l == nil || l.threshold <= 0 {
 		return 0
 	}
+	d := l.retryAfterLocal(key)
+	if l.store != nil {
+		if rd, err := l.store.RetryAfter(key); err == nil && rd > d {
+			d = rd
+		}
+	}
+	return d
+}
+
+func (l *Limiter) retryAfterLocal(key string) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e := l.entries[key]
@@ -77,6 +110,19 @@ func (l *Limiter) Fail(key string) bool {
 	if l == nil || l.threshold <= 0 {
 		return false
 	}
+	local := l.failLocal(key)
+	if l.store == nil {
+		return local
+	}
+	// Fail open to per-node limiting if the shared store errors.
+	d, err := l.store.Fail(key, l.threshold, l.window, l.lockout)
+	if err != nil {
+		return local
+	}
+	return local || d > 0
+}
+
+func (l *Limiter) failLocal(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -110,6 +156,9 @@ func (l *Limiter) Reset(key string) {
 	l.mu.Lock()
 	delete(l.entries, key)
 	l.mu.Unlock()
+	if l.store != nil {
+		_ = l.store.Reset(key)
+	}
 }
 
 // SetClock overrides the time source (tests only).

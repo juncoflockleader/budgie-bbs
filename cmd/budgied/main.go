@@ -28,6 +28,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/natsconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/nntp"
+	"github.com/juncoflockleader/budgie-bbs/internal/ratelimit"
 	"github.com/juncoflockleader/budgie-bbs/internal/redisconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/tui"
 	"github.com/juncoflockleader/budgie-bbs/internal/wsapi"
@@ -1752,10 +1753,27 @@ func main() {
 			"batchSize", *archiveRankingsProcessorBatchSize)
 	}
 
+	// Cluster-wide brute-force rate limiting: when Redis is configured, back the
+	// credential limiters with a shared store so login/2FA/recovery budgets are
+	// enforced across all nodes (not just per-process). Falls back to per-node
+	// limiting if Redis is unavailable at request time.
+	var rateLimitStore ratelimit.Store
+	if strings.TrimSpace(*redisURL) != "" {
+		rlClient, err := redisconn.NewClient(*redisURL)
+		if err != nil {
+			slog.Error("rate-limit redis client", "flag", "-redis", "err", err)
+			os.Exit(1)
+		}
+		defer func() { _ = rlClient.Close() }()
+		rateLimitStore = ratelimit.NewRedisStore(rlClient, *readCachePrefix)
+		slog.Info("cluster-wide rate limiting enabled", "backend", "redis", "prefix", *readCachePrefix)
+	}
+
 	// HTTP listener — always started so /healthz, /readyz, /metrics are reachable
 	// on every node. The full API/WS/SPA is mounted only on the api role; the
 	// gateway role gets live WS/SSE/poll transports without the REST API surface.
 	httpSrv := httpapi.New(c, secret)
+	httpSrv.EnableClusterRateLimiting(rateLimitStore)
 	if err := httpSrv.SetWriteRegionURL(*writeRegionURL); err != nil {
 		slog.Error("invalid write region URL", "flag", "-write-region-url", "value", *writeRegionURL, "err", err)
 		os.Exit(1)
@@ -1799,6 +1817,7 @@ func main() {
 		hk := hostKeyPath(*hostKey)
 		ensureHostKey(hk)
 		tuiSrv := tui.New(c, *sshPort, hk)
+		tuiSrv.EnableClusterRateLimiting(rateLimitStore)
 		tuiSrv.SetAllowRegistration(*allowSSHRegistration)
 		if *doorsConf != "" {
 			doors, err := core.LoadDoorsConfig(*doorsConf)
