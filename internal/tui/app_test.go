@@ -383,7 +383,7 @@ func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newModel(c, actor, 80, 24, false, localeEN, "", nil, nil, "", false)
+	m := newModel(c, actor, 80, 24, false, localeEN, "", nil, nil, "", false, false)
 	m.page = pageProfile
 	profile, err := c.UserProfileByName(actor.Name)
 	if err != nil {

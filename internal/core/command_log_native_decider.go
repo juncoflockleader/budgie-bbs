@@ -807,6 +807,11 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 	} else {
 		events = append(events, filterEvents...)
 	}
+	if automodEvents, errDetail := nativeAutomodEvents(e.core.DB, record, actor.ID, postID, thread.ID, thread.Board, rawBody, ts, len(events)); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
+	} else {
+		events = append(events, automodEvents...)
+	}
 	if mailEvent, errDetail := nativeArticleMailBackEvent(e.core.DB, record, actor, authorName, authorID, thread, mailBackTarget, postID, cleanBody, ts, len(events)); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	} else if mailEvent != nil {
@@ -972,6 +977,11 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 		return nativeCommandDecision{}, errDetail
 	} else {
 		events = append(events, filterEvents...)
+	}
+	if automodEvents, errDetail := nativeAutomodEvents(e.core.DB, record, actor.ID, postID, threadID, payload.Board, title+"\n"+body, ts, len(events)); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
+	} else {
+		events = append(events, automodEvents...)
 	}
 	return nativeCommandDecision{
 		reply:  Reply{Result: &proto.AckResult{ID: threadID}},

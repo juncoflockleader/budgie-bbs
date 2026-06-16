@@ -39,6 +39,11 @@ Not yet present:
 
 ## Progress
 
+2026-06-15 (follow-ups — automod on repost/board-mail + SSH 2FA gate):
+
+- Automod now also evaluates reposts and board-mail. Hooked `evaluateBoardAutomod` into the legacy `repostPost` and the native `decideRepostPost`/`decidePostBoardMailAppend`; legacy `postBoardMail` and the native board-mail-create path already delegate to appendPost/createThread, so they were covered transitively. Test: `TestBoardAutomodRepost`.
+- 2FA over SSH: instead of refusing password auth for 2FA-required staff, the TUI now shows a mandatory in-app two-factor gate (`pageTwoFactorGate`) on connect — enter a TOTP or backup code (tab to switch) before reaching the BBS; esc disconnects. The SSH handshake admits the user (password or key) and the gate enforces the second factor. Test: `TestTwoFactorGate`; verified over a real SSH session (password login → gate → TOTP → main menu).
+
 2026-06-15 (2FA enhancement — backup/recovery codes):
 
 - Single-use 2FA backup codes. A user with an enrolled second factor can generate a set of 10 recovery codes (shown once); each is stored as a SHA-256 hash in a new `two_factor_backup_codes` table (SQLite + Postgres migration 77). Regenerating replaces the set; disabling the last 2FA method clears them.

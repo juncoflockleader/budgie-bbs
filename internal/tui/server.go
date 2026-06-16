@@ -106,13 +106,8 @@ func (s *Server) authPassword(ctx ssh.Context, password string) bool {
 		slog.Warn("ssh: password auth failed", "user", username, "err", err)
 		return false
 	}
-	// When staff 2FA is enforced, an enrolled staff member cannot use password
-	// auth over SSH (there is no interactive second-factor prompt); their SSH key
-	// is the second factor, so require public-key auth instead.
-	if required, err := s.core.TwoFactorRequiredForLogin(user.ID, user.Role); err == nil && required {
-		slog.Warn("ssh: password auth blocked, 2FA enforced; use a public key", "user", username)
-		return false
-	}
+	// 2FA-required users are admitted here but the TUI gates them with an
+	// in-app second-factor challenge before granting access.
 	if err := s.core.RecordLogin(user.ID); err != nil {
 		slog.Error("ssh: could not record login", "user", username, "err", err)
 		return false
@@ -163,7 +158,8 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 	if s.doors != nil {
 		doors = s.doors.Doors
 	}
-	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh, doors, caps.termName, s.allowRegistration)
+	requires2FA, _ := s.core.TwoFactorRequiredForLogin(user.ID, user.Role)
+	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh, doors, caps.termName, s.allowRegistration, requires2FA)
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithEnvironment(sess.Environ()),

@@ -163,6 +163,32 @@ func TestBoardAutomodStaffExempt(t *testing.T) {
 	}
 }
 
+func TestBoardAutomodRepost(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+	admin := registerAndGetUser(t, c, "admin", "pw")
+	alice := registerAndGetUser(t, c, "alice", "pw")
+
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "src", Name: "Src"})
+	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "dst", Name: "Dst"})
+	exec(t, c, admin, proto.CmdSetBoardAutomodRule, proto.SetBoardAutomodRulePayload{
+		Board: "dst", MatchType: "keyword", Pattern: "badword", Action: "redact", Reason: "no",
+	})
+
+	srcThread := exec(t, c, admin, proto.CmdCreateThread, proto.CreateThreadPayload{Board: "src", Title: "topic", Body: "contains badword here"})
+	srcPosts, _ := c.ListPosts(srcThread.ID, 10, 0)
+	if len(srcPosts) == 0 {
+		t.Fatal("no source post")
+	}
+
+	// alice reposts the offending content into dst, where automod redacts it.
+	rep := exec(t, c, alice, proto.CmdRepostPost, proto.RepostPostPayload{Post: srcPosts[0].ID, Board: "dst", Title: "reposted"})
+	dstPosts, _ := c.ListPosts(rep.ID, 10, 0)
+	if len(dstPosts) != 1 || !dstPosts[0].Redacted {
+		t.Fatalf("reposted banned content should be redacted on dst: %+v", dstPosts)
+	}
+}
+
 func TestBoardAutomodRateThreshold(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

@@ -656,6 +656,10 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
+	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, p.Board, title+"\n"+body, actor.ID)
+	if err != nil {
+		return internalErr(err)
+	}
 
 	ct := contentType(sourcePost.ContentType)
 	ts := nowMS()
@@ -736,6 +740,13 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 			return internalErr(err)
 		}
 	}
+	var automodEvents []*proto.Event
+	if automodMatched {
+		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
+		if err != nil {
+			return internalErr(err)
+		}
+	}
 	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
 		ActorID: actor.ID, ActorName: authorName, PostID: postID, ThreadID: threadID,
 		BoardID: p.Board, Body: body, TS: ts, Seq: pseq,
@@ -754,6 +765,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		h.bus.Publish(filterEvent)
 	}
 	h.publishGeneratedEvents(filterGeneratedEvents)
+	h.publishGeneratedEvents(automodEvents)
 
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }

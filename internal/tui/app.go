@@ -38,6 +38,7 @@ const (
 	pageNodeSpy
 	pageDoorsMenu
 	pageSignup
+	pageTwoFactorGate
 )
 
 const threadPageSize = 50
@@ -172,6 +173,12 @@ type model struct {
 	signup            *signupState
 	signupInput       textinput.Model
 	signupVP          viewport.Model
+
+	// In-app 2FA gate: shown first when the connected user must pass 2FA.
+	requires2FA bool
+	gateInput   textinput.Model
+	gateMethod  string // "totp" | "backup"
+	gateErr     string
 }
 
 type chatLine struct {
@@ -229,7 +236,7 @@ func (m *model) postSignatureSepLine() string {
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string, allowRegistration bool) model {
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string, allowRegistration bool, requires2FA bool) model {
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
 	if actor != nil && actor.IsAdmin() {
 		scopes = append(scopes, "system:nodes")
@@ -274,6 +281,8 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		doors:             doors,
 		termName:          termName,
 		allowRegistration: allowRegistration,
+		requires2FA:       requires2FA,
+		gateMethod:        "totp",
 	}
 
 	m.list = list.New(nil, newBBSListDelegate(), width, sectionContentHeightFor(height))
@@ -291,6 +300,16 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	m.signupInput = si
 	m.signupVP = viewport.New(width, sectionContentHeightFor(height))
 	m.signupVP.Style = lipgloss.NewStyle()
+
+	gi := textinput.New()
+	gi.CharLimit = 32
+	gi.Width = width - 4
+	gi.Placeholder = "123456"
+	m.gateInput = gi
+	if requires2FA {
+		m.page = pageTwoFactorGate
+		m.gateInput.Focus()
+	}
 
 	m.compose = textarea.New()
 	m.compose.Placeholder = composeBodyPlaceholder
@@ -673,6 +692,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.signupInput, c = m.signupInput.Update(msg)
 				cmds = append(cmds, c)
 			}
+		case pageTwoFactorGate:
+			var c tea.Cmd
+			m.gateInput, c = m.gateInput.Update(msg)
+			cmds = append(cmds, c)
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -763,6 +786,9 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	case pageSignup:
 		return m.handleSignupKey(key)
+
+	case pageTwoFactorGate:
+		return m.handleTwoFactorGateKey(key)
 
 	case pageBoardList:
 		switch key {
@@ -1512,6 +1538,8 @@ func (m model) View() string {
 		body = m.renderSection("Doors", m.list.View(), "enter=launch  esc/←=back")
 	case pageSignup:
 		body = m.renderSignup()
+	case pageTwoFactorGate:
+		body = m.renderTwoFactorGate()
 	case pageThread:
 		help := m.tr(msgHelpThreadReader)
 		if m.actor.IsMod() {
@@ -3404,6 +3432,8 @@ func (m model) pageName(p page) string {
 		return "Doors"
 	case pageSignup:
 		return "Create account"
+	case pageTwoFactorGate:
+		return "Two-factor"
 	}
 	return ""
 }
