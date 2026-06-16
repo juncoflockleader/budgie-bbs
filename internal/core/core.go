@@ -1342,10 +1342,19 @@ func markBoardReadForAllUsersTx(tx *sql.Tx, boardID string, seq, ts int64) error
 	return err
 }
 
+// dummyBcryptHash is compared against on the no-such-user login path so
+// authentication spends roughly the same time whether or not the account
+// exists, mitigating username enumeration via response timing. (bcrypt is the
+// dominant cost of a login.)
+var dummyBcryptHash, _ = bcrypt.GenerateFromPassword([]byte("constant-time-placeholder"), bcrypt.DefaultCost)
+
 // AuthenticateUser verifies credentials and returns the user on success.
 func (c *Core) AuthenticateUser(name, password string) (*User, error) {
 	u, err := getUserByName(c.DB, name)
 	if err != nil || u == nil {
+		// Run a dummy comparison so a missing account isn't distinguishable from
+		// a wrong password by timing.
+		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
 		return nil, ErrInvalidCredentials
 	}
 	if u.DeactivatedAt > 0 {
