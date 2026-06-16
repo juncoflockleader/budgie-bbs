@@ -18,6 +18,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/ratelimit"
 )
 
 // Server wraps a wish SSH server.
@@ -27,11 +28,19 @@ type Server struct {
 	hostKey           string
 	doors             *core.DoorsConfig // optional; nil means doors are disabled
 	allowRegistration bool              // opt-in guest self-registration over SSH
+	pwLimiter         *ratelimit.Limiter
 }
 
 // New creates an SSH server. hostKey is the path to the host private key file.
 func New(c *core.Core, port int, hostKey string) *Server {
-	return &Server{core: c, port: port, hostKey: hostKey}
+	return &Server{
+		core:    c,
+		port:    port,
+		hostKey: hostKey,
+		// Throttle SSH password brute-force per IP and per account (matches the
+		// HTTP login limiter). Pubkey auth is unaffected.
+		pwLimiter: ratelimit.New(10, 15*time.Minute, 15*time.Minute),
+	}
 }
 
 // SetDoors configures the door games available to SSH sessions.
@@ -112,11 +121,22 @@ func (s *Server) authPassword(ctx ssh.Context, password string) bool {
 	if username == "" || isGuestSSHUser(username) {
 		return false
 	}
-	user, err := s.core.AuthenticateUserFromHost(username, password, remoteHost(ctx.RemoteAddr()))
+	host := remoteHost(ctx.RemoteAddr())
+	ipKey := "ssh-ip:" + host
+	nameKey := "ssh-name:" + strings.ToLower(username)
+	if s.pwLimiter.MaxRetryAfter(ipKey, nameKey) > 0 {
+		slog.Warn("ssh: password auth rate-limited", "user", username, "host", host)
+		return false
+	}
+	user, err := s.core.AuthenticateUserFromHost(username, password, host)
 	if err != nil || user == nil {
+		s.pwLimiter.Fail(ipKey)
+		s.pwLimiter.Fail(nameKey)
 		slog.Warn("ssh: password auth failed", "user", username, "err", err)
 		return false
 	}
+	s.pwLimiter.Reset(ipKey)
+	s.pwLimiter.Reset(nameKey)
 	// 2FA-required users are admitted here but the TUI gates them with an
 	// in-app second-factor challenge before granting access.
 	if err := s.core.RecordLogin(user.ID); err != nil {

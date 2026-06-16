@@ -248,8 +248,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.core.AuthenticateUserFromHost(req.Name, req.Password, requestHost(r))
 	if err != nil {
-		s.loginLimiter.fail(ipKey)
-		s.loginLimiter.fail(nameKey)
+		s.loginLimiter.Fail(ipKey)
+		s.loginLimiter.Fail(nameKey)
 		if errors.Is(err, core.ErrAccountDeactivated) {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "account deactivated", false)
 			return
@@ -274,8 +274,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Correct credentials — clear the brute-force counters for this IP/account.
-	s.loginLimiter.reset(ipKey)
-	s.loginLimiter.reset(nameKey)
+	s.loginLimiter.Reset(ipKey)
+	s.loginLimiter.Reset(nameKey)
 	// Staff 2FA: when enrolled and enforced, return a challenge (no token yet);
 	// the client completes it via POST /auth/2fa/verify.
 	required, err := s.core.TwoFactorRequiredForLogin(u.ID, u.Role)
@@ -343,7 +343,7 @@ func (s *Server) handleRequestPasswordRecovery(w http.ResponseWriter, r *http.Re
 		writeRateLimited(w, wait)
 		return
 	}
-	s.recoveryLimiter.fail(recoveryKey) // every request counts toward the per-IP cap
+	s.recoveryLimiter.Fail(recoveryKey) // every request counts toward the per-IP cap
 	if _, err := s.core.RequestPasswordRecovery(req.Name, req.SubmittedName, req.Email, req.Note); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not queue recovery request", true)
 		return
@@ -364,11 +364,11 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.core.ChangePassword(actor.ID, req.CurrentPassword, req.NewPassword); err != nil {
-		s.loginLimiter.fail(cpKey)
+		s.loginLimiter.Fail(cpKey)
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid credentials", false)
 		return
 	}
-	s.loginLimiter.reset(cpKey)
+	s.loginLimiter.Reset(cpKey)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

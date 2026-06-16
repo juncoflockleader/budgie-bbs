@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/ratelimit"
 )
 
 // Server wires the HTTP routes to the core.
@@ -23,9 +24,9 @@ type Server struct {
 	webRoot string
 
 	// Brute-force limiters for credential/verification endpoints (per process).
-	loginLimiter     *failureLimiter // login + change-password (per IP and per account)
-	twoFactorLimiter *failureLimiter // 2FA code verification (per user and per IP)
-	recoveryLimiter  *failureLimiter // password-recovery requests (per IP)
+	loginLimiter     *ratelimit.Limiter // login + change-password (per IP and per account)
+	twoFactorLimiter *ratelimit.Limiter // 2FA code verification (per user and per IP)
+	recoveryLimiter  *ratelimit.Limiter // password-recovery requests (per IP)
 }
 
 // New creates an HTTP server.
@@ -36,11 +37,11 @@ func New(c *core.Core, jwtSecret []byte) *Server {
 		// 10 failures / 15 min → escalating 15 min lockout. Login is keyed per IP
 		// and per account so neither a single source nor a single target can be
 		// hammered.
-		loginLimiter: newFailureLimiter(10, 15*time.Minute, 15*time.Minute),
+		loginLimiter: ratelimit.New(10, 15*time.Minute, 15*time.Minute),
 		// 2FA codes are short, so be stricter: 6 tries then a 15 min lockout.
-		twoFactorLimiter: newFailureLimiter(6, 15*time.Minute, 15*time.Minute),
+		twoFactorLimiter: ratelimit.New(6, 15*time.Minute, 15*time.Minute),
 		// Password recovery is unauthenticated and side-effectful; cap per-IP spam.
-		recoveryLimiter: newFailureLimiter(10, time.Hour, 30*time.Minute),
+		recoveryLimiter: ratelimit.New(10, time.Hour, 30*time.Minute),
 	}
 }
 
