@@ -102,11 +102,23 @@ func tokenIssuedAfterPasswordChange(claims jwt.MapClaims, user *core.User) bool 
 }
 
 func bearerToken(r *http.Request) string {
-	// Support both Authorization header and ?token= query param (for WS upgrades).
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return strings.TrimPrefix(auth, "Bearer ")
 	}
-	return r.URL.Query().Get("token")
+	// The ?token= query param is only honored for the SSE/event-stream routes
+	// (EventSource cannot set an Authorization header). Accepting it everywhere
+	// would leak the token into access logs, browser history, and Referer
+	// headers for ordinary requests.
+	if isStreamPath(r.URL.Path) {
+		return r.URL.Query().Get("token")
+	}
+	return ""
+}
+
+// isStreamPath reports whether the path is an SSE/event-stream endpoint that
+// must accept the token as a query parameter.
+func isStreamPath(path string) bool {
+	return strings.HasSuffix(path, "/events") || strings.HasSuffix(path, "/events/stream")
 }
 
 // writeJSON writes a JSON response.
