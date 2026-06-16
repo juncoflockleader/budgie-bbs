@@ -70,16 +70,19 @@ These are tracked, accepted-for-now items. None enables account takeover or
 content/credential disclosure on a correctly-deployed instance; they are
 defense-in-depth or low-severity, and are slated for follow-up.
 
-- **Session token storage (frontend):** the web client stores the JWT in
-  `localStorage` with a 30-day lifetime. This is only exploitable in the presence
-  of a cross-site-scripting flaw — which the CSP, output escaping, and
-  `nosniff`/`Content-Disposition` headers defend against — but moving the token to
-  an `HttpOnly`+`Secure`+`SameSite` cookie (with CSRF protection) would reduce the
-  blast radius. **Planned.**
-- **Logout does not revoke the token server-side:** sessions are stateless JWTs,
-  so "log out" clears the client but the token remains valid until expiry (a
-  password change *does* revoke it). Matters mainly on shared devices. A token
-  denylist or short-lived access tokens with refresh are the planned remedy.
+- **Session token storage (frontend):** the server now also issues the session
+  JWT as an `HttpOnly`+`Secure`+`SameSite=Lax` cookie and accepts it (with a
+  same-origin CSRF check on cookie-authenticated mutations); the `Authorization`
+  header still works for programmatic clients. The web client itself has not yet
+  switched off `localStorage` — that SPA migration is phase A-2 of
+  [doc/auth-session-hardening-plan.md](doc/auth-session-hardening-plan.md). Until
+  then the token is still XSS-reachable in the browser (mitigated by the CSP /
+  output escaping / `nosniff`).
+- **Logout / session revocation:** ✅ addressed. `POST /api/v1/auth/logout-all`
+  revokes every outstanding token for the user (a per-user `sessions_valid_after`
+  epoch checked against the token `iat`, enforced cluster-wide); normal logout
+  clears the session cookie. Password change already revoked. Per-*device*
+  server-side revocation (a `jti` denylist) remains a future option.
 - **Board membership cap (Postgres):** under two simultaneous membership
   approvals for a board that is exactly at `MaxMembers`, the cap can be exceeded
   by a small margin. No security boundary is crossed (the extra members are still

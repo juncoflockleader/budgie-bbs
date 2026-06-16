@@ -106,6 +106,7 @@ func (s *Server) handleVerify2FA(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
 		return
 	}
+	setSessionCookie(w, r, tok, exp)
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, ExpiresAt: exp,
 		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},

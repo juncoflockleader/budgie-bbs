@@ -24,9 +24,16 @@ func userFromCtx(ctx context.Context) *core.User {
 // to the request context. Returns 401 if the token is missing or invalid.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok := bearerToken(r)
+		tok, viaCookie := resolveToken(r)
 		if tok == "" {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "missing token", false)
+			return
+		}
+		// CSRF: a cookie is attached automatically by the browser, so
+		// cookie-authenticated mutations must be same-origin. Header (Bearer)
+		// auth is not CSRF-able and is exempt.
+		if viaCookie && isStateChangingMethod(r.Method) && !requestIsSameOrigin(r) {
+			writeError(w, http.StatusForbidden, "forbidden", "cross-origin request blocked", false)
 			return
 		}
 		claims := jwt.MapClaims{}
@@ -104,20 +111,6 @@ func tokenIssuedAfterRevocation(claims jwt.MapClaims, user *core.User) bool {
 		return true // legacy token without iat; leave it to expire naturally
 	}
 	return int64(iat) >= cutoff
-}
-
-func bearerToken(r *http.Request) string {
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
-	}
-	// The ?token= query param is only honored for the SSE/event-stream routes
-	// (EventSource cannot set an Authorization header). Accepting it everywhere
-	// would leak the token into access logs, browser history, and Referer
-	// headers for ordinary requests.
-	if isStreamPath(r.URL.Path) {
-		return r.URL.Query().Get("token")
-	}
-	return ""
 }
 
 // isStreamPath reports whether the path is an SSE/event-stream endpoint that

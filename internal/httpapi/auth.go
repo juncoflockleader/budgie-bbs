@@ -151,6 +151,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
 		return
 	}
+	setSessionCookie(w, r, tok, exp)
 	writeJSON(w, http.StatusCreated, loginResponse{
 		Token: tok, ExpiresAt: exp,
 		User: authUser{ID: u.ID, Name: u.Name, Role: u.Role, RegistrationStatus: u.RegistrationStatus},
@@ -316,6 +317,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not issue token", true)
 		return
 	}
+	setSessionCookie(w, r, tok, exp)
 	mustEnroll, _ := s.core.StaffShouldEnroll2FA(u.ID, u.Role)
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token: tok, ExpiresAt: exp,
@@ -325,6 +327,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookie(w, r)
 	if err := s.core.RecordLogout(); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not record logout", true)
 		return
@@ -340,6 +343,7 @@ func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke sessions", true)
 		return
 	}
+	clearSessionCookie(w, r)
 	_ = s.core.RecordLogout()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
