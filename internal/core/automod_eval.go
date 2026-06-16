@@ -148,7 +148,7 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 		events = append(events, EventAppend{
 			ID:     stableCommandLogDecisionID("evt_", record, idx),
 			Kind:   proto.EvtBoardAutomodTriggered,
-			Scopes: []string{"board:" + boardID, "moderation:global"},
+			Scopes: []string{"moderation:global"}, // moderation-only: metadata must not reach board subscribers (M8 sibling)
 			Payload: &proto.BoardAutomodTriggeredPayload{
 				ID: stableCommandLogDecisionID("amlog_", record, idx), Board: boardID, RuleID: rule.ID,
 				MatchType: rule.MatchType, Action: action, TargetUser: actorID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,

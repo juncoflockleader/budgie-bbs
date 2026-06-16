@@ -88,10 +88,10 @@ defense-in-depth or low-severity, and are slated for follow-up.
   by a small margin. No security boundary is crossed (the extra members are still
   legitimately approved); it is a quota-accuracy issue pending a partition-aligned
   fix.
-- **Moderation metadata on automod events:** the automod-triggered audit event is
-  delivered to board subscribers in addition to moderators, exposing rule/target
-  metadata to board members. (The reporter-identity leak on manual/content-filter
-  flags has been fixed.) A follow-up will scope it to moderators only.
+- **Moderation event scoping:** ✅ addressed. Both the flag-review event
+  (reporter identity/reason) and the automod-triggered audit event
+  (rule/target/action metadata) are now scoped to `moderation:global` only, so
+  board subscribers no longer receive moderation internals.
 - **Username enumeration:** account existence is observable by design —
   registration reports a name conflict, and login returns distinct messages for
   pending/deactivated/rejected accounts. Login response timing has been equalized;
