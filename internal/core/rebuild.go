@@ -1296,7 +1296,7 @@ func ensureSysmailBoardSettingsProjection(tx *sql.Tx, ts int64) error {
 func recordReactionReceivedTx(tx *sql.Tx, postAuthorID string) error {
 	_, err := qExec(tx, `
 		INSERT INTO user_activity (user_id, reactions_recv) VALUES (?,1)
-		ON CONFLICT(user_id) DO UPDATE SET reactions_recv = reactions_recv + 1`,
+		ON CONFLICT(user_id) DO UPDATE SET reactions_recv = user_activity.reactions_recv + 1`,
 		postAuthorID,
 	)
 	return err

@@ -1101,7 +1101,9 @@ CREATE TABLE IF NOT EXISTS moderation_reviews (
     status      TEXT NOT NULL DEFAULT 'open',
     target_id   TEXT NOT NULL,
     target_kind TEXT NOT NULL,
-    reporter    TEXT NOT NULL REFERENCES users(id),
+    -- No FK on reporter: it may be a synthetic system actor (e.g. "automod" or
+    -- a content-filter reporter) that is not a real users(id) row.
+    reporter    TEXT NOT NULL,
     reason      TEXT NOT NULL DEFAULT '',
     resolution  TEXT NOT NULL DEFAULT '',
     actor       TEXT NOT NULL DEFAULT '',
@@ -3148,6 +3150,19 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at BIGINT NOT NULL D
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (80, 'postgres-users-password-changed-at', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 81,
+			Name:    "postgres-moderation-reviews-drop-reporter-fk",
+			// reporter may be a synthetic system actor (e.g. "automod"), so the
+			// users(id) FK is wrong and rejects automod/content-filter reviews.
+			SQL: `
+ALTER TABLE moderation_reviews DROP CONSTRAINT IF EXISTS moderation_reviews_reporter_fkey;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (81, 'postgres-moderation-reviews-drop-reporter-fk', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

@@ -37,10 +37,6 @@ jobs:
   go-postgres:
     name: Go test (Postgres path)
     runs-on: ubuntu-latest
-    # Non-blocking: this job currently surfaces pre-existing Postgres-only bugs
-    # (the SQLite suite is green). Tracked in doc/postgres-known-issues.md; remove
-    # continue-on-error once those are fixed so the Postgres path gates again.
-    continue-on-error: true
     services:
       postgres:
         image: postgres:17

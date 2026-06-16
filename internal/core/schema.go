@@ -1064,7 +1064,8 @@ CREATE TABLE IF NOT EXISTS moderation_reviews (
     status     TEXT NOT NULL DEFAULT 'open',
     target_id  TEXT NOT NULL,
     target_kind TEXT NOT NULL,
-    reporter   TEXT NOT NULL REFERENCES users(id),
+    -- No FK on reporter: it may be a synthetic system actor (e.g. "automod").
+    reporter   TEXT NOT NULL,
     reason     TEXT NOT NULL DEFAULT '',
     resolution TEXT NOT NULL DEFAULT '',
     actor      TEXT NOT NULL DEFAULT '',
