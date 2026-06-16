@@ -77,17 +77,43 @@ type article struct {
 	Post   core.Post
 }
 
+const (
+	// nntpIdleTimeout closes connections that stall mid-read (Slowloris).
+	nntpIdleTimeout = 5 * time.Minute
+	// nntpMaxLineBytes bounds a single protocol line so an unterminated line
+	// cannot grow the read buffer without limit.
+	nntpMaxLineBytes = 64 << 10
+	// nntpMaxArticleBytes bounds a POSTed article's accumulated size.
+	nntpMaxArticleBytes = 2 << 20
+)
+
+var errNNTPLineTooLong = fmt.Errorf("nntp: line too long")
+
+// readLine reads one CRLF-terminated line with an idle deadline and a hard
+// length bound (ReadSlice, unlike ReadString, will not grow the buffer past its
+// size — it returns ErrBufferFull, which we surface as a fatal line-too-long).
+func (s *session) readLine() (string, error) {
+	if s.conn != nil {
+		_ = s.conn.SetReadDeadline(time.Now().Add(nntpIdleTimeout))
+	}
+	line, err := s.r.ReadSlice('\n')
+	if err == bufio.ErrBufferFull {
+		return "", errNNTPLineTooLong
+	}
+	return string(line), err
+}
+
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	se := &session{
 		s:    s,
 		conn: conn,
-		r:    bufio.NewReader(conn),
+		r:    bufio.NewReaderSize(conn, nntpMaxLineBytes),
 		w:    bufio.NewWriter(conn),
 	}
 	se.writeLine("200 BudgieBBS NNTP gateway ready")
 	for {
-		line, err := se.r.ReadString('\n')
+		line, err := se.readLine()
 		if err != nil {
 			return
 		}
@@ -451,10 +477,15 @@ func (s *session) readPostedArticle() (map[string]string, string, error) {
 	headers := map[string]string{}
 	var body []string
 	inBody := false
+	total := 0
 	for {
-		line, err := s.r.ReadString('\n')
+		line, err := s.readLine()
 		if err != nil {
 			return nil, "", err
+		}
+		total += len(line)
+		if total > nntpMaxArticleBytes {
+			return nil, "", fmt.Errorf("nntp: article too large")
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "." {
