@@ -843,6 +843,20 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `INSERT OR IGNORE INTO security_settings (id, staff_2fa_required, updated_at) VALUES ('default', 0, 0)`); err != nil {
 		return fmt.Errorf("seed security settings: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS site_appearance_settings (
+		    id             TEXT    PRIMARY KEY DEFAULT 'default',
+		    site_title     TEXT    NOT NULL DEFAULT 'Budgie BBS',
+		    tagline        TEXT    NOT NULL DEFAULT '',
+		    banner_message TEXT    NOT NULL DEFAULT '',
+		    accent_color   TEXT    NOT NULL DEFAULT '',
+		    default_theme  TEXT    NOT NULL DEFAULT 'dark',
+		    updated_at     INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure site appearance settings table: %w", err)
+	}
+	if _, err := qExec(db, `INSERT OR IGNORE INTO site_appearance_settings (id, updated_at) VALUES ('default', 0)`); err != nil {
+		return fmt.Errorf("seed site appearance settings: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_2fa_settings (
 		    user_id        TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 		    totp_secret    TEXT    NOT NULL DEFAULT '',

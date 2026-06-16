@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
-import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule, BoardAutomodActivity } from '../api/types'
+import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule, BoardAutomodActivity, SiteAppearance } from '../api/types'
+import { applyAppearance } from '../appearance'
 
 type Props = {
   token: string
@@ -33,6 +34,8 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [sanctionReason, setSanctionReason] = useState('')
   const [sanctions, setSanctions] = useState<UserSanction[] | null>(null)
   const [securitySettings, setSecuritySettings] = useState<SecuritySettings | null>(null)
+  const [appearance, setAppearance] = useState<SiteAppearance | null>(null)
+  const [appearanceDraft, setAppearanceDraft] = useState<SiteAppearance | null>(null)
   const [role2FA, setRole2FA] = useState<string | null>(null)
   const [automodBoard, setAutomodBoard] = useState('')
   const [automodRules, setAutomodRules] = useState<BoardAutomodRule[] | null>(null)
@@ -92,13 +95,14 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   async function loadAdminData() {
     if (currentUserRole !== 'admin') return
     setLoading(true)
-    const [boardsRes, categoriesRes, settingsRes, registrationsRes, recoveryRes, securityRes] = await Promise.all([
+    const [boardsRes, categoriesRes, settingsRes, registrationsRes, recoveryRes, securityRes, appearanceRes] = await Promise.all([
       api.listBoardSummaries(token),
       api.listCategories(token),
       api.getAccountRegistrationSettings(token),
       api.listAccountRegistrations(token, 'pending', 50, 0),
       api.listPasswordRecoveryRequests(token, 'pending', 50, 0),
       api.getSecuritySettings(token),
+      api.getSiteAppearance(),
     ])
     setLoading(false)
 
@@ -112,6 +116,33 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
     if (registrationsRes.data) setPendingRegistrations(registrationsRes.data)
     if (recoveryRes.data) setPasswordRecoveryRequests(recoveryRes.data)
     if (securityRes.data) setSecuritySettings(securityRes.data)
+    if (appearanceRes.data) {
+      setAppearance(appearanceRes.data)
+      setAppearanceDraft(appearanceRes.data)
+    }
+  }
+
+  async function saveAppearance(event: FormEvent) {
+    event.preventDefault()
+    if (!appearanceDraft) return
+    setSaving('appearance')
+    setNotice(null)
+    const res = await api.setSiteAppearance(token, {
+      siteTitle: appearanceDraft.siteTitle,
+      tagline: appearanceDraft.tagline,
+      bannerMessage: appearanceDraft.bannerMessage,
+      accentColor: appearanceDraft.accentColor,
+      defaultTheme: appearanceDraft.defaultTheme,
+    })
+    setSaving(null)
+    if (res.error || !res.data) {
+      setNotice({ kind: 'error', text: res.error?.message ?? 'Could not save appearance.' })
+      return
+    }
+    setAppearance(res.data)
+    setAppearanceDraft(res.data)
+    applyAppearance(res.data)
+    setNotice({ kind: 'ok', text: 'Site appearance updated.' })
   }
 
   async function setStaff2FARequired(required: boolean) {
@@ -471,6 +502,97 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
           Require two-factor authentication for staff (admins &amp; moderators)
         </label>
         <p className="muted">Enrolled staff are prompted for a code at login. Confirm staff have enrolled (use “Check 2FA” above) before enabling, to avoid surprises.</p>
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <h3>Site appearance</h3>
+        </div>
+        {appearanceDraft ? (
+          <form className="admin-form" onSubmit={saveAppearance}>
+            <div className="admin-form-grid">
+              <label>
+                Site title
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={appearanceDraft.siteTitle}
+                  onChange={e => setAppearanceDraft({ ...appearanceDraft, siteTitle: e.target.value })}
+                  placeholder="Budgie BBS"
+                />
+              </label>
+              <label>
+                Tagline
+                <input
+                  type="text"
+                  maxLength={200}
+                  value={appearanceDraft.tagline}
+                  onChange={e => setAppearanceDraft({ ...appearanceDraft, tagline: e.target.value })}
+                  placeholder="Shown under the title on the sign-in page"
+                />
+              </label>
+              <label>
+                Default theme
+                <select
+                  value={appearanceDraft.defaultTheme}
+                  onChange={e => setAppearanceDraft({ ...appearanceDraft, defaultTheme: e.target.value })}
+                >
+                  <option value="">— none (let visitors choose) —</option>
+                  <option value="dark">Dark</option>
+                  <option value="dim">Dim</option>
+                  <option value="light">Light</option>
+                  <option value="warm">Warm</option>
+                </select>
+              </label>
+              <label>
+                Accent color
+                <span className="admin-color-row">
+                  <input
+                    type="color"
+                    value={appearanceDraft.accentColor || '#000000'}
+                    onChange={e => setAppearanceDraft({ ...appearanceDraft, accentColor: e.target.value })}
+                  />
+                  <input
+                    type="text"
+                    maxLength={7}
+                    value={appearanceDraft.accentColor}
+                    onChange={e => setAppearanceDraft({ ...appearanceDraft, accentColor: e.target.value })}
+                    placeholder="#RRGGBB (blank = theme default)"
+                  />
+                  {appearanceDraft.accentColor && (
+                    <button type="button" className="link-btn" onClick={() => setAppearanceDraft({ ...appearanceDraft, accentColor: '' })}>Clear</button>
+                  )}
+                </span>
+              </label>
+            </div>
+            <label>
+              Banner message
+              <textarea
+                maxLength={500}
+                rows={2}
+                value={appearanceDraft.bannerMessage}
+                onChange={e => setAppearanceDraft({ ...appearanceDraft, bannerMessage: e.target.value })}
+                placeholder="Site-wide announcement shown to signed-in members (blank = no banner)"
+              />
+            </label>
+            <div className="admin-board-actions">
+              <button type="submit" disabled={saving === 'appearance'}>
+                {saving === 'appearance' ? 'Saving…' : 'Save appearance'}
+              </button>
+              {appearance && (
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => setAppearanceDraft(appearance)}
+                  disabled={saving === 'appearance'}
+                >Reset</button>
+              )}
+            </div>
+            <p className="muted">Title and accent apply site-wide immediately. The default theme only affects visitors who haven’t chosen one. The banner shows to all members until they dismiss it.</p>
+          </form>
+        ) : (
+          <p className="muted">Loading…</p>
+        )}
       </section>
 
       <section className="admin-panel">

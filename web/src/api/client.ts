@@ -57,6 +57,7 @@ import type {
   UserSanction,
   TwoFactorStatus,
   SecuritySettings,
+  SiteAppearance,
   BoardAutomodRule,
   BoardAutomodActivity,
 } from './types'
@@ -432,6 +433,20 @@ export async function disableEmailTwoFactor(token: string): Promise<ApiResponse<
 export async function generateBackupCodes(token: string): Promise<ApiResponse<{ codes: string[] }>> {
   const res = await fetch(`${BASE}/account/2fa/backup-codes`, { method: 'POST', headers: authHeaders(token) })
   return json<{ codes: string[] }>(res)
+}
+
+export async function getSiteAppearance(): Promise<ApiResponse<SiteAppearance>> {
+  const res = await fetch(`${BASE}/site/appearance`)
+  return json<SiteAppearance>(res)
+}
+
+export async function setSiteAppearance(token: string, payload: Partial<SiteAppearance>): Promise<ApiResponse<SiteAppearance>> {
+  const res = await fetch(`${BASE}/admin/site-appearance`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(payload),
+  })
+  return json<SiteAppearance>(res)
 }
 
 export async function getSecuritySettings(token: string): Promise<ApiResponse<SecuritySettings>> {

@@ -584,6 +584,15 @@ export interface SecuritySettings {
   updatedAt: number
 }
 
+export interface SiteAppearance {
+  siteTitle: string
+  tagline: string
+  bannerMessage: string
+  accentColor: string
+  defaultTheme: string
+  updatedAt: number
+}
+
 export interface BoardAutomodActivity {
   id: string
   board: string

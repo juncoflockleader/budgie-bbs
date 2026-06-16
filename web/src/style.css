@@ -349,6 +349,31 @@ label {
   background: var(--c-bg);
 }
 
+/* ── Site-wide banner ──────────────────────────────────────────────────── */
+.site-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--c-accent);
+  border-radius: var(--radius);
+  background: var(--c-accent-sub);
+  color: var(--c-text);
+}
+.site-banner > span { flex: 1 1 auto; white-space: pre-wrap }
+.site-banner-close {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--c-text-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.site-banner-close:hover { color: var(--c-text) }
+
 /* ── Page header ───────────────────────────────────────────────────────── */
 .page-header {
   display: flex;
@@ -395,6 +420,7 @@ label {
   align-items: center;
   gap: 0.5rem;
 }
+.auth-tagline { color: var(--c-text-dim); font-size: 0.95rem; margin: -0.25rem 0 0.25rem }
 .auth-locale { align-self: flex-end; margin-bottom: -0.5rem }
 .auth-form {
   display: flex;
@@ -1011,6 +1037,14 @@ label {
 .admin-form-grid--role {
   grid-template-columns: minmax(0, 1fr) minmax(8rem, 12rem);
 }
+.admin-board-actions { display: flex; gap: 0.7rem; align-items: center }
+.admin-color-row { display: flex; gap: 0.4rem; align-items: center }
+.admin-color-row input[type="color"] {
+  width: 2.2rem; height: 2.2rem; padding: 0;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: none; cursor: pointer; flex: 0 0 auto;
+}
+.admin-color-row input[type="text"] { flex: 1 1 auto; min-width: 0 }
 .admin-notice {
   padding: 0.55rem 0.7rem;
   border: 1px solid var(--c-border);

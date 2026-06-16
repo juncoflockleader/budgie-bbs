@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, FormEvent, useRef } from 'react'
 import { useAuth } from './hooks/useAuth'
 import { useTheme, type ThemeId } from './hooks/useTheme'
+import { applyAppearance } from './appearance'
+import type { SiteAppearance } from './api/types'
 import { LocaleCode, useI18n } from './i18n'
 import { AuthPage } from './pages/AuthPage'
 import { BoardListPage } from './pages/BoardListPage'
@@ -49,6 +51,32 @@ export function App() {
   const [privateUnreadCount, setPrivateUnreadCount] = useState(0)
   const searchRef = useRef<HTMLInputElement>(null)
   const historyDepthRef = useRef(0)
+  const [appearance, setAppearance] = useState<SiteAppearance | null>(null)
+  const [bannerDismissed, setBannerDismissed] = useState<string | null>(() => {
+    try { return localStorage.getItem('budgie.bannerDismissed') } catch { return null }
+  })
+
+  // Load public site appearance once and apply branding (title, accent, default theme).
+  useEffect(() => {
+    api.getSiteAppearance().then(res => {
+      if (!res.data) return
+      setAppearance(res.data)
+      applyAppearance(res.data, t => setTheme(t as ThemeId))
+    })
+    // applyAppearance (e.g. from an admin save) broadcasts the new branding so
+    // the sidebar title and banner update live without a reload.
+    const onAppearance = (e: Event) => setAppearance((e as CustomEvent<SiteAppearance>).detail)
+    window.addEventListener('budgie:appearance', onAppearance)
+    return () => window.removeEventListener('budgie:appearance', onAppearance)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function dismissBanner() {
+    if (!appearance?.bannerMessage) return
+    try { localStorage.setItem('budgie.bannerDismissed', appearance.bannerMessage) } catch { /* ignore */ }
+    setBannerDismissed(appearance.bannerMessage)
+  }
+  const showBanner = Boolean(appearance?.bannerMessage) && bannerDismissed !== appearance?.bannerMessage
 
   const refreshPrivateUnread = useCallback(() => {
     if (!auth.token) return
@@ -130,7 +158,7 @@ export function App() {
   }, [])
 
   if (!auth.token || !auth.user) {
-    return <AuthPage onLogin={login} />
+    return <AuthPage onLogin={login} siteTitle={appearance?.siteTitle} tagline={appearance?.tagline} />
   }
 
   const { token, user } = auth
@@ -194,7 +222,7 @@ export function App() {
         {/* Brand */}
         <div className="sidebar-brand" onClick={() => nav({ name: 'boards' })}>
           <span className="sidebar-logo">🐦</span>
-          <span className="sidebar-title">Budgie</span>
+          <span className="sidebar-title">{appearance?.siteTitle || 'Budgie'}</span>
         </div>
 
         {/* Search */}
@@ -287,6 +315,12 @@ export function App() {
       </aside>
 
       <main className="main-content">
+        {showBanner && (
+          <div className="site-banner">
+            <span>{appearance?.bannerMessage}</span>
+            <button type="button" className="site-banner-close" aria-label="Dismiss" onClick={dismissBanner}>×</button>
+          </div>
+        )}
         {page.name === 'boards' && (
           <BoardListPage
             token={token}

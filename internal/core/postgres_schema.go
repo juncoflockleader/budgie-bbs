@@ -3108,5 +3108,26 @@ VALUES (77, 'postgres-2fa-backup-codes', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 78,
+			Name:    "postgres-site-appearance",
+			SQL: `
+CREATE TABLE IF NOT EXISTS site_appearance_settings (
+    id             TEXT PRIMARY KEY DEFAULT 'default',
+    site_title     TEXT NOT NULL DEFAULT 'Budgie BBS',
+    tagline        TEXT NOT NULL DEFAULT '',
+    banner_message TEXT NOT NULL DEFAULT '',
+    accent_color   TEXT NOT NULL DEFAULT '',
+    default_theme  TEXT NOT NULL DEFAULT 'dark',
+    updated_at     BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO site_appearance_settings (id, updated_at) VALUES ('default', 0)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (78, 'postgres-site-appearance', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

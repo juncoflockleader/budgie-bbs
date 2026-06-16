@@ -6,6 +6,8 @@ import { useI18n } from '../i18n'
 
 interface Props {
   onLogin: (token: string, user: AuthState['user']) => void
+  siteTitle?: string
+  tagline?: string
 }
 
 const providerScripts: Record<string, { src: string; cls: string }> = {
@@ -14,7 +16,7 @@ const providerScripts: Record<string, { src: string; cls: string }> = {
   recaptcha: { src: 'https://www.google.com/recaptcha/api.js', cls: 'g-recaptcha' },
 }
 
-export function AuthPage({ onLogin }: Props) {
+export function AuthPage({ onLogin, siteTitle, tagline }: Props) {
   const { t, locale, setLocale } = useI18n()
   const [mode, setMode] = useState<'login' | 'register' | 'recover'>('login')
   const [name, setName] = useState('')
@@ -188,7 +190,8 @@ export function AuthPage({ onLogin }: Props) {
 
   return (
     <div className="auth-page">
-      <h1 className="auth-title">{t('app.name')}</h1>
+      <h1 className="auth-title">{siteTitle || t('app.name')}</h1>
+      {tagline && <p className="auth-tagline">{tagline}</p>}
       <div className="auth-locale">
         <select
           value={locale}
