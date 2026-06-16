@@ -339,6 +339,7 @@ func acquireUserBootstrapGate(tx *sql.Tx) error {
 	_, err := qExec(tx, `SELECT pg_advisory_xact_lock(?)`, pgUserBootstrapLockKey)
 	return err
 }
+
 const pgPartitionWorkers = 16
 
 // NewPostgres opens a Postgres database and applies the production schema.

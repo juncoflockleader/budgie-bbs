@@ -9,11 +9,11 @@ func TestAuthorizedScopes(t *testing.T) {
 	alice := registerAndGetUser(t, c, "alice", "password123") // regular user
 
 	requested := []string{
-		"chat:lobby",                // public pass-through
-		"presence:global",           // public pass-through
-		"moderation:global",         // staff only
-		"account:" + alice.ID,       // owner only
-		"account:" + admin.ID,       // owner only
+		"chat:lobby",                 // public pass-through
+		"presence:global",            // public pass-through
+		"moderation:global",          // staff only
+		"account:" + alice.ID,        // owner only
+		"account:" + admin.ID,        // owner only
 		"board:does-not-exist-12345", // unreadable/missing board
 	}
 

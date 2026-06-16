@@ -328,9 +328,9 @@ func (s *session) handleNewNews(arg string) {
 		s.writeLine("501 syntax: NEWNEWS wildmat date time [GMT]")
 		return
 	}
-	wildmat := parts[0]  // e.g. "*" or "budgie.general"
-	dateStr := parts[1]  // YYYYMMDD
-	timeStr := parts[2]  // HHMMSS
+	wildmat := parts[0] // e.g. "*" or "budgie.general"
+	dateStr := parts[1] // YYYYMMDD
+	timeStr := parts[2] // HHMMSS
 	asGMT := len(parts) >= 4 && strings.EqualFold(parts[3], "GMT")
 
 	// Parse the date and time.

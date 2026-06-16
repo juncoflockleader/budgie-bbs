@@ -18,14 +18,14 @@ type NodeEntry struct {
 	UserID    string    `json:"userId"`
 	Username  string    `json:"username"`
 	RemoteIP  string    `json:"remoteIp,omitempty"`
-	Location  string    `json:"location"`  // current TUI page label
+	Location  string    `json:"location"` // current TUI page label
 	LoginTime time.Time `json:"loginTime"`
 }
 
 // nodeSession holds the runtime handles for a live SSH session.
 type nodeSession struct {
 	NodeEntry
-	cancelFn func()     // calls sess.Close() to kick the SSH connection
+	cancelFn func()      // calls sess.Close() to kick the SSH connection
 	msgCh    chan string // receives sysop messages directed at this node
 }
 
