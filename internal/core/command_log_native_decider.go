@@ -3810,6 +3810,13 @@ func (e *CommandLogNativeDecisionExecutor) decideBlessUser(ctx context.Context, 
 	if ignored {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "target user ignores you", false)
 	}
+	// One blessing per (blesser, target): the ranking counts rows, so repeated
+	// blessings of the same target would otherwise inflate it.
+	if already, err := nativeBlessingExists(e.core.DB, actor.ID, target.ID); err != nil {
+		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+	} else if already {
+		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "you have already blessed this user", false)
+	}
 
 	ts := record.EnqueuedAt
 	if ts <= 0 {
@@ -9939,6 +9946,18 @@ func nativeRelationshipExists(db *sql.DB, userID, targetUserID, kind string) (bo
 	err := qQueryRow(db,
 		`SELECT 1 FROM user_relationships WHERE user_id=? AND target_user_id=? AND kind=? LIMIT 1`,
 		userID, targetUserID, kind,
+	).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func nativeBlessingExists(db *sql.DB, fromID, toID string) (bool, error) {
+	var found int
+	err := qQueryRow(db,
+		`SELECT 1 FROM blessings WHERE from_user_id=? AND to_user_id=? LIMIT 1`,
+		fromID, toID,
 	).Scan(&found)
 	if err == sql.ErrNoRows {
 		return false, nil

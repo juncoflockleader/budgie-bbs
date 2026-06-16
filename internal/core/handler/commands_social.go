@@ -9,6 +9,19 @@ import (
 
 const loginWatchRelationshipKind = "login_watch"
 
+// blessingExistsTx reports whether fromID has already blessed toID.
+func blessingExistsTx(tx *sql.Tx, fromID, toID string) (bool, error) {
+	var found int
+	err := qQueryRow(tx,
+		`SELECT 1 FROM blessings WHERE from_user_id=? AND to_user_id=? LIMIT 1`,
+		fromID, toID,
+	).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (h *Handler) setUserRelationship(actor *User, p proto.SetUserRelationshipPayload) Reply {
 	targetRef := strings.TrimSpace(p.User)
 	if targetRef == "" {
@@ -143,6 +156,13 @@ func (h *Handler) blessUser(actor *User, p proto.BlessUserPayload) Reply {
 	}
 	if ignored {
 		return Reply{Err: errDetail(proto.ErrForbidden, "target user ignores you", false)}
+	}
+	// One blessing per (blesser, target): the blessing ranking counts rows, so
+	// without this a user could bless the same target repeatedly to inflate it.
+	if already, err := blessingExistsTx(tx, actor.ID, target.ID); err != nil {
+		return internalErr(err)
+	} else if already {
+		return Reply{Err: errDetail(proto.ErrConflict, "you have already blessed this user", false)}
 	}
 
 	ts := nowMS()

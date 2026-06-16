@@ -3375,6 +3375,10 @@ func TestBlessUserCreatesBlessingBoardAndRankings(t *testing.T) {
 		}
 	}
 
+	// A second blessing from the same user to the same target is rejected so it
+	// cannot inflate the blessing ranking (which counts blessing rows).
+	execExpectErr(t, c, alice, proto.CmdBlessUser, proto.BlessUserPayload{User: "bob"}, proto.ErrConflict)
+
 	exec(t, c, carol, proto.CmdBlessUser, proto.BlessUserPayload{User: "bob"})
 	rankings, err := c.ListBlessingRankings(10, 0)
 	if err != nil {
