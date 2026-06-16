@@ -51,6 +51,32 @@ func TestTwoFactorTOTPEnrollAndVerify(t *testing.T) {
 	}
 }
 
+func TestVerifyTOTPRejectsReplay(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+	u := registerAndGetUser(t, c, "alice", "pw")
+
+	secret, _, err := c.BeginTOTPEnrollment(u.ID, u.Name)
+	if err != nil {
+		t.Fatalf("begin enrollment: %v", err)
+	}
+	confirmCode, _ := totp.CodeAtTime(secret, time.Now().Unix())
+	if err := c.ConfirmTOTPEnrollment(u.ID, confirmCode); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	code, _ := totp.CodeAtTime(secret, time.Now().Unix())
+	// First use of a fresh code succeeds.
+	if err := c.VerifyTOTP(u.ID, code); err != nil {
+		t.Fatalf("first verify should succeed: %v", err)
+	}
+	// Replaying the very same code must be rejected — a code is single-use per
+	// time step (RFC 6238 §5.2).
+	if err := c.VerifyTOTP(u.ID, code); err == nil {
+		t.Fatal("a replayed TOTP code must be rejected")
+	}
+}
+
 func TestTwoFactorBackupCodes(t *testing.T) {
 	c, cancel := newTestCore(t)
 	defer cancel()

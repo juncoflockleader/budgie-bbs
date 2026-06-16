@@ -3129,5 +3129,16 @@ VALUES (78, 'postgres-site-appearance', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 79,
+			Name:    "postgres-2fa-totp-last-step",
+			SQL: `
+ALTER TABLE user_2fa_settings ADD COLUMN IF NOT EXISTS totp_last_step BIGINT NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (79, 'postgres-2fa-totp-last-step', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

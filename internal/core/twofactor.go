@@ -323,14 +323,29 @@ func (c *Core) StaffShouldEnroll2FA(userID, role string) (bool, error) {
 func (c *Core) VerifyTOTP(userID, code string) error {
 	var secret string
 	var enrolled int
-	err := qQueryRow(c.DB, `SELECT totp_secret, totp_enrolled FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&secret, &enrolled)
+	var lastStep int64
+	err := qQueryRow(c.DB, `SELECT totp_secret, totp_enrolled, totp_last_step FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&secret, &enrolled, &lastStep)
 	if err == sql.ErrNoRows || enrolled == 0 || strings.TrimSpace(secret) == "" {
 		return ErrTwoFactorNotEnrolled
 	}
 	if err != nil {
 		return err
 	}
-	if !totp.Validate(secret, code, time.Now().Unix(), 1) {
+	step, ok := totp.ValidateAt(secret, code, time.Now().Unix(), 1)
+	if !ok {
+		return ErrTwoFactorInvalidCode
+	}
+	// Reject replay: a code is single-use per time-step. Atomically claim the
+	// step only if it is newer than the last one accepted (guards concurrent
+	// replays too — exactly one updater wins).
+	if step <= lastStep {
+		return ErrTwoFactorInvalidCode
+	}
+	res, err := qExec(c.DB, `UPDATE user_2fa_settings SET totp_last_step=? WHERE user_id=? AND totp_last_step < ?`, step, userID, step)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrTwoFactorInvalidCode
 	}
 	return nil

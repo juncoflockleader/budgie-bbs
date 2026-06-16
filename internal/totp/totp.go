@@ -62,24 +62,33 @@ func CodeAtTime(secret string, unixSeconds int64) (string, error) {
 // +/- skew steps of clock drift (skew=1 → accepts the previous, current, and
 // next 30s windows). Comparison is constant-time.
 func Validate(secret, code string, unixSeconds int64, skew int) bool {
+	_, ok := ValidateAt(secret, code, unixSeconds, skew)
+	return ok
+}
+
+// ValidateAt is like Validate but also returns the time-step counter the code
+// matched, so callers can enforce single-use (reject replays of an already-seen
+// step). matchedStep is meaningful only when ok is true.
+func ValidateAt(secret, code string, unixSeconds int64, skew int) (matchedStep int64, ok bool) {
 	code = strings.TrimSpace(code)
 	if len(code) != digits {
-		return false
+		return 0, false
 	}
 	if skew < 0 {
 		skew = 0
 	}
 	base := unixSeconds / period
 	for d := -skew; d <= skew; d++ {
-		want, err := codeAt(secret, uint64(base+int64(d)))
+		step := base + int64(d)
+		want, err := codeAt(secret, uint64(step))
 		if err != nil {
-			return false
+			return 0, false
 		}
 		if subtle.ConstantTimeCompare([]byte(want), []byte(code)) == 1 {
-			return true
+			return step, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 // OTPAuthURI builds the otpauth://totp/ URI that authenticator apps consume

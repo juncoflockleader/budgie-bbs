@@ -863,9 +863,14 @@ func applySQLiteMigrations(db *sql.DB) error {
 		    totp_pending   TEXT    NOT NULL DEFAULT '',
 		    totp_enrolled  INTEGER NOT NULL DEFAULT 0,
 		    email_enrolled INTEGER NOT NULL DEFAULT 0,
+		    totp_last_step INTEGER NOT NULL DEFAULT 0,
 		    updated_at     INTEGER NOT NULL DEFAULT 0
 		)`); err != nil {
 		return fmt.Errorf("ensure user 2fa settings table: %w", err)
+	}
+	// Upgrade path for DBs created before TOTP replay protection existed.
+	if err := ensureColumn(db, "user_2fa_settings", "totp_last_step", "totp_last_step INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS two_factor_email_codes (
 		    user_id    TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
