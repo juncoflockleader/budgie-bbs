@@ -30,9 +30,15 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/nntp"
 	"github.com/juncoflockleader/budgie-bbs/internal/ratelimit"
 	"github.com/juncoflockleader/budgie-bbs/internal/redisconn"
+	"github.com/juncoflockleader/budgie-bbs/internal/tracing"
 	"github.com/juncoflockleader/budgie-bbs/internal/tui"
 	"github.com/juncoflockleader/budgie-bbs/internal/wsapi"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
+
+// buildVersion is the service version reported in traces; override at build time
+// with -ldflags "-X main.buildVersion=...".
+var buildVersion = "dev"
 
 func main() {
 	kafkaSecurityDefaults := kafkaconn.RuntimeSecurityConfigFromEnv()
@@ -59,6 +65,8 @@ func main() {
 		mailInboxURL                        = flag.String("mail-inbox-url", "", "Web inbox URL of a local SMTP catcher to surface in the signup UI; auto-set to http://localhost:8025 (mailpit) when the relay host is loopback (also BUDGIE_MAIL_INBOX_URL)")
 		requirePolicyAccept                 = flag.Bool("require-policy-acceptance", false, "Require signup to record explicit privacy-policy acceptance (also BUDGIE_REQUIRE_POLICY_ACCEPTANCE)")
 		allowSSHRegistration                = flag.Bool("allow-ssh-registration", false, "Allow guests to create an account from the SSH TUI (no captcha over SSH; off by default)")
+		otelTracing                         = flag.Bool("otel-tracing", false, "Enable OpenTelemetry distributed tracing (also auto-enabled when OTEL_EXPORTER_OTLP_ENDPOINT is set); exports via OTLP/HTTP using the standard OTEL_* env vars")
+		otelSampleRatio                     = flag.Float64("otel-sample-ratio", 1.0, "Head trace sampling ratio in [0,1] when tracing is enabled")
 		webRoot                             = flag.String("web", "", "Path to web/dist directory for SPA serving (optional)")
 		nntpAddr                            = flag.String("nntp", "", "NNTP listen address (optional, e.g. :1190)")
 		nntpDomain                          = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
@@ -1753,6 +1761,33 @@ func main() {
 			"batchSize", *archiveRankingsProcessorBatchSize)
 	}
 
+	// OpenTelemetry distributed tracing (opt-in). Enabled by -otel-tracing or by
+	// presence of an OTLP endpoint env var. Installs a global tracer provider +
+	// W3C propagator so spans flow across nodes; the HTTP server and write-region
+	// proxy are instrumented below.
+	tracingEnabled := *otelTracing ||
+		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != "" ||
+		strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")) != ""
+	hostname, _ := os.Hostname()
+	tracingShutdown, err := tracing.Init(ctx, tracing.Config{
+		Enabled:     tracingEnabled,
+		ServiceName: "budgied",
+		Version:     buildVersion,
+		NodeID:      hostname,
+		SampleRatio: *otelSampleRatio,
+	})
+	if err != nil {
+		slog.Warn("tracing disabled: init failed", "err", err)
+		tracingEnabled = false
+	} else if tracingEnabled {
+		slog.Info("OpenTelemetry tracing enabled", "sampleRatio", *otelSampleRatio)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tracingShutdown(shutdownCtx)
+	}()
+
 	// Cluster-wide brute-force rate limiting: when Redis is configured, back the
 	// credential limiters with a shared store so login/2FA/recovery budgets are
 	// enforced across all nodes (not just per-process). Falls back to per-node
@@ -1784,6 +1819,11 @@ func main() {
 	mux := http.NewServeMux()
 	writeRegionProxyEnabled := strings.TrimSpace(*writeRegionURL) != ""
 	wsAllowCommands := !writeRegionProxyEnabled || commandAuthoritativeMode != ""
+	// Propagate trace context across the write-region proxy hop so a request
+	// traced on this node continues as one trace on the write region.
+	if tracingEnabled && writeRegionProxyEnabled {
+		httpSrv.SetWriteRegionTransport(otelhttp.NewTransport(http.DefaultTransport))
+	}
 	if roles["api"] {
 		wsSrv := wsapi.NewGateway(c, secret, wsAllowCommands)
 		mux.Handle("/api/v1/ws", wsSrv)
@@ -1799,9 +1839,16 @@ func main() {
 	// header floods. ReadTimeout/WriteTimeout are intentionally omitted: the WS
 	// and SSE endpoints are long-lived and a global write deadline would sever
 	// them. Per-endpoint body-size caps are applied in the httpapi layer.
+	// Instrument the HTTP surface with otelhttp when tracing is enabled: every
+	// request becomes a server span (continuing any incoming traceparent), and
+	// the span context flows into handlers via the request context.
+	var rootHandler http.Handler = mux
+	if tracingEnabled {
+		rootHandler = otelhttp.NewHandler(mux, "budgied.http")
+	}
 	srv := &http.Server{
 		Addr:              *httpAddr,
-		Handler:           mux,
+		Handler:           rootHandler,
 		ReadHeaderTimeout: 10 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}

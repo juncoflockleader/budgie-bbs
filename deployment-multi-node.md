@@ -1654,6 +1654,31 @@ egress (`budgie_write_region_routed_requests_total`). Those panels make the
 cost of extra gateways, writers, hot-thread splits, and cross-region write
 routing visible before changing topology.
 
+### Distributed tracing (OpenTelemetry)
+
+Each node can export OpenTelemetry traces over OTLP/HTTP. Enable it with the
+`-otel-tracing` flag, or simply by setting `OTEL_EXPORTER_OTLP_ENDPOINT` (the
+flag auto-enables when that env var is present). All the standard `OTEL_*`
+environment variables are honored for endpoint, headers, and protocol; head
+sampling is `-otel-sample-ratio` (default 1.0).
+
+When enabled, the HTTP server is wrapped with `otelhttp`, so every request
+becomes a server span (continuing any inbound `traceparent`), and the
+write-region proxy hop propagates W3C trace context — so a write routed from an
+edge node to the write region shows up as a single distributed trace. Spans
+carry `service.name=budgied`, `service.version`, and a `budgie.node_id` resource
+attribute (the hostname) so you can slice traces by node. Tracing is off by
+default and has no cost when disabled; an unreachable collector is non-fatal
+(spans are dropped, the server keeps serving).
+
+Point the endpoint at any OTLP collector (e.g. an OpenTelemetry Collector,
+Jaeger, Tempo):
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+budgied -roles api ...   # tracing auto-enabled
+```
+
 ## Failure modes and recovery
 
 | Failure | Behavior | Recovery |
