@@ -337,7 +337,26 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/", spaHandler(s.webRoot))
 	}
 
-	return securityHeaders(s.routeWriteRegion(mux))
+	return securityHeaders(limitRequestBody(s.routeWriteRegion(mux)))
+}
+
+// maxJSONBodyBytes caps the request body for every endpoint except the
+// multipart attachment uploads (which set their own larger limit). Every JSON
+// command is far smaller than this (e.g. post bodies 20 KB, personal files
+// 8 KB, favorite-tree imports 200 folders/500 boards), so the cap is generous
+// while preventing an unbounded json.Decode from exhausting memory.
+const maxJSONBodyBytes = 4 << 20 // 4 MiB
+
+// limitRequestBody wraps the request body in a MaxBytesReader so handlers cannot
+// be forced to buffer an arbitrarily large payload. The multipart attachment
+// upload routes are skipped — they apply their own (larger) limit.
+func limitRequestBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && !strings.HasSuffix(r.URL.Path, "/attachments") {
+			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // contentSecurityPolicy is a strict, SPA-compatible CSP. The single allowed
