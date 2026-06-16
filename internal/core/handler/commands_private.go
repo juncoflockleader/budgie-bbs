@@ -4,12 +4,43 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+// lockMailboxes serializes concurrent writers to the same mailbox so the
+// recipient mail-quota check and insert are race-free. CmdSendMail/CmdForwardMail
+// are partitioned by the sender, so without this two senders to one recipient
+// could both pass the recipient's quota check and overshoot it. No-op on SQLite
+// (its single writer already serializes); on Postgres it takes a
+// transaction-scoped advisory lock per mailbox, acquired in sorted order to
+// avoid deadlock between overlapping recipient sets.
+func (h *Handler) lockMailboxes(tx *sql.Tx, copyCounts map[string]int) error {
+	if h.lockCmd == nil { // SQLite mode: writes are already serialized
+		return nil
+	}
+	keys := make([]string, 0, len(copyCounts))
+	for k := range copyCounts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, mailboxAdvisoryKey(k)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mailboxAdvisoryKey(mailbox string) int64 {
+	hsh := fnv.New64a()
+	_, _ = hsh.Write([]byte("mailbox:" + mailbox))
+	return int64(hsh.Sum64())
+}
 
 // maxMailRecipientsPerSend bounds the fan-out of a single non-admin mail send.
 const maxMailRecipientsPerSend = 50
@@ -85,6 +116,9 @@ func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 	}
 	if saveSent {
 		copyCounts[actor.ID]++
+	}
+	if err := h.lockMailboxes(tx, copyCounts); err != nil {
+		return internalErr(err)
 	}
 	if errReply := ensureMailQuotaTx(tx, copyCounts, mailMessageSize(subject, body, attachments)); errReply.Err != nil {
 		return errReply
@@ -667,6 +701,9 @@ func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "mail can have at most 8 attachments", false)}
 	}
 	copyCounts, err := activeMailCopyCountsTx(tx, mailID)
+	if err == nil {
+		err = h.lockMailboxes(tx, copyCounts)
+	}
 	if err != nil {
 		return internalErr(err)
 	}

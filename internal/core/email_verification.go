@@ -178,11 +178,14 @@ func (c *Core) ResendEmailVerification(name string) error {
 	return c.StartEmailVerification(u.ID, email)
 }
 
-// emailVerified reports whether a user's email is confirmed.
+// emailVerified reports whether a user's email is confirmed. Fails closed: a
+// read error reports "not verified" so a database hiccup cannot bypass the
+// email-verification login gate (login already requires the database, so this
+// does not reduce availability in practice).
 func (c *Core) emailVerified(userID string) bool {
 	var v int
 	if err := qQueryRow(c.DB, `SELECT email_verified FROM users WHERE id=?`, userID).Scan(&v); err != nil {
-		return true // fail open on read error; login's other gates still apply
+		return false
 	}
 	return v != 0
 }

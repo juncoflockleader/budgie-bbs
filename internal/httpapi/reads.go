@@ -1454,5 +1454,13 @@ func paginate(r *http.Request) (limit, offset int) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
+	// Clamp offset to a sane range: negative offsets are invalid, and an
+	// enormous offset forces the DB to scan/skip huge numbers of rows.
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > 1_000_000 {
+		offset = 1_000_000
+	}
 	return
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -14,6 +15,19 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/totp"
 )
+
+// randomIndex returns a uniform random index in [0, n) using rejection sampling,
+// avoiding the modulo bias of `byte % n` when n does not divide 256.
+func randomIndex(n int) (int, error) {
+	if n <= 0 {
+		return 0, fmt.Errorf("randomIndex: range must be positive")
+	}
+	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	if err != nil {
+		return 0, err
+	}
+	return int(v.Int64()), nil
+}
 
 var (
 	// ErrTwoFactorNotEnrolled is returned when a 2FA action needs an enrollment
@@ -240,13 +254,13 @@ func (c *Core) clearBackupCodesIfUnenrolled(userID string) error {
 }
 
 func randomBackupCode() (string, error) {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
 	out := make([]byte, 8)
 	for i := range out {
-		out[i] = backupCodeAlphabet[int(buf[i])%len(backupCodeAlphabet)]
+		idx, err := randomIndex(len(backupCodeAlphabet))
+		if err != nil {
+			return "", err
+		}
+		out[i] = backupCodeAlphabet[idx]
 	}
 	return string(out[:4]) + "-" + string(out[4:]), nil
 }
@@ -404,13 +418,14 @@ func (c *Core) userRegistrationEmail(userID string) string {
 }
 
 func randomNumericCode(n int) (string, error) {
-	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
 	const digits = "0123456789"
+	buf := make([]byte, n)
 	for i := range buf {
-		buf[i] = digits[int(buf[i])%10]
+		idx, err := randomIndex(len(digits))
+		if err != nil {
+			return "", err
+		}
+		buf[i] = digits[idx]
 	}
 	return string(buf), nil
 }

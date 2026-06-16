@@ -83,6 +83,9 @@ func extractPoll(body string) (*pollBlock, string) {
 	lines := strings.Split(inner, "\n")
 	var question string
 	var options []string
+	// Cap poll options so a single post can't create an unbounded number of
+	// option rows; excess lines beyond the cap are ignored.
+	const maxPollOptions = 20
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -90,7 +93,7 @@ func extractPoll(body string) (*pollBlock, string) {
 		}
 		if question == "" && !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "*") {
 			question = line
-		} else {
+		} else if len(options) < maxPollOptions {
 			opt := strings.TrimLeft(line, "-* ")
 			if opt != "" {
 				options = append(options, opt)
