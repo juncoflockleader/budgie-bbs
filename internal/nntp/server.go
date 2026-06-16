@@ -175,6 +175,14 @@ func (s *session) handleAuth(arg string) {
 	}
 }
 
+// canRead reports whether this session's actor may read the given board. It
+// enforces the same member-read-mode access control as the HTTP transport so
+// NNTP cannot expose private/member-only boards.
+func (s *session) canRead(boardID string) bool {
+	ok, err := s.s.core.ActorCanReadBoardID(s.actor, boardID)
+	return err == nil && ok
+}
+
 func (s *session) handleList() {
 	boards, err := s.s.core.ListBoards()
 	if err != nil {
@@ -183,6 +191,9 @@ func (s *session) handleList() {
 	}
 	s.writeLine("215 list of newsgroups follows")
 	for _, b := range boards {
+		if !s.canRead(b.ID) {
+			continue
+		}
 		group := s.boardToGroup(b.ID)
 		count := s.articleCount(b.ID)
 		high := count
@@ -198,6 +209,12 @@ func (s *session) handleList() {
 func (s *session) handleGroup(arg string) {
 	board := s.groupToBoard(strings.TrimSpace(arg))
 	if board == "" {
+		s.writeLine("411 no such newsgroup")
+		return
+	}
+	// Member-read-mode boards are not selectable by non-members — this gates
+	// ARTICLE/HEAD/BODY/OVER too, since they operate on the selected group.
+	if !s.canRead(board) {
 		s.writeLine("411 no such newsgroup")
 		return
 	}
@@ -312,6 +329,9 @@ func (s *session) handleNewNews(arg string) {
 
 	s.writeLine("230 list of new articles follows")
 	for _, b := range boards {
+		if !s.canRead(b.ID) {
+			continue
+		}
 		group := s.boardToGroup(b.ID)
 		if !nntpWildmatMatch(wildmat, group) {
 			continue

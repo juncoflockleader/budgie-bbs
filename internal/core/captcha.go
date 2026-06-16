@@ -176,8 +176,16 @@ func (c *Core) verifyNativeCaptcha(sub CaptchaSubmission) error {
 	if err != nil {
 		return err
 	}
-	// Single-use: consume the challenge regardless of outcome.
-	_, _ = qExec(c.DB, `DELETE FROM captcha_challenges WHERE id=?`, sub.ChallengeID)
+	// Single-use: atomically claim the challenge. Exactly one concurrent request
+	// deletes the row; any replay of the same solved challenge gets 0 rows
+	// affected and fails, so one solved captcha authorizes only one signup.
+	res, err := qExec(c.DB, `DELETE FROM captcha_challenges WHERE id=?`, sub.ChallengeID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrCaptchaFailed
+	}
 	if exp < nowMS() {
 		return ErrCaptchaFailed
 	}

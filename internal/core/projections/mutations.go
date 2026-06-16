@@ -4191,13 +4191,20 @@ func ReviewPasswordRecoveryRequest(db *sql.DB, id, reviewerID, decision, passwor
 			return nil, err
 		}
 	}
-	if _, err := QExec(tx,
+	res, err := QExec(tx,
 		`UPDATE password_recovery_requests
 		    SET status=?, reviewer_id=?, review_note=?, updated_at=?
 		  WHERE id=? AND status='pending'`,
 		status, reviewerID, note, ts, id,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
+	}
+	// If a concurrent reviewer already resolved this request, the guarded update
+	// affects 0 rows — return before commit so the (possibly different) password
+	// reset above rolls back rather than double-applying.
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, sql.ErrNoRows
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

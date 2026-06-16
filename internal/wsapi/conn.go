@@ -365,6 +365,11 @@ func (s *Server) validateToken(tok string) (*core.User, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Reject non-session tokens (e.g. the pre-verification 2FA challenge token,
+	// typ:"2fa") so they cannot authenticate a WS connection and bypass 2FA.
+	if typ, _ := claims["typ"].(string); typ != "" && typ != "session" {
+		return nil, fmt.Errorf("invalid token type")
+	}
 	uid, _ := claims["sub"].(string)
 	if uid == "" {
 		return nil, fmt.Errorf("missing sub claim")

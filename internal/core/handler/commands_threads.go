@@ -13,9 +13,17 @@ import (
 
 // --- Thread/post command implementations ---
 
+// maxPostBodyLen bounds a thread/post body. Without it a single body is
+// unbounded — amplifying memory/storage use, FTS indexing, and content/automod
+// scanning. Matches the cap already used for editable bodies.
+const maxPostBodyLen = 20000
+
 func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if p.Board == "" || p.Title == "" || p.Body == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "board, title, and body are required", false)}
+	}
+	if len(p.Body) > maxPostBodyLen {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "body must be 20000 characters or less", false)}
 	}
 	pollBlock, cleanBody := extractPoll(p.Body)
 	if pollBlock != nil && cleanBody != p.Body {
@@ -195,6 +203,9 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if p.Thread == "" || p.Body == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread and body are required", false)}
+	}
+	if len(p.Body) > maxPostBodyLen {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "body must be 20000 characters or less", false)}
 	}
 	userBody := p.Body
 	pollBlock, cleanBody := extractPoll(userBody)

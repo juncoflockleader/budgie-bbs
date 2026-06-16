@@ -138,8 +138,15 @@ func (c *Core) VerifyEmailToken(token string) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Single-use: consume regardless of outcome.
-	_, _ = qExec(c.DB, `DELETE FROM email_verification_tokens WHERE token=?`, token)
+	// Single-use: atomically claim the token. Only the request that actually
+	// deletes the row proceeds; a concurrent replay gets 0 rows and fails.
+	res, err := qExec(c.DB, `DELETE FROM email_verification_tokens WHERE token=?`, token)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, ErrVerificationTokenInvalid
+	}
 	if exp < nowMS() {
 		return nil, ErrVerificationTokenInvalid
 	}

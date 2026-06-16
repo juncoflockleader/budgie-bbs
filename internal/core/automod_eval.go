@@ -41,8 +41,14 @@ func evaluateBoardAutomod(db *sql.DB, boardID, text, authorID string) (*projecti
 			needle := strings.ToLower(strings.TrimSpace(r.Pattern))
 			matched = needle != "" && strings.Contains(lower, needle)
 		case "regex":
-			if re, err := regexp.Compile(r.Pattern); err == nil {
-				matched = re.MatchString(text)
+			// Defense-in-depth against ReDoS-style CPU exhaustion: skip patterns
+			// that compile to an oversized program (validation rejects these on
+			// write, but a rule may predate that check), and bound the input fed
+			// to the matcher so per-evaluation cost stays small regardless.
+			if proto.AutomodRegexWithinComplexityLimit(r.Pattern) {
+				if re, err := regexp.Compile(r.Pattern); err == nil {
+					matched = re.MatchString(automodRegexInput(text))
+				}
 			}
 		case "repeated_text":
 			matched = maxConsecutiveRun(text) >= r.Threshold
@@ -175,6 +181,24 @@ func maxConsecutiveRun(text string) int {
 		return 0
 	}
 	return best
+}
+
+// maxAutomodRegexInputBytes bounds how much post text a user regex runs against.
+// Combined with the program-size cap at validation, this keeps any single
+// automod regex evaluation cheap even on very large posts.
+const maxAutomodRegexInputBytes = 16 << 10 // 16 KiB
+
+// automodRegexInput returns text truncated (on a UTF-8 boundary) to the input
+// cap used for regex matching.
+func automodRegexInput(text string) string {
+	if len(text) <= maxAutomodRegexInputBytes {
+		return text
+	}
+	b := text[:maxAutomodRegexInputBytes]
+	for len(b) > 0 && !utf8.ValidString(b) {
+		b = b[:len(b)-1]
+	}
+	return b
 }
 
 var automodLinkRe = regexp.MustCompile(`(?i)https?://`)

@@ -40,6 +40,14 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid token", false)
 			return
 		}
+		// Reject non-session tokens (e.g. the pre-verification 2FA challenge
+		// token, which carries typ:"2fa"). Full session tokens have no typ or
+		// typ:"session"; without this check a challenge token would authenticate
+		// every protected endpoint and bypass the second factor entirely.
+		if typ, _ := claims["typ"].(string); typ != "" && typ != "session" {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid token type", false)
+			return
+		}
 		uid, _ := claims["sub"].(string)
 		if uid == "" {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "invalid token claims", false)

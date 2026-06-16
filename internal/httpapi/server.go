@@ -319,7 +319,39 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/", spaHandler(s.webRoot))
 	}
 
-	return s.routeWriteRegion(mux)
+	return securityHeaders(s.routeWriteRegion(mux))
+}
+
+// contentSecurityPolicy is a strict, SPA-compatible CSP. The single allowed
+// inline script is the theme bootstrap in web/index.html (hashed below so we
+// don't need 'unsafe-inline' for scripts). style-src keeps 'unsafe-inline'
+// because React sets inline style attributes; Google Fonts are allow-listed.
+// If the inline bootstrap in web/index.html changes, update the hash (compute:
+// printf '%s' "<script body>" | openssl dgst -sha256 -binary | openssl base64).
+const contentSecurityPolicy = "default-src 'self'; " +
+	"base-uri 'self'; " +
+	"object-src 'none'; " +
+	"frame-ancestors 'none'; " +
+	"img-src 'self' data:; " +
+	"font-src 'self' https://fonts.gstatic.com; " +
+	"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+	"script-src 'self' 'sha256-ZKEaS57sgKgiS9jYCWMu9BV09EirGsVTYWGi4S4x1RQ='; " +
+	"connect-src 'self'"
+
+// securityHeaders sets defense-in-depth response headers on every response:
+// clickjacking protection (frame-ancestors/X-Frame-Options), MIME-sniff
+// blocking (so uploaded files can't be sniffed into executable types), a
+// restrictive referrer policy, and the CSP above.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // spaHandler serves files from root; requests to unknown paths fall back to

@@ -31,6 +31,71 @@ func TestBuildMessageFormat(t *testing.T) {
 	}
 }
 
+func TestValidateRecipientRejectsInjectionAndMalformed(t *testing.T) {
+	bad := []string{
+		"",
+		"not-an-email",
+		"v@x.com\r\nBcc: attacker@evil.com",
+		"v@x.com\nSubject: hijack",
+		"v@x.com\x00",
+		"Name <v@x.com>", // display-name form
+		"a@b.com, c@d.com",
+	}
+	for _, addr := range bad {
+		if err := validateRecipient(addr); err == nil {
+			t.Errorf("expected %q to be rejected", addr)
+		}
+	}
+	for _, addr := range []string{"alice@dest.test", "bob.smith+tag@sub.example.org"} {
+		if err := validateRecipient(addr); err != nil {
+			t.Errorf("expected %q to be accepted, got %v", addr, err)
+		}
+	}
+}
+
+func TestBuildMessageStripsHeaderInjection(t *testing.T) {
+	out := string(buildMessage(Message{
+		From:    "no-reply@budgie.example\r\nBcc: sneaky@evil.com",
+		To:      "alice@dest.test",
+		Subject: "Hi\r\nX-Injected: yes",
+		Body:    "hello",
+	}))
+	// The injected values must not start a new header line (no CRLF before them).
+	if strings.Contains(out, "\r\nBcc:") || strings.Contains(out, "\r\nX-Injected:") {
+		t.Fatalf("header injection not stripped:\n%s", out)
+	}
+	// The From header must remain a single line.
+	if strings.Count(out[:strings.Index(out, "\r\nTo:")], "\r\n") != 0 {
+		t.Fatalf("From header spans multiple lines:\n%s", out)
+	}
+}
+
+func TestIsPublicIPRejectsInternalRanges(t *testing.T) {
+	internal := []string{"127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1", "169.254.169.254", "::1", "fc00::1", "0.0.0.0"}
+	for _, s := range internal {
+		if isPublicIP(net.ParseIP(s)) {
+			t.Errorf("expected %s to be treated as non-public", s)
+		}
+	}
+	for _, s := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
+		if !isPublicIP(net.ParseIP(s)) {
+			t.Errorf("expected %s to be treated as public", s)
+		}
+	}
+}
+
+func TestBlockPrivateControlRejectsInternal(t *testing.T) {
+	if err := blockPrivateControl("tcp", "169.254.169.254:25", nil); err == nil {
+		t.Fatal("expected metadata address to be blocked")
+	}
+	if err := blockPrivateControl("tcp", "127.0.0.1:25", nil); err == nil {
+		t.Fatal("expected loopback to be blocked")
+	}
+	if err := blockPrivateControl("tcp", "8.8.8.8:25", nil); err != nil {
+		t.Fatalf("expected public address to be allowed, got %v", err)
+	}
+}
+
 func TestNewFactory(t *testing.T) {
 	if m, err := New(Config{Mode: "off"}); err != nil || m != nil {
 		t.Fatalf("off should be nil mailer: m=%v err=%v", m, err)

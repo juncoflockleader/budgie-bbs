@@ -53,7 +53,7 @@ NODE_A_HTTP="${NODE_A_HTTP:-:18091}"
 NODE_B_HTTP="${NODE_B_HTTP:-:18092}"
 PROPAGATE_WAIT_SEC="${PROPAGATE_WAIT_SEC:-5}"
 # Same JWT secret on both nodes so a token minted on A is valid on B.
-export BUDGIE_JWT_SECRET="${BUDGIE_JWT_SECRET:-cluster-smoke-shared-secret}"
+export BUDGIE_JWT_SECRET="${BUDGIE_JWT_SECRET:-cluster-smoke-shared-secret-0123456789}"
 [[ -n "$DSN" ]] && export BUDGIE_POSTGRES_DSN="$DSN"
 
 if [[ "$EXTERNAL" -eq 1 ]]; then

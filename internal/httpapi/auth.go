@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	mailpkg "net/mail"
 	"strings"
 	"time"
 
@@ -94,7 +95,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "captcha check failed", true)
 		return
 	}
-	if s.core.EmailVerificationEnabled() && !strings.Contains(req.Email, "@") {
+	if s.core.EmailVerificationEnabled() && !validEmailAddress(req.Email) {
 		writeError(w, http.StatusUnprocessableEntity, "email_required", "a valid email is required", false)
 		return
 	}
@@ -384,11 +385,24 @@ func (s *Server) handleAddPubkey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// validEmailAddress accepts only a bare, well-formed address with no control
+// characters — rejecting the header-injection / SSRF inputs the mailer also
+// guards against, but at the door so they are never stored.
+func validEmailAddress(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.ContainsAny(s, "\r\n\x00") {
+		return false
+	}
+	parsed, err := mailpkg.ParseAddress(s)
+	return err == nil && parsed.Address == s
+}
+
 func (s *Server) mintToken(userID string) (string, int64, error) {
 	exp := time.Now().Add(30 * 24 * time.Hour)
 	claims := jwt.MapClaims{
 		"sub": userID,
 		"exp": exp.Unix(),
+		"typ": "session",
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := tok.SignedString(s.jwtSecret)

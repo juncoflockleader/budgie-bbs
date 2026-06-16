@@ -52,7 +52,7 @@ for url in "http://localhost:${COMPOSE_API1_PORT}" "http://localhost:${COMPOSE_A
 done
 
 echo "==> running cross-node smoke against api1 and api2"
-BUDGIE_JWT_SECRET="compose-cluster-shared-secret" \
+BUDGIE_JWT_SECRET="compose-cluster-shared-secret-demo-0123456789" \
 BUDGIE_SMOKE_NODE_A="http://localhost:${COMPOSE_API1_PORT}" \
 BUDGIE_SMOKE_NODE_B="http://localhost:${COMPOSE_API2_PORT}" \
   ./scripts/cluster-smoke.sh

@@ -84,6 +84,12 @@ func TestStaffTwoFactorLoginChallenge(t *testing.T) {
 		t.Fatal("login challenge missing challengeToken")
 	}
 
+	// The pre-verification challenge token must NOT authenticate protected
+	// endpoints — otherwise it bypasses the second factor entirely (C1).
+	if leak := do(http.MethodGet, "/api/v1/account/2fa", challenge, nil); leak.Code != http.StatusUnauthorized {
+		t.Fatalf("challenge token must not be accepted as a session token, got %d %s", leak.Code, leak.Body.String())
+	}
+
 	// Wrong code is rejected.
 	if bad := do(http.MethodPost, "/api/v1/auth/2fa/verify", "", map[string]string{"challengeToken": challenge, "method": "totp", "code": "000000"}); bad.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for a bad code, got %d %s", bad.Code, bad.Body.String())

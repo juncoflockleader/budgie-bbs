@@ -8,7 +8,7 @@ name: budgie
 
 x-node-env: &node-env
   BUDGIE_POSTGRES_DSN: "postgres://budgie:budgie@postgres:5432/budgie?sslmode=disable"
-  BUDGIE_JWT_SECRET: "compose-cluster-shared-secret"
+  BUDGIE_JWT_SECRET: "compose-cluster-shared-secret-demo-0123456789"
 
 services:
   postgres:

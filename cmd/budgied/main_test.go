@@ -17,6 +17,47 @@ func TestResolveWebRootUsesExplicitPath(t *testing.T) {
 	}
 }
 
+func TestValidateConfiguredJWTSecret(t *testing.T) {
+	cases := []struct {
+		name   string
+		secret string
+		ok     bool
+	}{
+		{"placeholder rejected", "change-me-in-production", false},
+		{"too short rejected", "short", false},
+		{"31 bytes rejected", strings.Repeat("a", 31), false},
+		{"32 bytes accepted", strings.Repeat("a", 32), true},
+		{"long accepted", strings.Repeat("a", 64), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateConfiguredJWTSecret(tc.secret)
+			if tc.ok && err != nil {
+				t.Fatalf("expected %q to be accepted, got error: %v", tc.secret, err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("expected %q to be rejected, got nil", tc.secret)
+			}
+		})
+	}
+}
+
+func TestResolveJWTSecretEmptyGeneratesEphemeral(t *testing.T) {
+	// An empty configuration yields a random ephemeral secret (no exit), and
+	// successive calls differ (proving it is freshly generated, not a default).
+	a := resolveJWTSecret("")
+	b := resolveJWTSecret("")
+	if len(a) < minJWTSecretLen {
+		t.Fatalf("ephemeral secret too short: %d", len(a))
+	}
+	if string(a) == string(b) {
+		t.Fatal("expected distinct ephemeral secrets on each call")
+	}
+	if string(a) == "change-me-in-production" {
+		t.Fatal("ephemeral secret must not be the placeholder")
+	}
+}
+
 func TestHasWebIndex(t *testing.T) {
 	root := t.TempDir()
 	if hasWebIndex(root) {

@@ -3,7 +3,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -297,11 +299,9 @@ func main() {
 		*meiliSearchAPIKey = envOr("BUDGIE_MEILISEARCH_API_KEY", "")
 	}
 
-	// JWT secret: use env var, flag, or a fixed dev default.
-	secret := []byte(*jwtSecret)
-	if len(secret) == 0 {
-		secret = []byte(envOr("BUDGIE_JWT_SECRET", "change-me-in-production"))
-	}
+	// JWT secret: flag, then env. Refuses insecure values; generates an
+	// ephemeral random secret only when none is configured (dev convenience).
+	secret := resolveJWTSecret(envOr2(*jwtSecret, "BUDGIE_JWT_SECRET"))
 
 	if *initDB {
 		if *storage != "postgres" || *pgDSN == "" {
@@ -1777,7 +1777,16 @@ func main() {
 	} else {
 		mux.Handle("/", httpSrv.OpsHandler())
 	}
-	srv := &http.Server{Addr: *httpAddr, Handler: mux}
+	// ReadHeaderTimeout + MaxHeaderBytes guard against Slowloris and oversized
+	// header floods. ReadTimeout/WriteTimeout are intentionally omitted: the WS
+	// and SSE endpoints are long-lived and a global write deadline would sever
+	// them. Per-endpoint body-size caps are applied in the httpapi layer.
+	srv := &http.Server{
+		Addr:              *httpAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+	}
 	go func() {
 		slog.Info("HTTP listening", "addr", *httpAddr, "api", roles["api"], "gateway", roles["gateway"], "writeRegionProxy", writeRegionProxyEnabled, "wsCommands", wsAllowCommands)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -1831,6 +1840,50 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// minJWTSecretLen is the minimum accepted length for a configured JWT/HMAC
+// signing secret. The token signing is HS256, so the secret is the entire
+// security of every session — short or guessable secrets allow token forgery.
+const minJWTSecretLen = 32
+
+// resolveJWTSecret turns the configured secret (flag or env) into the signing
+// key, refusing insecure values. An empty secret yields a random ephemeral key
+// (fine for single-node dev; sessions just don't survive a restart). A
+// configured secret must be at least minJWTSecretLen bytes and must not be the
+// historical placeholder, otherwise the process refuses to start — a known or
+// short HMAC key lets anyone forge a token for any account, including admins.
+func resolveJWTSecret(configured string) []byte {
+	if configured == "" {
+		buf := make([]byte, 32)
+		if _, err := rand.Read(buf); err != nil {
+			slog.Error("could not generate an ephemeral JWT secret", "err", err)
+			os.Exit(1)
+		}
+		slog.Warn("no JWT secret configured; generated a random ephemeral secret — " +
+			"sessions will not survive a restart and will not match across nodes. " +
+			"Set BUDGIE_JWT_SECRET (>= 32 chars) for production.")
+		return []byte(hex.EncodeToString(buf))
+	}
+	if err := validateConfiguredJWTSecret(configured); err != nil {
+		slog.Error("refusing to start with an insecure JWT secret", "err", err,
+			"hint", "set BUDGIE_JWT_SECRET to a unique random value (>= 32 chars)")
+		os.Exit(1)
+	}
+	return []byte(configured)
+}
+
+// validateConfiguredJWTSecret rejects a configured secret that is the historical
+// placeholder or too short to resist offline guessing/forgery. Returns nil when
+// the secret is acceptable. Pure (no exit/log) so it is unit-testable.
+func validateConfiguredJWTSecret(s string) error {
+	if s == "change-me-in-production" {
+		return fmt.Errorf("the placeholder secret 'change-me-in-production' must not be used")
+	}
+	if len(s) < minJWTSecretLen {
+		return fmt.Errorf("secret is %d bytes; need at least %d", len(s), minJWTSecretLen)
+	}
+	return nil
 }
 
 // envOr2 prefers a non-empty flag value, falling back to an env var.

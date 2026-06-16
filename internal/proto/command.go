@@ -2,8 +2,31 @@ package proto
 
 import (
 	"regexp"
+	"regexp/syntax"
 	"strings"
 )
+
+// maxAutomodRegexProgramSize bounds the compiled NFA instruction count of a
+// user-supplied automod regex. RE2 has no catastrophic backtracking, but large
+// bounded repetitions (e.g. `a{1000}` repeated) expand into huge programs whose
+// match time, though linear, can still burn seconds of CPU per post. Bounding
+// the program size keeps any single rule cheap to evaluate. A normal pattern
+// compiles to well under this; `a{1000}`-style blowups are rejected.
+const maxAutomodRegexProgramSize = 1000
+
+// AutomodRegexWithinComplexityLimit reports whether a regex compiles to a
+// program small enough to evaluate cheaply (see maxAutomodRegexProgramSize).
+func AutomodRegexWithinComplexityLimit(pattern string) bool {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return false
+	}
+	prog, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		return false
+	}
+	return len(prog.Inst) <= maxAutomodRegexProgramSize
+}
 
 // CommandName identifies which command a client is sending.
 type CommandName string
@@ -256,6 +279,9 @@ func ValidateAutomodRule(p SetBoardAutomodRulePayload) string {
 		if matchType == "regex" {
 			if _, err := regexp.Compile(pattern); err != nil {
 				return "invalid regular expression"
+			}
+			if !AutomodRegexWithinComplexityLimit(pattern) {
+				return "regular expression is too complex"
 			}
 		}
 	case "repeated_text":

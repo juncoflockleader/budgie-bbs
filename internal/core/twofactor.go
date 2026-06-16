@@ -383,7 +383,17 @@ func (c *Core) VerifyEmail2FACode(userID, code string) error {
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(strings.TrimSpace(code))) != nil {
 		return ErrTwoFactorInvalidCode
 	}
-	_, _ = qExec(c.DB, `DELETE FROM two_factor_email_codes WHERE user_id=?`, userID)
+	// Atomically claim the code so it cannot be redeemed twice by concurrent
+	// requests. Guarding on the exact stored hash means a wrong guess (rejected
+	// above) never consumes the code, while the correct code stays single-use
+	// under a race: exactly one deleter wins, the rest get 0 rows and fail.
+	res, err := qExec(c.DB, `DELETE FROM two_factor_email_codes WHERE user_id=? AND code_hash=?`, userID, hash)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrTwoFactorInvalidCode
+	}
 	return nil
 }
 

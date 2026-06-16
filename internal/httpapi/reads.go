@@ -1068,10 +1068,9 @@ func (s *Server) maskPrivatePresenceLocations(actor *core.User, users []core.Soc
 }
 
 func actorCanReadBoardInfo(actor *core.User, info *core.BoardInfo) bool {
-	if info == nil || !info.Settings.MemberReadMode {
-		return true
-	}
-	return actorCanModerateBoardInfo(actor, info) || actorIsBoardMemberInfo(actor, info)
+	// Delegates to the canonical core implementation so every transport (HTTP,
+	// NNTP, SSH/TUI) enforces one read-access rule.
+	return core.ActorCanReadBoard(actor, info)
 }
 
 func actorCanModerateBoardInfo(actor *core.User, info *core.BoardInfo) bool {

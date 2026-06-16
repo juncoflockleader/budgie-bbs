@@ -324,6 +324,21 @@ func New(dbPath string, options ...Option) (*Core, error) {
 // by appendEvent to preserve scalar seq commit visibility while partition
 // writers are introduced.
 const pgScalarSeqAppendLockKey = int64(1654893721)
+
+// pgUserBootstrapLockKey serializes RegisterUser transactions on Postgres so the
+// first-user-becomes-admin bootstrap and approval gating are race-free.
+const pgUserBootstrapLockKey = int64(1654893724)
+
+// acquireUserBootstrapGate takes a transaction-scoped advisory lock on Postgres
+// so concurrent registrations cannot both observe an empty users table. It is a
+// no-op on SQLite, which already serializes writes via a single connection.
+func acquireUserBootstrapGate(tx *sql.Tx) error {
+	if currentSQLFlavor != postgresFlavor {
+		return nil
+	}
+	_, err := qExec(tx, `SELECT pg_advisory_xact_lock(?)`, pgUserBootstrapLockKey)
+	return err
+}
 const pgPartitionWorkers = 16
 
 // NewPostgres opens a Postgres database and applies the production schema.
@@ -1136,6 +1151,14 @@ func (c *Core) RegisterUser(name, password string) (*User, error) {
 	}
 	defer tx.Rollback() //nolint
 
+	// Serialize registrations on Postgres so the "first user becomes admin"
+	// bootstrap cannot race: under READ COMMITTED two concurrent registrations
+	// against an empty DB would both see COUNT(users)=0 and both become admin.
+	// SQLite is already serialized by its single writer connection.
+	if err := acquireUserBootstrapGate(tx); err != nil {
+		return nil, fmt.Errorf("registration gate: %w", err)
+	}
+
 	var n int
 	if err := qQueryRow(tx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
 		return nil, err
@@ -1361,6 +1384,41 @@ func (c *Core) AuthenticateUserFromHost(name, password, host string) (*User, err
 		return nil, ErrLoginIPDenied
 	}
 	return u, nil
+}
+
+// AuthorizeUserSession applies the non-credential login gates to an
+// already-identified user: account deactivation, registration status, email
+// verification, and the login-host ACL. The SSH public-key path uses this so it
+// cannot bypass the gates the password and HTTP login paths enforce (a
+// deactivated, banned, pending/rejected, unverified, or host-denied account
+// must not be admitted just because it holds a registered key).
+func (c *Core) AuthorizeUserSession(u *User, host string) error {
+	if u == nil {
+		return ErrInvalidCredentials
+	}
+	if u.DeactivatedAt > 0 {
+		return ErrAccountDeactivated
+	}
+	switch u.RegistrationStatus {
+	case "", "approved":
+	case "pending":
+		return ErrAccountPending
+	case "rejected":
+		return ErrAccountRejected
+	default:
+		return ErrAccountPending
+	}
+	if !c.emailVerified(u.ID) {
+		return ErrEmailNotVerified
+	}
+	allowed, err := c.UserLoginAllowed(u.ID, host)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrLoginIPDenied
+	}
+	return nil
 }
 
 func (c *Core) UserLoginAllowed(userID, host string) (bool, error) {

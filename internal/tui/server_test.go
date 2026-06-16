@@ -86,6 +86,40 @@ func TestUnknownPubkeyStillAllowsExplicitGuest(t *testing.T) {
 	}
 }
 
+func TestPubkeyAuthRejectsDeactivatedAccount(t *testing.T) {
+	c := newTestCore(t)
+	user, err := c.RegisterUser("carol", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("register user: %v", err)
+	}
+	key := newTestPublicKey(t)
+	fp := gossh.FingerprintSHA256(key)
+	if err := c.AddPubkey(user.ID, fp); err != nil {
+		t.Fatalf("add pubkey: %v", err)
+	}
+
+	srv := New(c, 0, "")
+
+	// Sanity: the key authenticates while the account is active.
+	ctx := newTestSSHContext("carol", "203.0.113.7:49152")
+	if !srv.authPublicKey(ctx, key) {
+		t.Fatalf("expected pubkey auth to succeed for an active account")
+	}
+
+	// Deactivating the account must make the same key stop working — otherwise a
+	// registered key bypasses the deactivation gate the password path enforces.
+	if err := c.DeactivateAccount(user.ID, "correct-horse-battery-staple", "leaving"); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+	ctx2 := newTestSSHContext("carol", "203.0.113.7:49152")
+	if srv.authPublicKey(ctx2, key) {
+		t.Fatalf("expected pubkey auth to be rejected for a deactivated account")
+	}
+	if got := ctx2.Value(userKey{}); got != nil {
+		t.Fatalf("expected no user in context after rejected pubkey auth, got %+v", got)
+	}
+}
+
 func newTestCore(t *testing.T) *core.Core {
 	t.Helper()
 	f, err := os.CreateTemp("", "budgie_tui_test_*.db")

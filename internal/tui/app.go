@@ -2907,18 +2907,34 @@ func (m model) fetchNodes() tea.Cmd {
 	}
 }
 
+// canReadBoard enforces the shared member-read-mode access control so the TUI
+// cannot list or open private/member-only boards the actor isn't entitled to.
+func (m model) canReadBoard(board string) bool {
+	ok, err := m.c.ActorCanReadBoardID(m.actor, board)
+	return err == nil && ok
+}
+
 func (m model) fetchBoards() tea.Cmd {
 	return func() tea.Msg {
 		boards, err := m.c.ListBoards()
 		if err != nil {
 			return errMsg{err}
 		}
-		return boardsMsg{boards}
+		readable := boards[:0]
+		for _, b := range boards {
+			if m.canReadBoard(b.ID) {
+				readable = append(readable, b)
+			}
+		}
+		return boardsMsg{readable}
 	}
 }
 
 func (m model) fetchThreads(board string, offset int) tea.Cmd {
 	return func() tea.Msg {
+		if !m.canReadBoard(board) {
+			return threadsMsg{board: board, offset: offset, threads: nil}
+		}
 		threads, err := m.c.ListThreads(board, threadPageSize, offset)
 		if err != nil {
 			return errMsg{err}
@@ -2929,6 +2945,11 @@ func (m model) fetchThreads(board string, offset int) tea.Cmd {
 
 func (m model) fetchPosts(thread string) tea.Cmd {
 	return func() tea.Msg {
+		// Resolve the thread's board and enforce read access (defense in depth
+		// in case a thread id is reached outside the board → thread navigation).
+		if t, err := m.c.GetThread(thread); err == nil && t != nil && !m.canReadBoard(t.Board) {
+			return postsMsg{nil}
+		}
 		posts, err := m.c.ListPosts(thread, 100, 0)
 		if err != nil {
 			return errMsg{err}

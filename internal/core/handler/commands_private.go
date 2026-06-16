@@ -11,6 +11,9 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
+// maxMailRecipientsPerSend bounds the fan-out of a single non-admin mail send.
+const maxMailRecipientsPerSend = 50
+
 func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 	recipientRefs, errReply := h.expandMailRecipients(actor, p)
 	if errReply.Err != nil {
@@ -18,6 +21,12 @@ func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 	}
 	if len(recipientRefs) == 0 {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "at least one recipient is required", false)}
+	}
+	// Cap per-send fan-out for ordinary users (the admin-only mail-all path is
+	// exempt). Without this a single send can fan out to an unbounded recipient
+	// list, multiplying DB work and stored copies.
+	if !p.ToAll && len(recipientRefs) > maxMailRecipientsPerSend {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "too many recipients in one message", false)}
 	}
 	body := strings.TrimSpace(p.Body)
 	if body == "" {

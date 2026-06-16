@@ -90,6 +90,17 @@ func (s *Server) authPublicKey(ctx ssh.Context, key ssh.PublicKey) bool {
 		slog.Warn("ssh: unknown pubkey", "user", ctx.User(), "fp", fp)
 		return false
 	}
+	// Apply the same account-state and login-host gates as the password/HTTP
+	// login paths — a registered key must not bypass a deactivation, ban,
+	// pending/rejected status, unverified email, or host ACL.
+	if err := s.core.AuthorizeUserSession(user, remoteHost(ctx.RemoteAddr())); err != nil {
+		slog.Warn("ssh: pubkey login denied", "user", user.Name, "err", err)
+		return false
+	}
+	if err := s.core.RecordLogin(user.ID); err != nil {
+		slog.Error("ssh: could not record login", "user", user.Name, "err", err)
+		return false
+	}
 	ctx.SetValue(userKey{}, user)
 	return true
 }
