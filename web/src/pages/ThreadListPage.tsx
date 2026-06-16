@@ -128,7 +128,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
     }
   }, [board.id, activeTitleQuery, activeAuthorQuery])
 
-  useStream({ token }, onEvent)
+  useStream({ enabled: true }, onEvent)
 
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>

@@ -11,12 +11,13 @@ import type { EventCursor } from '../api/types'
 type Handler = (evt: BudgieEvent) => void
 
 interface Options {
-  token: string | null
+  /** Connect only when signed in. Auth rides the same-origin HttpOnly cookie. */
+  enabled: boolean
   /** Scalar fallback cursor for servers that do not understand partition cursors. */
   after?: number
 }
 
-export function useStream({ token, after = 0 }: Options, onEvent: Handler) {
+export function useStream({ enabled, after = 0 }: Options, onEvent: Handler) {
   const onEventRef = useRef<Handler>(onEvent)
   onEventRef.current = onEvent
 
@@ -25,7 +26,7 @@ export function useStream({ token, after = 0 }: Options, onEvent: Handler) {
   }, [])
 
   useEffect(() => {
-    if (!token) return
+    if (!enabled) return
 
     let cancelled = false
     let ws: WebSocket | null = null
@@ -75,7 +76,7 @@ export function useStream({ token, after = 0 }: Options, onEvent: Handler) {
 
     function tryWs() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      const url = `${proto}://${location.host}/api/v1/ws?token=${encodeURIComponent(token!)}`
+      const url = `${proto}://${location.host}/api/v1/ws` // auth via same-origin session cookie
       ws = new WebSocket(url)
 
       ws.onopen = () => {
@@ -113,7 +114,7 @@ export function useStream({ token, after = 0 }: Options, onEvent: Handler) {
     }
 
     function fallbackSse() {
-      const params = new URLSearchParams({ token: token!, after: String(seenSeq) })
+      const params = new URLSearchParams({ after: String(seenSeq) }) // auth via cookie
       const cursor = partitionResumeCursor()
       if (cursor) params.set('cursor', JSON.stringify(cursor))
       const url = `/api/v1/events/stream?${params.toString()}`
@@ -141,5 +142,5 @@ export function useStream({ token, after = 0 }: Options, onEvent: Handler) {
       ws?.close()
       es?.close()
     }
-  }, [token, after, dispatch])
+  }, [enabled, after, dispatch])
 }

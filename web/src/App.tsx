@@ -44,7 +44,7 @@ type Page =
 export function App() {
   const { locale, setLocale, t } = useI18n()
   const { theme, setTheme } = useTheme()
-  const { auth, login, logout } = useAuth()
+  const { auth, login, logout, loading: authLoading } = useAuth()
   const [page, setPage] = useState<Page>({ name: 'boards' })
   const [searchDraft, setSearchDraft] = useState('')
   const [unreadCount, setUnreadCount] = useState(0)
@@ -78,29 +78,30 @@ export function App() {
   }
   const showBanner = Boolean(appearance?.bannerMessage) && bannerDismissed !== appearance?.bannerMessage
 
+  const loggedIn = !!auth.user
   const refreshPrivateUnread = useCallback(() => {
-    if (!auth.token) return
+    if (!loggedIn) return
     Promise.all([api.listMail(auth.token), api.listDirectConversations(auth.token)]).then(([mailRes, messageRes]) => {
       const mailUnread = mailRes.data?.unreadCount ?? 0
       const messageUnread = messageRes.data?.unreadCount ?? 0
       setPrivateUnreadCount(mailUnread + messageUnread)
     })
-  }, [auth.token])
+  }, [loggedIn, auth.token])
 
   useEffect(() => {
-    if (!auth.token) return
+    if (!loggedIn) return
     api.listNotifications(auth.token).then(res => {
       if (res.data) setUnreadCount(res.data.unreadCount)
     })
     refreshPrivateUnread()
-  }, [auth.token, refreshPrivateUnread])
+  }, [loggedIn, auth.token, refreshPrivateUnread])
 
   // Live update unread count from stream events
   const onEvent = useCallback((evt: BudgieEvent) => {
     if (evt.event === 'user.joined' || evt.event === 'user.left') return
     // Any event that might be a notification for us — re-fetch count
     if (evt.event === 'post.appended' || evt.event === 'post.edited') {
-      if (auth.token) {
+      if (loggedIn) {
         api.listNotifications(auth.token).then(res => {
           if (res.data) setUnreadCount(res.data.unreadCount)
         })
@@ -109,12 +110,12 @@ export function App() {
     if (evt.event === 'mail.sent' || evt.event === 'direct_message.sent') {
       refreshPrivateUnread()
     }
-  }, [auth.token, refreshPrivateUnread])
+  }, [loggedIn, auth.token, refreshPrivateUnread])
 
-  useStream({ token: auth.token ?? null }, onEvent)
+  useStream({ enabled: loggedIn }, onEvent)
 
   useEffect(() => {
-    if (auth.token) return
+    if (loggedIn) return
     const sessionId = getGuestSessionId()
     const ping = () => {
       void api.setGuestPresence({
@@ -131,7 +132,7 @@ export function App() {
       document.removeEventListener('visibilitychange', ping)
       void api.setGuestPresence({ sessionId, status: 'offline', location: 'web' })
     }
-  }, [auth.token])
+  }, [loggedIn])
 
   useEffect(() => {
     const current = pageFromHistoryState(window.history.state)
@@ -157,7 +158,11 @@ export function App() {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  if (!auth.token || !auth.user) {
+  if (authLoading) {
+    // Brief: bootstrapping the session from the cookie via /auth/me.
+    return null
+  }
+  if (!auth.user) {
     return <AuthPage onLogin={login} siteTitle={appearance?.siteTitle} tagline={appearance?.tagline} />
   }
 
@@ -185,9 +190,8 @@ export function App() {
   }
 
   function handleLogout() {
-    void api.logout(token)
     replacePage({ name: 'boards' })
-    logout()
+    logout() // clears state and calls the cookie-based logout endpoint
   }
 
   function submitSearch(e: FormEvent) {

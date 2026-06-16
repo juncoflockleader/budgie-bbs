@@ -482,13 +482,21 @@ export async function listBoardAutomodActivity(token: string, board: string): Pr
   return { data: r.data?.activity ?? [] }
 }
 
-export async function logout(token: string): Promise<ApiResponse<unknown>> {
+export async function logout(): Promise<ApiResponse<unknown>> {
+  // Cookie-authenticated; the HttpOnly session cookie is sent automatically
+  // same-origin, and the server clears it.
   const res = await fetch(`${BASE}/auth/logout`, {
     method: 'POST',
-    headers: authHeaders(token),
     keepalive: true,
   })
   return json<unknown>(res)
+}
+
+// getMe restores the SPA session from the HttpOnly session cookie (no token in
+// JS). Returns the current user, or an error/401 when not signed in.
+export async function getMe(): Promise<ApiResponse<{ id: string; name: string; role: string; registrationStatus?: string }>> {
+  const res = await fetch(`${BASE}/auth/me`)
+  return json<{ id: string; name: string; role: string; registrationStatus?: string }>(res)
 }
 
 export async function requestPasswordRecovery(

@@ -474,7 +474,7 @@ export function ThreadPage({
     }
   }, [thread.id, currentUsername, refreshPoll, scheduleReactionProjectionRefresh])
 
-  useStream({ token }, onEvent)
+  useStream({ enabled: true }, onEvent)
 
   async function submitPost() {
     if (!draftBody.trim()) return

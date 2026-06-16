@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -51,7 +52,11 @@ func NewGateway(c *core.Core, jwtSecret []byte, allowCommands bool) *Server {
 
 // ServeHTTP upgrades the connection and drives the conn lifecycle.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	tok := bearerToken(r)
+	tok, viaCookie := wsToken(r)
+	if viaCookie && !wsSameOrigin(r) {
+		http.Error(w, "cross-origin websocket blocked", http.StatusForbidden)
+		return
+	}
 	actor, err := s.validateToken(tok)
 	if err != nil {
 		http.Error(w, "unauthenticated", http.StatusUnauthorized)
@@ -383,15 +388,43 @@ func (s *Server) validateToken(tok string) (*core.User, error) {
 	return user, nil
 }
 
-func bearerToken(r *http.Request) string {
+// wsToken returns the session token for a WS upgrade and whether it came from
+// the session cookie. Precedence: ?token= (programmatic/legacy) > Authorization
+// > the HttpOnly session cookie (browsers, same-origin).
+func wsToken(r *http.Request) (token string, viaCookie bool) {
 	if q := r.URL.Query().Get("token"); q != "" {
-		return q
+		return q, false
 	}
-	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer "), false
 	}
-	return ""
+	if c, err := r.Cookie("budgie_session"); err == nil && c.Value != "" {
+		return c.Value, true
+	}
+	return "", false
+}
+
+// wsSameOrigin guards cookie-authenticated WebSocket upgrades against
+// cross-site WebSocket hijacking: the browser attaches the cookie cross-site and
+// the upgrader's CheckOrigin is permissive, so a cookie-auth upgrade must be
+// same-origin. Browsers always send Origin on WS upgrades, so a missing Origin
+// is treated as not-same-origin.
+func wsSameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return true
+	case "cross-site", "same-site":
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 func defaultScopes() []string {

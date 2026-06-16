@@ -70,14 +70,14 @@ These are tracked, accepted-for-now items. None enables account takeover or
 content/credential disclosure on a correctly-deployed instance; they are
 defense-in-depth or low-severity, and are slated for follow-up.
 
-- **Session token storage (frontend):** the server now also issues the session
-  JWT as an `HttpOnly`+`Secure`+`SameSite=Lax` cookie and accepts it (with a
-  same-origin CSRF check on cookie-authenticated mutations); the `Authorization`
-  header still works for programmatic clients. The web client itself has not yet
-  switched off `localStorage` — that SPA migration is phase A-2 of
-  [doc/auth-session-hardening-plan.md](doc/auth-session-hardening-plan.md). Until
-  then the token is still XSS-reachable in the browser (mitigated by the CSP /
-  output escaping / `nosniff`).
+- **Session token storage (frontend):** ✅ addressed. The session JWT is an
+  `HttpOnly`+`Secure`+`SameSite=Lax` cookie; the web client no longer keeps the
+  token in `localStorage` (and purges any legacy value), bootstrapping its
+  session from `GET /auth/me`. Cookie-authenticated mutations require a
+  same-origin check (CSRF), and WebSocket upgrades require same-origin (CSWSH).
+  The `Authorization: Bearer` header still works for programmatic clients. Only
+  cleanup remains (phase A-3: stop returning the JWT in JSON for browser logins)
+  — see [doc/auth-session-hardening-plan.md](doc/auth-session-hardening-plan.md).
 - **Logout / session revocation:** ✅ addressed. `POST /api/v1/auth/logout-all`
   revokes every outstanding token for the user (a per-user `sessions_valid_after`
   epoch checked against the token `iat`, enforced cluster-wide); normal logout

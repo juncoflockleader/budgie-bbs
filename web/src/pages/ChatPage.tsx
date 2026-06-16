@@ -90,7 +90,7 @@ export function ChatPage({ token, onBack, onMessageUser }: Props) {
     }
   }, [selectedRoom])
 
-  useStream({ token }, onEvent)
+  useStream({ enabled: true }, onEvent)
 
   useEffect(() => {
     let cancelled = false

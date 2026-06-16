@@ -1,9 +1,9 @@
 # Plan: Auth Session Hardening — HttpOnly Cookie + Logout Revocation
 
-Status: **in progress** — Part B (logout revocation) is **done**; Part A is at
-**phase A-1** (server issues + accepts the cookie with CSRF, backward
-compatible); phases A-2 (flip the SPA) and A-3 (cleanup) remain. Covers the two
-`SECURITY.md`
+Status: **in progress** — Part B (logout revocation) **done**; Part A phases
+**A-1 (server cookie + CSRF) and A-2 (SPA flipped to cookie-only, browser
+verified) done**; only **A-3 (cleanup: stop returning the JWT in JSON for
+browser logins)** remains. Covers the two `SECURITY.md`
 "known limitations" follow-ups:
 
 1. The web client stores the session JWT in `localStorage` (readable by any JS —
