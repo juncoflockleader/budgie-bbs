@@ -39,6 +39,13 @@ Not yet present:
 
 ## Progress
 
+2026-06-15 (2FA enhancement — backup/recovery codes):
+
+- Single-use 2FA backup codes. A user with an enrolled second factor can generate a set of 10 recovery codes (shown once); each is stored as a SHA-256 hash in a new `two_factor_backup_codes` table (SQLite + Postgres migration 77). Regenerating replaces the set; disabling the last 2FA method clears them.
+- At the login challenge, "backup" is offered as a method when unused codes remain; `POST /auth/2fa/verify` with `method:"backup"` consumes one code atomically (single-use). Account endpoint `POST /account/2fa/backup-codes` issues a fresh set; `TwoFactorStatus.backupCodesRemaining` surfaces the count.
+- Web: AuthPage challenge gains a "Backup code" tab; the profile 2FA section shows the remaining count with a Generate/Regenerate button that displays the codes once.
+- Tests: core `TestTwoFactorBackupCodes` (generate, single-use, normalization, regenerate-invalidates, cleared-on-unenroll). Verified on the running binary: a backup code completed a staff login challenge and could not be reused.
+
 2026-06-15 (automod enhancements — multi-action rules + staff exemption):
 
 - A rule may now carry several comma-separated actions (e.g. `redact,board_ban`), applied together in order when it matches; each action is authorized independently (union of requirements) and gets its own audit-log entry. Implemented across the proto validator (`ParseAutomodActions`), both execution paths, and the AdminPage form (action checkboxes instead of a single select). Single-action rules are unaffected.

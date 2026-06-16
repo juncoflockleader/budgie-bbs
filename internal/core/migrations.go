@@ -861,6 +861,18 @@ func applySQLiteMigrations(db *sql.DB) error {
 		)`); err != nil {
 		return fmt.Errorf("ensure two factor email codes table: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS two_factor_backup_codes (
+		    id         TEXT    PRIMARY KEY,
+		    user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		    code_hash  TEXT    NOT NULL,
+		    used       INTEGER NOT NULL DEFAULT 0,
+		    created_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure two factor backup codes table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE INDEX IF NOT EXISTS idx_2fa_backup_user ON two_factor_backup_codes(user_id, used)`); err != nil {
+		return fmt.Errorf("ensure two factor backup codes index: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS board_automod_rules (
 		    id           TEXT    PRIMARY KEY,
 		    board_id     TEXT    NOT NULL REFERENCES boards(id) ON DELETE CASCADE,

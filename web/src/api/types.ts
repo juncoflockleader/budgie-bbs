@@ -576,6 +576,7 @@ export interface AuthResponse {
 export interface TwoFactorStatus {
   totpEnrolled: boolean
   emailEnrolled: boolean
+  backupCodesRemaining: number
 }
 
 export interface SecuritySettings {

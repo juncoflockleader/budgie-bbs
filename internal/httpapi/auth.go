@@ -285,6 +285,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if st.EmailEnrolled {
 			methods = append(methods, "email")
 		}
+		if st.BackupCodesRemaining > 0 {
+			methods = append(methods, "backup")
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":         "2fa_required",
 			"challengeToken": challenge,

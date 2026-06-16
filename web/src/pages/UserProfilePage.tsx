@@ -117,7 +117,8 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
   const [deleteReason, setDeleteReason] = useState('')
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null)
   const [deleteSaving, setDeleteSaving] = useState(false)
-  const [twoFAStatus, setTwoFAStatus] = useState<{ totpEnrolled: boolean; emailEnrolled: boolean } | null>(null)
+  const [twoFAStatus, setTwoFAStatus] = useState<{ totpEnrolled: boolean; emailEnrolled: boolean; backupCodesRemaining: number } | null>(null)
+  const [backupCodes, setBackupCodes] = useState<string[] | null>(null)
   const [totpEnroll, setTotpEnroll] = useState<{ secret: string; otpauthUri: string; qr: string } | null>(null)
   const [totpCode, setTotpCode] = useState('')
   const [twoFANotice, setTwoFANotice] = useState<string | null>(null)
@@ -152,6 +153,15 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
     const res = enable ? await api.enableEmailTwoFactor(token) : await api.disableEmailTwoFactor(token)
     if (res.error) { setTwoFANotice(res.error.message); return }
     setTwoFANotice(enable ? 'Email codes enabled.' : 'Email codes disabled.')
+    setBackupCodes(null)
+    await loadTwoFA()
+  }
+  async function generateBackupCodes() {
+    setTwoFANotice(null)
+    const res = await api.generateBackupCodes(token)
+    if (res.error) { setTwoFANotice(res.error.message); return }
+    setBackupCodes(res.data?.codes ?? [])
+    setTwoFANotice('Save these codes somewhere safe — they are shown only once.')
     await loadTwoFA()
   }
 
@@ -953,6 +963,20 @@ export function UserProfilePage({ token, username, isOwnProfile, currentUserRole
               <button type="button" onClick={() => toggleEmail2FA(true)}>Enable</button>
             )}
           </div>
+          {(twoFAStatus?.totpEnrolled || twoFAStatus?.emailEnrolled) && (
+            <div className="twofa-row">
+              <span>Backup codes <span className="muted">({twoFAStatus?.backupCodesRemaining ?? 0} left)</span></span>
+              <button type="button" onClick={generateBackupCodes}>{(twoFAStatus?.backupCodesRemaining ?? 0) > 0 ? 'Regenerate' : 'Generate'}</button>
+            </div>
+          )}
+          {backupCodes && (
+            <div className="twofa-enroll">
+              <p className="muted">Each code works once. Store them somewhere safe.</p>
+              <ul className="backup-codes">
+                {backupCodes.map(code => <li key={code}><code>{code}</code></li>)}
+              </ul>
+            </div>
+          )}
           <p className="muted">Staff accounts may be required to use two-factor authentication by an administrator.</p>
         </section>
       )}

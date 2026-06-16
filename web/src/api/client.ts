@@ -429,6 +429,11 @@ export async function disableEmailTwoFactor(token: string): Promise<ApiResponse<
   return json<{ ok: boolean }>(res)
 }
 
+export async function generateBackupCodes(token: string): Promise<ApiResponse<{ codes: string[] }>> {
+  const res = await fetch(`${BASE}/account/2fa/backup-codes`, { method: 'POST', headers: authHeaders(token) })
+  return json<{ codes: string[] }>(res)
+}
+
 export async function getSecuritySettings(token: string): Promise<ApiResponse<SecuritySettings>> {
   const res = await fetch(`${BASE}/admin/security-settings`, { headers: authHeaders(token) })
   return json<SecuritySettings>(res)

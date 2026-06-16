@@ -2,7 +2,9 @@ package core
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,11 +40,13 @@ type SecuritySettings struct {
 
 // TwoFactorStatus reports a user's 2FA enrollment.
 type TwoFactorStatus struct {
-	TOTPEnrolled  bool `json:"totpEnrolled"`
-	EmailEnrolled bool `json:"emailEnrolled"`
+	TOTPEnrolled         bool `json:"totpEnrolled"`
+	EmailEnrolled        bool `json:"emailEnrolled"`
+	BackupCodesRemaining int  `json:"backupCodesRemaining"`
 }
 
-// Enrolled reports whether any second factor is set up.
+// Enrolled reports whether any second factor is set up. Backup codes are a
+// fallback for an enrolled method, not an independent enrollment.
 func (s TwoFactorStatus) Enrolled() bool { return s.TOTPEnrolled || s.EmailEnrolled }
 
 // SecuritySettings returns the site security settings (zero value if unset).
@@ -84,6 +88,7 @@ func (c *Core) TwoFactorStatus(userID string) (TwoFactorStatus, error) {
 	}
 	st.TOTPEnrolled = totpEnrolled != 0
 	st.EmailEnrolled = emailEnrolled != 0
+	st.BackupCodesRemaining = c.BackupCodesRemaining(userID)
 	return st, nil
 }
 
@@ -126,8 +131,10 @@ func (c *Core) ConfirmTOTPEnrollment(userID, code string) error {
 
 // DisableTOTP removes a user's authenticator enrollment.
 func (c *Core) DisableTOTP(userID string) error {
-	_, err := qExec(c.DB, `UPDATE user_2fa_settings SET totp_secret='', totp_pending='', totp_enrolled=0, updated_at=? WHERE user_id=?`, nowMS(), userID)
-	return err
+	if _, err := qExec(c.DB, `UPDATE user_2fa_settings SET totp_secret='', totp_pending='', totp_enrolled=0, updated_at=? WHERE user_id=?`, nowMS(), userID); err != nil {
+		return err
+	}
+	return c.clearBackupCodesIfUnenrolled(userID)
 }
 
 // EnableEmail2FA turns on email-code 2FA; requires an email on file.
@@ -144,8 +151,120 @@ func (c *Core) EnableEmail2FA(userID string) error {
 
 // DisableEmail2FA turns off email-code 2FA.
 func (c *Core) DisableEmail2FA(userID string) error {
-	_, err := qExec(c.DB, `UPDATE user_2fa_settings SET email_enrolled=0, updated_at=? WHERE user_id=?`, nowMS(), userID)
+	if _, err := qExec(c.DB, `UPDATE user_2fa_settings SET email_enrolled=0, updated_at=? WHERE user_id=?`, nowMS(), userID); err != nil {
+		return err
+	}
+	return c.clearBackupCodesIfUnenrolled(userID)
+}
+
+const backupCodeCount = 10
+
+// backupCodeAlphabet excludes visually ambiguous characters.
+const backupCodeAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
+// GenerateBackupCodes issues a fresh set of single-use recovery codes (replacing
+// any existing ones) and returns the plaintext codes to show once. Requires an
+// enrolled second factor.
+func (c *Core) GenerateBackupCodes(userID string) ([]string, error) {
+	st, err := c.TwoFactorStatus(userID)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Enrolled() {
+		return nil, ErrTwoFactorNotEnrolled
+	}
+	now := nowMS()
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint
+	if _, err := qExec(tx, `DELETE FROM two_factor_backup_codes WHERE user_id=?`, userID); err != nil {
+		return nil, err
+	}
+	codes := make([]string, 0, backupCodeCount)
+	for i := 0; i < backupCodeCount; i++ {
+		code, err := randomBackupCode()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := qExec(tx,
+			`INSERT INTO two_factor_backup_codes (id, user_id, code_hash, used, created_at) VALUES (?,?,?,0,?)`,
+			newID("bkp_"), userID, hashBackupCode(code), now); err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return codes, nil
+}
+
+// VerifyBackupCode consumes a single-use recovery code, returning nil on success.
+func (c *Core) VerifyBackupCode(userID, code string) error {
+	if normalizeBackupCode(code) == "" {
+		return ErrTwoFactorInvalidCode
+	}
+	res, err := qExec(c.DB,
+		`UPDATE two_factor_backup_codes SET used=1 WHERE user_id=? AND code_hash=? AND used=0`,
+		userID, hashBackupCode(code))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrTwoFactorInvalidCode
+	}
+	return nil
+}
+
+// BackupCodesRemaining counts a user's unused recovery codes.
+func (c *Core) BackupCodesRemaining(userID string) int {
+	var n int
+	_ = qQueryRow(c.DB, `SELECT COUNT(*) FROM two_factor_backup_codes WHERE user_id=? AND used=0`, userID).Scan(&n)
+	return n
+}
+
+func (c *Core) clearBackupCodesIfUnenrolled(userID string) error {
+	var totpEnrolled, emailEnrolled int
+	err := qQueryRow(c.DB, `SELECT totp_enrolled, email_enrolled FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&totpEnrolled, &emailEnrolled)
+	if err == nil && (totpEnrolled != 0 || emailEnrolled != 0) {
+		return nil
+	}
+	_, err = qExec(c.DB, `DELETE FROM two_factor_backup_codes WHERE user_id=?`, userID)
 	return err
+}
+
+func randomBackupCode() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	out := make([]byte, 8)
+	for i := range out {
+		out[i] = backupCodeAlphabet[int(buf[i])%len(backupCodeAlphabet)]
+	}
+	return string(out[:4]) + "-" + string(out[4:]), nil
+}
+
+func normalizeBackupCode(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func hashBackupCode(code string) string {
+	sum := sha256.Sum256([]byte(normalizeBackupCode(code)))
+	return hex.EncodeToString(sum[:])
 }
 
 // TwoFactorRequiredForLogin reports whether the given staff user must pass a 2FA

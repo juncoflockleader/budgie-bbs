@@ -3090,5 +3090,23 @@ VALUES (76, 'postgres-automod-audit-log', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 77,
+			Name:    "postgres-2fa-backup-codes",
+			SQL: `
+CREATE TABLE IF NOT EXISTS two_factor_backup_codes (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL,
+    used       INTEGER NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_2fa_backup_user ON two_factor_backup_codes(user_id, used);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (77, 'postgres-2fa-backup-codes', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

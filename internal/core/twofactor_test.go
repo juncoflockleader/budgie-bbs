@@ -1,6 +1,7 @@
 package core_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,68 @@ func TestTwoFactorTOTPEnrollAndVerify(t *testing.T) {
 	}
 	if st, _ := c.TwoFactorStatus(u.ID); st.TOTPEnrolled {
 		t.Fatal("should be disabled")
+	}
+}
+
+func TestTwoFactorBackupCodes(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+	u := registerAndGetUser(t, c, "alice", "pw")
+
+	// Backup codes require an enrolled method.
+	if _, err := c.GenerateBackupCodes(u.ID); err == nil {
+		t.Fatal("expected error generating backup codes before enrollment")
+	}
+	secret, _, err := c.BeginTOTPEnrollment(u.ID, u.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _ := totp.CodeAtTime(secret, time.Now().Unix())
+	if err := c.ConfirmTOTPEnrollment(u.ID, code); err != nil {
+		t.Fatal(err)
+	}
+
+	codes, err := c.GenerateBackupCodes(u.ID)
+	if err != nil || len(codes) != 10 {
+		t.Fatalf("generate backup codes: %v (%d)", err, len(codes))
+	}
+	if got := c.BackupCodesRemaining(u.ID); got != 10 {
+		t.Fatalf("remaining = %d, want 10", got)
+	}
+	// A code works once, then is consumed.
+	if err := c.VerifyBackupCode(u.ID, codes[0]); err != nil {
+		t.Fatalf("verify backup code: %v", err)
+	}
+	if got := c.BackupCodesRemaining(u.ID); got != 9 {
+		t.Fatalf("remaining after one use = %d, want 9", got)
+	}
+	if err := c.VerifyBackupCode(u.ID, codes[0]); err == nil {
+		t.Fatal("a backup code must be single-use")
+	}
+	if err := c.VerifyBackupCode(u.ID, "wrong-code"); err == nil {
+		t.Fatal("a wrong backup code must fail")
+	}
+	// Codes accept normalized input (case/dashes ignored).
+	if err := c.VerifyBackupCode(u.ID, strings.ToUpper(strings.ReplaceAll(codes[1], "-", " "))); err != nil {
+		t.Fatalf("normalized backup code should verify: %v", err)
+	}
+	// Regenerating replaces the old set.
+	fresh, _ := c.GenerateBackupCodes(u.ID)
+	if got := c.BackupCodesRemaining(u.ID); got != 10 {
+		t.Fatalf("remaining after regen = %d, want 10", got)
+	}
+	if err := c.VerifyBackupCode(u.ID, codes[2]); err == nil {
+		t.Fatal("old backup codes must be invalidated on regeneration")
+	}
+	if err := c.VerifyBackupCode(u.ID, fresh[0]); err != nil {
+		t.Fatalf("new backup code should verify: %v", err)
+	}
+	// Disabling the last 2FA method clears backup codes.
+	if err := c.DisableTOTP(u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.BackupCodesRemaining(u.ID); got != 0 {
+		t.Fatalf("backup codes should be cleared when unenrolled, got %d", got)
 	}
 }
 

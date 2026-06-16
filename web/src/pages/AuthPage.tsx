@@ -211,12 +211,17 @@ export function AuthPage({ onLogin }: Props) {
               {twoFAMethods.includes('email') && (
                 <button type="button" className={`link-btn${twoFAMethod === 'email' ? ' twofa-active' : ''}`} onClick={() => setTwoFAMethod('email')}>Email code</button>
               )}
+              {twoFAMethods.includes('backup') && (
+                <button type="button" className={`link-btn${twoFAMethod === 'backup' ? ' twofa-active' : ''}`} onClick={() => setTwoFAMethod('backup')}>Backup code</button>
+              )}
             </div>
           )}
           <p className="muted">
             {twoFAMethod === 'email'
               ? 'Enter the 6-digit code sent to your email.'
-              : 'Enter the 6-digit code from your authenticator app.'}
+              : twoFAMethod === 'backup'
+                ? 'Enter one of your saved backup codes.'
+                : 'Enter the 6-digit code from your authenticator app.'}
           </p>
           {twoFAMethod === 'email' && (
             <button type="button" className="link-btn" onClick={sendEmail2FACode}>Send a code to my email</button>
@@ -228,9 +233,9 @@ export function AuthPage({ onLogin }: Props) {
               autoFocus
               value={twoFACode}
               onChange={e => setTwoFACode(e.target.value)}
-              inputMode="numeric"
+              inputMode={twoFAMethod === 'backup' ? 'text' : 'numeric'}
               autoComplete="one-time-code"
-              placeholder="123456"
+              placeholder={twoFAMethod === 'backup' ? 'abcd-efgh' : '123456'}
               required
             />
           </label>

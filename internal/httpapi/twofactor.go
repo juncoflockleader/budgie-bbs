@@ -68,6 +68,8 @@ func (s *Server) handleVerify2FA(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "email":
 		verr = s.core.VerifyEmail2FACode(uid, req.Code)
+	case "backup":
+		verr = s.core.VerifyBackupCode(uid, req.Code)
 	default:
 		verr = s.core.VerifyTOTP(uid, req.Code)
 	}
@@ -194,6 +196,22 @@ func (s *Server) handleDisableEmail2FA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleGenerateBackupCodes issues a fresh set of single-use recovery codes,
+// returned once in plaintext for the user to save.
+func (s *Server) handleGenerateBackupCodes(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	codes, err := s.core.GenerateBackupCodes(actor.ID)
+	if err != nil {
+		if errors.Is(err, core.ErrTwoFactorNotEnrolled) {
+			writeError(w, http.StatusUnprocessableEntity, "not_enrolled", "set up an authenticator or email 2FA first", false)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"codes": codes})
 }
 
 // --- admin security settings + per-user status ---

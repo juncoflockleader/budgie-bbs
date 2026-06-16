@@ -180,6 +180,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/account/2fa/totp", auth(http.HandlerFunc(s.handleDisableTOTP)))
 	mux.Handle("POST /api/v1/account/2fa/email", auth(http.HandlerFunc(s.handleEnableEmail2FA)))
 	mux.Handle("DELETE /api/v1/account/2fa/email", auth(http.HandlerFunc(s.handleDisableEmail2FA)))
+	mux.Handle("POST /api/v1/account/2fa/backup-codes", auth(http.HandlerFunc(s.handleGenerateBackupCodes)))
 	mux.Handle("GET /api/v1/admin/security-settings", auth(http.HandlerFunc(s.handleGetSecuritySettings)))
 	mux.Handle("PATCH /api/v1/admin/security-settings", auth(http.HandlerFunc(s.handleSetSecuritySettings)))
 	mux.Handle("GET /api/v1/users/{name}/2fa", auth(http.HandlerFunc(s.handleGetUser2FAStatus)))

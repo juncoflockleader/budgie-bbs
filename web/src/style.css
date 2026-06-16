@@ -1976,6 +1976,8 @@ button.ranking-row:hover { border-color: var(--c-accent); opacity: 1 }
 }
 .twofa-enroll { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.5rem 0; }
 .twofa-qr { width: 180px; height: 180px; align-self: flex-start; background: #fff; padding: 6px; border-radius: 4px; }
+.backup-codes { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, max-content); gap: 0.25rem 1.5rem; }
+.backup-codes code { font-size: 0.95rem; letter-spacing: 0.04em; }
 
 .automod-actions {
   display: flex; flex-wrap: wrap; gap: 0.5rem 1rem;
