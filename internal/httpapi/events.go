@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -25,7 +26,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		limitN = 50
 	}
 	waitSec, _ := strconv.Atoi(q.Get("wait"))
-	scopes := q["scope"]
+	scopes := s.authorizedScopes(userFromCtx(r.Context()), q["scope"])
 
 	head, err := s.core.Head()
 	if err != nil {
@@ -63,10 +64,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
+	// scopes is already authorized and never nil; an empty list (a request for
+	// only forbidden scopes) correctly subscribes to nothing.
 	subScopes := scopes
-	if len(subScopes) == 0 {
-		subScopes = defaultScopes()
-	}
 	sub := s.core.Subscribe(subScopes)
 	defer s.core.Unsubscribe(sub)
 
@@ -112,7 +112,7 @@ func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
-	scopes := q["scope"]
+	scopes := s.authorizedScopes(userFromCtx(r.Context()), q["scope"])
 
 	// Honour Last-Event-ID header as the cursor (SSE auto-reconnect).
 	after, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
@@ -145,10 +145,9 @@ func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
+	// scopes is already authorized and never nil; an empty list subscribes to
+	// nothing (a request for only forbidden scopes).
 	subScopes := scopes
-	if len(subScopes) == 0 {
-		subScopes = defaultScopes()
-	}
 	sub := s.core.Subscribe(subScopes)
 	defer s.core.Unsubscribe(sub)
 
@@ -285,6 +284,18 @@ func writeSSEEvent(w http.ResponseWriter, evt *proto.Event) error {
 	_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evt.Kind, raw)
 	metrics.GatewaySSESendLatency.Observe(float64(time.Since(start).Microseconds()) / 1000.0)
 	return err
+}
+
+// authorizedScopes resolves the scopes a stream request may use. With no scope
+// requested it falls back to the public defaults; otherwise it filters the
+// requested scopes to those the actor is authorized to receive (private boards,
+// other users' account scopes, and moderation scopes are dropped). The result
+// is never nil, so replay/subscribe never degrade to "all events".
+func (s *Server) authorizedScopes(actor *core.User, requested []string) []string {
+	if len(requested) == 0 {
+		return defaultScopes()
+	}
+	return s.core.AuthorizedScopes(actor, requested)
 }
 
 func defaultScopes() []string {

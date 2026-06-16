@@ -250,6 +250,13 @@ func newWSReplayTestCore(t *testing.T, name string) *core.Core {
 		t.Fatalf("new core: %v", err)
 	}
 	t.Cleanup(func() { _ = c.DB.Close() })
+	// Seed the public boards these replay tests scope events to, so the
+	// gateway's scope-authorization (board read access) permits subscribing.
+	for _, b := range []string{"general", "life"} {
+		if _, err := c.DB.Exec(`INSERT OR IGNORE INTO boards (id, name) VALUES (?, ?)`, b, b); err != nil {
+			t.Fatalf("seed board %q: %v", b, err)
+		}
+	}
 	return c
 }
 

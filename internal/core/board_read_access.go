@@ -1,5 +1,7 @@
 package core
 
+import "strings"
+
 // Board read-access control, shared by every transport (HTTP, NNTP, SSH/TUI).
 //
 // A board in MemberReadMode (private / members-only) is readable only by site
@@ -27,6 +29,46 @@ func (c *Core) ActorCanReadBoardID(actor *User, boardID string) (bool, error) {
 		return false, err
 	}
 	return ActorCanReadBoard(actor, info), nil
+}
+
+// AuthorizedScopes filters a client-requested set of live-event subscription
+// scopes down to those the actor may receive. Event payloads carry real content
+// (post bodies, sanctions, notifications), so without this an authenticated user
+// could subscribe to (or replay) another board's, user's, or moderation scope
+// and read data they cannot otherwise see. Returns a non-nil slice (possibly
+// empty — meaning "match nothing", never "match everything").
+func (c *Core) AuthorizedScopes(actor *User, requested []string) []string {
+	allowed := make([]string, 0, len(requested))
+	for _, sc := range requested {
+		if c.scopeVisibleTo(actor, sc) {
+			allowed = append(allowed, sc)
+		}
+	}
+	return allowed
+}
+
+func (c *Core) scopeVisibleTo(actor *User, scope string) bool {
+	switch {
+	case strings.HasPrefix(scope, "board:"):
+		ok, _ := c.ActorCanReadBoardID(actor, strings.TrimPrefix(scope, "board:"))
+		return ok
+	case strings.HasPrefix(scope, "thread:"):
+		t, err := c.GetThread(strings.TrimPrefix(scope, "thread:"))
+		if err != nil || t == nil {
+			return false
+		}
+		ok, _ := c.ActorCanReadBoardID(actor, t.Board)
+		return ok
+	case strings.HasPrefix(scope, "account:"):
+		// Only the account owner may subscribe to their own account scope
+		// (notifications, sanctions targeting them, etc.).
+		return actor != nil && strings.TrimPrefix(scope, "account:") == actor.ID
+	case strings.HasPrefix(scope, "moderation:"):
+		return actor != nil && actor.IsMod()
+	default:
+		// chat:, presence:, and other non-sensitive broadcast scopes.
+		return true
+	}
 }
 
 func actorModeratesBoard(actor *User, info *BoardInfo) bool {

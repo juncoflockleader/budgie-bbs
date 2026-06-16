@@ -130,10 +130,7 @@ func (c *wsConn) run(ctx context.Context) {
 		metrics.GatewayReconnects.Inc()
 	}
 
-	scopes := resume.Subscriptions
-	if len(scopes) == 0 {
-		scopes = defaultScopes()
-	}
+	scopes := c.authorizedScopes(resume.Subscriptions)
 	c.scopes = scopes
 	c.cursor = resumeCursor
 	c.sub = c.core.Subscribe(scopes)
@@ -208,10 +205,7 @@ func (c *wsConn) handleInbound(ctx context.Context, msg proto.InboundMessage) {
 			if json.Unmarshal(msg.Payload, &resume) != nil {
 				return
 			}
-			scopes := resume.Subscriptions
-			if len(scopes) == 0 {
-				scopes = defaultScopes()
-			}
+			scopes := c.authorizedScopes(resume.Subscriptions)
 			if c.sub != nil {
 				c.core.Unsubscribe(c.sub)
 			}
@@ -402,4 +396,15 @@ func bearerToken(r *http.Request) string {
 
 func defaultScopes() []string {
 	return []string{"board:general", "chat:lobby", "presence:global"}
+}
+
+// authorizedScopes filters the client-requested subscription scopes to those
+// this connection's actor may receive (private boards, other accounts, and
+// moderation scopes are dropped); an empty request falls back to public
+// defaults. Never nil, so subscribe/replay never degrade to "all events".
+func (c *wsConn) authorizedScopes(requested []string) []string {
+	if len(requested) == 0 {
+		return defaultScopes()
+	}
+	return c.core.AuthorizedScopes(c.actor, requested)
 }
