@@ -1447,7 +1447,9 @@ func (c *Core) ChangePassword(userID, currentPassword, newPassword string) error
 	if err != nil {
 		return err
 	}
-	if _, err := qExec(c.DB, `UPDATE users SET password=? WHERE id=?`, string(hash), userID); err != nil {
+	// Record the change time (unix seconds) so existing session tokens, which
+	// carry an `iat`, are invalidated (session revocation on password change).
+	if _, err := qExec(c.DB, `UPDATE users SET password=?, password_changed_at=? WHERE id=?`, string(hash), nowMS()/1000, userID); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
 	return nil

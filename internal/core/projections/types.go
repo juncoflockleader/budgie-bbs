@@ -735,6 +735,9 @@ type User struct {
 	DeactivatedAt      int64
 	DeactivatedBy      string
 	DeactivatedReason  string
+	// PasswordChangedAt is the unix-seconds time of the last password change;
+	// session tokens issued before it are rejected (session revocation).
+	PasswordChangedAt int64
 }
 
 type AccountRegistrationSettings struct {

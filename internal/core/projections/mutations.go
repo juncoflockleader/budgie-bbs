@@ -4187,7 +4187,9 @@ func ReviewPasswordRecoveryRequest(db *sql.DB, id, reviewerID, decision, passwor
 	status := "rejected"
 	if decision == "reset" {
 		status = "resolved"
-		if _, err := QExec(tx, `UPDATE users SET password=? WHERE id=?`, passwordHash, userID); err != nil {
+		// Bump password_changed_at (unix seconds) so prior session tokens are
+		// revoked when an admin resets the password.
+		if _, err := QExec(tx, `UPDATE users SET password=?, password_changed_at=? WHERE id=?`, passwordHash, ts/1000, userID); err != nil {
 			return nil, err
 		}
 	}

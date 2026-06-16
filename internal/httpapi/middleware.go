@@ -58,6 +58,13 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "user not found", false)
 			return
 		}
+		// Session revocation: reject tokens minted before the user's last
+		// password change. Tokens predating this feature have no iat and are
+		// left alone (they expire on their own).
+		if !tokenIssuedAfterPasswordChange(claims, user) {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", "session expired; please sign in again", false)
+			return
+		}
 		if user.DeactivatedAt > 0 {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "account deactivated", false)
 			return
@@ -77,6 +84,21 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ctxUser, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// tokenIssuedAfterPasswordChange reports whether a token is still valid with
+// respect to the user's last password change. A token with an `iat` earlier
+// than PasswordChangedAt is revoked; a token without `iat` (pre-feature) or a
+// user who never changed their password (PasswordChangedAt == 0) is accepted.
+func tokenIssuedAfterPasswordChange(claims jwt.MapClaims, user *core.User) bool {
+	if user.PasswordChangedAt <= 0 {
+		return true
+	}
+	iat, ok := claims["iat"].(float64)
+	if !ok {
+		return true // legacy token without iat; leave it to expire naturally
+	}
+	return int64(iat) >= user.PasswordChangedAt
 }
 
 func bearerToken(r *http.Request) string {

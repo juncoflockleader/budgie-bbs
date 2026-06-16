@@ -374,7 +374,19 @@ func (s *Server) validateToken(tok string) (*core.User, error) {
 	if uid == "" {
 		return nil, fmt.Errorf("missing sub claim")
 	}
-	return s.core.UserByID(uid)
+	user, err := s.core.UserByID(uid)
+	if err != nil || user == nil {
+		return user, err
+	}
+	// Session revocation: reject tokens minted before the user's last password
+	// change. Tokens without iat (pre-feature) or users who never changed their
+	// password (PasswordChangedAt == 0) are accepted.
+	if user.PasswordChangedAt > 0 {
+		if iat, ok := claims["iat"].(float64); ok && int64(iat) < user.PasswordChangedAt {
+			return nil, fmt.Errorf("session expired")
+		}
+	}
+	return user, nil
 }
 
 func bearerToken(r *http.Request) string {

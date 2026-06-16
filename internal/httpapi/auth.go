@@ -426,6 +426,7 @@ func (s *Server) mintToken(userID string) (string, int64, error) {
 	claims := jwt.MapClaims{
 		"sub": userID,
 		"exp": exp.Unix(),
+		"iat": time.Now().Unix(), // used for password-change session revocation
 		"typ": "session",
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

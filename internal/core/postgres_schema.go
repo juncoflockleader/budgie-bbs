@@ -3140,5 +3140,16 @@ VALUES (79, 'postgres-2fa-totp-last-step', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 80,
+			Name:    "postgres-users-password-changed-at",
+			SQL: `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at BIGINT NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (80, 'postgres-users-password-changed-at', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }
