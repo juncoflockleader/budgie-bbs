@@ -738,6 +738,9 @@ type User struct {
 	// PasswordChangedAt is the unix-seconds time of the last password change;
 	// session tokens issued before it are rejected (session revocation).
 	PasswordChangedAt int64
+	// SessionsValidAfter is the unix-seconds cutoff set by an explicit
+	// "sign out everywhere"; session tokens issued before it are rejected.
+	SessionsValidAfter int64
 }
 
 type AccountRegistrationSettings struct {

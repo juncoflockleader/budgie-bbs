@@ -1465,6 +1465,18 @@ func (c *Core) ChangePassword(userID, currentPassword, newPassword string) error
 	return nil
 }
 
+// RevokeUserSessions invalidates all of a user's existing session tokens
+// ("sign out everywhere") by advancing sessions_valid_after to now (unix
+// seconds). Session tokens carry an `iat`; requireAuth rejects any minted before
+// this cutoff. Stateless JWTs give per-user (every-device) granularity, enforced
+// cluster-wide via the shared column.
+func (c *Core) RevokeUserSessions(userID string) error {
+	if _, err := qExec(c.DB, `UPDATE users SET sessions_valid_after=? WHERE id=?`, nowMS()/1000, userID); err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
+	}
+	return nil
+}
+
 func (c *Core) DeactivateAccount(userID, password, reason string) error {
 	if strings.TrimSpace(password) == "" {
 		return ErrDeactivationIncomplete

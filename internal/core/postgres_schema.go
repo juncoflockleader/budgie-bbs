@@ -3166,5 +3166,16 @@ VALUES (81, 'postgres-moderation-reviews-drop-reporter-fk', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},
+		{
+			Version: 82,
+			Name:    "postgres-users-sessions-valid-after",
+			SQL: `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after BIGINT NOT NULL DEFAULT 0;
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (82, 'postgres-users-sessions-valid-after', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
 	}
 }

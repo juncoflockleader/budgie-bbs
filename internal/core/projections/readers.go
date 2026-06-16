@@ -4508,11 +4508,13 @@ func GetUserByID(db *sql.DB, id string) (*User, error) {
 	u := &User{}
 	err := QQueryRow(db, `SELECT id, name, role, password, created,
 	        COALESCE(NULLIF(registration_status,''), 'approved'), COALESCE(reviewed_at,0), COALESCE(reviewed_by,''), COALESCE(review_reason,''),
-	        COALESCE(deactivated_at,0), COALESCE(deactivated_by,''), COALESCE(deactivated_reason,''), COALESCE(password_changed_at,0)
+	        COALESCE(deactivated_at,0), COALESCE(deactivated_by,''), COALESCE(deactivated_reason,''), COALESCE(password_changed_at,0),
+	        COALESCE(sessions_valid_after,0)
 	    FROM users WHERE id=?`, id).
 		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created,
 			&u.RegistrationStatus, &u.ReviewedAt, &u.ReviewedBy, &u.ReviewReason,
-			&u.DeactivatedAt, &u.DeactivatedBy, &u.DeactivatedReason, &u.PasswordChangedAt)
+			&u.DeactivatedAt, &u.DeactivatedBy, &u.DeactivatedReason, &u.PasswordChangedAt,
+			&u.SessionsValidAfter)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

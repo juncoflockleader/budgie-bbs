@@ -59,9 +59,9 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 		// Session revocation: reject tokens minted before the user's last
-		// password change. Tokens predating this feature have no iat and are
-		// left alone (they expire on their own).
-		if !tokenIssuedAfterPasswordChange(claims, user) {
+		// password change or an explicit "sign out everywhere". Tokens predating
+		// this feature have no iat and are left alone (they expire on their own).
+		if !tokenIssuedAfterRevocation(claims, user) {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "session expired; please sign in again", false)
 			return
 		}
@@ -86,19 +86,24 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// tokenIssuedAfterPasswordChange reports whether a token is still valid with
-// respect to the user's last password change. A token with an `iat` earlier
-// than PasswordChangedAt is revoked; a token without `iat` (pre-feature) or a
-// user who never changed their password (PasswordChangedAt == 0) is accepted.
-func tokenIssuedAfterPasswordChange(claims jwt.MapClaims, user *core.User) bool {
-	if user.PasswordChangedAt <= 0 {
+// tokenIssuedAfterRevocation reports whether a token is still valid with respect
+// to the user's revocation cutoff — the later of their last password change and
+// an explicit "sign out everywhere". A token with an `iat` earlier than that
+// cutoff is revoked; a token without `iat` (pre-feature) or a user who has
+// neither changed their password nor revoked sessions is accepted.
+func tokenIssuedAfterRevocation(claims jwt.MapClaims, user *core.User) bool {
+	cutoff := user.PasswordChangedAt
+	if user.SessionsValidAfter > cutoff {
+		cutoff = user.SessionsValidAfter
+	}
+	if cutoff <= 0 {
 		return true
 	}
 	iat, ok := claims["iat"].(float64)
 	if !ok {
 		return true // legacy token without iat; leave it to expire naturally
 	}
-	return int64(iat) >= user.PasswordChangedAt
+	return int64(iat) >= cutoff
 }
 
 func bearerToken(r *http.Request) string {

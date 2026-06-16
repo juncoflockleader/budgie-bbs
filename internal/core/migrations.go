@@ -50,6 +50,7 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"processed_commands", "command_hash", "command_hash TEXT NOT NULL DEFAULT ''"},
 		{"users", "deactivated_at", "deactivated_at INTEGER NOT NULL DEFAULT 0"},
 		{"users", "password_changed_at", "password_changed_at INTEGER NOT NULL DEFAULT 0"},
+		{"users", "sessions_valid_after", "sessions_valid_after INTEGER NOT NULL DEFAULT 0"},
 		{"users", "deactivated_by", "deactivated_by TEXT NOT NULL DEFAULT ''"},
 		{"users", "deactivated_reason", "deactivated_reason TEXT NOT NULL DEFAULT ''"},
 		{"users", "registration_status", "registration_status TEXT NOT NULL DEFAULT 'approved'"},

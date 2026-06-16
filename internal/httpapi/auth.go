@@ -332,6 +332,18 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleLogoutAll revokes every outstanding session token for the authenticated
+// user ("sign out everywhere"), invalidating tokens on all devices and nodes.
+func (s *Server) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
+	actor := userFromCtx(r.Context())
+	if err := s.core.RevokeUserSessions(actor.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not revoke sessions", true)
+		return
+	}
+	_ = s.core.RecordLogout()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (s *Server) handleRequestPasswordRecovery(w http.ResponseWriter, r *http.Request) {
 	var req passwordRecoveryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
