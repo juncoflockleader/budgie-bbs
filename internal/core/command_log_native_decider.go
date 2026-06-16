@@ -1927,7 +1927,7 @@ func (e *CommandLogNativeDecisionExecutor) decideFlagPost(ctx context.Context, r
 		{
 			ID:     stableCommandLogDecisionID("evt_", record, 0),
 			Kind:   proto.EvtPostFlagged,
-			Scopes: []string{"thread:" + post.Thread, "board:" + thread.Board, "moderation:global"},
+			Scopes: []string{"moderation:global"}, // moderation-only: reporter/reason not broadcast to board (M8)
 			Payload: &proto.PostFlaggedPayload{
 				ReviewID: reviewID,
 				Kind:     "post_flag",
@@ -8446,7 +8446,7 @@ func nativeContentFilterReviewEvents(db *sql.DB, record CommandLogRecord, actor 
 		{
 			ID:     stableCommandLogDecisionID("evt_", record, startIndex),
 			Kind:   proto.EvtPostFlagged,
-			Scopes: []string{"thread:" + threadID, "board:" + boardID, "moderation:global"},
+			Scopes: []string{"moderation:global"}, // moderation-only: reporter/reason not broadcast to board (M8)
 			Payload: &proto.PostFlaggedPayload{
 				ReviewID: reviewID,
 				Kind:     "content_filter",

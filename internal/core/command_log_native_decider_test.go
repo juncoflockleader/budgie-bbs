@@ -5230,16 +5230,40 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 	if err != nil {
 		t.Fatalf("replay filtered create board events: %v", err)
 	}
-	if len(boardEvents) != 3 || boardEvents[2].Kind != proto.EvtPostFlagged {
-		t.Fatalf("filtered create board events = %+v, want thread.new, post.appended, post.flagged", boardEvents)
+	// The content-filter flag event carries the reporter + reason, so it must
+	// not appear on the board partition (reporter leak — M8); the board keeps
+	// only the public thread/post events and the flag lands on the global
+	// (moderation) partition.
+	if len(boardEvents) != 2 || boardEvents[0].Kind != proto.EvtThreadNew || boardEvents[1].Kind != proto.EvtPostAppended {
+		t.Fatalf("filtered create board events = %+v, want thread.new, post.appended only", boardEvents)
+	}
+	for _, e := range boardEvents {
+		if e.Kind == proto.EvtPostFlagged {
+			t.Fatalf("post.flagged must not appear on the board partition (reporter leak): %+v", boardEvents)
+		}
 	}
 	rootPostPayload, ok := boardEvents[1].Payload.(*proto.PostAppendedPayload)
 	if !ok {
 		t.Fatalf("root post payload = %T, want PostAppendedPayload", boardEvents[1].Payload)
 	}
-	filterPayload, ok := boardEvents[2].Payload.(*proto.PostFlaggedPayload)
-	if !ok {
-		t.Fatalf("filter payload = %T, want PostFlaggedPayload", boardEvents[2].Payload)
+	globalPartition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
+	globalEvents, err := eventStore.ReplayPartition(ctx, globalPartition.Kind, globalPartition.Key, 0, 10)
+	if err != nil {
+		t.Fatalf("replay global events: %v", err)
+	}
+	var filterPayload *proto.PostFlaggedPayload
+	for _, e := range globalEvents {
+		if e.Kind != proto.EvtPostFlagged {
+			continue
+		}
+		p, ok := e.Payload.(*proto.PostFlaggedPayload)
+		if !ok {
+			t.Fatalf("filter payload = %T, want PostFlaggedPayload", e.Payload)
+		}
+		filterPayload = p
+	}
+	if filterPayload == nil {
+		t.Fatalf("post.flagged not found on the moderation/global partition; global=%+v", globalEvents)
 	}
 	if filterPayload.Kind != "content_filter" || filterPayload.PostID != rootPostPayload.ID ||
 		filterPayload.Thread != rootPostPayload.Thread || filterPayload.Reporter != bob.ID ||
@@ -5262,6 +5286,15 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 		Limit:     10,
 	}); err != nil {
 		t.Fatalf("materialize filtered create board events: %v", err)
+	}
+	// post.flagged is scoped moderation-only → global partition (M8); materialize
+	// it there so the content-filter review is built.
+	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
+		Source:    "native-content-filter-test",
+		Partition: globalPartition,
+		Limit:     10,
+	}); err != nil {
+		t.Fatalf("materialize filtered flag event: %v", err)
 	}
 	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
 		Source:    "native-content-filter-test",
@@ -5337,6 +5370,14 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 		Limit:     10,
 	}); err != nil {
 		t.Fatalf("materialize filtered append board events: %v", err)
+	}
+	// The append's post.flagged is also scoped moderation-only → global (M8).
+	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
+		Source:    "native-content-filter-test",
+		Partition: globalPartition,
+		Limit:     10,
+	}); err != nil {
+		t.Fatalf("materialize filtered append flag event: %v", err)
 	}
 	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
 		Source:    "native-content-filter-test",
@@ -12712,16 +12753,36 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != flagRecord.Offset {
 		t.Fatalf("flag committed offset = %d, %v; want %d, nil", got, err, flagRecord.Offset)
 	}
+	// The flag event carries the reporter + reason, so it must NOT land on the
+	// board partition (delivering/replaying it to board subscribers would leak
+	// the reporter's identity — M8). The board partition keeps only the public
+	// thread/post events; the flag event lands on the moderation/global partition.
 	boardEvents, err = eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
 	if err != nil {
-		t.Fatalf("replay flag events: %v", err)
+		t.Fatalf("replay board events: %v", err)
 	}
-	if len(boardEvents) != 3 || boardEvents[2].Kind != proto.EvtPostFlagged {
-		t.Fatalf("flag events = %+v, want post.flagged appended to board partition", boardEvents)
+	for _, e := range boardEvents {
+		if e.Kind == proto.EvtPostFlagged {
+			t.Fatalf("post.flagged must not appear on the board partition (reporter leak): %+v", boardEvents)
+		}
 	}
-	flagEvent, ok := boardEvents[2].Payload.(*proto.PostFlaggedPayload)
-	if !ok {
-		t.Fatalf("flag payload = %T, want PostFlaggedPayload", boardEvents[2].Payload)
+	globalEvents, err := eventStore.ReplayPartition(ctx, globalPartition.Kind, globalPartition.Key, 0, 10)
+	if err != nil {
+		t.Fatalf("replay global events: %v", err)
+	}
+	var flagEvent *proto.PostFlaggedPayload
+	for _, e := range globalEvents {
+		if e.Kind != proto.EvtPostFlagged {
+			continue
+		}
+		p, ok := e.Payload.(*proto.PostFlaggedPayload)
+		if !ok {
+			t.Fatalf("flag payload = %T, want PostFlaggedPayload", e.Payload)
+		}
+		flagEvent = p
+	}
+	if flagEvent == nil {
+		t.Fatalf("post.flagged not found on the moderation/global partition; global=%+v", globalEvents)
 	}
 	if flagEvent.Kind != "post_flag" || flagEvent.PostID != rootPostPayload.ID || flagEvent.Thread != rootPostPayload.Thread ||
 		flagEvent.Reporter != bob.ID || flagEvent.Reason != "sensitive report reason" || flagEvent.TS != 2234 {
@@ -12752,8 +12813,10 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		}
 	}
 	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-moderation-review-test",
-		Partition: boardPartition,
+		Source: "native-moderation-review-test",
+		// post.flagged is scoped moderation-only, so it lands on the global
+		// partition (M8) — materialize it there to build the review.
+		Partition: globalPartition,
 		Limit:     10,
 	}); err != nil {
 		t.Fatalf("materialize flag event: %v", err)
@@ -12819,16 +12882,25 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 	if got, err := commandLog.CommittedOffset(ctx, reviewPartition); err != nil || got != resolveRecord.Offset {
 		t.Fatalf("resolve committed offset = %d, %v; want %d, nil", got, err, resolveRecord.Offset)
 	}
-	globalEvents, err := eventStore.ReplayPartition(ctx, globalPartition.Kind, globalPartition.Key, 0, 10)
+	globalEvents, err = eventStore.ReplayPartition(ctx, globalPartition.Kind, globalPartition.Key, 0, 10)
 	if err != nil {
 		t.Fatalf("replay resolve events: %v", err)
 	}
-	if len(globalEvents) != 1 || globalEvents[0].Kind != proto.EvtReviewResolved {
-		t.Fatalf("global resolve events = %+v, want one review.resolved", globalEvents)
+	// The moderation/global partition now holds both the earlier post.flagged
+	// and this review.resolved (flag events are scoped moderation-only — M8).
+	var resolveEvent *proto.ReviewResolvedPayload
+	for _, e := range globalEvents {
+		if e.Kind != proto.EvtReviewResolved {
+			continue
+		}
+		p, ok := e.Payload.(*proto.ReviewResolvedPayload)
+		if !ok {
+			t.Fatalf("resolve payload = %T, want ReviewResolvedPayload", e.Payload)
+		}
+		resolveEvent = p
 	}
-	resolveEvent, ok := globalEvents[0].Payload.(*proto.ReviewResolvedPayload)
-	if !ok {
-		t.Fatalf("resolve payload = %T, want ReviewResolvedPayload", globalEvents[0].Payload)
+	if resolveEvent == nil {
+		t.Fatalf("review.resolved not found on the moderation/global partition; global=%+v", globalEvents)
 	}
 	if resolveEvent.ReviewID != flagEvent.ReviewID || resolveEvent.Resolution != "private moderator note" || resolveEvent.By != admin.ID || resolveEvent.TS != 3234 {
 		t.Fatalf("resolve event = %+v, want deterministic review resolution", resolveEvent)

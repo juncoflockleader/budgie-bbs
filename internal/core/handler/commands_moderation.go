@@ -41,7 +41,11 @@ func (h *Handler) flagPost(actor *User, p proto.FlagPostPayload) Reply {
 	if err := insertModerationReview(tx, reviewID, "post_flag", post.ID, "post", actor.ID, p.Reason, ts); err != nil {
 		return internalErr(err)
 	}
-	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board, "moderation:global"}
+	// Moderation-only: this event carries the reporter and reason, so it must
+	// not be delivered/replayed on board/thread scopes (that exposes the
+	// reporter's identity to every board member — M8). Moderators receive it via
+	// moderation:global; the review projection consumes it regardless of scope.
+	scopes := []string{"moderation:global"}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, &proto.PostFlaggedPayload{
 		ReviewID: reviewID, Kind: "post_flag", PostID: post.ID, Thread: post.Thread, Reporter: actor.ID, Reason: p.Reason, TS: ts,
 	})
@@ -249,7 +253,8 @@ func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *User, publicAut
 	if err := insertModerationReview(tx, reviewID, "content_filter", postID, "post", actor.ID, reason, ts); err != nil {
 		return nil, nil, err
 	}
-	scopes := []string{"thread:" + threadID, "board:" + boardID, "moderation:global"}
+	// Moderation-only (reporter/reason must not reach board subscribers — M8).
+	scopes := []string{"moderation:global"}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, &proto.PostFlaggedPayload{
 		ReviewID: reviewID, Kind: "content_filter", PostID: postID, Thread: threadID, Reporter: actor.ID, Reason: reason, TS: ts,
 	})

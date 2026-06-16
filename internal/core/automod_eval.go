@@ -114,7 +114,7 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 		case "manual_review":
 			reviewID := stableCommandLogDecisionID("rev_", record, idx)
 			actionEvent = &EventAppend{
-				ID: evtID, Kind: proto.EvtPostFlagged, Scopes: []string{"thread:" + threadID, "board:" + boardID, "moderation:global"},
+				ID: evtID, Kind: proto.EvtPostFlagged, Scopes: []string{"moderation:global"}, // moderation-only: reporter/reason not broadcast to board (M8)
 				Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "automod", PostID: postID, Thread: threadID, Reporter: by, Reason: reason, TS: ts}, TS: ts,
 			}
 		case "redact":
