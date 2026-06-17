@@ -58,6 +58,7 @@ import type {
   TwoFactorStatus,
   SecuritySettings,
   SiteAppearance,
+  TUIStockArt,
   BoardAutomodRule,
   BoardAutomodActivity,
 } from './types'
@@ -447,6 +448,11 @@ export async function setSiteAppearance(token: string, payload: Partial<SiteAppe
     body: JSON.stringify(payload),
   })
   return json<SiteAppearance>(res)
+}
+
+export async function getTUIStockArt(): Promise<ApiResponse<{ arts: TUIStockArt[] }>> {
+  const res = await fetch(`${BASE}/site/tui-stock-art`)
+  return json<{ arts: TUIStockArt[] }>(res)
 }
 
 export async function getSecuritySettings(token: string): Promise<ApiResponse<SecuritySettings>> {

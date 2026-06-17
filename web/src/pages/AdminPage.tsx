@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
 import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule, BoardAutomodActivity, SiteAppearance } from '../api/types'
 import { applyAppearance } from '../appearance'
+import { TuiLayoutEditor } from '../components/TuiLayoutEditor'
 
 type Props = {
   token: string
@@ -133,6 +134,7 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
       bannerMessage: appearanceDraft.bannerMessage,
       accentColor: appearanceDraft.accentColor,
       defaultTheme: appearanceDraft.defaultTheme,
+      mainMenuLayout: appearanceDraft.mainMenuLayout,
     })
     setSaving(null)
     if (res.error || !res.data) {
@@ -575,6 +577,14 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
                 placeholder="Site-wide announcement shown to signed-in members (blank = no banner)"
               />
             </label>
+            <div className="admin-section-heading admin-subheading">
+              <h4>SSH terminal main menu</h4>
+            </div>
+            <p className="muted">Compose what members see on the SSH/TUI main menu: stack ASCII-art banners, text, and the menu in any order. Art too wide for a member’s terminal is skipped automatically.</p>
+            <TuiLayoutEditor
+              value={appearanceDraft.mainMenuLayout ?? { blocks: [] }}
+              onChange={(layout) => setAppearanceDraft({ ...appearanceDraft, mainMenuLayout: layout })}
+            />
             <div className="admin-board-actions">
               <button type="submit" disabled={saving === 'appearance'}>
                 {saving === 'appearance' ? 'Saving…' : 'Save appearance'}

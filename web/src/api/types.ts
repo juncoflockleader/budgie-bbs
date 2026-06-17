@@ -584,13 +584,33 @@ export interface SecuritySettings {
   updatedAt: number
 }
 
+export interface TUIBlock {
+  type: 'art' | 'text' | 'menu' | 'spacer'
+  align?: 'left' | 'center' | 'right'
+  art?: string
+  stock?: string
+  text?: string
+  color?: string
+  lines?: number
+}
+
+export interface TUIMainMenuLayout {
+  blocks: TUIBlock[]
+}
+
 export interface SiteAppearance {
   siteTitle: string
   tagline: string
   bannerMessage: string
   accentColor: string
   defaultTheme: string
+  mainMenuLayout?: TUIMainMenuLayout
   updatedAt: number
+}
+
+export interface TUIStockArt {
+  name: string
+  art: string
 }
 
 export interface BoardAutomodActivity {

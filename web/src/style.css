@@ -1045,6 +1045,26 @@ label {
   background: none; cursor: pointer; flex: 0 0 auto;
 }
 .admin-color-row input[type="text"] { flex: 1 1 auto; min-width: 0 }
+.admin-subheading { margin-top: 1rem }
+/* TUI main-menu layout editor */
+.tui-layout-editor { display: flex; flex-direction: column; gap: 0.6rem }
+.tui-block-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem }
+.tui-block {
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  padding: 0.6rem 0.7rem; display: flex; flex-direction: column; gap: 0.5rem;
+}
+.tui-block-head { display: flex; align-items: center; justify-content: space-between }
+.tui-block-actions { display: flex; gap: 0.5rem }
+.tui-inline { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9em }
+.tui-inline select, .tui-inline input[type="number"] { width: auto }
+.tui-art-input { font-family: var(--font-mono, monospace); white-space: pre; }
+.tui-art-preview {
+  margin: 0; padding: 0.5rem 0.6rem; overflow-x: auto;
+  font-family: var(--font-mono, monospace); line-height: 1.1; font-size: 0.85em;
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  background: var(--c-bg-subtle, rgba(127,127,127,0.08));
+}
+.tui-block-add { display: flex; flex-wrap: wrap; gap: 0.6rem }
 .admin-notice {
   padding: 0.55rem 0.7rem;
   border: 1px solid var(--c-border);
