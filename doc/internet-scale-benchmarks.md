@@ -124,5 +124,6 @@ budget file. For the full bundle + manifest archival, use
 
 - **Sustained soak profile:** a multi-hour run at a fraction of peak to surface
   memory growth, GC pauses, broker compaction, and reconnect-storm recovery —
-  distinct from these capacity gates.
+  distinct from these capacity gates. Sketched in
+  [`internet-scale-soak-profile.md`](internet-scale-soak-profile.md).
 - **Kafka backend drain** (§4): consumer start-offset / partition-assignment fix.
