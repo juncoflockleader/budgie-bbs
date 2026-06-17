@@ -19,8 +19,8 @@ compaction over hours). A dedicated soak profile is listed under *Follow-ups*.
 | Git revision | `d30f29e8` (clean tree; gates refuse to run on a dirty tree) |
 | Date | 2026-06-16 |
 | Command-log / gateway budget | `ops/internet-scale-budgets.example.json` (sha256 `d0fe4a92…46d69c9`) |
-| Host | Mac mini (Apple Silicon), **colocated loopback** — NATS JetStream 2.x, PostgreSQL 16, Redis, Go 1.26 |
-| Colocation rationale | The design requires throughput evidence from a host **colocated** with the brokers/DB (low jitter). All three pillars below ran on the mini over loopback against real NATS JetStream + Postgres. (An earlier laptop run of pillar 1 against ephemeral PG 17 showed a higher absolute throughput and a 1.93× speedup — cross-host corroboration of the ratio.) |
+| Host | Mac mini (Apple Silicon), **colocated loopback** — NATS JetStream 2.x, Kafka 4.2 (KRaft), PostgreSQL 16, Redis, Go 1.26 |
+| Colocation rationale | The design requires throughput evidence from a host **colocated** with the brokers/DB (low jitter). All results below ran on the mini over loopback against real NATS JetStream / Kafka + Postgres. (An earlier laptop run of the write-scaling pillar against ephemeral PG 17 showed a higher absolute throughput and a 1.93× speedup — cross-host corroboration of the ratio.) |
 
 Raw reports are archived under `artifacts/internet-scale/` (gitignored) and can
 be re-verified without re-running load via
@@ -83,18 +83,28 @@ The submit rate (20k cmd/s, Redis command-index disabled) is consistent with the
 `milestones-internet-scale.md` "Current Slice Status" figure of 20,690 cmd/s for
 the same configuration — independent corroboration at a later commit.
 
-### 4. Kafka backend parity — ⚠️ not completed on the staging host
+### 4. Durable command-log drain (Kafka / KRaft) — ✅ passed (mini, loopback)
 
-The Kafka-backed durable gate (`scripts/commandlog-native-kafka-gate.sh`) was
-attempted against a Kafka 4.2.0 (KRaft) broker. The producer enqueued records,
-but the writer's consumer group joined and then immediately left having fetched
-0 records (`no worker progress after 3 rounds with lag 200`). The Kafka client
-(`github.com/twmb/franz-go v1.21.3`) is version-compatible with Kafka 4.2, so
-this is a consumer start-offset / writer-partition-assignment nuance in the
-Kafka load path, **not** a protocol mismatch and **not** a core-scale failure —
-the NATS path (the promoted durable backend of record) is unaffected. Tracked as
-a follow-up; Kafka is an alternative backend, not required for the promoted
-internet-scale budget.
+`scripts/commandlog-native-kafka-gate.sh`, same shape as §3, against a real
+Kafka 4.2.0 (KRaft) broker with Postgres materialization.
+
+| Metric | Result | Budget |
+|---|---|---|
+| Total commands | 2,400 | ≥2,400 |
+| Submit throughput | **18,182 cmd/s** (132 ms) | ≥100 |
+| Drain throughput | **340 cmd/s** (222 rounds, 7,052 ms) | ≥75 |
+| Event projection | **406 events/s** (3,200 events) | ≥75 |
+| Partition lag after drain | **0** | 0 |
+| Failed / commit / assignment / claim losses | 0 / 0 / 0 / 0 | all 0 |
+
+This initially failed (`no worker progress after 3 rounds with lag 200`): the
+drain's no-progress detector gave up after three 25 ms "fast drain" polls — far
+sooner than the Kafka consumer group's first join/sync completes (member-id
+round trip + cooperative-sticky rebalance, ~1 s). NATS has no group-join step,
+so it was unaffected. Fixed by absorbing the join latency in the first fetch
+(`ReadyTimeout`) before reverting to fast steady-state polling. The Kafka drain
+runs at a lower rate than NATS here (more poll rounds per batch); closing that
+throughput gap is a separate optimization, not a correctness issue.
 
 ## Reproducing
 
@@ -126,4 +136,6 @@ budget file. For the full bundle + manifest archival, use
   memory growth, GC pauses, broker compaction, and reconnect-storm recovery —
   distinct from these capacity gates. Sketched in
   [`internet-scale-soak-profile.md`](internet-scale-soak-profile.md).
-- **Kafka backend drain** (§4): consumer start-offset / partition-assignment fix.
+- **Kafka drain throughput** (§4): the Kafka backend drains correctly but at a
+  lower rate than NATS (more poll rounds per batch) — a throughput optimization,
+  not a correctness gap.
