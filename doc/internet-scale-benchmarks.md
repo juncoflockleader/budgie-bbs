@@ -19,9 +19,8 @@ compaction over hours). A dedicated soak profile is listed under *Follow-ups*.
 | Git revision | `d30f29e8` (clean tree; gates refuse to run on a dirty tree) |
 | Date | 2026-06-16 |
 | Command-log / gateway budget | `ops/internet-scale-budgets.example.json` (sha256 `d0fe4a92…46d69c9`) |
-| Postgres-write host | MacBook (laptop), ephemeral PostgreSQL 17, loopback |
-| Gateway + command-log host | Mac mini (Apple Silicon), **colocated loopback** — NATS JetStream 2.x, PostgreSQL 16, Redis, Go 1.26 |
-| Why two hosts | The design requires throughput evidence from a host **colocated** with the brokers (low jitter). Gateway fanout and the durable command-log drain ran on the mini over loopback against real NATS JetStream + Postgres. The Postgres write-scaling pillar is broker-independent and ran on the laptop. |
+| Host | Mac mini (Apple Silicon), **colocated loopback** — NATS JetStream 2.x, PostgreSQL 16, Redis, Go 1.26 |
+| Colocation rationale | The design requires throughput evidence from a host **colocated** with the brokers/DB (low jitter). All three pillars below ran on the mini over loopback against real NATS JetStream + Postgres. (An earlier laptop run of pillar 1 against ephemeral PG 17 showed a higher absolute throughput and a 1.93× speedup — cross-host corroboration of the ratio.) |
 
 Raw reports are archived under `artifacts/internet-scale/` (gitignored) and can
 be re-verified without re-running load via
@@ -31,17 +30,21 @@ be re-verified without re-running load via
 
 ### 1. Postgres write scaling (per-aggregate vs. global lock) — ✅ passed
 
-`cmd/budgie-loadgen`, 3,200 `createThread` writes per shape, ephemeral PG.
+`cmd/budgie-loadgen`, 3,200 `createThread` writes per shape, mini loopback PG 16.
 Validates that spreading writes across independent board partitions relieves the
 single global write lock.
 
 | Metric | Same partition (1 hot board) | Spread (16 boards) | Budget |
 |---|---|---|---|
-| Throughput | 392 writes/s | **755 writes/s** | — |
-| p95 latency | 88.8 ms | **59.1 ms** | ≤150 ms (spread) |
-| p99 latency | 92.8 ms | 65.4 ms | — |
+| Throughput | 323 writes/s | **543 writes/s** | — |
+| p95 latency | 101.4 ms | **78.8 ms** | ≤150 ms (spread) |
+| p99 latency | 103.8 ms | 89.1 ms | — |
 | Failed writes | 0 | 0 | 0 |
-| **Spread speedup** | — | **1.93×** | ≥1.5× |
+| **Spread speedup** | — | **1.68×** | ≥1.5× |
+
+Absolute throughput is host-bound (the mini concurrently runs other services);
+the **speedup ratio** is the portable claim and clears the budget on both hosts
+(1.68× colocated here, 1.93× on the idle laptop).
 
 ### 2. Gateway fanout capacity — ✅ passed (mini, loopback)
 
@@ -123,5 +126,3 @@ budget file. For the full bundle + manifest archival, use
   memory growth, GC pauses, broker compaction, and reconnect-storm recovery —
   distinct from these capacity gates.
 - **Kafka backend drain** (§4): consumer start-offset / partition-assignment fix.
-- **Colocated Postgres-write run:** pillar 1 here is from the laptop; re-running
-  it on the mini over loopback would give a fully colocated number set.
