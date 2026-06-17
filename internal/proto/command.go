@@ -56,6 +56,7 @@ const (
 	CmdPublishSystemNotice        CommandName = "publishSystemNotice"
 	CmdSendChatLine               CommandName = "sendChatLine"
 	CmdSetPresence                CommandName = "setPresence"
+	CmdMUDCommand                 CommandName = "mudCommand"
 	CmdCreateBoard                CommandName = "createBoard"
 	CmdSetBoardSettings           CommandName = "setBoardSettings"
 	CmdSetBoardModerator          CommandName = "setBoardModerator"
@@ -716,6 +717,13 @@ type RevokeRolePayload struct {
 type SendChatLinePayload struct {
 	Room string `json:"room"`
 	Text string `json:"text"`
+}
+
+// MUDCommandPayload carries a raw MUD command line (e.g. "look", "north",
+// "say hi", "who"). The server parses the verb; this keeps the wire format
+// stable as new verbs are added.
+type MUDCommandPayload struct {
+	Line string `json:"line"`
 }
 
 type PublishStatsSnapshotPayload struct {

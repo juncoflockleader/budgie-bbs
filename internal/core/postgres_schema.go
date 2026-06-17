@@ -3127,6 +3127,12 @@ CREATE TABLE IF NOT EXISTS site_appearance_settings (
 INSERT INTO site_appearance_settings (id, updated_at) VALUES ('default', 0)
 ON CONFLICT (id) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS mud_players (
+    user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    room_id    TEXT NOT NULL DEFAULT '',
+    updated_at BIGINT NOT NULL DEFAULT 0
+);
+
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (78, 'postgres-site-appearance', 0)
 ON CONFLICT (version) DO NOTHING;
@@ -3186,6 +3192,21 @@ ALTER TABLE site_appearance_settings ADD COLUMN IF NOT EXISTS tui_main_menu_layo
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (83, 'postgres-site-appearance-tui-layout', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 84,
+			Name:    "postgres-mud-players",
+			SQL: `
+CREATE TABLE IF NOT EXISTS mud_players (
+    user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    room_id    TEXT NOT NULL DEFAULT '',
+    updated_at BIGINT NOT NULL DEFAULT 0
+);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (84, 'postgres-mud-players', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

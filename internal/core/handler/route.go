@@ -192,6 +192,13 @@ func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMes
 		}
 		return h.sendChatLine(actor, p)
 
+	case proto.CmdMUDCommand:
+		var p proto.MUDCommandPayload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return badPayload()
+		}
+		return h.executeMUDCommand(actor, p)
+
 	case proto.CmdSetPresence:
 		var p proto.SetPresencePayload
 		if err := json.Unmarshal(payload, &p); err != nil {

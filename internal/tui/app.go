@@ -39,6 +39,7 @@ const (
 	pageDoorsMenu
 	pageSignup
 	pageTwoFactorGate
+	pageMUD
 )
 
 const threadPageSize = 50
@@ -141,6 +142,14 @@ type model struct {
 	profileInput  textinput.Model
 	profileEditor textarea.Model
 	searchQuery   string
+
+	// MUD ("The Town"): a shared multi-user text world. mudRoom is the current
+	// room snapshot; mudLog is the scrolling activity feed; mudRoomScope tracks
+	// the room scope currently subscribed (so it can be swapped on movement).
+	mudInput     textinput.Model
+	mudRoom      *proto.MUDRoomView
+	mudLog       []string
+	mudRoomScope string
 
 	// Compose mode: true = creating new thread, false = replying
 	composingNewThread bool
@@ -291,6 +300,12 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	ci.CharLimit = 1000
 	ci.Width = width - 4
 
+	mi := textinput.New()
+	mi.Placeholder = "look, north, say hi, who, help…"
+	mi.Prompt = "› "
+	mi.CharLimit = 400
+	mi.Width = width - 4
+
 	pi := textinput.New()
 	pi.CharLimit = 1000
 	pi.Width = width - 4
@@ -306,6 +321,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		height:            height,
 		titleInput:        ti,
 		chatInput:         ci,
+		mudInput:          mi,
 		profileInput:      pi,
 		selectedPost:      -1,
 		postReactions:     make(map[string]bool),
@@ -435,6 +451,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.compose.SetHeight(msg.Height / 3)
 		m.titleInput.Width = msg.Width - 4
 		m.chatInput.Width = msg.Width - 4
+		m.mudInput.Width = msg.Width - 4
 		m.profileInput.Width = msg.Width - 4
 		m.profileEditor.SetWidth(msg.Width - 4)
 		m.profileEditor.SetHeight(msg.Height / 3)
@@ -711,6 +728,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var viewportCmd tea.Cmd
 			m.vp, viewportCmd = m.vp.Update(msg)
 			cmds = append(cmds, viewportCmd)
+		case pageMUD:
+			var inputCmd tea.Cmd
+			m.mudInput, inputCmd = m.mudInput.Update(msg)
+			cmds = append(cmds, inputCmd)
 		case pageCompose:
 			if m.composingNewThread && m.titleInput.Focused() {
 				var c tea.Cmd
@@ -824,6 +845,8 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		case "6", "o":
 			return m.enterOnline()
 		case "7":
+			return m.enterMUD()
+		case "8":
 			return m.quit()
 		case "c":
 			if m.canRegister() {
@@ -1159,6 +1182,29 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return tea.Quit
 		}
 
+	case pageMUD:
+		// Only intercept submit / leave / hard-quit; every other key (including
+		// letters like 'q') must reach the command input.
+		switch key {
+		case "enter":
+			line := strings.TrimSpace(m.mudInput.Value())
+			if line == "" {
+				return nil
+			}
+			m.mudInput.Reset()
+			return m.sendMUDCommand(line)
+		case "esc":
+			cmd := m.leaveMUD()
+			if !m.popPage() {
+				m.page = pageMainMenu
+			}
+			return cmd
+		case "ctrl+c":
+			m.leaveMUD()
+			m.c.Unsubscribe(m.sub)
+			return tea.Quit
+		}
+
 	case pageSearch:
 		switch key {
 		case "enter":
@@ -1423,6 +1469,21 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 		}
 		cmds = append(cmds, m.fetchNotificationStatus())
 
+	case proto.EvtMUDRoom:
+		if p, ok := evt.Payload.(*proto.MUDRoomEventPayload); ok {
+			m.mudAppend(p.Text)
+		}
+
+	case proto.EvtMUDView:
+		if v, ok := evt.Payload.(*proto.MUDViewPayload); ok && !v.Left {
+			if v.Room != nil {
+				m.applyMUDRoom(v.Room)
+			}
+			for _, ln := range v.Lines {
+				m.mudAppend(ln)
+			}
+		}
+
 	case proto.EvtThreadNew:
 		if m.page == pageThreadList {
 			cmds = append(cmds, m.fetchThreads(m.currentBoard, m.threadOffset))
@@ -1668,6 +1729,8 @@ func (m model) View() string {
 		}
 	case pageChat:
 		body = m.renderSection(m.tr(msgTitleLiveChat), m.chatSectionContent(), m.tr(msgHelpChat))
+	case pageMUD:
+		body = m.renderSection("The Town", m.mudSectionContent(), "type a command · 'help' · esc=leave")
 	case pageSearch:
 		body = m.renderSection(m.tr(msgTitleSearch), m.vp.View(), m.tr(msgHelpSearch))
 	}
@@ -2018,6 +2081,8 @@ func (m model) headerTitle() string {
 		return m.tr(msgTitleNewReply)
 	case pageChat:
 		return m.tr(msgTitleLiveChat)
+	case pageMUD:
+		return "The Town"
 	case pageSearch:
 		return m.tr(msgTitleSearch)
 	default:
@@ -2371,7 +2436,8 @@ func (m *model) rebuildList() {
 			mainMenuItem{key: "4", title: m.tr(msgTitleSearch), desc: m.tr(msgPageSearchDesc)},
 			mainMenuItem{key: "5", title: m.tr(msgTitleProfile), desc: m.tr(msgPageProfileDesc)},
 			mainMenuItem{key: "6", title: m.tr(msgTitleOnlineUsers), desc: m.tr(msgPageOnlineDesc)},
-			mainMenuItem{key: "7", title: m.tr(msgPageExit), desc: m.tr(msgPageExitDesc)},
+			mainMenuItem{key: "7", title: "The Town (MUD)", desc: "Wander the shared text world"},
+			mainMenuItem{key: "8", title: m.tr(msgPageExit), desc: m.tr(msgPageExitDesc)},
 		}
 		if m.canRegister() {
 			items = append(items, mainMenuItem{key: "c", title: "Create account", desc: "Register a new account"})
@@ -2496,6 +2562,8 @@ func (m *model) openMainMenuSelection() tea.Cmd {
 	case "6":
 		return m.enterOnline()
 	case "7":
+		return m.enterMUD()
+	case "8":
 		return m.quit()
 	case "c":
 		if m.canRegister() {
@@ -2575,6 +2643,110 @@ func (m *model) enterChat() tea.Cmd {
 	m.chatInput.Focus()
 	m.rebuildChatView()
 	return m.fetchChatLines("lobby")
+}
+
+// --- MUD ("The Town") -------------------------------------------------------
+
+func (m *model) enterMUD() tea.Cmd {
+	m.pushPage(pageMUD)
+	m.mudInput.Focus()
+	m.mudLog = nil
+	m.mudRoom = nil
+	m.mudRoomScope = ""
+	if m.c != nil && m.sub != nil && m.actor != nil {
+		m.c.Bus.AddScopes(m.sub, []string{"mud:user:" + m.actor.ID})
+	}
+	return m.sendMUDCommand("look")
+}
+
+func (m *model) leaveMUD() tea.Cmd {
+	cmd := m.sendMUDCommand("quit")
+	if m.c != nil && m.sub != nil && m.actor != nil {
+		scopes := []string{"mud:user:" + m.actor.ID}
+		if m.mudRoomScope != "" {
+			scopes = append(scopes, m.mudRoomScope)
+		}
+		m.c.Bus.RemoveScopes(m.sub, scopes)
+	}
+	m.mudRoomScope = ""
+	return cmd
+}
+
+func (m model) sendMUDCommand(line string) tea.Cmd {
+	return func() tea.Msg {
+		if m.c == nil {
+			return nil
+		}
+		raw, _ := json.Marshal(proto.MUDCommandPayload{Line: line})
+		reply := m.c.ExecCmd(context.Background(), m.actor, proto.CmdMUDCommand, raw, "")
+		if reply.Err != nil {
+			return errMsg{fmt.Errorf("%s", reply.Err.Message)}
+		}
+		return nil // effects (room view, room events) arrive over the event bus
+	}
+}
+
+// applyMUDRoom swaps the subscribed room scope when the player changes rooms and
+// records the new room snapshot.
+func (m *model) applyMUDRoom(room *proto.MUDRoomView) {
+	if room == nil {
+		return
+	}
+	newScope := "mud:room:" + room.ID
+	if newScope != m.mudRoomScope && m.c != nil && m.sub != nil {
+		if m.mudRoomScope != "" {
+			m.c.Bus.RemoveScopes(m.sub, []string{m.mudRoomScope})
+		}
+		m.c.Bus.AddScopes(m.sub, []string{newScope})
+		m.mudRoomScope = newScope
+	}
+	m.mudRoom = room
+}
+
+func (m *model) mudAppend(line string) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	m.mudLog = append(m.mudLog, line)
+	if len(m.mudLog) > 200 {
+		m.mudLog = m.mudLog[len(m.mudLog)-200:]
+	}
+}
+
+// mudSectionContent renders the room panel, the recent activity log, and the
+// command input, sized to the section height.
+func (m model) mudSectionContent() string {
+	avail := m.sectionContentHeight()
+	input := m.mudInput.View()
+
+	var head strings.Builder
+	if m.mudRoom != nil {
+		head.WriteString(m.styled(styleTitle, m.mudRoom.Name) + "\n")
+		for _, dl := range strings.Split(m.mudRoom.Desc, "\n") {
+			head.WriteString(m.styled(styleDim, dl) + "\n")
+		}
+		if len(m.mudRoom.Exits) > 0 {
+			head.WriteString(m.styled(stylePostSignatureSep, "Exits: "+strings.Join(m.mudRoom.Exits, ", ")) + "\n")
+		}
+		if len(m.mudRoom.Occupants) > 0 {
+			head.WriteString(m.styled(styleAuthor, "Also here: "+strings.Join(m.mudRoom.Occupants, ", ")) + "\n")
+		}
+		head.WriteString("\n")
+	}
+	headStr := head.String()
+	headH := 0
+	if strings.TrimSpace(headStr) != "" {
+		headH = lipgloss.Height(headStr)
+	}
+	logH := avail - headH - 1 // reserve a line for the input
+	if logH < 1 {
+		logH = 1
+	}
+	logLines := m.mudLog
+	if len(logLines) > logH {
+		logLines = logLines[len(logLines)-logH:]
+	}
+	return headStr + strings.Join(logLines, "\n") + "\n" + input
 }
 
 func (m *model) selectedBoard() *core.Board {
@@ -3590,6 +3762,8 @@ func (m model) pageName(p page) string {
 		return m.tr(msgTitleNewReply)
 	case pageChat:
 		return m.tr(msgTitleLiveChat)
+	case pageMUD:
+		return "The Town"
 	case pageSearch:
 		return m.tr(msgTitleSearch)
 	case pageNotifications:

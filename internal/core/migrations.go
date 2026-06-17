@@ -863,6 +863,13 @@ func applySQLiteMigrations(db *sql.DB) error {
 	if _, err := qExec(db, `INSERT OR IGNORE INTO site_appearance_settings (id, updated_at) VALUES ('default', 0)`); err != nil {
 		return fmt.Errorf("seed site appearance settings: %w", err)
 	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS mud_players (
+		    user_id    TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		    room_id    TEXT    NOT NULL DEFAULT '',
+		    updated_at INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure mud players table: %w", err)
+	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_2fa_settings (
 		    user_id        TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 		    totp_secret    TEXT    NOT NULL DEFAULT '',

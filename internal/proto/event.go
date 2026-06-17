@@ -75,6 +75,8 @@ const (
 	// Ephemeral events — carry eseq, best-effort, prunable.
 	EvtChatLine       EventKind = "chat.line"
 	EvtPresenceUpdate EventKind = "presence.update"
+	EvtMUDRoom        EventKind = "mud.room"
+	EvtMUDView        EventKind = "mud.view"
 	EvtUserJoined     EventKind = "user.joined"
 	EvtUserLeft       EventKind = "user.left"
 	EvtPostReacted    EventKind = "post.reacted"
@@ -799,6 +801,28 @@ type ChatLinePayload struct {
 	User string `json:"user"`
 	Text string `json:"text"`
 	TS   int64  `json:"ts"`
+}
+
+// MUDRoomEventPayload is a live, room-scoped MUD event delivered to everyone in
+// the room. Kind is one of: say, emote, enter, leave, pose, tell. Text is the
+// fully-rendered line (e.g. "alice says, \"hi\"" or "bob arrives from the south").
+type MUDRoomEventPayload struct {
+	Room  string `json:"room"`
+	Kind  string `json:"kind"`
+	Actor string `json:"actor"`
+	Text  string `json:"text"`
+	TS    int64  `json:"ts"`
+}
+
+// MUDViewPayload is delivered privately to the acting player (scope
+// mud:user:<id>) in response to their own command. Room refreshes the room
+// panel (look / after moving); Lines are direct feedback (help, who, errors);
+// Left signals the player has left the world so the client closes the view.
+type MUDViewPayload struct {
+	Room  *MUDRoomView `json:"room,omitempty"`
+	Lines []string     `json:"lines,omitempty"`
+	Left  bool         `json:"left,omitempty"`
+	TS    int64        `json:"ts"`
 }
 
 type PresenceUpdatePayload struct {

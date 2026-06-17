@@ -531,6 +531,7 @@ func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName,
 func commandBypassesCommandLog(name proto.CommandName) bool {
 	switch name {
 	case proto.CmdSendChatLine,
+		proto.CmdMUDCommand,
 		proto.CmdSetPresence,
 		proto.CmdReactPost,
 		proto.CmdUnreactPost,

@@ -226,6 +226,15 @@ type AckResult struct {
 
 const AckStatusPending = "pending"
 
+// MUDRoomView is a snapshot of the room a player is in, returned by look/move.
+type MUDRoomView struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Desc      string   `json:"desc"`
+	Exits     []string `json:"exits"`     // available exit directions, sorted
+	Occupants []string `json:"occupants"` // other players present (names), sorted
+}
+
 // Standard error codes (see protocol-definition.md §8).
 const (
 	ErrUnauthenticated        = "unauthenticated"
