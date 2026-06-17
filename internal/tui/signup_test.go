@@ -17,7 +17,7 @@ func TestSSHSignupFlow(t *testing.T) {
 	c.SetPrivacyPolicy(true)
 
 	guest := &core.User{ID: "guest", Name: "guest", Role: "user"}
-	m := newModel(c, guest, 80, 24, false, localeEN, "", nil, nil, "", true, false)
+	m := newModel(c, guest, 80, 24, false, localeEN, "", nil, nil, "", true, false, nil)
 	if !m.canRegister() {
 		t.Fatal("guest with allowRegistration should be able to register")
 	}
@@ -80,7 +80,7 @@ func TestSSHSignupFlow(t *testing.T) {
 func TestSSHSignupDisabledByDefault(t *testing.T) {
 	c := newTestCore(t)
 	guest := &core.User{ID: "guest", Name: "guest", Role: "user"}
-	m := newModel(c, guest, 80, 24, false, localeEN, "", nil, nil, "", false, false)
+	m := newModel(c, guest, 80, 24, false, localeEN, "", nil, nil, "", false, false, nil)
 	if m.canRegister() {
 		t.Fatal("guest should not be able to register when allowRegistration is false")
 	}

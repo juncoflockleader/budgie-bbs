@@ -199,7 +199,11 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 		doors = s.doors.Doors
 	}
 	requires2FA, _ := s.core.TwoFactorRequiredForLogin(user.ID, user.Role)
-	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh, doors, caps.termName, s.allowRegistration, requires2FA)
+	// Build a renderer bound to this SSH session so lipgloss styles use the
+	// client's detected color profile, not the (often colorless, headless-daemon)
+	// server process profile.
+	renderer := bubbletea.MakeRenderer(sess)
+	m := newModel(s.core, user, width, height, caps.supportsANSI, caps.locale, nodeID, msgCh, doors, caps.termName, s.allowRegistration, requires2FA, renderer)
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 		tea.WithEnvironment(sess.Environ()),

@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/muesli/termenv"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -262,7 +265,7 @@ func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 	m := model{
 		actor:        &core.User{Name: "alice"},
 		page:         pageMainMenu,
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
 	}
 	m.rebuildList()
@@ -320,7 +323,7 @@ func TestMainMenuExitItemQuits(t *testing.T) {
 	m := model{
 		actor:        &core.User{Name: "alice"},
 		page:         pageMainMenu,
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
 	}
 	m.rebuildList()
@@ -340,7 +343,7 @@ func TestStatusMessageRendersInTopHeader(t *testing.T) {
 		actor:        &core.User{Name: "alice"},
 		page:         pageMainMenu,
 		statusMsg:    "profile saved",
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
 	}
 	m.rebuildList()
@@ -355,7 +358,7 @@ func TestMainMenuProfileShortcutOpensProfileSettings(t *testing.T) {
 	m := model{
 		actor:        &core.User{Name: "alice"},
 		page:         pageMainMenu,
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
 	}
 	m.rebuildList()
@@ -376,6 +379,32 @@ func TestMainMenuProfileShortcutOpensProfileSettings(t *testing.T) {
 	}
 }
 
+func TestSSHRendererAppliesSessionColorProfile(t *testing.T) {
+	c := newTestCore(t)
+	actor, err := c.RegisterUser("colortester", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A renderer pinned to a 256-color profile stands in for an SSH session whose
+	// client supports color, independent of the (TTY-less) test process. This is
+	// what the real handler does via bubbletea.MakeRenderer(sess). Without the
+	// per-session renderer, package-level styles would use the global renderer
+	// (no color under a headless daemon) and emit no escapes.
+	r := lipgloss.NewRenderer(io.Discard)
+	r.SetColorProfile(termenv.ANSI256)
+	m := newModel(c, actor, 80, 24, true, localeEN, "", nil, nil, "", false, false, r)
+
+	if out := m.fullWidth(styleHeader, "BudgieBBS"); !strings.Contains(out, "\x1b[") {
+		t.Fatalf("header should carry ANSI color from the session renderer, got %q", out)
+	}
+	if out := m.styled(styleAuthor, "alice"); !strings.Contains(out, "\x1b[") {
+		t.Fatalf("styled() should carry ANSI color from the session renderer, got %q", out)
+	}
+	if line := m.postBoundaryLine(); !strings.Contains(line, "\x1b[") {
+		t.Fatalf("post separator should carry ANSI color from the session renderer, got %q", line)
+	}
+}
+
 func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 	c := newTestCore(t)
 	actor, err := c.RegisterUser("alice", "correct-horse-battery-staple")
@@ -383,7 +412,7 @@ func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := newModel(c, actor, 80, 24, false, localeEN, "", nil, nil, "", false, false)
+	m := newModel(c, actor, 80, 24, false, localeEN, "", nil, nil, "", false, false, nil)
 	m.page = pageProfile
 	profile, err := c.UserProfileByName(actor.Name)
 	if err != nil {
@@ -423,7 +452,7 @@ func TestMainMenuOnlineShortcutOpensOnlineUsers(t *testing.T) {
 	m := model{
 		actor:        &core.User{Name: "alice"},
 		page:         pageMainMenu,
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
 	}
 	m.rebuildList()
@@ -468,7 +497,7 @@ func TestOnlineUsersPageShowsPresenceRows(t *testing.T) {
 	m := model{
 		actor:        alice,
 		page:         pageOnline,
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		onlineUsers:  users,
 		supportsANSI: false,
 	}
@@ -544,7 +573,7 @@ func TestTopHeaderMergesSectionTitle(t *testing.T) {
 	m := model{
 		actor:        &core.User{Name: "alice"},
 		page:         pageNotifications,
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
 	}
 	view := m.View()
@@ -564,7 +593,7 @@ func TestViewHeightFitsTerminal(t *testing.T) {
 		width:        48,
 		height:       10,
 		statusMsg:    strings.Repeat("saved ", 20),
-		list:         list.New(nil, newBBSListDelegate(), 48, 30),
+		list:         list.New(nil, newBBSListDelegate(nil), 48, 30),
 		supportsANSI: true,
 	}
 	m.rebuildList()
@@ -826,7 +855,7 @@ func TestLeftArrowFromBoardListReturnsToMainMenu(t *testing.T) {
 	m := model{
 		actor:        &core.User{Name: "alice"},
 		page:         pageBoardList,
-		list:         list.New(nil, newBBSListDelegate(), 80, 20),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
 	}
 	m.rebuildList()
@@ -934,7 +963,7 @@ func TestThreadSubmittedReturnsFromComposeToNewThread(t *testing.T) {
 		vp:           viewport.New(80, 20),
 		compose:      textarea.New(),
 		titleInput:   textinput.New(),
-		list:         list.New(nil, newBBSListDelegate(), 80, sectionContentHeightFor(20)),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, sectionContentHeightFor(20)),
 		currentBoard: "general",
 	}
 	m.titleInput.SetValue("Title")
@@ -961,7 +990,7 @@ func TestThreadSubmittedPendingStaysOnThreadList(t *testing.T) {
 		vp:           viewport.New(80, 20),
 		compose:      textarea.New(),
 		titleInput:   textinput.New(),
-		list:         list.New(nil, newBBSListDelegate(), 80, sectionContentHeightFor(20)),
+		list:         list.New(nil, newBBSListDelegate(nil), 80, sectionContentHeightFor(20)),
 		currentBoard: "general",
 	}
 	m.titleInput.SetValue("Title")
@@ -1019,7 +1048,7 @@ func TestPendingCommandMessagesUseQueuedStatus(t *testing.T) {
 		vp:         viewport.New(80, 20),
 		compose:    textarea.New(),
 		titleInput: textinput.New(),
-		list:       list.New(nil, newBBSListDelegate(), 80, sectionContentHeightFor(20)),
+		list:       list.New(nil, newBBSListDelegate(nil), 80, sectionContentHeightFor(20)),
 	}
 
 	updated, _ := m.Update(postSubmittedMsg{thread: "thr_1", queued: true})

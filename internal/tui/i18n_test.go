@@ -57,7 +57,7 @@ func TestTUIChineseHeaderDoesNotWrap(t *testing.T) {
 		supportsANSI: true,
 		locale:       localeZHTW,
 	}
-	m.list = list.New(nil, newBBSListDelegate(), 40, sectionContentHeightFor(m.height))
+	m.list = list.New(nil, newBBSListDelegate(nil), 40, sectionContentHeightFor(m.height))
 	m.rebuildList()
 
 	headerLine := strings.SplitN(m.View(), "\n", 2)[0]

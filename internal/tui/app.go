@@ -167,6 +167,11 @@ type model struct {
 	termName      string            // M12: TERM env value forwarded to door processes
 	authorNames   map[string]string
 	supportsANSI  bool
+	// r is the per-session lipgloss renderer. Styles are package-level templates
+	// built with the global renderer (whose color profile reflects the *server*
+	// process — no color under a headless daemon); rebinding each style to r via
+	// rstyle makes it render with the SSH *session's* detected color profile.
+	r *lipgloss.Renderer
 
 	// SSH self-registration (opt-in via -allow-ssh-registration).
 	allowRegistration bool
@@ -204,9 +209,21 @@ var (
 	styleChatUser         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("178"))
 )
 
+// rstyle rebinds a package-level style template to this session's renderer so it
+// renders with the SSH client's color profile rather than the server process's.
+func (m model) rstyle(style lipgloss.Style) lipgloss.Style {
+	if m.r == nil {
+		return style
+	}
+	return style.Renderer(m.r)
+}
+
 func (m *model) styled(style lipgloss.Style, value string) string {
-	if m == nil || m.supportsANSI {
+	if m == nil {
 		return style.Render(value)
+	}
+	if m.supportsANSI {
+		return m.rstyle(style).Render(value)
 	}
 	return value
 }
@@ -216,27 +233,40 @@ func (m *model) postSepLine() string {
 }
 
 func (m *model) postBoundaryLine() string {
-	if m == nil || m.supportsANSI {
+	if m == nil {
 		return stylePostSep.Render(postSepText)
+	}
+	if m.supportsANSI {
+		return m.rstyle(stylePostSep).Render(postSepText)
 	}
 	return postSepText
 }
 
 func (m *model) postInnerSepLine() string {
-	if m == nil || m.supportsANSI {
+	if m == nil {
 		return stylePostInnerSep.Render(postSepText)
+	}
+	if m.supportsANSI {
+		return m.rstyle(stylePostInnerSep).Render(postSepText)
 	}
 	return postSepText
 }
 
 func (m *model) postSignatureSepLine() string {
-	if m == nil || m.supportsANSI {
+	if m == nil {
 		return stylePostSignatureSep.Render(postSignatureSepText)
+	}
+	if m.supportsANSI {
+		return m.rstyle(stylePostSignatureSep).Render(postSignatureSepText)
 	}
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string, allowRegistration bool, requires2FA bool) model {
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string, allowRegistration bool, requires2FA bool, renderer *lipgloss.Renderer) model {
+	if renderer == nil {
+		// Unit tests and any non-SSH caller fall back to the global renderer.
+		renderer = lipgloss.DefaultRenderer()
+	}
 	scopes := []string{"board:general", "chat:lobby", "presence:global"}
 	if actor != nil && actor.IsAdmin() {
 		scopes = append(scopes, "system:nodes")
@@ -277,6 +307,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		postPolls:         make(map[string]*core.Poll),
 		authorNames:       make(map[string]string),
 		supportsANSI:      supportsANSI,
+		r:                 renderer,
 		locale:            locale,
 		doors:             doors,
 		termName:          termName,
@@ -285,7 +316,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		gateMethod:        "totp",
 	}
 
-	m.list = list.New(nil, newBBSListDelegate(), width, sectionContentHeightFor(height))
+	m.list = list.New(nil, newBBSListDelegate(renderer), width, sectionContentHeightFor(height))
 	m.list.SetShowHelp(false)
 	m.list.SetShowStatusBar(false)
 	m.list.SetFilteringEnabled(false)
@@ -323,7 +354,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 	return m
 }
 
-func newBBSListDelegate() list.DefaultDelegate {
+func newBBSListDelegate(r *lipgloss.Renderer) list.DefaultDelegate {
 	delegate := list.NewDefaultDelegate()
 	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.Foreground(lipgloss.Color("252"))
 	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.Foreground(lipgloss.Color("109"))
@@ -338,6 +369,18 @@ func newBBSListDelegate() list.DefaultDelegate {
 		Background(lipgloss.Color("24")).
 		Reverse(true).
 		Padding(0, 1)
+	// Rebind every delegate style to the per-session renderer so list items keep
+	// their colors under a headless daemon (whose global renderer is no-color).
+	if r != nil {
+		s := &delegate.Styles
+		s.NormalTitle = s.NormalTitle.Renderer(r)
+		s.NormalDesc = s.NormalDesc.Renderer(r)
+		s.SelectedTitle = s.SelectedTitle.Renderer(r)
+		s.SelectedDesc = s.SelectedDesc.Renderer(r)
+		s.DimmedTitle = s.DimmedTitle.Renderer(r)
+		s.DimmedDesc = s.DimmedDesc.Renderer(r)
+		s.FilterMatch = s.FilterMatch.Renderer(r)
+	}
 	return delegate
 }
 
@@ -1761,7 +1804,7 @@ func (m model) renderPanel(content string) string {
 	if !m.supportsANSI {
 		return content
 	}
-	return stylePanel.Width(m.panelWidth() - 2).Render(content)
+	return m.rstyle(stylePanel).Width(m.panelWidth() - 2).Render(content)
 }
 
 func (m model) renderSection(_ string, content, help string) string {
@@ -1777,7 +1820,7 @@ func (m model) fullWidth(style lipgloss.Style, value string) string {
 		return value
 	}
 	width := m.panelWidth()
-	return style.Width(width).Render(truncateDisplayWidth(value, width-2))
+	return m.rstyle(style).Width(width).Render(truncateDisplayWidth(value, width-2))
 }
 
 func (m model) panelWidth() int {
@@ -2838,9 +2881,9 @@ func (m *model) rebuildChatView() {
 
 // renderMarkup converts the constrained Markdown subset to ANSI-friendly text.
 func (m *model) renderMarkup(body string) string {
-	boldStyle := lipgloss.NewStyle().Bold(true)
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	boldStyle := m.rstyle(lipgloss.NewStyle().Bold(true))
+	dimStyle := m.rstyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240")))
+	codeStyle := m.rstyle(lipgloss.NewStyle().Foreground(lipgloss.Color("214")))
 
 	lines := strings.Split(body, "\n")
 	out := make([]string, 0, len(lines))

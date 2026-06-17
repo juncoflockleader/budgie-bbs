@@ -24,7 +24,7 @@ func TestTwoFactorGate(t *testing.T) {
 	}
 
 	// A 2FA-required session opens on the gate, not the main menu.
-	m := newModel(c, user, 80, 24, false, localeEN, "", nil, nil, "", false, true)
+	m := newModel(c, user, 80, 24, false, localeEN, "", nil, nil, "", false, true, nil)
 	if m.page != pageTwoFactorGate {
 		t.Fatalf("expected the session to start on the 2FA gate, got page %v", m.page)
 	}
