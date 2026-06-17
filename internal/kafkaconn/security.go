@@ -28,12 +28,33 @@ func RuntimeClientOpts(runtime RuntimeConfig, clientID string) ([]kgo.Opt, error
 		kgo.SeedBrokers(runtime.Brokers...),
 		kgo.ClientID(clientID),
 	}
+	if lvl := kafkaDebugLogLevel(); lvl != kgo.LogLevelNone {
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, lvl, nil)))
+	}
 	securityOpts, err := runtime.SecurityOpts()
 	if err != nil {
 		return nil, err
 	}
 	opts = append(opts, securityOpts...)
 	return opts, nil
+}
+
+// kafkaDebugLogLevel returns the franz-go client log level from
+// BUDGIE_KAFKA_LOG_LEVEL (debug|info|warn|error|none). It defaults to none so
+// production clients stay silent; it is a diagnostic aid for load/gate runs.
+func kafkaDebugLogLevel() kgo.LogLevel {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BUDGIE_KAFKA_LOG_LEVEL"))) {
+	case "debug":
+		return kgo.LogLevelDebug
+	case "info":
+		return kgo.LogLevelInfo
+	case "warn", "warning":
+		return kgo.LogLevelWarn
+	case "error":
+		return kgo.LogLevelError
+	default:
+		return kgo.LogLevelNone
+	}
 }
 
 func (c RuntimeConfig) SecurityOpts() ([]kgo.Opt, error) {

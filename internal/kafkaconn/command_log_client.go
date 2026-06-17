@@ -15,12 +15,20 @@ import (
 type FranzCommandLogClientOptions struct {
 	PollTimeout     time.Duration
 	PollRecordLimit int
+	// ReadyTimeout bounds how long the very first fetch may block while the
+	// consumer group completes its initial join/sync. A Kafka group join (member
+	// id round trip + cooperative-sticky rebalance) takes far longer than the
+	// steady-state PollTimeout, so without this grace the first few empty polls
+	// look like a stalled drain. After the first successful poll the client
+	// reverts to the fast PollTimeout. Zero falls back to a built-in default.
+	ReadyTimeout time.Duration
 }
 
 func FastDrainFranzCommandLogClientOptions() FranzCommandLogClientOptions {
 	return FranzCommandLogClientOptions{
 		PollTimeout:     25 * time.Millisecond,
 		PollRecordLimit: 4096,
+		ReadyTimeout:    10 * time.Second,
 	}
 }
 
@@ -44,6 +52,7 @@ type FranzCommandLogClient struct {
 	mu        sync.Mutex
 	buffered  map[commandPhysicalPartition][]*kgo.Record
 	committed map[commandPhysicalPartition]int64
+	warmedUp  bool // first poll completed; consumer group has joined/synced
 }
 
 var _ CommandLogClient = (*FranzCommandLogClient)(nil)
@@ -108,7 +117,13 @@ func (c *FranzCommandLogClient) FetchCommandRecords(ctx context.Context, request
 		return out, err
 	}
 
-	deadline := time.Now().Add(c.options.PollTimeout)
+	// The first fetch absorbs the consumer-group join latency (see ReadyTimeout);
+	// thereafter polls stay fast so steady-state drain throughput is unaffected.
+	pollBudget := c.options.PollTimeout
+	if !c.warmedUp && c.options.ReadyTimeout > pollBudget {
+		pollBudget = c.options.ReadyTimeout
+	}
+	deadline := time.Now().Add(pollBudget)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -134,6 +149,9 @@ func (c *FranzCommandLogClient) FetchCommandRecords(ctx context.Context, request
 			}
 			return nil, err
 		}
+		// A poll returned without error: the group has joined/synced, so revert
+		// to fast steady-state polling for subsequent fetches.
+		c.warmedUp = true
 		for _, record := range fetches.Records() {
 			if record == nil || record.Topic != request.Topic {
 				continue
@@ -363,6 +381,9 @@ func (c *FranzCommandLogClient) pollRecordLimit(request CommandFetchRequest) int
 func normalizeFranzCommandLogClientOptions(options FranzCommandLogClientOptions) FranzCommandLogClientOptions {
 	if options.PollTimeout <= 0 {
 		options.PollTimeout = 2 * time.Second
+	}
+	if options.ReadyTimeout < options.PollTimeout {
+		options.ReadyTimeout = options.PollTimeout
 	}
 	return options
 }
