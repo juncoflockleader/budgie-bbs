@@ -107,6 +107,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/auth/policy", s.handleAuthPolicy)
 	mux.HandleFunc("GET /api/v1/auth/privacy-policy", s.handlePrivacyPolicy)
 	mux.HandleFunc("GET /api/v1/site/appearance", s.handleGetSiteAppearance)
+	mux.HandleFunc("GET /api/v1/site/tui-stock-art", s.handleGetTUIStockArt)
 	mux.HandleFunc("GET /api/v1/auth/captcha", s.handleCaptchaChallenge)
 	mux.HandleFunc("GET /api/v1/auth/verify-email", s.handleVerifyEmail)
 	mux.HandleFunc("POST /api/v1/auth/resend-verification", s.handleResendVerification)

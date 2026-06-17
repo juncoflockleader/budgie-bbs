@@ -173,6 +173,10 @@ type model struct {
 	// rstyle makes it render with the SSH *session's* detected color profile.
 	r *lipgloss.Renderer
 
+	// appearance is the admin-configured site branding + main-menu layout,
+	// snapshotted at login. nil falls back to built-in defaults.
+	appearance *core.SiteAppearance
+
 	// SSH self-registration (opt-in via -allow-ssh-registration).
 	allowRegistration bool
 	signup            *signupState
@@ -272,6 +276,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		scopes = append(scopes, "system:nodes")
 	}
 	sub := c.Subscribe(scopes)
+	appearance, _ := c.SiteAppearance() // nil on error -> defaults at render time
 	threadTitlePlaceholder := trLocale(locale, msgPlaceholderThreadTitle)
 	chatMessagePlaceholder := trLocale(locale, msgPlaceholderChatMessage)
 	composeBodyPlaceholder := trLocale(locale, msgPlaceholderComposeBody)
@@ -308,6 +313,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		authorNames:       make(map[string]string),
 		supportsANSI:      supportsANSI,
 		r:                 renderer,
+		appearance:        appearance,
 		locale:            locale,
 		doors:             doors,
 		termName:          termName,
@@ -1670,10 +1676,114 @@ func (m model) View() string {
 }
 
 func (m model) renderMainMenu() string {
-	var b strings.Builder
-	b.WriteString(m.styled(styleDim, m.tr(msgTagline)) + "\n\n")
-	b.WriteString(m.list.View())
-	return b.String()
+	layout := core.DefaultTUIMainMenuLayout()
+	if m.appearance != nil && m.appearance.MainMenuLayout != nil && len(m.appearance.MainMenuLayout.Blocks) > 0 {
+		layout = *m.appearance.MainMenuLayout
+	}
+	// Inner content width (panel border + padding) and the height budget for the
+	// section. Art wider than the terminal is skipped so narrow clients degrade
+	// gracefully instead of wrapping (which would overflow the section).
+	innerWidth := m.panelWidth() - 4
+	if innerWidth < 1 {
+		innerWidth = m.panelWidth()
+	}
+	avail := m.sectionContentHeight()
+
+	parts := make([]string, 0, len(layout.Blocks))
+	menuPos := -1
+	for _, blk := range layout.Blocks {
+		switch strings.ToLower(strings.TrimSpace(blk.Type)) {
+		case "menu":
+			menuPos = len(parts)
+			parts = append(parts, "") // placeholder; sized + filled below
+		case "spacer":
+			n := blk.Lines
+			if n < 1 {
+				n = 1
+			}
+			parts = append(parts, strings.Repeat("\n", n-1))
+		case "text":
+			text := blk.Text
+			if strings.TrimSpace(text) == "" {
+				text = m.mainMenuTagline()
+			}
+			text = truncateDisplayWidth(text, innerWidth)
+			parts = append(parts, m.placeMenuBlock(m.colorizeBlock(text, blk.Color, true), blk.Align, innerWidth))
+		case "art":
+			art := strings.TrimRight(blk.Art, "\n")
+			if s := strings.TrimSpace(blk.Stock); s != "" {
+				art = core.StockTUIArt(s)
+			}
+			if strings.TrimSpace(art) == "" {
+				continue
+			}
+			if innerWidth > 0 && lipgloss.Width(art) > innerWidth {
+				continue // too wide for this terminal; degrade gracefully
+			}
+			parts = append(parts, m.placeMenuBlock(m.colorizeBlock(art, blk.Color, false), blk.Align, innerWidth))
+		}
+	}
+
+	// Size the menu list to the height left over after the decorative blocks so
+	// the whole composition fits the section content area.
+	if menuPos >= 0 {
+		decoLines := 0
+		for i, p := range parts {
+			if i != menuPos {
+				decoLines += lipgloss.Height(p)
+			}
+		}
+		menuHeight := avail - decoLines
+		if menuHeight < 1 {
+			menuHeight = 1
+		}
+		m.list.SetHeight(menuHeight)
+		parts[menuPos] = m.list.View()
+	}
+	return strings.Join(parts, "\n")
+}
+
+// mainMenuTagline returns the admin tagline if set, else the built-in default.
+func (m model) mainMenuTagline() string {
+	if m.appearance != nil && strings.TrimSpace(m.appearance.Tagline) != "" {
+		return strings.TrimSpace(m.appearance.Tagline)
+	}
+	return m.tr(msgTagline)
+}
+
+// colorizeBlock applies an optional per-block hex color (truecolor) to art/text,
+// honoring the ANSI capability gate. When no color is given, text blocks render
+// dim and art renders in the terminal's default foreground.
+func (m model) colorizeBlock(content, hexColor string, dimWhenPlain bool) string {
+	if !m.supportsANSI {
+		return content
+	}
+	if c := strings.TrimSpace(hexColor); c != "" {
+		return m.rstyle(lipgloss.NewStyle().Foreground(lipgloss.Color(c))).Render(content)
+	}
+	if dimWhenPlain {
+		return m.styled(styleDim, content)
+	}
+	return content
+}
+
+// placeMenuBlock horizontally aligns a (possibly multi-line) block within width,
+// preserving the block's internal shape.
+func (m model) placeMenuBlock(content, align string, width int) string {
+	if width <= 0 {
+		return content
+	}
+	pos := lipgloss.Left
+	switch strings.ToLower(strings.TrimSpace(align)) {
+	case "center":
+		pos = lipgloss.Center
+	case "right":
+		pos = lipgloss.Right
+	}
+	if pos == lipgloss.Left {
+		return content
+	}
+	return lipgloss.PlaceHorizontal(width, pos, content)
 }
 
 func (m model) renderProfileSettings() string {

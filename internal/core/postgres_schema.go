@@ -3121,6 +3121,7 @@ CREATE TABLE IF NOT EXISTS site_appearance_settings (
     banner_message TEXT NOT NULL DEFAULT '',
     accent_color   TEXT NOT NULL DEFAULT '',
     default_theme  TEXT NOT NULL DEFAULT 'dark',
+    tui_main_menu_layout TEXT NOT NULL DEFAULT '',
     updated_at     BIGINT NOT NULL DEFAULT 0
 );
 INSERT INTO site_appearance_settings (id, updated_at) VALUES ('default', 0)
@@ -3174,6 +3175,17 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after BIGINT NOT NULL 
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (82, 'postgres-users-sessions-valid-after', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 83,
+			Name:    "postgres-site-appearance-tui-layout",
+			SQL: `
+ALTER TABLE site_appearance_settings ADD COLUMN IF NOT EXISTS tui_main_menu_layout TEXT NOT NULL DEFAULT '';
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (83, 'postgres-site-appearance-tui-layout', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

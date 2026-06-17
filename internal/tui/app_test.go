@@ -405,6 +405,36 @@ func TestSSHRendererAppliesSessionColorProfile(t *testing.T) {
 	}
 }
 
+func TestMainMenuRendersConfiguredLayout(t *testing.T) {
+	c := newTestCore(t)
+	actor, err := c.RegisterUser("layouttester", "correct-horse-battery-staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := lipgloss.NewRenderer(io.Discard)
+	r.SetColorProfile(termenv.ANSI256)
+	m := newModel(c, actor, 80, 24, true, localeEN, "", nil, nil, "", false, false, r)
+	m.appearance = &core.SiteAppearance{
+		Tagline: "campus bbs over ssh",
+		MainMenuLayout: &core.TUIMainMenuLayout{Blocks: []core.TUIBlock{
+			{Type: "art", Stock: "budgie-bbs", Align: "center"},
+			{Type: "spacer", Lines: 1},
+			{Type: "text", Text: "", Align: "center", Color: "#58a6ff"},
+			{Type: "menu", Align: "left"},
+		}},
+	}
+	out := m.renderMainMenu()
+	if !strings.Contains(out, "|____/") { // a fragment unique to the stock banner art
+		t.Fatalf("expected stock banner art in main menu, got:\n%s", out)
+	}
+	if !strings.Contains(out, "campus bbs over ssh") {
+		t.Fatalf("expected empty text block to be filled with the tagline, got:\n%s", out)
+	}
+	if !strings.Contains(out, "\x1b[") {
+		t.Fatalf("expected ANSI color in the rendered menu, got %q", out)
+	}
+}
+
 func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 	c := newTestCore(t)
 	actor, err := c.RegisterUser("alice", "correct-horse-battery-staple")

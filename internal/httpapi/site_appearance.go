@@ -20,6 +20,16 @@ func (s *Server) handleGetSiteAppearance(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, a)
 }
 
+// handleGetTUIStockArt serves the catalog of built-in ASCII art presets so the
+// admin layout editor can offer them with previews. Public (decorative only).
+func (s *Server) handleGetTUIStockArt(w http.ResponseWriter, r *http.Request) {
+	arts := make([]map[string]string, 0)
+	for _, name := range core.StockTUIArtNames() {
+		arts = append(arts, map[string]string{"name": name, "art": core.StockTUIArt(name)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"arts": arts})
+}
+
 // handleSetSiteAppearance updates the site appearance (admin only).
 func (s *Server) handleSetSiteAppearance(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())

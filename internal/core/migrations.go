@@ -852,9 +852,13 @@ func applySQLiteMigrations(db *sql.DB) error {
 		    banner_message TEXT    NOT NULL DEFAULT '',
 		    accent_color   TEXT    NOT NULL DEFAULT '',
 		    default_theme  TEXT    NOT NULL DEFAULT 'dark',
+		    tui_main_menu_layout TEXT NOT NULL DEFAULT '',
 		    updated_at     INTEGER NOT NULL DEFAULT 0
 		)`); err != nil {
 		return fmt.Errorf("ensure site appearance settings table: %w", err)
+	}
+	if err := ensureColumn(db, "site_appearance_settings", "tui_main_menu_layout", "tui_main_menu_layout TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("add site_appearance_settings.tui_main_menu_layout: %w", err)
 	}
 	if _, err := qExec(db, `INSERT OR IGNORE INTO site_appearance_settings (id, updated_at) VALUES ('default', 0)`); err != nil {
 		return fmt.Errorf("seed site appearance settings: %w", err)
