@@ -165,7 +165,7 @@ export function App() {
     return null
   }
   if (!auth.user) {
-    return <AuthPage onLogin={login} siteTitle={appearance?.siteTitle} tagline={appearance?.tagline} />
+    return <AuthPage onLogin={login} siteTitle={appearance?.siteTitle} tagline={appearance?.tagline} bannerURL={api.buildSiteAssetURL(appearance, 'banner')} />
   }
 
   const { token, user } = auth
@@ -228,8 +228,8 @@ export function App() {
         {/* Brand */}
         <div className="sidebar-brand" onClick={() => nav({ name: 'boards' })}>
           <span className="sidebar-logo">
-            {logoImgOk
-              ? <img className="sidebar-logo-img" src={api.siteAssetURL('logo')} alt="" onError={() => setLogoImgOk(false)} />
+            {api.buildSiteAssetURL(appearance, 'logo') && logoImgOk
+              ? <img className="sidebar-logo-img" src={api.buildSiteAssetURL(appearance, 'logo')!} alt="" onError={() => setLogoImgOk(false)} />
               : (appearance?.logo || '🐦')}
           </span>
           <span className="sidebar-title">{appearance?.siteTitle || 'Budgie'}</span>

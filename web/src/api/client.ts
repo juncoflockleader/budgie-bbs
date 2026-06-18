@@ -455,10 +455,24 @@ export async function getTUIStockArt(): Promise<ApiResponse<{ arts: TUIStockArt[
   return json<{ arts: TUIStockArt[] }>(res)
 }
 
-// siteAssetURL is the public URL for an uploaded site image (logo|banner).
-// Append a cache-busting query when you need the freshest version.
+// siteAssetURL is the app endpoint for an uploaded site image (logo|banner);
+// used for admin previews. Append a cache-busting query for the freshest copy.
 export function siteAssetURL(name: string): string {
   return `${BASE}/site/asset/${name}`
+}
+
+// buildSiteAssetURL returns the public URL for a site image: the CDN/base URL
+// (immutable, versioned) when configured, else the app endpoint with a version
+// query. Returns null when the asset is unset so callers can show a fallback.
+export function buildSiteAssetURL(
+  appearance: { assetBaseURL?: string; assetVersions?: Record<string, number> } | null | undefined,
+  name: string,
+): string | null {
+  const version = appearance?.assetVersions?.[name] ?? 0
+  if (!version) return null
+  const base = appearance?.assetBaseURL
+  if (base) return `${base}/site/${name}-${version}.png`
+  return `${BASE}/site/asset/${name}?v=${version}`
 }
 
 export async function uploadSiteAsset(token: string, name: string, file: File): Promise<ApiResponse<{ ok: boolean; byteSize: number }>> {

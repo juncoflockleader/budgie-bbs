@@ -606,6 +606,10 @@ export interface SiteAppearance {
   accentColor: string
   defaultTheme: string
   mainMenuLayout?: TUIMainMenuLayout
+  // assetBaseURL is the external/CDN base for uploaded images ("" = app-served);
+  // assetVersions[name] is each asset's version (0 = unset) for cache-busting.
+  assetBaseURL?: string
+  assetVersions?: Record<string, number>
   updatedAt: number
 }
 

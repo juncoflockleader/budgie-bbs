@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	_ "modernc.org/sqlite"
@@ -52,6 +53,10 @@ type Core struct {
 	handler *Handler
 	// Nodes is the in-memory registry of active SSH sessions (M14).
 	Nodes *NodeRegistry
+	// assetStore, when non-nil, holds site-asset bytes (logo/banner) in an
+	// external object store (S3/R2) so a CDN can serve them; nil keeps bytes in
+	// the DB and the app serves them.
+	assetStore assetstore.Store
 	// pgDSN and nodeID are non-empty in Postgres mode only.
 	// pgDSN is used to start the cross-node LISTEN goroutine.
 	// nodeID identifies this process in pg_notify payloads.

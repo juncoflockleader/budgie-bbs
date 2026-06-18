@@ -8,6 +8,7 @@ interface Props {
   onLogin: (token: string, user: AuthState['user']) => void
   siteTitle?: string
   tagline?: string
+  bannerURL?: string | null
 }
 
 const providerScripts: Record<string, { src: string; cls: string }> = {
@@ -16,7 +17,7 @@ const providerScripts: Record<string, { src: string; cls: string }> = {
   recaptcha: { src: 'https://www.google.com/recaptcha/api.js', cls: 'g-recaptcha' },
 }
 
-export function AuthPage({ onLogin, siteTitle, tagline }: Props) {
+export function AuthPage({ onLogin, siteTitle, tagline, bannerURL }: Props) {
   const { t, locale, setLocale } = useI18n()
   const [mode, setMode] = useState<'login' | 'register' | 'recover'>('login')
   const [name, setName] = useState('')
@@ -190,7 +191,7 @@ export function AuthPage({ onLogin, siteTitle, tagline }: Props) {
 
   return (
     <div className="auth-page">
-      <img className="auth-banner" src={api.siteAssetURL('banner')} alt="" onError={e => { e.currentTarget.style.display = 'none' }} />
+      {bannerURL && <img className="auth-banner" src={bannerURL} alt="" onError={e => { e.currentTarget.style.display = 'none' }} />}
       <h1 className="auth-title">{siteTitle || t('app.name')}</h1>
       {tagline && <p className="auth-tagline">{tagline}</p>}
       <div className="auth-locale">

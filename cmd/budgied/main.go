@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
@@ -1804,6 +1805,13 @@ func main() {
 		slog.Info("cluster-wide rate limiting enabled", "backend", "redis", "prefix", *readCachePrefix)
 	}
 
+	// Site assets (logo/banner): use an external object store + CDN when
+	// configured (BUDGIE_ASSET_S3_BUCKET…), else keep bytes in the DB.
+	if err := configureAssetStore(c); err != nil {
+		slog.Error("site asset store init failed", "err", err)
+		os.Exit(1)
+	}
+
 	// HTTP listener — always started so /healthz, /readyz, /metrics are reachable
 	// on every node. The full API/WS/SPA is mounted only on the api role; the
 	// gateway role gets live WS/SSE/poll transports without the REST API surface.
@@ -1899,6 +1907,32 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+// configureAssetStore wires an external S3-compatible object store for site
+// assets when BUDGIE_ASSET_S3_BUCKET is set; otherwise assets stay in the DB.
+//
+//	BUDGIE_ASSET_S3_BUCKET, _REGION (default "auto"), _ENDPOINT (R2/MinIO),
+//	_ACCESS_KEY, _SECRET_KEY; BUDGIE_ASSET_BASE_URL = public/CDN base URL.
+func configureAssetStore(c *core.Core) error {
+	bucket := strings.TrimSpace(os.Getenv("BUDGIE_ASSET_S3_BUCKET"))
+	if bucket == "" {
+		return nil
+	}
+	store, err := assetstore.NewS3(assetstore.S3Config{
+		Bucket:        bucket,
+		Region:        os.Getenv("BUDGIE_ASSET_S3_REGION"),
+		Endpoint:      os.Getenv("BUDGIE_ASSET_S3_ENDPOINT"),
+		AccessKey:     os.Getenv("BUDGIE_ASSET_S3_ACCESS_KEY"),
+		SecretKey:     os.Getenv("BUDGIE_ASSET_S3_SECRET_KEY"),
+		PublicBaseURL: os.Getenv("BUDGIE_ASSET_BASE_URL"),
+	})
+	if err != nil {
+		return err
+	}
+	c.SetAssetStore(store)
+	slog.Info("site assets: external object store enabled", "bucket", bucket, "publicBase", store.PublicBaseURL())
+	return nil
 }
 
 func envOr(key, fallback string) string {
