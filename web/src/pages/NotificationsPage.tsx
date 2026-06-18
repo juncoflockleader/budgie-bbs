@@ -23,8 +23,8 @@ export function NotificationsPage({ token, onBack }: Props) {
     if (res.error) {
       setError(t('common.errorPrefix', { message: res.error.message }))
     } else if (res.data) {
-      setNotifs(res.data.notifications)
-      setUnreadCount(res.data.unreadCount)
+      setNotifs(res.data.notifications ?? [])
+      setUnreadCount(res.data.unreadCount ?? 0)
     }
   }
 
