@@ -47,6 +47,7 @@ export function App() {
   const { theme, setTheme } = useTheme()
   const { auth, login, logout, loading: authLoading } = useAuth()
   const [page, setPage] = useState<Page>({ name: 'boards' })
+  const [logoImgOk, setLogoImgOk] = useState(true)
   const [searchDraft, setSearchDraft] = useState('')
   const [unreadCount, setUnreadCount] = useState(0)
   const [privateUnreadCount, setPrivateUnreadCount] = useState(0)
@@ -226,7 +227,11 @@ export function App() {
       <aside className="sidebar">
         {/* Brand */}
         <div className="sidebar-brand" onClick={() => nav({ name: 'boards' })}>
-          <span className="sidebar-logo">{appearance?.logo || '🐦'}</span>
+          <span className="sidebar-logo">
+            {logoImgOk
+              ? <img className="sidebar-logo-img" src={api.siteAssetURL('logo')} alt="" onError={() => setLogoImgOk(false)} />
+              : (appearance?.logo || '🐦')}
+          </span>
           <span className="sidebar-title">{appearance?.siteTitle || 'Budgie'}</span>
         </div>
 

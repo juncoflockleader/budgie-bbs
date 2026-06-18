@@ -190,6 +190,7 @@ export function AuthPage({ onLogin, siteTitle, tagline }: Props) {
 
   return (
     <div className="auth-page">
+      <img className="auth-banner" src={api.siteAssetURL('banner')} alt="" onError={e => { e.currentTarget.style.display = 'none' }} />
       <h1 className="auth-title">{siteTitle || t('app.name')}</h1>
       {tagline && <p className="auth-tagline">{tagline}</p>}
       <div className="auth-locale">

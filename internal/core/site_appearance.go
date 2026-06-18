@@ -23,6 +23,7 @@ type SiteAppearance struct {
 }
 
 const defaultSiteTitle = "Budgie BBS"
+const defaultSiteTheme = "light"
 
 var siteThemes = map[string]bool{"dark": true, "dim": true, "light": true, "warm": true}
 
@@ -31,7 +32,7 @@ var hexColorRe = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 // SiteAppearance returns the current site appearance settings (sensible defaults
 // if unset).
 func (c *Core) SiteAppearance() (*SiteAppearance, error) {
-	out := &SiteAppearance{SiteTitle: defaultSiteTitle, DefaultTheme: "dark"}
+	out := &SiteAppearance{SiteTitle: defaultSiteTitle, DefaultTheme: defaultSiteTheme}
 	var layoutRaw string
 	err := qQueryRow(c.DB,
 		`SELECT site_title, COALESCE(logo,''), tagline, banner_message, accent_color, default_theme,
@@ -52,7 +53,7 @@ func (c *Core) SiteAppearance() (*SiteAppearance, error) {
 		out.SiteTitle = defaultSiteTitle
 	}
 	if !siteThemes[out.DefaultTheme] {
-		out.DefaultTheme = "dark"
+		out.DefaultTheme = defaultSiteTheme
 	}
 	return out, nil
 }
@@ -84,7 +85,7 @@ func (c *Core) SetSiteAppearance(a SiteAppearance) (*SiteAppearance, error) {
 	}
 	theme := strings.TrimSpace(a.DefaultTheme)
 	if theme == "" {
-		theme = "dark"
+		theme = defaultSiteTheme
 	}
 	if !siteThemes[theme] {
 		return nil, errors.New("default theme must be one of dark, dim, light, warm")

@@ -851,7 +851,7 @@ func applySQLiteMigrations(db *sql.DB) error {
 		    tagline        TEXT    NOT NULL DEFAULT '',
 		    banner_message TEXT    NOT NULL DEFAULT '',
 		    accent_color   TEXT    NOT NULL DEFAULT '',
-		    default_theme  TEXT    NOT NULL DEFAULT 'dark',
+		    default_theme  TEXT    NOT NULL DEFAULT 'light',
 		    logo           TEXT    NOT NULL DEFAULT '',
 		    tui_main_menu_layout TEXT NOT NULL DEFAULT '',
 		    updated_at     INTEGER NOT NULL DEFAULT 0
@@ -873,6 +873,15 @@ func applySQLiteMigrations(db *sql.DB) error {
 		    updated_at INTEGER NOT NULL DEFAULT 0
 		)`); err != nil {
 		return fmt.Errorf("ensure mud players table: %w", err)
+	}
+	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS site_assets (
+		    name         TEXT    PRIMARY KEY,
+		    content_type TEXT    NOT NULL DEFAULT '',
+		    data         BLOB,
+		    byte_size    INTEGER NOT NULL DEFAULT 0,
+		    updated_at   INTEGER NOT NULL DEFAULT 0
+		)`); err != nil {
+		return fmt.Errorf("ensure site assets table: %w", err)
 	}
 	if _, err := qExec(db, `CREATE TABLE IF NOT EXISTS user_2fa_settings (
 		    user_id        TEXT    PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

@@ -455,6 +455,29 @@ export async function getTUIStockArt(): Promise<ApiResponse<{ arts: TUIStockArt[
   return json<{ arts: TUIStockArt[] }>(res)
 }
 
+// siteAssetURL is the public URL for an uploaded site image (logo|banner).
+// Append a cache-busting query when you need the freshest version.
+export function siteAssetURL(name: string): string {
+  return `${BASE}/site/asset/${name}`
+}
+
+export async function uploadSiteAsset(token: string, name: string, file: File): Promise<ApiResponse<{ ok: boolean; byteSize: number }>> {
+  const res = await fetch(`${BASE}/admin/site-asset/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'image/png', ...authHeaders(token) },
+    body: file,
+  })
+  return json<{ ok: boolean; byteSize: number }>(res)
+}
+
+export async function deleteSiteAsset(token: string, name: string): Promise<ApiResponse<{ ok: boolean }>> {
+  const res = await fetch(`${BASE}/admin/site-asset/${name}`, {
+    method: 'DELETE',
+    headers: { ...authHeaders(token) },
+  })
+  return json<{ ok: boolean }>(res)
+}
+
 export async function getSecuritySettings(token: string): Promise<ApiResponse<SecuritySettings>> {
   const res = await fetch(`${BASE}/admin/security-settings`, { headers: authHeaders(token) })
   return json<SecuritySettings>(res)

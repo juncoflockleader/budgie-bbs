@@ -646,8 +646,8 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
               <span className="favorite-folder-actions">
                 {favoriteStats.unreadPosts > 0 && <button className="board-action-btn" onClick={e => markFavoriteScopeRead('', e)} title={t('board.favoriteActions.markRead')}>✓</button>}
                 {favoriteStats.hasReadMarker && <button className="board-action-btn" onClick={e => restoreFavoriteScopeRead('', e)} title={t('board.favoriteActions.restoreReadMarker')}>↶</button>}
-                <button className="board-action-btn" onClick={exportFavorites} title={t('board.favoriteActions.export')}>{t('board.favoriteActions.export')}</button>
-                <button className="board-action-btn" onClick={importFavorites} title={t('board.favoriteActions.import')}>{t('board.favoriteActions.import')}</button>
+                <button className="board-action-btn" onClick={exportFavorites} title={t('board.favoriteActions.export')} aria-label={t('board.favoriteActions.export')}>📤</button>
+                <button className="board-action-btn" onClick={importFavorites} title={t('board.favoriteActions.import')} aria-label={t('board.favoriteActions.import')}>📥</button>
                 <button className="board-action-btn" onClick={e => createFolder('', e)} title={t('board.favoriteActions.newFolder')}>＋</button>
               </span>
             </div>

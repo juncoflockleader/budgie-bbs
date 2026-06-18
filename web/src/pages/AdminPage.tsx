@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
 import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule, BoardAutomodActivity, SiteAppearance } from '../api/types'
 import { applyAppearance } from '../appearance'
@@ -37,6 +37,7 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [securitySettings, setSecuritySettings] = useState<SecuritySettings | null>(null)
   const [appearance, setAppearance] = useState<SiteAppearance | null>(null)
   const [appearanceDraft, setAppearanceDraft] = useState<SiteAppearance | null>(null)
+  const [assetBust, setAssetBust] = useState(0)
   const [role2FA, setRole2FA] = useState<string | null>(null)
   const [automodBoard, setAutomodBoard] = useState('')
   const [automodRules, setAutomodRules] = useState<BoardAutomodRule[] | null>(null)
@@ -146,6 +147,33 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
     setAppearanceDraft(res.data)
     applyAppearance(res.data)
     setNotice({ kind: 'ok', text: 'Site appearance updated.' })
+  }
+
+  async function uploadSiteImage(name: 'logo' | 'banner', event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.type !== 'image/png') {
+      setNotice({ kind: 'error', text: 'Please choose a PNG image.' })
+      return
+    }
+    const res = await api.uploadSiteAsset(token, name, file)
+    if (res.error) {
+      setNotice({ kind: 'error', text: res.error.message })
+      return
+    }
+    setAssetBust(Date.now())
+    setNotice({ kind: 'ok', text: `${name === 'logo' ? 'Logo' : 'Banner'} image uploaded.` })
+  }
+
+  async function removeSiteImage(name: 'logo' | 'banner') {
+    const res = await api.deleteSiteAsset(token, name)
+    if (res.error) {
+      setNotice({ kind: 'error', text: res.error.message })
+      return
+    }
+    setAssetBust(Date.now())
+    setNotice({ kind: 'ok', text: `${name === 'logo' ? 'Logo' : 'Banner'} image removed.` })
   }
 
   async function setStaff2FARequired(required: boolean) {
@@ -523,6 +551,22 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
                   onChange={e => setAppearanceDraft({ ...appearanceDraft, logo: e.target.value })}
                   placeholder="🐦 (emoji or short glyph, shown before the title)"
                 />
+              </label>
+              <label>
+                Logo image (PNG)
+                <span className="admin-asset-row">
+                  <img className="admin-asset-preview admin-asset-preview--logo" src={`${api.siteAssetURL('logo')}?t=${assetBust}`} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden' }} onLoad={e => { e.currentTarget.style.visibility = 'visible' }} />
+                  <input type="file" accept="image/png" onChange={e => uploadSiteImage('logo', e)} />
+                  <button type="button" className="link-btn danger" onClick={() => removeSiteImage('logo')}>Clear</button>
+                </span>
+              </label>
+              <label>
+                Banner image (PNG, shown on the sign-in page)
+                <span className="admin-asset-row">
+                  <img className="admin-asset-preview admin-asset-preview--banner" src={`${api.siteAssetURL('banner')}?t=${assetBust}`} alt="" onError={e => { e.currentTarget.style.visibility = 'hidden' }} onLoad={e => { e.currentTarget.style.visibility = 'visible' }} />
+                  <input type="file" accept="image/png" onChange={e => uploadSiteImage('banner', e)} />
+                  <button type="button" className="link-btn danger" onClick={() => removeSiteImage('banner')}>Clear</button>
+                </span>
               </label>
               <label>
                 Site title

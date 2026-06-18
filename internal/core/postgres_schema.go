@@ -3120,7 +3120,7 @@ CREATE TABLE IF NOT EXISTS site_appearance_settings (
     tagline        TEXT NOT NULL DEFAULT '',
     banner_message TEXT NOT NULL DEFAULT '',
     accent_color   TEXT NOT NULL DEFAULT '',
-    default_theme  TEXT NOT NULL DEFAULT 'dark',
+    default_theme  TEXT NOT NULL DEFAULT 'light',
     logo           TEXT NOT NULL DEFAULT '',
     tui_main_menu_layout TEXT NOT NULL DEFAULT '',
     updated_at     BIGINT NOT NULL DEFAULT 0
@@ -3132,6 +3132,14 @@ CREATE TABLE IF NOT EXISTS mud_players (
     user_id    TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     room_id    TEXT NOT NULL DEFAULT '',
     updated_at BIGINT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS site_assets (
+    name         TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL DEFAULT '',
+    data         BYTEA,
+    byte_size    BIGINT NOT NULL DEFAULT 0,
+    updated_at   BIGINT NOT NULL DEFAULT 0
 );
 
 INSERT INTO schema_migrations (version, name, applied_at)
@@ -3219,6 +3227,23 @@ ALTER TABLE site_appearance_settings ADD COLUMN IF NOT EXISTS logo TEXT NOT NULL
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (85, 'postgres-site-appearance-logo', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 86,
+			Name:    "postgres-site-assets",
+			SQL: `
+CREATE TABLE IF NOT EXISTS site_assets (
+    name         TEXT PRIMARY KEY,
+    content_type TEXT NOT NULL DEFAULT '',
+    data         BYTEA,
+    byte_size    BIGINT NOT NULL DEFAULT 0,
+    updated_at   BIGINT NOT NULL DEFAULT 0
+);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (86, 'postgres-site-assets', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

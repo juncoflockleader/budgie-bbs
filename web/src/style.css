@@ -12,7 +12,6 @@
 }
 
 /* ── Theme: Dark (default) ─────────────────────────────────────────────── */
-:root,
 html[data-theme="dark"] {
   --c-bg:           #0d1117;
   --c-surface:      #161b22;
@@ -48,7 +47,8 @@ html[data-theme="dim"] {
   --c-warn:         #faa61a;
 }
 
-/* ── Theme: Light ──────────────────────────────────────────────────────── */
+/* ── Theme: Light (also the default when no theme is selected) ─────────── */
+:root,
 html[data-theme="light"] {
   --c-bg:           #ffffff;
   --c-surface:      #f6f8fa;
@@ -182,7 +182,12 @@ label {
 }
 .sidebar-brand:hover .sidebar-title { color: var(--c-accent) }
 
-.sidebar-logo { font-size: 1.35rem; line-height: 1; flex-shrink: 0 }
+.sidebar-logo { font-size: 1.35rem; line-height: 1; flex-shrink: 0; display: inline-flex; align-items: center }
+.sidebar-logo-img { width: 1.5em; height: 1.5em; object-fit: contain; display: block }
+.auth-banner { display: block; max-width: 100%; max-height: 140px; object-fit: contain; margin: 0 auto 1.1rem }
+.admin-asset-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap }
+.admin-asset-preview { max-height: 48px; max-width: 180px; object-fit: contain; border: 1px solid var(--c-border); border-radius: var(--radius); background: rgba(127,127,127,0.06) }
+.admin-asset-preview--banner { max-height: 64px; max-width: 280px }
 .sidebar-title {
   font-size: 1.05rem;
   font-weight: 700;
