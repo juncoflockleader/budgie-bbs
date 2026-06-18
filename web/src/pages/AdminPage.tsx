@@ -130,6 +130,7 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
     setNotice(null)
     const res = await api.setSiteAppearance(token, {
       siteTitle: appearanceDraft.siteTitle,
+      logo: appearanceDraft.logo,
       tagline: appearanceDraft.tagline,
       bannerMessage: appearanceDraft.bannerMessage,
       accentColor: appearanceDraft.accentColor,
@@ -513,6 +514,16 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
         {appearanceDraft ? (
           <form className="admin-form" onSubmit={saveAppearance}>
             <div className="admin-form-grid">
+              <label>
+                Logo
+                <input
+                  type="text"
+                  maxLength={16}
+                  value={appearanceDraft.logo}
+                  onChange={e => setAppearanceDraft({ ...appearanceDraft, logo: e.target.value })}
+                  placeholder="🐦 (emoji or short glyph, shown before the title)"
+                />
+              </label>
               <label>
                 Site title
                 <input

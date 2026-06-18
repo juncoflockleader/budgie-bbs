@@ -3121,6 +3121,7 @@ CREATE TABLE IF NOT EXISTS site_appearance_settings (
     banner_message TEXT NOT NULL DEFAULT '',
     accent_color   TEXT NOT NULL DEFAULT '',
     default_theme  TEXT NOT NULL DEFAULT 'dark',
+    logo           TEXT NOT NULL DEFAULT '',
     tui_main_menu_layout TEXT NOT NULL DEFAULT '',
     updated_at     BIGINT NOT NULL DEFAULT 0
 );
@@ -3207,6 +3208,17 @@ CREATE TABLE IF NOT EXISTS mud_players (
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (84, 'postgres-mud-players', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 85,
+			Name:    "postgres-site-appearance-logo",
+			SQL: `
+ALTER TABLE site_appearance_settings ADD COLUMN IF NOT EXISTS logo TEXT NOT NULL DEFAULT '';
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (85, 'postgres-site-appearance-logo', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

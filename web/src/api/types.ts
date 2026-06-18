@@ -600,6 +600,7 @@ export interface TUIMainMenuLayout {
 
 export interface SiteAppearance {
   siteTitle: string
+  logo: string
   tagline: string
   bannerMessage: string
   accentColor: string

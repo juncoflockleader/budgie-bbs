@@ -226,7 +226,7 @@ export function App() {
       <aside className="sidebar">
         {/* Brand */}
         <div className="sidebar-brand" onClick={() => nav({ name: 'boards' })}>
-          <span className="sidebar-logo">🐦</span>
+          <span className="sidebar-logo">{appearance?.logo || '🐦'}</span>
           <span className="sidebar-title">{appearance?.siteTitle || 'Budgie'}</span>
         </div>
 

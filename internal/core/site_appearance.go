@@ -11,6 +11,7 @@ import (
 // fields are public (served to anonymous users for the login page and header).
 type SiteAppearance struct {
 	SiteTitle     string `json:"siteTitle"`
+	Logo          string `json:"logo"` // short logo glyph/emoji shown before the title (e.g. 🐦)
 	Tagline       string `json:"tagline"`
 	BannerMessage string `json:"bannerMessage"`
 	AccentColor   string `json:"accentColor"`  // "" or #rgb/#rrggbb
@@ -33,10 +34,10 @@ func (c *Core) SiteAppearance() (*SiteAppearance, error) {
 	out := &SiteAppearance{SiteTitle: defaultSiteTitle, DefaultTheme: "dark"}
 	var layoutRaw string
 	err := qQueryRow(c.DB,
-		`SELECT site_title, tagline, banner_message, accent_color, default_theme,
+		`SELECT site_title, COALESCE(logo,''), tagline, banner_message, accent_color, default_theme,
 		        COALESCE(tui_main_menu_layout,''), updated_at
 		   FROM site_appearance_settings WHERE id='default'`,
-	).Scan(&out.SiteTitle, &out.Tagline, &out.BannerMessage, &out.AccentColor, &out.DefaultTheme, &layoutRaw, &out.UpdatedAt)
+	).Scan(&out.SiteTitle, &out.Logo, &out.Tagline, &out.BannerMessage, &out.AccentColor, &out.DefaultTheme, &layoutRaw, &out.UpdatedAt)
 	if err == sql.ErrNoRows {
 		layout := defaultTUIMainMenuLayout()
 		out.MainMenuLayout = &layout
@@ -64,6 +65,10 @@ func (c *Core) SetSiteAppearance(a SiteAppearance) (*SiteAppearance, error) {
 	}
 	if len(title) > 80 {
 		return nil, errors.New("site title must be 80 characters or less")
+	}
+	logo := strings.TrimSpace(a.Logo)
+	if len(logo) > 32 {
+		return nil, errors.New("logo must be 32 bytes or less (a short glyph or emoji)")
 	}
 	tagline := strings.TrimSpace(a.Tagline)
 	if len(tagline) > 200 {
@@ -93,13 +98,13 @@ func (c *Core) SetSiteAppearance(a SiteAppearance) (*SiteAppearance, error) {
 		return nil, err
 	}
 	if _, err := qExec(c.DB,
-		`INSERT INTO site_appearance_settings (id, site_title, tagline, banner_message, accent_color, default_theme, tui_main_menu_layout, updated_at)
-		 VALUES ('default', ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO site_appearance_settings (id, site_title, logo, tagline, banner_message, accent_color, default_theme, tui_main_menu_layout, updated_at)
+		 VALUES ('default', ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
-		   site_title=excluded.site_title, tagline=excluded.tagline, banner_message=excluded.banner_message,
+		   site_title=excluded.site_title, logo=excluded.logo, tagline=excluded.tagline, banner_message=excluded.banner_message,
 		   accent_color=excluded.accent_color, default_theme=excluded.default_theme,
 		   tui_main_menu_layout=excluded.tui_main_menu_layout, updated_at=excluded.updated_at`,
-		title, tagline, banner, accent, theme, layoutRaw, nowMS(),
+		title, logo, tagline, banner, accent, theme, layoutRaw, nowMS(),
 	); err != nil {
 		return nil, err
 	}
