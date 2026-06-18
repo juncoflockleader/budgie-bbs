@@ -254,6 +254,26 @@ label {
 .sidebar-item--active { background: var(--c-accent-sub); color: var(--c-accent) }
 .sidebar-item--active:hover { background: var(--c-accent-sub); color: var(--c-accent); opacity: 1 }
 
+/* Sidebar navigation tree (favorites + category → board directory) */
+.nav-tree { display: flex; flex-direction: column; margin: 0.15rem 0 0.35rem; max-height: 42vh; overflow-y: auto; }
+.nav-tree-section, .nav-tree-folder, .nav-tree-board {
+  display: flex; align-items: center; gap: 0.3rem; width: 100%;
+  border: none; background: transparent; color: var(--c-muted);
+  cursor: pointer; text-align: left; border-radius: var(--radius);
+  padding: 0.26rem 0.5rem; line-height: 1.25;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nav-tree-section { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.3rem; }
+.nav-tree-folder { font-size: 0.82rem; font-weight: 600; }
+.nav-tree-board { font-size: 0.82rem; }
+.nav-tree-section:hover, .nav-tree-folder:hover, .nav-tree-board:hover { background: rgba(255,255,255,0.06); color: var(--c-text); }
+.nav-tree-board--active { background: var(--c-accent-sub); color: var(--c-accent); }
+.nav-tree-board--active:hover { background: var(--c-accent-sub); color: var(--c-accent); }
+.nav-tree-caret { flex: 0 0 auto; width: 0.8em; font-size: 0.7em; opacity: 0.7; }
+.nav-tree-section-icon { flex: 0 0 auto; opacity: 0.8; }
+.nav-tree-leaf { flex: 0 0 auto; opacity: 0.4; }
+.nav-tree-group { display: flex; flex-direction: column; }
+
 .sidebar-icon {
   width: 1.2rem;
   text-align: center;

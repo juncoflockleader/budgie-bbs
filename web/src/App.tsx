@@ -20,6 +20,7 @@ import { UserProfilePage } from './pages/UserProfilePage'
 import { AuthorPostsPage } from './pages/AuthorPostsPage'
 import { ResidentFeedPage } from './pages/ResidentFeedPage'
 import { AdminPage } from './pages/AdminPage'
+import { SidebarNavTree } from './components/SidebarNavTree'
 import * as api from './api/client'
 import type { Board, Thread, ThreadSummary, BudgieEvent } from './api/types'
 import { useStream } from './hooks/useStream'
@@ -248,6 +249,11 @@ export function App() {
           {sidebarItem('boards',        '⊞', t('nav.boards'),     () => nav({ name: 'boards' }))}
           {sidebarItem('unread',        '◉', t('nav.unread'),     () => nav({ name: 'unread' }))}
           {sidebarItem('resident-feed', '⊛', t('nav.resident'),   () => nav({ name: 'resident-feed' }))}
+          <SidebarNavTree
+            token={token}
+            activeBoardId={page.name === 'threads' ? page.board.id : undefined}
+            onOpenBoard={board => nav({ name: 'threads', board })}
+          />
 
           <span className="sidebar-section">{t('nav.people')}</span>
           {sidebarItem('chat',     '◎', t('nav.chat'),    () => nav({ name: 'chat' }))}
