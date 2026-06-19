@@ -215,6 +215,9 @@ export interface BoardSettings {
   memberPostMode: boolean
   statsExcluded: boolean
   zapAllowed: boolean
+  // '' (default: follows memberReadMode), 'hidden' (block guests), or 'public'
+  // (expose to guests regardless). Controls unauthenticated guest browsing.
+  guestAccess?: '' | 'hidden' | 'public'
   updatedAt: number
 }
 

@@ -20,6 +20,8 @@ interface Props {
   currentUserId: string
   currentUserRole: string
   currentUsername: string
+  isGuest?: boolean
+  onRequireLogin?: () => void
   initialPostId?: string
   onBack: () => void
   onOpenThread: (thread: ThreadSummary, initialPostId?: string) => void
@@ -93,6 +95,8 @@ export function ThreadPage({
   currentUserId,
   currentUsername,
   currentUserRole,
+  isGuest = false,
+  onRequireLogin,
   initialPostId,
   onBack,
   onOpenThread,
@@ -182,9 +186,10 @@ export function ThreadPage({
     }
   }, [loadedDraftKey, draftKey, draftBody, replyAnonymous, replyTo, draftAttachments])
 
-  // Fetch trust level for an author if not already loaded
+  // Fetch trust level for an author if not already loaded. The trust endpoint is
+  // auth-only, so guests skip it (no badges, no repeated 401s).
   async function loadTrust(author: string) {
-    if (trustLevels[author] !== undefined) return
+    if (isGuest || trustLevels[author] !== undefined) return
     const res = await api.getTrust(token, author)
     if (res.data) {
       setTrustLevels(prev => ({ ...prev, [author]: res.data!.trustLevel }))
@@ -192,6 +197,11 @@ export function ThreadPage({
   }
 
   async function loadCurrentUserTrust() {
+    if (isGuest) {
+      setCanCreatePoll(false)
+      setIsTrustLoaded(true)
+      return
+    }
     setIsTrustLoaded(false)
     const trustRes = await api.getTrust(token, currentUsername)
     if (trustRes.data) {
@@ -342,6 +352,7 @@ export function ThreadPage({
   }, [token, thread.id, initialPostId, refreshUnreadThreads])
 
   useEffect(() => {
+    if (isGuest) return // presence is auth-only
     void api.setPresence(token, {
       status: `reading:thread:${thread.id}`,
       mode: 'reading',
@@ -349,7 +360,7 @@ export function ThreadPage({
       thread: thread.id,
       location: threadTitle,
     })
-  }, [token, thread.id, thread.board, threadTitle])
+  }, [token, thread.id, thread.board, threadTitle, isGuest])
 
   useEffect(() => {
     loadCurrentUserTrust()
@@ -474,7 +485,9 @@ export function ThreadPage({
     }
   }, [thread.id, currentUsername, refreshPoll, scheduleReactionProjectionRefresh])
 
-  useStream({ enabled: true }, onEvent)
+  // Guests have no session; the SSE stream requires auth, so disable it to
+  // avoid a 401 reconnect storm.
+  useStream({ enabled: !isGuest }, onEvent)
 
   async function submitPost() {
     if (!draftBody.trim()) return
@@ -719,7 +732,7 @@ export function ThreadPage({
   const canRenameThread = canModerateThreads || thread.authorId === currentUserId || thread.author === currentUsername
   const canManagePolls = canManageBoard || Boolean(currentMember?.canManagePolls)
   const boardBlocksReplies = Boolean(boardInfo?.settings.readOnly || boardInfo?.settings.noReply)
-  const canReplyInBoard = !threadLocked && (!boardBlocksReplies || canManageBoard)
+  const canReplyInBoard = !isGuest && !threadLocked && (!boardBlocksReplies || canManageBoard)
   const canAttach = Boolean(boardInfo?.settings.attachmentsAllowed || canManageBoard)
 
   function scrollToPost(postId: string) {
@@ -940,13 +953,17 @@ export function ThreadPage({
         <button className="back-btn" onClick={onBack}>← Threads</button>
         <h2 className="thread-title">{threadTitle}</h2>
         {threadLocked && <span className="locked-badge">🔒 Locked</span>}
-        <span className="unread-pill">{unreadPosts.length} unread</span>
-        <button className="link-btn" disabled={unreadPosts.length === 0} onClick={() => jumpUnread('previous')}>Prev unread</button>
-        <button className="link-btn" disabled={unreadPosts.length === 0} onClick={() => jumpUnread('next')}>Next unread</button>
-        <button className="link-btn" disabled={readablePosts.length === 0} onClick={() => jumpTopicBoundary('first')}>First post</button>
-        <button className="link-btn" disabled={readablePosts.length === 0} onClick={() => jumpTopicBoundary('last')}>Last post</button>
-        <button className="link-btn" disabled={otherUnreadThreadCount === 0} onClick={() => jumpUnreadThread('previous')}>Prev unread thread</button>
-        <button className="link-btn" disabled={otherUnreadThreadCount === 0} onClick={() => jumpUnreadThread('next')}>Next unread thread</button>
+        {!isGuest && (
+          <>
+            <span className="unread-pill">{unreadPosts.length} unread</span>
+            <button className="link-btn" disabled={unreadPosts.length === 0} onClick={() => jumpUnread('previous')}>Prev unread</button>
+            <button className="link-btn" disabled={unreadPosts.length === 0} onClick={() => jumpUnread('next')}>Next unread</button>
+            <button className="link-btn" disabled={readablePosts.length === 0} onClick={() => jumpTopicBoundary('first')}>First post</button>
+            <button className="link-btn" disabled={readablePosts.length === 0} onClick={() => jumpTopicBoundary('last')}>Last post</button>
+            <button className="link-btn" disabled={otherUnreadThreadCount === 0} onClick={() => jumpUnreadThread('previous')}>Prev unread thread</button>
+            <button className="link-btn" disabled={otherUnreadThreadCount === 0} onClick={() => jumpUnreadThread('next')}>Next unread thread</button>
+          </>
+        )}
         {authorFocus && (
           <>
             <span className="reading-mode-pill">{authorFocus}</span>
@@ -968,8 +985,8 @@ export function ThreadPage({
             <button className="link-btn" onClick={() => curateThreadDigest('pinned')}>Pin thread</button>
           </>
         )}
-        <button className="link-btn" disabled={unreadPosts.length === 0} onClick={markThreadRead}>Mark all read</button>
-        {readSeq > 0 && <button className="link-btn" onClick={restoreThreadRead}>Restore marker</button>}
+        {!isGuest && <button className="link-btn" disabled={unreadPosts.length === 0} onClick={markThreadRead}>Mark all read</button>}
+        {!isGuest && readSeq > 0 && <button className="link-btn" onClick={restoreThreadRead}>Restore marker</button>}
         {canRenameThread && <button className="link-btn" onClick={renameThreadTitle}>Rename</button>}
         {canModerateThreads && (
           <button className="link-btn" onClick={toggleLock}>
@@ -1018,7 +1035,7 @@ export function ThreadPage({
                 {!post.redacted && post.mailBack && <span className="post-flag-badge">Mail-back</span>}
                 {!post.redacted && post.sourcePost && <span className="post-flag-badge">Repost</span>}
                 <span className="post-actions">
-                  {post.createdSeq > readSeq && !post.redacted && (
+                  {!isGuest && post.createdSeq > readSeq && !post.redacted && (
                     <button className="link-btn" onClick={() => markPostReadThrough(post)}>Mark to here</button>
                   )}
                   {!post.redacted && post.author !== 'Anonymous' && (
@@ -1030,13 +1047,13 @@ export function ThreadPage({
                   {!post.redacted && (
                     <button className="link-btn" onClick={() => startReplyTree(post)}>Reply tree</button>
                   )}
-                  {!post.redacted && post.author !== 'Anonymous' && post.authorId !== currentUserId && (
+                  {!isGuest && !post.redacted && post.author !== 'Anonymous' && post.authorId !== currentUserId && (
                     <>
                       <button className="link-btn" onClick={() => setAuthorRelationship(post, 'friend')}>Friend</button>
                       <button className="link-btn danger" onClick={() => setAuthorRelationship(post, 'ignore')}>Ignore</button>
                     </>
                   )}
-                  {!post.redacted && canMailAuthor && (
+                  {!isGuest && !post.redacted && canMailAuthor && (
                     <button className="link-btn" onClick={() => mailPostAuthor(post)}>Mail</button>
                   )}
                   {canUseCurationAction && !post.redacted && (
@@ -1045,7 +1062,7 @@ export function ThreadPage({
                       <button className="link-btn" onClick={() => curatePostDigest(post, 'pinned')}>Pin</button>
                     </>
                   )}
-                  {!post.redacted && (
+                  {!isGuest && !post.redacted && (
                     <button className="link-btn" onClick={() => repostArticle(post)}>Repost</button>
                   )}
                   {canCurateBoard && !post.redacted && (
@@ -1066,13 +1083,17 @@ export function ThreadPage({
                   {canAttach && !post.redacted && (canManageBoard || post.authorId === currentUserId) && (
                     <button className="link-btn" onClick={() => uploadAttachment(post)}>Upload file</button>
                   )}
-                  <button
-                    className={`link-btn react-btn${rx.reacted ? ' react-btn--active' : ''}`}
-                    onClick={() => toggleReact(post.id)}
-                    title={rx.reacted ? 'Remove heart' : 'Heart this post'}
-                  >
-                    {rx.reacted ? '❤️' : '🤍'}{rx.count > 0 ? ` ${rx.count}` : ''}
-                  </button>
+                  {isGuest ? (
+                    rx.count > 0 && <span className="react-btn">❤️ {rx.count}</span>
+                  ) : (
+                    <button
+                      className={`link-btn react-btn${rx.reacted ? ' react-btn--active' : ''}`}
+                      onClick={() => toggleReact(post.id)}
+                      title={rx.reacted ? 'Remove heart' : 'Heart this post'}
+                    >
+                      {rx.reacted ? '❤️' : '🤍'}{rx.count > 0 ? ` ${rx.count}` : ''}
+                    </button>
+                  )}
                   {canReplyToPost && !post.redacted && (
                     <>
                       <button className="link-btn" onClick={() => startReply(post)}>Reply</button>
@@ -1150,6 +1171,7 @@ export function ThreadPage({
               {poll && (
                 <PollWidget
                   poll={poll}
+                  readOnly={isGuest}
                   onVote={optionId => handleVotePoll(poll.id, optionId)}
                   onPublishResult={canPublishPollResult ? () => handlePublishPollResult(poll.id) : undefined}
                 />
@@ -1159,6 +1181,13 @@ export function ThreadPage({
         })}
         <div ref={bottomRef} />
       </div>
+
+      {isGuest && !threadLocked && (
+        <div className="guest-reply-prompt">
+          <span>Sign in to join the conversation.</span>
+          {onRequireLogin && <button type="button" className="new-btn" onClick={onRequireLogin}>Sign in</button>}
+        </div>
+      )}
 
       {canReplyInBoard && (
         composing ? (

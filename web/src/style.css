@@ -399,6 +399,45 @@ label {
 }
 .site-banner-close:hover { color: var(--c-text) }
 
+/* Guest browsing: top-of-content prompt + inline sign-in affordances. */
+.guest-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.55rem 0.85rem;
+  border: 1px dashed var(--c-accent);
+  border-radius: var(--radius);
+  background: var(--c-accent-sub);
+  color: var(--c-text-dim);
+  font-size: 0.9rem;
+}
+.guest-banner > span { flex: 1 1 auto }
+.guest-banner-signin {
+  flex: 0 0 auto;
+  border: 1px solid var(--c-accent);
+  background: var(--c-accent);
+  color: var(--c-accent-fg, #fff);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.guest-banner-signin:hover { filter: brightness(1.05) }
+.guest-reply-prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface-2, var(--c-surface));
+  color: var(--c-text-dim);
+}
+.guest-reply-prompt > span { flex: 1 1 auto }
+.auth-guest-link { display: block; margin-top: 0.35rem }
+
 /* ── Page header ───────────────────────────────────────────────────────── */
 .page-header {
   display: flex;

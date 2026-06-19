@@ -9,6 +9,7 @@ type BoardSortMode = 'name' | 'new' | 'online' | 'posts' | 'activity' | 'unread'
 interface Props {
   token: string
   currentUserRole: string
+  isGuest?: boolean
   onSelect: (board: Board) => void
 }
 
@@ -18,7 +19,11 @@ function savedTab(): BoardTab {
   try { return (localStorage.getItem('budgieBoardTab') as BoardTab) ?? 'unread' } catch { return 'unread' }
 }
 
-export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
+// Guests have no personal favorites/recommendations; the directory and "all"
+// tabs are the only meaningful views. Reused to skip personal fetches.
+const GUEST_FAV_TREE: FavoriteTree = { folders: [], boards: [] }
+
+export function BoardListPage({ token, currentUserRole, isGuest = false, onSelect }: Props) {
   const { t } = useI18n()
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [recommendedBoards, setRecommendedBoards] = useState<RecommendedBoard[]>([])
@@ -28,7 +33,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [boardQuery, setBoardQuery] = useState('')
   const [boardSort, setBoardSort] = useState<BoardSortMode>('name')
-  const [activeTab, setActiveTab] = useState<BoardTab>(savedTab)
+  const [activeTab, setActiveTab] = useState<BoardTab>(() => isGuest ? 'directory' : savedTab())
 
   function switchTab(tab: BoardTab) {
     setActiveTab(tab)
@@ -39,7 +44,9 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all([api.listBoardSummaries(token), api.listRecommendedBoards(token), api.listFavoriteTree(token), api.listCategories(token)]).then(([boardsRes, recommendedRes, treeRes, categoriesRes]) => {
+    const recReq = isGuest ? Promise.resolve({ data: [] as RecommendedBoard[] }) : api.listRecommendedBoards(token)
+    const favReq = isGuest ? Promise.resolve({ data: GUEST_FAV_TREE }) : api.listFavoriteTree(token)
+    Promise.all([api.listBoardSummaries(token), recReq, favReq, api.listCategories(token)]).then(([boardsRes, recommendedRes, treeRes, categoriesRes]) => {
       if (cancelled) return
       setLoading(false)
       if (boardsRes.error) {
@@ -66,7 +73,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [token, isGuest])
 
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
@@ -98,7 +105,9 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
   }
 
   async function reloadBoards(previousBoards = boards, previousTree = favoriteTree, previousRecommended = recommendedBoards) {
-    const [boardsRes, recommendedRes, treeRes, categoriesRes] = await Promise.all([api.listBoardSummaries(token), api.listRecommendedBoards(token), api.listFavoriteTree(token), api.listCategories(token)])
+    const recReq = isGuest ? Promise.resolve({ data: [] as RecommendedBoard[] }) : api.listRecommendedBoards(token)
+    const favReq = isGuest ? Promise.resolve({ data: GUEST_FAV_TREE }) : api.listFavoriteTree(token)
+    const [boardsRes, recommendedRes, treeRes, categoriesRes] = await Promise.all([api.listBoardSummaries(token), recReq, favReq, api.listCategories(token)])
     if (boardsRes.error) {
       setBoards(previousBoards)
       setFavoriteTree(previousTree)
@@ -373,12 +382,13 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
           {board.description && <span className="item-desc muted">{board.description}</span>}
           <BoardStats board={board} />
           <PolicyBadges board={board} />
-          {!board.zapped && board.unreadPosts > 0 && (
+          {!isGuest && !board.zapped && board.unreadPosts > 0 && (
             <span className="item-meta unread-meta">
               {unreadSummary(board.unreadPosts, board.unreadThreads)}
             </span>
           )}
         </span>
+        {!isGuest && (
         <span className="board-row-actions">
           {board.unreadPosts > 0 && (
             <button
@@ -431,6 +441,7 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
             {isFavorite ? '★' : '☆'}
           </button>
         </span>
+        )}
       </li>
     )
   }
@@ -588,19 +599,23 @@ export function BoardListPage({ token, currentUserRole, onSelect }: Props) {
     <div className="board-list">
       {/* ── Tab bar ───────────────────────────────────────────────────── */}
       <div className="board-tabs">
-        <button
-          className={`board-tab board-tab--unread${activeTab === 'unread' ? ' board-tab--active' : ''}`}
-          onClick={() => switchTab('unread')}
-        >
-          {t('board.tabUnread')}
-          {unreadBoards.length > 0 && <span className="board-tab-count">{unreadBoards.length}</span>}
-        </button>
-        <button
-          className={`board-tab${activeTab === 'favorites' ? ' board-tab--active' : ''}`}
-          onClick={() => switchTab('favorites')}
-        >
-          {t('board.tabFavorites')}
-        </button>
+        {!isGuest && (
+          <button
+            className={`board-tab board-tab--unread${activeTab === 'unread' ? ' board-tab--active' : ''}`}
+            onClick={() => switchTab('unread')}
+          >
+            {t('board.tabUnread')}
+            {unreadBoards.length > 0 && <span className="board-tab-count">{unreadBoards.length}</span>}
+          </button>
+        )}
+        {!isGuest && (
+          <button
+            className={`board-tab${activeTab === 'favorites' ? ' board-tab--active' : ''}`}
+            onClick={() => switchTab('favorites')}
+          >
+            {t('board.tabFavorites')}
+          </button>
+        )}
         <button
           className={`board-tab${activeTab === 'directory' ? ' board-tab--active' : ''}`}
           onClick={() => switchTab('directory')}

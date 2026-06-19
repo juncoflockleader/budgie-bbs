@@ -147,10 +147,11 @@ type SetBoardSettingsPayload struct {
 	AttachmentsAllowed *bool  `json:"attachmentsAllowed,omitempty"`
 	MailInAllowed      *bool  `json:"mailInAllowed,omitempty"`
 	RelayEnabled       *bool  `json:"relayEnabled,omitempty"`
-	MemberReadMode     *bool  `json:"memberReadMode,omitempty"`
-	MemberPostMode     *bool  `json:"memberPostMode,omitempty"`
-	StatsExcluded      *bool  `json:"statsExcluded,omitempty"`
-	ZapAllowed         *bool  `json:"zapAllowed,omitempty"`
+	MemberReadMode     *bool   `json:"memberReadMode,omitempty"`
+	MemberPostMode     *bool   `json:"memberPostMode,omitempty"`
+	StatsExcluded      *bool   `json:"statsExcluded,omitempty"`
+	ZapAllowed         *bool   `json:"zapAllowed,omitempty"`
+	GuestAccess        *string `json:"guestAccess,omitempty"`
 }
 
 type SetBoardModeratorPayload struct {

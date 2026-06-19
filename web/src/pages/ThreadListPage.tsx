@@ -1,6 +1,6 @@
 import { type FormEvent, type MouseEvent, useEffect, useState, useCallback } from 'react'
 import * as api from '../api/client'
-import type { Board, BoardInfo, BoardMember, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
+import type { ApiResponse, Board, BoardInfo, BoardMember, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
 import type { BudgieEvent, ThreadNewPayload, ThreadTitleSetPayload } from '../api/types'
 import { Spinner } from '../components/Spinner'
 import { useStream } from '../hooks/useStream'
@@ -11,13 +11,14 @@ interface Props {
   board: Board
   currentUserId: string
   currentUserRole: string
+  isGuest?: boolean
   onSelect: (thread: ThreadSummary, initialPostId?: string) => void
   onBack: () => void
   onNewThread: () => void
   onMessageUser: (username: string) => void
 }
 
-export function ThreadListPage({ token, board, currentUserId, currentUserRole, onSelect, onBack, onNewThread, onMessageUser }: Props) {
+export function ThreadListPage({ token, board, currentUserId, currentUserRole, isGuest = false, onSelect, onBack, onNewThread, onMessageUser }: Props) {
   const { t } = useI18n()
   const [threads, setThreads] = useState<ThreadSummary[]>([])
   const [pinnedEntries, setPinnedEntries] = useState<DigestEntry[]>([])
@@ -51,24 +52,33 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
   }
 
   useEffect(() => {
+    if (isGuest) return // presence is auth-only
     void api.setPresence(token, {
       status: `reading:${board.id}`,
       mode: 'reading',
       board: board.id,
       location: board.name,
     })
-  }, [token, board.id, board.name])
+  }, [token, board.id, board.name, isGuest])
 
   useEffect(() => {
     setLoading(true)
     setError(null)
+    // Guests can read threads + public board info, but the digest, member
+    // applications, and online-user lists are auth-only; skip them (resolve to
+    // empty) so a guest doesn't hit a 401 that aborts the whole load.
+    const empty = <T,>(data: T) => Promise.resolve({ data } as ApiResponse<T>)
+    const pinnedReq = isGuest ? empty<DigestEntry[]>([]) : api.listDigestEntries(token, board.id, 'pinned')
+    const digestReq = isGuest ? empty<DigestEntry[]>([]) : api.listDigestEntries(token, board.id)
+    const applicationsReq = isGuest ? empty<BoardMemberApplication[]>([]) : api.listBoardMemberApplications(token, board.id, 'pending')
+    const onlineReq = isGuest ? empty<SocialUser[]>([]) : api.listBoardOnlineUsers(token, board.id)
     Promise.all([
       api.listThreads(token, board.id, 30, 0, false, { q: activeTitleQuery, author: activeAuthorQuery }),
       api.getBoardInfo(token, board.id),
-      api.listDigestEntries(token, board.id, 'pinned'),
-      api.listDigestEntries(token, board.id),
-      api.listBoardMemberApplications(token, board.id, 'pending'),
-      api.listBoardOnlineUsers(token, board.id),
+      pinnedReq,
+      digestReq,
+      applicationsReq,
+      onlineReq,
     ]).then(([threadsRes, boardRes, pinnedRes, digestRes, applicationsRes, onlineRes]) => {
       setLoading(false)
       if (threadsRes.error) {
@@ -96,7 +106,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
       setMemberApplications(applicationsRes.data ?? [])
       setOnlineUsers(onlineRes.data ?? [])
     })
-  }, [token, board.id, activeTitleQuery, activeAuthorQuery])
+  }, [token, board.id, activeTitleQuery, activeAuthorQuery, isGuest])
 
   const onEvent = useCallback((evt: BudgieEvent) => {
     if (evt.event === 'thread.new') {
@@ -128,7 +138,9 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
     }
   }, [board.id, activeTitleQuery, activeAuthorQuery])
 
-  useStream({ enabled: true }, onEvent)
+  // Guests have no session; the SSE stream requires auth, so disable it to
+  // avoid a 401 reconnect storm.
+  useStream({ enabled: !isGuest }, onEvent)
 
   if (loading) return <Spinner />
   if (error) return <p className="error">{error}</p>
@@ -507,7 +519,7 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
         {(settings?.memberReadMode || settings?.memberPostMode) && !currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={applyForMembership}>{t('board.apply')}</button>}
         {currentUserIsMember && !canManageBoard && <button className="link-btn" onClick={leaveMembership}>{t('board.leave')}</button>}
         {canOpenBoardSettings && <button className="link-btn" onClick={() => setSettingsOpen(open => !open)}>{t('board.settings')}</button>}
-        <button className="new-btn" onClick={onNewThread} disabled={!canCreateThread}>{t('board.createThread')}</button>
+        {!isGuest && <button className="new-btn" onClick={onNewThread} disabled={!canCreateThread}>{t('board.createThread')}</button>}
       </div>
       <form className="search-form thread-search-form" onSubmit={submitThreadSearch}>
         <input
@@ -551,6 +563,17 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, o
                     {t(`board.${label}`)}
                   </label>
                 ))}
+                <label className="setting-toggle setting-select">
+                  <span>{t('board.guestAccess')}</span>
+                  <select
+                    value={settingsDraft.guestAccess ?? ''}
+                    onChange={e => setSettingsDraft(d => d ? { ...d, guestAccess: e.target.value as BoardSettings['guestAccess'] } : d)}
+                  >
+                    <option value="">{t('board.guestAccessDefault')}</option>
+                    <option value="public">{t('board.guestAccessPublic')}</option>
+                    <option value="hidden">{t('board.guestAccessHidden')}</option>
+                  </select>
+                </label>
               </div>
               <div className="board-settings-actions">
                 <button onClick={saveSettings}>{t('board.saveSettings')}</button>

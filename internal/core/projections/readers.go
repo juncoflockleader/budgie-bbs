@@ -1356,12 +1356,12 @@ func GetBoardSettings(db *sql.DB, boardID string) (*BoardSettings, error) {
 		`SELECT COALESCE(s.anonymous_allowed, 0), COALESCE(s.read_only, 0), COALESCE(s.no_reply, 0),
 		        COALESCE(s.attachments_allowed, 0), COALESCE(s.mail_in_allowed, 0), COALESCE(s.relay_enabled, 0),
 		        COALESCE(s.member_read_mode, 0), COALESCE(s.member_post_mode, 0), COALESCE(s.stats_excluded, 0),
-		        COALESCE(s.zap_allowed, 1), COALESCE(s.updated_at, 0)
+		        COALESCE(s.zap_allowed, 1), COALESCE(s.guest_access, ''), COALESCE(s.updated_at, 0)
 		   FROM boards b
 		   LEFT JOIN board_settings s ON s.board_id=b.id
 		  WHERE b.id=?`,
 		boardID,
-	).Scan(&anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &statsExcluded, &zapAllowed, &settings.UpdatedAt)
+	).Scan(&anonymousAllowed, &readOnly, &noReply, &attachmentsAllowed, &mailInAllowed, &relayEnabled, &memberReadMode, &memberPostMode, &statsExcluded, &zapAllowed, &settings.GuestAccess, &settings.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1369,6 +1369,7 @@ func GetBoardSettings(db *sql.DB, boardID string) (*BoardSettings, error) {
 		return nil, err
 	}
 	applySettingsFlags(settings, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded, zapAllowed)
+	settings.GuestAccess = NormalizeGuestAccess(settings.GuestAccess)
 	return settings, nil
 }
 

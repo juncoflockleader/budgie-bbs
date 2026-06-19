@@ -20,6 +20,28 @@ func userFromCtx(ctx context.Context) *core.User {
 	return u
 }
 
+// guestPrincipal is the sentinel actor for unauthenticated (guest) browsing.
+// Its empty ID and "guest" role mean board-read checks treat it as a guest and
+// IsAdmin/IsMod are false; per-user data (favorites, unread) comes back empty.
+func guestPrincipal() *core.User { return &core.User{Role: "guest"} }
+
+// optionalAuth is middleware for the public browsing surface (boards, threads,
+// posts, categories). A request with NO credentials is served as a guest. A
+// request that DOES present a token must pass full validation — a stale,
+// revoked, deactivated, or otherwise invalid token is rejected with 401 rather
+// than silently downgraded to guest, so clients clear dead sessions instead of
+// browsing under a defunct identity. Use only on safe (GET) read routes.
+func (s *Server) optionalAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok, _ := resolveToken(r); tok == "" {
+			ctx := context.WithValue(r.Context(), ctxUser, guestPrincipal())
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		s.requireAuth(next).ServeHTTP(w, r)
+	})
+}
+
 // requireAuth is middleware that validates the Bearer JWT and attaches the user
 // to the request context. Returns 401 if the token is missing or invalid.
 func (s *Server) requireAuth(next http.Handler) http.Handler {

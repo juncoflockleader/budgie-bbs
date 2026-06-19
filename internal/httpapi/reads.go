@@ -1172,6 +1172,20 @@ func (s *Server) handleGetPoll(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetPollByPost(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
 	postID := r.PathValue("post")
+	// Gate by board read access so guests (and non-members) can't read poll data
+	// from a member-only board by post id. GetPost populates the thread (not the
+	// board), so resolve the board via the thread.
+	if post, err := s.core.GetPost(postID); err == nil && post != nil {
+		if thread, err := s.core.GetThread(post.Thread); err == nil && thread != nil {
+			if ok, err := s.actorCanReadBoard(actor, thread.Board); err != nil {
+				writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+				return
+			} else if !ok {
+				writeError(w, http.StatusForbidden, proto.ErrForbidden, "board members only", false)
+				return
+			}
+		}
+	}
 	poll, err := s.core.GetPollByPostID(postID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
@@ -1198,6 +1212,16 @@ func (s *Server) handleListThreadPolls(w http.ResponseWriter, r *http.Request) {
 	}
 	threadID := r.PathValue("thread")
 	limit, offset := paginate(r)
+
+	if thread, err := s.core.GetThread(threadID); err == nil && thread != nil {
+		if ok, err := s.actorCanReadBoard(actor, thread.Board); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
+			return
+		} else if !ok {
+			writeError(w, http.StatusForbidden, proto.ErrForbidden, "board members only", false)
+			return
+		}
+	}
 
 	posts, err := s.core.ListPosts(threadID, limit, offset)
 	if err != nil {

@@ -178,6 +178,7 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 		MemberPostMode:     p.MemberPostMode,
 		StatsExcluded:      p.StatsExcluded,
 		ZapAllowed:         p.ZapAllowed,
+		GuestAccess:        p.GuestAccess,
 	}
 	if err := setBoardSettings(h.db, p.Board, patch); err != nil {
 		return internalErr(err)
@@ -4728,6 +4729,13 @@ func boardSettingsAuditLines(p proto.SetBoardSettingsPayload) []string {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s: %t", field.name, *field.value))
+	}
+	if p.GuestAccess != nil {
+		v := projections.NormalizeGuestAccess(*p.GuestAccess)
+		if v == "" {
+			v = "default"
+		}
+		out = append(out, "guestAccess: "+v)
 	}
 	return out
 }

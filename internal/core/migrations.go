@@ -90,6 +90,7 @@ func applySQLiteMigrations(db *sql.DB) error {
 		{"board_members", "position", "position INTEGER NOT NULL DEFAULT 0"},
 		{"board_settings", "stats_excluded", "stats_excluded INTEGER NOT NULL DEFAULT 0"},
 		{"board_settings", "zap_allowed", "zap_allowed INTEGER NOT NULL DEFAULT 1"},
+		{"board_settings", "guest_access", "guest_access TEXT NOT NULL DEFAULT ''"},
 		{"digest_entries", "body", "body TEXT NOT NULL DEFAULT ''"},
 		{"digest_entries", "body_edited", "body_edited INTEGER NOT NULL DEFAULT 0"},
 		{"user_presence", "mode", "mode TEXT NOT NULL DEFAULT ''"},

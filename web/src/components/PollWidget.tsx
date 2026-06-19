@@ -6,19 +6,22 @@ interface Props {
   poll: Poll
   onVote: (optionId: string) => Promise<void>
   onPublishResult?: () => Promise<void>
+  // Guests can see results but cannot cast a vote.
+  readOnly?: boolean
 }
 
-export function PollWidget({ poll, onVote, onPublishResult }: Props) {
+export function PollWidget({ poll, onVote, onPublishResult, readOnly = false }: Props) {
   const { t } = useI18n()
   const [voting, setVoting] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
 
   const expired = poll.expiresAt ? poll.expiresAt < Date.now() : false
+  const votable = !readOnly && !expired
   const totalVotes = poll.options.reduce((s, o) => s + o.voteCount, 0)
   const voteSuffix = totalVotes > 1 ? 's' : ''
 
   async function handleVote(optionId: string) {
-    if (expired) return
+    if (!votable) return
     if (poll.voted === optionId) return
     setVoting(optionId)
     try {
@@ -45,14 +48,14 @@ export function PollWidget({ poll, onVote, onPublishResult }: Props) {
         {poll.options.map(opt => {
           const pct = totalVotes > 0 ? Math.round((opt.voteCount / totalVotes) * 100) : 0
           const isVoted = poll.voted === opt.id
-          const showResults = !!poll.voted || expired
+          const showResults = !!poll.voted || expired || readOnly
 
           return (
             <div
               key={opt.id}
-              className={`poll-option${isVoted ? ' poll-option--voted' : ''}${!expired ? ' poll-option--clickable' : ''}`}
+              className={`poll-option${isVoted ? ' poll-option--voted' : ''}${votable ? ' poll-option--clickable' : ''}`}
               onClick={() => {
-                if (!expired) handleVote(opt.id)
+                if (votable) handleVote(opt.id)
               }}
             >
               {showResults && (

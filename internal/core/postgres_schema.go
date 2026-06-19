@@ -341,6 +341,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
     stats_excluded      INTEGER NOT NULL DEFAULT 0,
     zap_allowed         INTEGER NOT NULL DEFAULT 1,
+    guest_access        TEXT NOT NULL DEFAULT '',
     updated_at          BIGINT NOT NULL DEFAULT 0
 );
 
@@ -3244,6 +3245,18 @@ CREATE TABLE IF NOT EXISTS site_assets (
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (86, 'postgres-site-assets', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 87,
+			Name:    "postgres-board-settings-guest-access",
+			SQL: `
+ALTER TABLE board_settings
+    ADD COLUMN IF NOT EXISTS guest_access TEXT NOT NULL DEFAULT '';
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (87, 'postgres-board-settings-guest-access', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

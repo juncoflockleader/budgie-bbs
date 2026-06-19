@@ -6,6 +6,7 @@ import { useI18n } from '../i18n'
 
 interface Props {
   onLogin: (token: string, user: AuthState['user']) => void
+  onBrowseAsGuest?: () => void
   siteTitle?: string
   tagline?: string
   bannerURL?: string | null
@@ -17,7 +18,7 @@ const providerScripts: Record<string, { src: string; cls: string }> = {
   recaptcha: { src: 'https://www.google.com/recaptcha/api.js', cls: 'g-recaptcha' },
 }
 
-export function AuthPage({ onLogin, siteTitle, tagline, bannerURL }: Props) {
+export function AuthPage({ onLogin, onBrowseAsGuest, siteTitle, tagline, bannerURL }: Props) {
   const { t, locale, setLocale } = useI18n()
   const [mode, setMode] = useState<'login' | 'register' | 'recover'>('login')
   const [name, setName] = useState('')
@@ -405,6 +406,15 @@ export function AuthPage({ onLogin, siteTitle, tagline, bannerURL }: Props) {
             onClick={() => { setMode('recover'); setError(null) }}
           >
             {t('auth.forgotPassword')}
+          </button>
+        )}
+        {mode === 'login' && onBrowseAsGuest && (
+          <button
+            type="button"
+            className="link-btn auth-guest-link"
+            onClick={onBrowseAsGuest}
+          >
+            {t('auth.browseAsGuest')}
           </button>
         )}
       </form>

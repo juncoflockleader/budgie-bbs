@@ -310,7 +310,12 @@ type BoardSettings struct {
 	MemberPostMode     bool   `json:"memberPostMode"`
 	StatsExcluded      bool   `json:"statsExcluded"`
 	ZapAllowed         bool   `json:"zapAllowed"`
-	UpdatedAt          int64  `json:"updatedAt"`
+	// GuestAccess overrides the default guest-readability of this board:
+	// "" / "default" follows MemberReadMode (non-member boards are guest-
+	// readable), "hidden" blocks unauthenticated guests even on an otherwise
+	// public board, and "public" exposes the board to guests regardless.
+	GuestAccess string `json:"guestAccess"`
+	UpdatedAt   int64  `json:"updatedAt"`
 }
 
 type BoardSettingsPatch struct {
@@ -324,6 +329,7 @@ type BoardSettingsPatch struct {
 	MemberPostMode     *bool
 	StatsExcluded      *bool
 	ZapAllowed         *bool
+	GuestAccess        *string
 }
 
 type BoardModerator struct {

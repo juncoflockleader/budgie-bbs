@@ -2684,6 +2684,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardSettings(ctx context.Co
 		MemberPostMode:     payload.MemberPostMode,
 		StatsExcluded:      payload.StatsExcluded,
 		ZapAllowed:         payload.ZapAllowed,
+		GuestAccess:        payload.GuestAccess,
 	})
 	ts := record.EnqueuedAt
 	if ts <= 0 {
@@ -2705,6 +2706,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardSettings(ctx context.Co
 			MemberPostMode:     settings.MemberPostMode,
 			StatsExcluded:      settings.StatsExcluded,
 			ZapAllowed:         settings.ZapAllowed,
+			GuestAccess:        settings.GuestAccess,
 			By:                 actor.ID,
 			TS:                 ts,
 		},
@@ -7378,6 +7380,13 @@ func nativeBoardSettingsAuditLines(p proto.SetBoardSettingsPayload) []string {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s: %t", field.name, *field.value))
+	}
+	if p.GuestAccess != nil {
+		v := projections.NormalizeGuestAccess(*p.GuestAccess)
+		if v == "" {
+			v = "default"
+		}
+		out = append(out, "guestAccess: "+v)
 	}
 	return out
 }

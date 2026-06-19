@@ -398,6 +398,7 @@ type BoardSettingsSetPayload struct {
 	MemberPostMode     bool   `json:"memberPostMode"`
 	StatsExcluded      bool   `json:"statsExcluded"`
 	ZapAllowed         bool   `json:"zapAllowed"`
+	GuestAccess        string `json:"guestAccess"`
 	By                 string `json:"by,omitempty"`
 	TS                 int64  `json:"ts"`
 }

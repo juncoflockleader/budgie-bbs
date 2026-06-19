@@ -15,10 +15,30 @@ func ActorCanReadBoard(actor *User, info *BoardInfo) bool {
 	if info == nil {
 		return false
 	}
+	if actorIsGuest(actor) {
+		// Unauthenticated web guests are governed by the board's GuestAccess
+		// override: "public" always grants, "hidden" always denies, and the
+		// default follows the world-readable rule (non-member boards readable).
+		switch info.Settings.GuestAccess {
+		case "public":
+			return true
+		case "hidden":
+			return false
+		default:
+			return !info.Settings.MemberReadMode
+		}
+	}
 	if !info.Settings.MemberReadMode {
 		return true
 	}
 	return actorModeratesBoard(actor, info) || actorIsBoardMember(actor, info)
+}
+
+// actorIsGuest reports whether actor is the unauthenticated web guest principal.
+// A nil actor (internal/system reads such as NNTP or relay) is deliberately not
+// a guest, so those paths keep their existing world-readable behavior.
+func actorIsGuest(actor *User) bool {
+	return actor != nil && actor.Role == "guest"
 }
 
 // ActorCanReadBoardID loads the board and applies ActorCanReadBoard. A missing

@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS board_settings (
     member_post_mode    INTEGER NOT NULL DEFAULT 0,
     stats_excluded      INTEGER NOT NULL DEFAULT 0,
     zap_allowed         INTEGER NOT NULL DEFAULT 1,
+    guest_access        TEXT    NOT NULL DEFAULT '',
     updated_at          INTEGER NOT NULL DEFAULT 0
 );
 

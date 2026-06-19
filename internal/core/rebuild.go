@@ -706,6 +706,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			MemberPostMode:     evt.MemberPostMode,
 			StatsExcluded:      evt.StatsExcluded,
 			ZapAllowed:         evt.ZapAllowed,
+			GuestAccess:        evt.GuestAccess,
 			UpdatedAt:          evt.TS,
 		}); err != nil {
 			return err

@@ -1234,6 +1234,23 @@ func ApplyBoardSettingsPatch(settings *BoardSettings, patch BoardSettingsPatch) 
 	if patch.ZapAllowed != nil {
 		settings.ZapAllowed = *patch.ZapAllowed
 	}
+	if patch.GuestAccess != nil {
+		settings.GuestAccess = NormalizeGuestAccess(*patch.GuestAccess)
+	}
+}
+
+// NormalizeGuestAccess canonicalizes a guest-access value to "" (default),
+// "hidden", or "public". Any unrecognized value (including "default") maps to ""
+// so callers and storage only ever see the three canonical states.
+func NormalizeGuestAccess(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "hidden":
+		return "hidden"
+	case "public":
+		return "public"
+	default:
+		return ""
+	}
 }
 
 func SetBoardSettingsTx(tx *sql.Tx, settings BoardSettings) error {
@@ -1247,8 +1264,8 @@ func setBoardSettingsFinal(execable sqlLike, settings BoardSettings) error {
 	_, err := QExec(execable,
 		`INSERT INTO board_settings (
 		    board_id, anonymous_allowed, read_only, no_reply, attachments_allowed,
-		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, stats_excluded, zap_allowed, updated_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		    mail_in_allowed, relay_enabled, member_read_mode, member_post_mode, stats_excluded, zap_allowed, guest_access, updated_at
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(board_id)
 		 DO UPDATE SET
 		    anonymous_allowed=excluded.anonymous_allowed,
@@ -1261,6 +1278,7 @@ func setBoardSettingsFinal(execable sqlLike, settings BoardSettings) error {
 		    member_post_mode=excluded.member_post_mode,
 		    stats_excluded=excluded.stats_excluded,
 		    zap_allowed=excluded.zap_allowed,
+		    guest_access=excluded.guest_access,
 		    updated_at=excluded.updated_at`,
 		settings.BoardID,
 		boolInt(settings.AnonymousAllowed),
@@ -1273,6 +1291,7 @@ func setBoardSettingsFinal(execable sqlLike, settings BoardSettings) error {
 		boolInt(settings.MemberPostMode),
 		boolInt(settings.StatsExcluded),
 		boolInt(settings.ZapAllowed),
+		NormalizeGuestAccess(settings.GuestAccess),
 		settings.UpdatedAt,
 	)
 	return err

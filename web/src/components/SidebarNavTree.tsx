@@ -43,12 +43,15 @@ function groupFavoritesByFolder(boards: FavoriteBoardEntry[]): Record<string, Fa
 interface Props {
   token: string
   activeBoardId?: string
+  // Guests have no favorites; skip the personal favorites fetch (which would
+  // 401) and hide that section.
+  showFavorites?: boolean
   onOpenBoard: (board: Board) => void
 }
 
 // SidebarNavTree renders two collapsible trees in the sidebar: the user's
 // favorite folders/boards, and the full category → board directory.
-export function SidebarNavTree({ token, activeBoardId, onOpenBoard }: Props) {
+export function SidebarNavTree({ token, activeBoardId, showFavorites = true, onOpenBoard }: Props) {
   const { t } = useI18n()
   const [boards, setBoards] = useState<BoardSummary[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -58,7 +61,10 @@ export function SidebarNavTree({ token, activeBoardId, onOpenBoard }: Props) {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([api.listBoardSummaries(token), api.listCategories(token), api.listFavoriteTree(token)]).then(([b, c, tr]) => {
+    const favReq = showFavorites
+      ? api.listFavoriteTree(token)
+      : Promise.resolve({ data: { folders: [], boards: [] } as FavoriteTree })
+    Promise.all([api.listBoardSummaries(token), api.listCategories(token), favReq]).then(([b, c, tr]) => {
       if (cancelled) return
       setBoards(b.data ?? [])
       setCategories(c.data ?? [])
@@ -66,7 +72,7 @@ export function SidebarNavTree({ token, activeBoardId, onOpenBoard }: Props) {
       setReady(true)
     })
     return () => { cancelled = true }
-  }, [token])
+  }, [token, showFavorites])
 
   const toggle = (key: string) => setCollapsed(p => ({ ...p, [key]: !p[key] }))
   const isOpen = (key: string) => !collapsed[key]

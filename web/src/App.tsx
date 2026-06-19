@@ -46,6 +46,9 @@ export function App() {
   const { locale, setLocale, t } = useI18n()
   const { theme, setTheme } = useTheme()
   const { auth, login, logout, loading: authLoading } = useAuth()
+  // Guest browsing: a visitor who clicked "Browse as guest" sees the read-only
+  // app (public, non-member boards) without an account. auth.user stays null.
+  const [guestMode, setGuestMode] = useState(false)
   const [page, setPage] = useState<Page>({ name: 'boards' })
   const [logoImgOk, setLogoImgOk] = useState(true)
   const [searchDraft, setSearchDraft] = useState('')
@@ -164,11 +167,16 @@ export function App() {
     // Brief: bootstrapping the session from the cookie via /auth/me.
     return null
   }
-  if (!auth.user) {
-    return <AuthPage onLogin={login} siteTitle={appearance?.siteTitle} tagline={appearance?.tagline} bannerURL={api.buildSiteAssetURL(appearance, 'banner')} />
+  if (!auth.user && !guestMode) {
+    return <AuthPage onLogin={login} onBrowseAsGuest={() => setGuestMode(true)} siteTitle={appearance?.siteTitle} tagline={appearance?.tagline} bannerURL={api.buildSiteAssetURL(appearance, 'banner')} />
   }
 
-  const { token, user } = auth
+  // In guest mode auth.user is null; a synthetic guest principal keeps the
+  // read-only render paths working while write/personal affordances are hidden.
+  const isGuest = !auth.user
+  const token = auth.token
+  const user = auth.user ?? { id: '', name: 'guest', role: 'guest' }
+  const exitGuest = () => setGuestMode(false)
 
   function nav(p: Page) {
     const nextDepth = historyDepthRef.current + 1
@@ -252,52 +260,61 @@ export function App() {
         <nav className="sidebar-nav">
           <span className="sidebar-section">{t('nav.boards')}</span>
           {sidebarItem('boards',        '⊞', t('nav.boards'),     () => nav({ name: 'boards' }))}
-          {sidebarItem('unread',        '◉', t('nav.unread'),     () => nav({ name: 'unread' }))}
-          {sidebarItem('resident-feed', '⊛', t('nav.resident'),   () => nav({ name: 'resident-feed' }))}
+          {!isGuest && sidebarItem('unread',        '◉', t('nav.unread'),     () => nav({ name: 'unread' }))}
+          {!isGuest && sidebarItem('resident-feed', '⊛', t('nav.resident'),   () => nav({ name: 'resident-feed' }))}
           <SidebarNavTree
             token={token}
+            showFavorites={!isGuest}
             activeBoardId={page.name === 'threads' ? page.board.id : undefined}
             onOpenBoard={board => nav({ name: 'threads', board })}
           />
 
-          <span className="sidebar-section">{t('nav.people')}</span>
-          {sidebarItem('chat',     '◎', t('nav.chat'),    () => nav({ name: 'chat' }))}
-          <button
-            className={`sidebar-item${page.name === 'private' ? ' sidebar-item--active' : ''}`}
-            onClick={() => { nav({ name: 'private' }); setPrivateUnreadCount(0) }}
-          >
-            <span className="sidebar-icon">✉</span>
-            {t('nav.inbox')}
-            {privateUnreadCount > 0 && (
-              <span className="sidebar-badge">{privateUnreadCount > 99 ? '99+' : privateUnreadCount}</span>
-            )}
-          </button>
-          {sidebarItem('social',   '⊘', t('nav.people'),   () => nav({ name: 'social' }))}
-          {sidebarItem('rankings', '◈', t('nav.rankings'), () => nav({ name: 'rankings' }))}
-          {user.role === 'admin' && sidebarItem('admin', '⚙', t('nav.admin'), () => nav({ name: 'admin' }))}
+          {!isGuest && (
+            <>
+              <span className="sidebar-section">{t('nav.people')}</span>
+              {sidebarItem('chat',     '◎', t('nav.chat'),    () => nav({ name: 'chat' }))}
+              <button
+                className={`sidebar-item${page.name === 'private' ? ' sidebar-item--active' : ''}`}
+                onClick={() => { nav({ name: 'private' }); setPrivateUnreadCount(0) }}
+              >
+                <span className="sidebar-icon">✉</span>
+                {t('nav.inbox')}
+                {privateUnreadCount > 0 && (
+                  <span className="sidebar-badge">{privateUnreadCount > 99 ? '99+' : privateUnreadCount}</span>
+                )}
+              </button>
+              {sidebarItem('social',   '⊘', t('nav.people'),   () => nav({ name: 'social' }))}
+              {sidebarItem('rankings', '◈', t('nav.rankings'), () => nav({ name: 'rankings' }))}
+              {user.role === 'admin' && sidebarItem('admin', '⚙', t('nav.admin'), () => nav({ name: 'admin' }))}
+            </>
+          )}
         </nav>
 
         {/* Bottom: notifications + user + settings */}
         <div className="sidebar-bottom">
-          <button
-            className={`sidebar-item${page.name === 'notifications' ? ' sidebar-item--active' : ''}`}
-            onClick={() => { nav({ name: 'notifications' }); setUnreadCount(0) }}
-          >
-            <span className="sidebar-icon">🔔</span>
-            {t('nav.notifications')}
-            {unreadCount > 0 && (
-              <span className="sidebar-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
-            )}
-          </button>
+          {!isGuest && (
+            <button
+              className={`sidebar-item${page.name === 'notifications' ? ' sidebar-item--active' : ''}`}
+              onClick={() => { nav({ name: 'notifications' }); setUnreadCount(0) }}
+            >
+              <span className="sidebar-icon">🔔</span>
+              {t('nav.notifications')}
+              {unreadCount > 0 && (
+                <span className="sidebar-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
+              )}
+            </button>
+          )}
 
-          <button
-            className="sidebar-user-btn"
-            onClick={() => nav({ name: 'user-profile', username: user.name })}
-            title={t('nav.openProfile')}
-          >
-            <span className="sidebar-avatar">{user.name.charAt(0).toUpperCase()}</span>
-            <span className="sidebar-username">{user.name}</span>
-          </button>
+          {!isGuest && (
+            <button
+              className="sidebar-user-btn"
+              onClick={() => nav({ name: 'user-profile', username: user.name })}
+              title={t('nav.openProfile')}
+            >
+              <span className="sidebar-avatar">{user.name.charAt(0).toUpperCase()}</span>
+              <span className="sidebar-username">{user.name}</span>
+            </button>
+          )}
 
           <select
             className="sidebar-locale"
@@ -322,10 +339,17 @@ export function App() {
             <option value="warm">{t('settings.theme.warm')}</option>
           </select>
 
-          <button className="sidebar-item" onClick={handleLogout}>
-            <span className="sidebar-icon">↩</span>
-            {t('nav.logout')}
-          </button>
+          {isGuest ? (
+            <button className="sidebar-item sidebar-signin" onClick={exitGuest}>
+              <span className="sidebar-icon">→</span>
+              {t('nav.signIn')}
+            </button>
+          ) : (
+            <button className="sidebar-item" onClick={handleLogout}>
+              <span className="sidebar-icon">↩</span>
+              {t('nav.logout')}
+            </button>
+          )}
         </div>
       </aside>
 
@@ -336,10 +360,17 @@ export function App() {
             <button type="button" className="site-banner-close" aria-label="Dismiss" onClick={dismissBanner}>×</button>
           </div>
         )}
+        {isGuest && (
+          <div className="guest-banner">
+            <span>{t('guest.banner')} {t('guest.signInPrompt')}</span>
+            <button type="button" className="guest-banner-signin" onClick={exitGuest}>{t('nav.signIn')}</button>
+          </div>
+        )}
         {page.name === 'boards' && (
           <BoardListPage
             token={token}
             currentUserRole={user.role}
+            isGuest={isGuest}
             onSelect={board => nav({ name: 'threads', board })}
           />
         )}
@@ -349,6 +380,7 @@ export function App() {
             board={page.board}
             currentUserId={user.id}
             currentUserRole={user.role}
+            isGuest={isGuest}
             onSelect={(thread, initialPostId) => nav({ name: 'thread', board: page.board, thread, initialPostId })}
             onBack={() => goBack({ name: 'boards' })}
             onNewThread={() => nav({ name: 'new-thread', board: page.board })}
@@ -362,6 +394,8 @@ export function App() {
             currentUserId={user.id}
             currentUsername={user.name}
             currentUserRole={user.role}
+            isGuest={isGuest}
+            onRequireLogin={exitGuest}
             initialPostId={page.initialPostId}
             onBack={() => goBack({ name: 'threads', board: page.board })}
             onOpenThread={(thread: ThreadSummary, initialPostId?: string) => nav({ name: 'thread', board: page.board, thread, initialPostId })}
