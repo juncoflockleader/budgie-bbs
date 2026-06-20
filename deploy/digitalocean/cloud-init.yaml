@@ -1,0 +1,13 @@
+#cloud-config
+# Budgie BBS — DigitalOcean Droplet first-boot provisioning.
+#
+# Paste into the "User data" field (enable "Add Initialization scripts") when
+# creating the Droplet (Image: Ubuntu 24.04). Installs Caddy, the budgied
+# systemd unit, the service user + data dirs, and opens the host firewall (ufw)
+# for 80/443/2222. Ship the binary afterwards with deploy/digitalocean/deploy.sh.
+#
+# A $6/mo Basic Droplet (1 vCPU / 1 GB) is plenty. Basic Droplets are x86 ->
+# deploy with the default BUDGIE_ARCH=amd64.
+package_update: true
+runcmd:
+  - [ bash, -c, "curl -fsSL https://raw.githubusercontent.com/juncoflockleader/budgie-bbs/main/deploy/common/provision.sh | BUDGIE_FIREWALL=ufw bash" ]

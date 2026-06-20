@@ -1,0 +1,14 @@
+#cloud-config
+# Budgie BBS — Hetzner Cloud first-boot provisioning.
+#
+# Paste this into the "Cloud config" / user-data box when creating the server
+# (Image: Ubuntu 24.04). It installs Caddy, the budgied systemd unit, the
+# service user + data dirs, and opens the host firewall (ufw) for 80/443/2222.
+# The binary is shipped afterwards with deploy/hetzner/deploy.sh.
+#
+# Server type:
+#   CAX11/CAX21  (Ampere ARM, cheapest)  -> deploy with BUDGIE_ARCH=arm64
+#   CX22/CX32    (Intel/AMD x86)         -> deploy with BUDGIE_ARCH=amd64
+package_update: true
+runcmd:
+  - [ bash, -c, "curl -fsSL https://raw.githubusercontent.com/juncoflockleader/budgie-bbs/main/deploy/common/provision.sh | BUDGIE_FIREWALL=ufw bash" ]

@@ -7,6 +7,12 @@ any deployment that fits comfortably on one machine.
 For running two or more nodes against shared Postgres, see
 [`deployment-multi-node.md`](deployment-multi-node.md).
 
+**Hosting on a provider?** [`deploy/`](deploy/) has copy-paste templates and
+scripts (cloud-init + a `deploy.sh`) for Hetzner, DigitalOcean, Oracle Cloud,
+and Fly.io — each provisions Caddy + TLS, the systemd service, and the data dir
+for you. Start at [`deploy/README.md`](deploy/README.md). This document is the
+underlying flag/endpoint reference those quickstarts build on.
+
 ## Single-host simplification
 
 On one host, BudgieBBS does not need the internet-scale deployment machinery.
