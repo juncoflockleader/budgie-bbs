@@ -1,6 +1,6 @@
 import { type FormEvent, type MouseEvent, useEffect, useState, useCallback } from 'react'
 import * as api from '../api/client'
-import type { ApiResponse, Board, BoardInfo, BoardMember, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
+import type { ApiResponse, Board, BoardAIConfig, BoardInfo, BoardMember, BoardMemberApplication, BoardMemberRequirements, BoardSettings, DigestEntry, SocialUser, ThreadSummary } from '../api/types'
 import type { BudgieEvent, ThreadNewPayload, ThreadTitleSetPayload } from '../api/types'
 import { Spinner } from '../components/Spinner'
 import { useStream } from '../hooks/useStream'
@@ -29,6 +29,10 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, i
   const [settingsDraft, setSettingsDraft] = useState<BoardSettings | null>(null)
   const [requirementsDraft, setRequirementsDraft] = useState<BoardMemberRequirements | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [aiConfig, setAIConfig] = useState<BoardAIConfig | null>(null)
+  const [aiTokenInput, setAITokenInput] = useState('')
+  const [siteAIEnabled, setSiteAIEnabled] = useState(false)
+  const [aiSaving, setAISaving] = useState(false)
   const [moderatorName, setModeratorName] = useState('')
   const [memberName, setMemberName] = useState('')
   const [memberTitle, setMemberTitle] = useState('')
@@ -60,6 +64,16 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, i
       location: board.name,
     })
   }, [token, board.id, board.name, isGuest])
+
+  // Load the board's AI config (token-free) + the site-wide toggle when the
+  // settings panel is opened by someone who can manage settings.
+  useEffect(() => {
+    if (isGuest || !settingsOpen) return
+    void api.getAISettings(token).then(r => { if (r.data) setSiteAIEnabled(r.data.enabled) })
+    void api.getBoardAIConfig(token, board.id).then(r => {
+      if (r.data) { setAIConfig(r.data); setAITokenInput('') }
+    })
+  }, [token, board.id, settingsOpen, isGuest])
 
   useEffect(() => {
     setLoading(true)
@@ -207,6 +221,33 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, i
     setBoardInfo(refreshed.data ?? null)
     setSettingsDraft(refreshed.data?.settings ?? null)
     setRequirementsDraft(refreshed.data?.requirements ?? null)
+  }
+
+  function updateAI(patch: Partial<BoardAIConfig>) {
+    setAIConfig(prev => (prev ? { ...prev, ...patch } : prev))
+  }
+
+  async function saveAIConfig() {
+    if (!aiConfig) return
+    setAISaving(true)
+    setError(null)
+    const res = await api.setBoardAIConfig(token, board.id, {
+      enabled: aiConfig.enabled,
+      model: aiConfig.model,
+      triggerRole: aiConfig.triggerRole,
+      mode: aiConfig.mode,
+      replyPrompt: aiConfig.replyPrompt,
+      maxTotal: aiConfig.maxTotal,
+      maxPerHour: aiConfig.maxPerHour,
+      // Only send the token when the moderator typed a new one (write-only).
+      ...(aiTokenInput.trim() ? { apiToken: aiTokenInput.trim() } : {}),
+    })
+    setAISaving(false)
+    if (res.error) {
+      setError(res.error.message)
+      return
+    }
+    if (res.data) { setAIConfig(res.data); setAITokenInput('') }
   }
 
   async function saveMemberRequirements() {
@@ -578,6 +619,61 @@ export function ThreadListPage({ token, board, currentUserId, currentUserRole, i
               <div className="board-settings-actions">
                 <button onClick={saveSettings}>{t('board.saveSettings')}</button>
               </div>
+
+              {siteAIEnabled && aiConfig && (
+                <div className="board-ai-config">
+                  <h4>AI bot</h4>
+                  <label className="setting-toggle">
+                    <input type="checkbox" checked={aiConfig.enabled} onChange={e => updateAI({ enabled: e.target.checked })} />
+                    Enable an AI bot on this board
+                  </label>
+                  <p className="muted">The bot posts as <strong>{board.id}-ai</strong>. Bring your own provider API token below — it is stored write-only and never shown back (not even to site admins).</p>
+                  <div className="ai-config-grid">
+                    <label>
+                      API token {aiConfig.tokenSet ? <span className="muted">(set — leave blank to keep)</span> : <span className="muted">(not set)</span>}
+                      <input type="password" autoComplete="off" value={aiTokenInput} onChange={e => setAITokenInput(e.target.value)} placeholder={aiConfig.tokenSet ? '••••••••' : 'sk-…'} />
+                    </label>
+                    <label>
+                      Model
+                      <input value={aiConfig.model} onChange={e => updateAI({ model: e.target.value })} placeholder="claude-haiku-4-5" />
+                    </label>
+                    <label>
+                      Respond to posts by
+                      <select value={aiConfig.triggerRole} onChange={e => updateAI({ triggerRole: e.target.value as BoardAIConfig['triggerRole'] })}>
+                        <option value="user">Any user</option>
+                        <option value="mod">Moderators only</option>
+                      </select>
+                    </label>
+                    <label>
+                      Behavior
+                      <select value={aiConfig.mode} onChange={e => updateAI({ mode: e.target.value as BoardAIConfig['mode'] })}>
+                        <option value="reply">Only when replied to</option>
+                        <option value="every_post">Every post</option>
+                      </select>
+                    </label>
+                    <label>
+                      Max total replies (0 = unlimited)
+                      <input type="number" min={0} value={aiConfig.maxTotal} onChange={e => updateAI({ maxTotal: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
+                    </label>
+                    <label>
+                      Max replies per hour (0 = unlimited)
+                      <input type="number" min={0} value={aiConfig.maxPerHour} onChange={e => updateAI({ maxPerHour: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
+                    </label>
+                  </div>
+                  <label className="ai-reply-prompt">
+                    Context prompt (added to the bot’s instructions)
+                    <textarea rows={3} value={aiConfig.replyPrompt} onChange={e => updateAI({ replyPrompt: e.target.value })} placeholder="e.g. Answer Linux questions concisely and cite man pages." />
+                  </label>
+                  <p className="muted">Replies generated so far: {aiConfig.usedTotal}</p>
+                  <div className="board-settings-actions">
+                    <button onClick={saveAIConfig} disabled={aiSaving}>{aiSaving ? 'Saving…' : 'Save AI settings'}</button>
+                  </div>
+                </div>
+              )}
+              {!siteAIEnabled && (
+                <p className="muted">AI integration is disabled site-wide. A site admin must enable it before this board can run an AI bot.</p>
+              )}
+
               {requirements && (
                 <div className="member-requirements-grid">
                   <label className="requirement-field">

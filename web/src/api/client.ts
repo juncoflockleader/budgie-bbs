@@ -57,6 +57,9 @@ import type {
   UserSanction,
   TwoFactorStatus,
   SecuritySettings,
+  AISettings,
+  BoardAIConfig,
+  BoardAIConfigPatch,
   SiteAppearance,
   TUIStockArt,
   BoardAutomodRule,
@@ -504,6 +507,34 @@ export async function setSecuritySettings(token: string, staff2faRequired: boole
     body: JSON.stringify({ staff2faRequired }),
   })
   return json<SecuritySettings>(res)
+}
+
+export async function getAISettings(token: string): Promise<ApiResponse<AISettings>> {
+  const res = await fetch(`${BASE}/ai/settings`, { headers: authHeaders(token) })
+  return json<AISettings>(res)
+}
+
+export async function setAISettings(token: string, enabled: boolean): Promise<ApiResponse<AISettings>> {
+  const res = await fetch(`${BASE}/admin/ai-settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify({ enabled }),
+  })
+  return json<AISettings>(res)
+}
+
+export async function getBoardAIConfig(token: string, board: string): Promise<ApiResponse<BoardAIConfig>> {
+  const res = await fetch(`${BASE}/boards/${board}/ai`, { headers: authHeaders(token) })
+  return json<BoardAIConfig>(res)
+}
+
+export async function setBoardAIConfig(token: string, board: string, patch: BoardAIConfigPatch): Promise<ApiResponse<BoardAIConfig>> {
+  const res = await fetch(`${BASE}/boards/${board}/ai`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(patch),
+  })
+  return json<BoardAIConfig>(res)
 }
 
 export async function getUserTwoFactorStatus(token: string, name: string): Promise<ApiResponse<TwoFactorStatus>> {

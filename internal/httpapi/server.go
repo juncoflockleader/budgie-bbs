@@ -152,6 +152,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/rankings/blessings", auth(http.HandlerFunc(s.handleListBlessingRankings)))
 	mux.Handle("GET /api/v1/rankings/archive", auth(http.HandlerFunc(s.handleListArchiveRankings)))
 	mux.Handle("GET /api/v1/admin/registration-settings", auth(http.HandlerFunc(s.handleGetAccountRegistrationSettings)))
+	// Generative-AI integration: site-wide toggle (admin) + per-board config
+	// (board-settings managers). The board api_token is write-only via PATCH.
+	mux.Handle("GET /api/v1/ai/settings", auth(http.HandlerFunc(s.handleGetAISettings)))
+	mux.Handle("PATCH /api/v1/admin/ai-settings", auth(http.HandlerFunc(s.handleSetAISettings)))
+	mux.Handle("GET /api/v1/boards/{board}/ai", auth(http.HandlerFunc(s.handleGetBoardAIConfig)))
+	mux.Handle("PATCH /api/v1/boards/{board}/ai", auth(http.HandlerFunc(s.handleSetBoardAIConfig)))
 	mux.Handle("GET /api/v1/admin/registrations", auth(http.HandlerFunc(s.handleListAccountRegistrations)))
 	mux.Handle("GET /api/v1/admin/password-recovery", auth(http.HandlerFunc(s.handleListPasswordRecoveryRequests)))
 	mux.Handle("GET /api/v1/admin/hot-thread-splits", auth(http.HandlerFunc(s.handleListHotThreadSplits)))

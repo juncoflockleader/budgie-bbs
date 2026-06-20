@@ -1144,7 +1144,21 @@ func (c *Core) Unsubscribe(s *Subscription) {
 // --- User management (used by the auth layer) ---
 
 // RegisterUser creates a new account. The very first user becomes admin.
+// reservedAINameSuffix is reserved for per-board AI bot accounts (<board>-ai);
+// normal registration may not use it so a human can't impersonate a board's bot.
+const reservedAINameSuffix = "-ai"
+
+// RegisterUser creates a normal account. Names ending in the reserved AI suffix
+// are rejected (see reservedAINameSuffix); the bot accounts themselves are
+// created via registerUserInternal, which skips this check.
 func (c *Core) RegisterUser(name, password string) (*User, error) {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(name)), reservedAINameSuffix) {
+		return nil, fmt.Errorf("user name may not end in %q (reserved for AI bots)", reservedAINameSuffix)
+	}
+	return c.registerUserInternal(name, password)
+}
+
+func (c *Core) registerUserInternal(name, password string) (*User, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err

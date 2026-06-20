@@ -202,6 +202,32 @@ INSERT INTO account_registration_settings (id, require_approval, updated_at)
 VALUES ('default', 0, 0)
 ON CONFLICT (id) DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS ai_settings (
+    id         TEXT PRIMARY KEY DEFAULT 'default',
+    enabled    INTEGER NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO ai_settings (id, enabled, updated_at) VALUES ('default', 0, 0)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS board_ai_config (
+    board_id     TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    enabled      INTEGER NOT NULL DEFAULT 0,
+    provider     TEXT NOT NULL DEFAULT 'anthropic',
+    model        TEXT NOT NULL DEFAULT 'claude-haiku-4-5',
+    api_token    TEXT NOT NULL DEFAULT '',
+    trigger_role TEXT NOT NULL DEFAULT 'user',
+    mode         TEXT NOT NULL DEFAULT 'reply',
+    reply_prompt TEXT NOT NULL DEFAULT '',
+    max_total    INTEGER NOT NULL DEFAULT 0,
+    max_per_hour INTEGER NOT NULL DEFAULT 0,
+    used_total   INTEGER NOT NULL DEFAULT 0,
+    window_start BIGINT NOT NULL DEFAULT 0,
+    window_count INTEGER NOT NULL DEFAULT 0,
+    bot_user_id  TEXT NOT NULL DEFAULT '',
+    updated_at   BIGINT NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS password_recovery_requests (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -3257,6 +3283,41 @@ ALTER TABLE board_settings
 
 INSERT INTO schema_migrations (version, name, applied_at)
 VALUES (87, 'postgres-board-settings-guest-access', 0)
+ON CONFLICT (version) DO NOTHING;
+`,
+		},
+		{
+			Version: 88,
+			Name:    "postgres-ai-integration",
+			SQL: `
+CREATE TABLE IF NOT EXISTS ai_settings (
+    id         TEXT PRIMARY KEY DEFAULT 'default',
+    enabled    INTEGER NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL DEFAULT 0
+);
+INSERT INTO ai_settings (id, enabled, updated_at) VALUES ('default', 0, 0)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS board_ai_config (
+    board_id     TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    enabled      INTEGER NOT NULL DEFAULT 0,
+    provider     TEXT NOT NULL DEFAULT 'anthropic',
+    model        TEXT NOT NULL DEFAULT 'claude-haiku-4-5',
+    api_token    TEXT NOT NULL DEFAULT '',
+    trigger_role TEXT NOT NULL DEFAULT 'user',
+    mode         TEXT NOT NULL DEFAULT 'reply',
+    reply_prompt TEXT NOT NULL DEFAULT '',
+    max_total    INTEGER NOT NULL DEFAULT 0,
+    max_per_hour INTEGER NOT NULL DEFAULT 0,
+    used_total   INTEGER NOT NULL DEFAULT 0,
+    window_start BIGINT NOT NULL DEFAULT 0,
+    window_count INTEGER NOT NULL DEFAULT 0,
+    bot_user_id  TEXT NOT NULL DEFAULT '',
+    updated_at   BIGINT NOT NULL DEFAULT 0
+);
+
+INSERT INTO schema_migrations (version, name, applied_at)
+VALUES (88, 'postgres-ai-integration', 0)
 ON CONFLICT (version) DO NOTHING;
 `,
 		},

@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react'
 import * as api from '../api/client'
-import type { AccountRegistration, AccountRegistrationSettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule, BoardAutomodActivity, SiteAppearance } from '../api/types'
+import type { AccountRegistration, AccountRegistrationSettings, AISettings, BoardSummary, Category, PasswordRecoveryRequest, UserSanction, SecuritySettings, BoardAutomodRule, BoardAutomodActivity, SiteAppearance } from '../api/types'
 import { applyAppearance } from '../appearance'
 import { TuiLayoutEditor } from '../components/TuiLayoutEditor'
 
@@ -35,6 +35,7 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
   const [sanctionReason, setSanctionReason] = useState('')
   const [sanctions, setSanctions] = useState<UserSanction[] | null>(null)
   const [securitySettings, setSecuritySettings] = useState<SecuritySettings | null>(null)
+  const [aiSettings, setAISettingsState] = useState<AISettings | null>(null)
   const [appearance, setAppearance] = useState<SiteAppearance | null>(null)
   const [appearanceDraft, setAppearanceDraft] = useState<SiteAppearance | null>(null)
   const [assetBust, setAssetBust] = useState(0)
@@ -118,6 +119,7 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
     if (registrationsRes.data) setPendingRegistrations(registrationsRes.data)
     if (recoveryRes.data) setPasswordRecoveryRequests(recoveryRes.data)
     if (securityRes.data) setSecuritySettings(securityRes.data)
+    void api.getAISettings(token).then(r => { if (r.data) setAISettingsState(r.data) })
     if (appearanceRes.data) {
       setAppearance(appearanceRes.data)
       setAppearanceDraft(appearanceRes.data)
@@ -187,6 +189,19 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
     }
     setSecuritySettings(res.data ?? null)
     setNotice({ kind: 'ok', text: required ? 'Staff 2FA is now required.' : 'Staff 2FA requirement disabled.' })
+  }
+
+  async function setAIEnabled(enabled: boolean) {
+    setSaving('ai')
+    setNotice(null)
+    const res = await api.setAISettings(token, enabled)
+    setSaving(null)
+    if (res.error) {
+      setNotice({ kind: 'error', text: res.error.message })
+      return
+    }
+    setAISettingsState(res.data ?? null)
+    setNotice({ kind: 'ok', text: enabled ? 'AI integration enabled site-wide.' : 'AI integration disabled site-wide.' })
   }
 
   async function checkRole2FA() {
@@ -533,6 +548,22 @@ export function AdminPage({ token, currentUserRole, onBack, onOpenBoard }: Props
           Require two-factor authentication for staff (admins &amp; moderators)
         </label>
         <p className="muted">Enrolled staff are prompted for a code at login. Confirm staff have enrolled (use “Check 2FA” above) before enabling, to avoid surprises.</p>
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-section-heading">
+          <h3>AI integration</h3>
+        </div>
+        <label className="inline-toggle">
+          <input
+            type="checkbox"
+            checked={Boolean(aiSettings?.enabled)}
+            disabled={saving === 'ai' || !aiSettings}
+            onChange={e => setAIEnabled(e.target.checked)}
+          />
+          Enable generative-AI integration site-wide
+        </label>
+        <p className="muted">Master switch. When off, no AI bot replies anywhere regardless of per-board settings. Board moderators opt their board in and supply their own API token under that board’s settings; tokens are write-only and never shown back, not even to admins.</p>
       </section>
 
       <section className="admin-panel">

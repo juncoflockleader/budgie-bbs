@@ -178,6 +178,9 @@ func main() {
 		userRankingsProcessor               = flag.Bool("user-rankings-processor", false, "Run the rankings.users event-log processor on this worker node")
 		userRankingsProcessorInterval       = flag.Duration("user-rankings-processor-interval", time.Second, "Interval between rankings.users processor drains")
 		userRankingsProcessorBatchSize      = flag.Int("user-rankings-processor-batch-size", 500, "Maximum durable events the rankings.users processor applies per batch")
+		aiResponderProcessor                = flag.Bool("ai-responder-processor", true, "Run the generative-AI responder on this worker node (gated at runtime by the site-wide AI toggle and per-board config; run on a single worker)")
+		aiResponderProcessorInterval        = flag.Duration("ai-responder-processor-interval", 10*time.Second, "Interval between AI responder drains")
+		aiResponderProcessorBatchSize       = flag.Int("ai-responder-processor-batch-size", 5, "Maximum post events the AI responder processes per batch")
 		blessingRankingsProcessor           = flag.Bool("blessing-rankings-processor", false, "Run the rankings.blessings event-log processor on this worker node")
 		blessingRankingsProcessorInterval   = flag.Duration("blessing-rankings-processor-interval", time.Second, "Interval between rankings.blessings processor drains")
 		blessingRankingsProcessorBatchSize  = flag.Int("blessing-rankings-processor-batch-size", 500, "Maximum durable events the rankings.blessings processor applies per batch")
@@ -1743,6 +1746,15 @@ func main() {
 		slog.Info("user rankings processor enabled",
 			"interval", userRankingsProcessorInterval.String(),
 			"batchSize", *userRankingsProcessorBatchSize)
+	}
+	if roles["worker"] && *aiResponderProcessor {
+		if _, err := c.StartAIResponderProcessor(ctx, *aiResponderProcessorInterval, *aiResponderProcessorBatchSize); err != nil {
+			slog.Error("ai responder processor failed to start", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("ai responder processor enabled",
+			"interval", aiResponderProcessorInterval.String(),
+			"batchSize", *aiResponderProcessorBatchSize)
 	}
 	if *blessingRankingsProcessor {
 		if _, err := c.StartBlessingRankingsProcessor(ctx, *blessingRankingsProcessorInterval, *blessingRankingsProcessorBatchSize); err != nil {

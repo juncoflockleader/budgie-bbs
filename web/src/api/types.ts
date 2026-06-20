@@ -558,6 +558,41 @@ export interface ErrorDetail {
   retryAfterMs?: number
 }
 
+export interface AISettings {
+  enabled: boolean
+  updatedAt: number
+}
+
+// BoardAIConfig never carries the api_token; tokenSet reports whether one is
+// stored (the token is write-only).
+export interface BoardAIConfig {
+  boardId: string
+  enabled: boolean
+  provider: string
+  model: string
+  tokenSet: boolean
+  triggerRole: 'user' | 'mod'
+  mode: 'every_post' | 'reply'
+  replyPrompt: string
+  maxTotal: number
+  maxPerHour: number
+  usedTotal: number
+  botUserId: string
+  updatedAt: number
+}
+
+export interface BoardAIConfigPatch {
+  enabled?: boolean
+  provider?: string
+  model?: string
+  apiToken?: string
+  triggerRole?: 'user' | 'mod'
+  mode?: 'every_post' | 'reply'
+  replyPrompt?: string
+  maxTotal?: number
+  maxPerHour?: number
+}
+
 export interface ApiResponse<T> {
   data?: T
   error?: ErrorDetail

@@ -75,6 +75,34 @@ CREATE TABLE IF NOT EXISTS account_registration_settings (
 INSERT OR IGNORE INTO account_registration_settings (id, require_approval, updated_at)
     VALUES ('default', 0, 0);
 
+-- Site-wide generative-AI kill switch (admin-controlled).
+CREATE TABLE IF NOT EXISTS ai_settings (
+    id         TEXT PRIMARY KEY DEFAULT 'default',
+    enabled    INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO ai_settings (id, enabled, updated_at) VALUES ('default', 0, 0);
+
+-- Per-board generative-AI bot configuration. api_token is bring-your-own and is
+-- deliberately never returned by any read API (only DB access can see it).
+CREATE TABLE IF NOT EXISTS board_ai_config (
+    board_id     TEXT PRIMARY KEY REFERENCES boards(id) ON DELETE CASCADE,
+    enabled      INTEGER NOT NULL DEFAULT 0,
+    provider     TEXT NOT NULL DEFAULT 'anthropic',
+    model        TEXT NOT NULL DEFAULT 'claude-haiku-4-5',
+    api_token    TEXT NOT NULL DEFAULT '',
+    trigger_role TEXT NOT NULL DEFAULT 'user',
+    mode         TEXT NOT NULL DEFAULT 'reply',
+    reply_prompt TEXT NOT NULL DEFAULT '',
+    max_total    INTEGER NOT NULL DEFAULT 0,
+    max_per_hour INTEGER NOT NULL DEFAULT 0,
+    used_total   INTEGER NOT NULL DEFAULT 0,
+    window_start INTEGER NOT NULL DEFAULT 0,
+    window_count INTEGER NOT NULL DEFAULT 0,
+    bot_user_id  TEXT NOT NULL DEFAULT '',
+    updated_at   INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS password_recovery_requests (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

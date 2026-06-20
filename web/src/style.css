@@ -793,6 +793,31 @@ label {
   gap: 0.5rem;
   align-items: end;
 }
+
+/* Per-board AI bot config (inside the board settings panel). */
+.board-ai-config {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--c-border);
+}
+.board-ai-config h4 { margin: 0 0 0.5rem }
+.ai-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5rem;
+  align-items: end;
+  margin: 0.5rem 0;
+}
+.ai-config-grid label,
+.ai-reply-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82em;
+  color: var(--c-muted);
+}
+.ai-reply-prompt { margin: 0.5rem 0 }
+.ai-reply-prompt textarea { resize: vertical }
 .requirement-field {
   display: flex;
   flex-direction: column;

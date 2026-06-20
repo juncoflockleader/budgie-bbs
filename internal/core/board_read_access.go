@@ -1,6 +1,10 @@
 package core
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+)
 
 // Board read-access control, shared by every transport (HTTP, NNTP, SSH/TUI).
 //
@@ -32,6 +36,27 @@ func ActorCanReadBoard(actor *User, info *BoardInfo) bool {
 		return true
 	}
 	return actorModeratesBoard(actor, info) || actorIsBoardMember(actor, info)
+}
+
+// ActorCanSetBoardSettings reports whether actor may manage a board's settings:
+// a site moderator/admin, a board moderator, or a member granted the
+// can_set_board_settings permission. Mirrors the handler-side check for use by
+// direct-DB endpoints (e.g. the AI config, which is not command-routed).
+func (c *Core) ActorCanSetBoardSettings(actor *User, boardID string) bool {
+	if actor == nil || strings.TrimSpace(actor.ID) == "" {
+		return false
+	}
+	if actor.IsMod() {
+		return true
+	}
+	var x int
+	if err := projections.QQueryRow(c.DB, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&x); err == nil {
+		return true
+	}
+	if err := projections.QQueryRow(c.DB, `SELECT can_set_board_settings FROM board_members WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&x); err == nil && x != 0 {
+		return true
+	}
+	return false
 }
 
 // actorIsGuest reports whether actor is the unauthenticated web guest principal.
