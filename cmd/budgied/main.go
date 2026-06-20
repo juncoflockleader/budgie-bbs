@@ -69,6 +69,7 @@ func main() {
 		otelTracing                         = flag.Bool("otel-tracing", false, "Enable OpenTelemetry distributed tracing (also auto-enabled when OTEL_EXPORTER_OTLP_ENDPOINT is set); exports via OTLP/HTTP using the standard OTEL_* env vars")
 		otelSampleRatio                     = flag.Float64("otel-sample-ratio", 1.0, "Head trace sampling ratio in [0,1] when tracing is enabled")
 		webRoot                             = flag.String("web", "", "Path to web/dist directory for SPA serving (optional)")
+		sitemapInterval                     = flag.Duration("sitemap-interval", core.DefaultSitemapInterval, "Sitemap regeneration interval / cache TTL for /sitemap.xml (also BUDGIE_SITEMAP_INTERVAL)")
 		nntpAddr                            = flag.String("nntp", "", "NNTP listen address (optional, e.g. :1190)")
 		nntpDomain                          = flag.String("nntp-domain", "budgie.local", "Domain used for NNTP Message-ID values")
 		nntpPrefix                          = flag.String("nntp-prefix", "budgie", "NNTP newsgroup prefix")
@@ -1824,6 +1825,18 @@ func main() {
 	if root := resolveWebRoot(*webRoot); root != "" {
 		httpSrv.SetWebRoot(root)
 	}
+	// Search-engine support: /robots.txt + /sitemap.xml. The public base URL is
+	// shared with email links; the regeneration interval (cache TTL) is settable
+	// via -sitemap-interval or BUDGIE_SITEMAP_INTERVAL.
+	sitemapIv := *sitemapInterval
+	if env := strings.TrimSpace(os.Getenv("BUDGIE_SITEMAP_INTERVAL")); env != "" {
+		if d, err := time.ParseDuration(env); err == nil {
+			sitemapIv = d
+		} else {
+			slog.Warn("invalid BUDGIE_SITEMAP_INTERVAL; using flag/default", "value", env, "err", err)
+		}
+	}
+	httpSrv.SetSEOConfig(envOr2(*publicURL, "BUDGIE_PUBLIC_URL"), sitemapIv)
 	mux := http.NewServeMux()
 	writeRegionProxyEnabled := strings.TrimSpace(*writeRegionURL) != ""
 	wsAllowCommands := !writeRegionProxyEnabled || commandAuthoritativeMode != ""

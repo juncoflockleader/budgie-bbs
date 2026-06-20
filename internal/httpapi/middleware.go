@@ -26,20 +26,63 @@ func userFromCtx(ctx context.Context) *core.User {
 func guestPrincipal() *core.User { return &core.User{Role: "guest"} }
 
 // optionalAuth is middleware for the public browsing surface (boards, threads,
-// posts, categories). A request with NO credentials is served as a guest. A
-// request that DOES present a token must pass full validation — a stale,
-// revoked, deactivated, or otherwise invalid token is rejected with 401 rather
-// than silently downgraded to guest, so clients clear dead sessions instead of
-// browsing under a defunct identity. Use only on safe (GET) read routes.
+// posts, categories). It attaches the valid session user when one is present and
+// otherwise serves the request as a guest. Crucially, an invalid token (expired,
+// revoked, deactivated, stale after a server/JWT-secret change, or simply
+// malformed) is treated as "no session" — the guest principal — NOT rejected
+// with 401. This keeps public content readable for visitors whose session has
+// lapsed; a defunct token grants only the same anonymous view, never the former
+// identity, and personal/member routes (requireAuth) still 401 those tokens.
 func (s *Server) optionalAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if tok, _ := resolveToken(r); tok == "" {
-			ctx := context.WithValue(r.Context(), ctxUser, guestPrincipal())
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
+		actor := s.resolveOptionalUser(r)
+		if actor == nil {
+			actor = guestPrincipal()
 		}
-		s.requireAuth(next).ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), ctxUser, actor)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// resolveOptionalUser returns the valid session user, or nil to be treated as a
+// guest. It mirrors requireAuth's validation (signature, type, revocation,
+// deactivation, registration status) but never writes an error response — any
+// failure simply yields nil.
+func (s *Server) resolveOptionalUser(r *http.Request) *core.User {
+	tok, _ := resolveToken(r)
+	if tok == "" {
+		return nil
+	}
+	claims := jwt.MapClaims{}
+	if _, err := jwt.ParseWithClaims(tok, claims, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return s.jwtSecret, nil
+	}); err != nil {
+		return nil
+	}
+	if typ, _ := claims["typ"].(string); typ != "" && typ != "session" {
+		return nil
+	}
+	uid, _ := claims["sub"].(string)
+	if uid == "" {
+		return nil
+	}
+	user, err := s.core.UserByID(uid)
+	if err != nil || user == nil {
+		return nil
+	}
+	if !tokenIssuedAfterRevocation(claims, user) {
+		return nil
+	}
+	if user.DeactivatedAt > 0 {
+		return nil
+	}
+	if rs := user.RegistrationStatus; rs != "" && rs != "approved" {
+		return nil
+	}
+	return user
 }
 
 // requireAuth is middleware that validates the Bearer JWT and attaches the user

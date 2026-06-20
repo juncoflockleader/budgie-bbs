@@ -132,6 +132,8 @@ move state into the working directory.
 | `-nntp` | _(off)_ | NNTP listen address, e.g. `:1190`. Omit to disable. |
 | `-doors` | _(off)_ | Path to `doors.json` for door games. |
 | `-auto-stats` | `true` | Publish the daily stats snapshot. |
+| `-public-url` (`BUDGIE_PUBLIC_URL`) | _(derived)_ | Public base URL, e.g. `https://bbs.example`. Used for email links and absolute sitemap/robots URLs. If unset, derived per-request from the `Host` header. |
+| `-sitemap-interval` (`BUDGIE_SITEMAP_INTERVAL`) | `6h` | How often `/sitemap.xml` is regenerated (cache TTL). |
 
 ### Environment variables
 
@@ -139,6 +141,27 @@ move state into the working directory.
   **Set this in production.** The built-in fallback is a fixed dev default and
   is not safe for real deployments.
 - `BUDGIE_POSTGRES_DSN` — only relevant in Postgres mode.
+- `BUDGIE_PUBLIC_URL` — public base URL for email links and sitemap/robots.
+- `BUDGIE_SITEMAP_INTERVAL` — sitemap regeneration interval, e.g. `6h`.
+
+## Search engines (robots.txt + sitemap.xml)
+
+Two unauthenticated endpoints make the public, guest-readable surface
+crawlable:
+
+- `GET /robots.txt` — allows crawling, keeps `/api/` out of the index, and
+  points at the sitemap.
+- `GET /sitemap.xml` — lists the homepage plus every guest-readable board
+  (`/b/{id}`) and its threads (`/t/{id}`). Member-only and admin-hidden boards
+  are excluded (same rules as web guest browsing). It is regenerated at most
+  once per `-sitemap-interval` (served stale-while-revalidate so requests never
+  block on generation).
+
+Those `/b/{id}` and `/t/{id}` URLs are real, shareable deep links: the SPA
+resolves them on a cold load (a logged-out visitor lands in read-only guest
+mode), and sets a per-page `<title>` and `<link rel="canonical">`. Set
+`-public-url` so the sitemap and canonical URLs are absolute and correct behind
+a proxy.
 
 ## Health and metrics
 

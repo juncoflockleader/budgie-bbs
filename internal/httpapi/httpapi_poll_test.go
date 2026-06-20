@@ -3823,8 +3823,10 @@ func TestHTTPDeactivateAccountCreatesGoodbyeRecord(t *testing.T) {
 	}, &oldLogin); status != http.StatusUnauthorized {
 		t.Fatalf("expected deactivated login to fail, got %d", status)
 	}
-	boards := boardsResponse{}
-	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/boards", aliceToken, nil, &boards); status != http.StatusUnauthorized {
+	// The old token is rejected for authenticated actions. (Public browsing
+	// routes like /boards now fall back to a guest view for any invalid token, so
+	// assert on a personal endpoint that still requires a live session.)
+	if status := doJSONRequest(t, handler, http.MethodGet, "/api/v1/notifications", aliceToken, nil, nil); status != http.StatusUnauthorized {
 		t.Fatalf("expected old token to be rejected after deactivation, got %d", status)
 	}
 

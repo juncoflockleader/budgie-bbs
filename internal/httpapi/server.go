@@ -23,6 +23,13 @@ type Server struct {
 	// webRoot, if non-empty, serves a SPA from this filesystem path.
 	webRoot string
 
+	// SEO: configured public base URL (e.g. https://bbs.example.com) used to
+	// build absolute sitemap/robots URLs, the sitemap regeneration interval
+	// (cache TTL), and the stale-while-revalidate cache itself.
+	seoBaseURL      string
+	sitemapInterval time.Duration
+	sitemap         sitemapCache
+
 	// Brute-force limiters for credential/verification endpoints (per process).
 	loginLimiter     *ratelimit.Limiter // login + change-password (per IP and per account)
 	twoFactorLimiter *ratelimit.Limiter // 2FA code verification (per user and per IP)
@@ -62,6 +69,14 @@ func (s *Server) EnableClusterRateLimiting(store ratelimit.Store) {
 // All non-API requests are served from this directory; unknown paths fall back
 // to index.html (client-side routing).
 func (s *Server) SetWebRoot(path string) { s.webRoot = path }
+
+// SetSEOConfig sets the public base URL used for absolute sitemap/robots URLs
+// and the sitemap regeneration interval (cache TTL). A blank baseURL falls back
+// to the request's scheme+host at serve time; interval<=0 uses the default.
+func (s *Server) SetSEOConfig(baseURL string, interval time.Duration) {
+	s.seoBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	s.sitemapInterval = interval
+}
 
 // registerOps mounts the unauthenticated liveness/readiness/metrics routes.
 // Shared by the full Handler and the ops-only OpsHandler so every node — even
@@ -353,6 +368,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/users/{name}/sanctions", auth(http.HandlerFunc(s.handleSanctionUser)))
 	mux.Handle("DELETE /api/v1/users/{name}/sanctions", auth(http.HandlerFunc(s.handleClearUserSanction)))
 	mux.Handle("POST /api/v1/chat/{room}/lines", auth(http.HandlerFunc(s.handleSendChatLine)))
+
+	// Search-engine endpoints (exact paths, matched ahead of the SPA catch-all).
+	mux.HandleFunc("GET /robots.txt", s.handleRobotsTxt)
+	mux.HandleFunc("GET /sitemap.xml", s.handleSitemap)
 
 	// SPA static files (must come last — catches everything not matched above).
 	if s.webRoot != "" {

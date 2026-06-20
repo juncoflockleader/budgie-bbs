@@ -48,7 +48,10 @@ export function App() {
   const { auth, login, logout, loading: authLoading } = useAuth()
   // Guest browsing: a visitor who clicked "Browse as guest" sees the read-only
   // app (public, non-member boards) without an account. auth.user stays null.
-  const [guestMode, setGuestMode] = useState(false)
+  // A visitor who lands on a deep link (/b/{id} or /t/{id}) — e.g. from search
+  // results or a shared URL — enters guest mode automatically so the content
+  // renders instead of the login wall (a logged-in user is unaffected).
+  const [guestMode, setGuestMode] = useState(() => isDeepLinkPath(window.location.pathname))
   const [page, setPage] = useState<Page>({ name: 'boards' })
   const [logoImgOk, setLogoImgOk] = useState(true)
   const [searchDraft, setSearchDraft] = useState('')
@@ -144,24 +147,52 @@ export function App() {
     if (current) {
       historyDepthRef.current = historyDepthFromState(window.history.state)
       setPage(current)
+    } else if (isDeepLinkPath(window.location.pathname)) {
+      // Cold load / refresh / shared link on a /b/{id} or /t/{id} URL.
+      void resolveDeepLink(window.location.pathname)
     } else {
-      window.history.replaceState(historyStateForPage(page, historyDepthRef.current), '', window.location.href)
+      window.history.replaceState(historyStateForPage(page, historyDepthRef.current), '', pagePath(page))
     }
 
     function handlePopState(event: PopStateEvent) {
       const next = pageFromHistoryState(event.state)
-      if (!next) {
-        historyDepthRef.current = 0
-        setPage({ name: 'boards' })
+      if (next) {
+        historyDepthRef.current = historyDepthFromState(event.state)
+        setPage(next)
         return
       }
-      historyDepthRef.current = historyDepthFromState(event.state)
-      setPage(next)
+      // No SPA state on this history entry: re-resolve from the URL path.
+      if (isDeepLinkPath(window.location.pathname)) {
+        void resolveDeepLink(window.location.pathname)
+        return
+      }
+      historyDepthRef.current = 0
+      setPage({ name: 'boards' })
     }
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Per-page <title> and canonical link for SEO / shareable links: search
+  // engines and link unfurlers read the document title and canonical URL.
+  useEffect(() => {
+    const site = appearance?.siteTitle || 'Budgie'
+    let title = site
+    if (page.name === 'threads') title = `${page.board.name} · ${site}`
+    else if (page.name === 'thread') title = `${page.thread.title} · ${site}`
+    document.title = title
+
+    const href = window.location.origin + pagePath(page)
+    let link = document.head.querySelector('link[rel="canonical"]') as HTMLLinkElement | null
+    if (!link) {
+      link = document.createElement('link')
+      link.rel = 'canonical'
+      document.head.appendChild(link)
+    }
+    link.href = href
+  }, [page, appearance])
 
   if (authLoading) {
     // Brief: bootstrapping the session from the cookie via /auth/me.
@@ -181,14 +212,48 @@ export function App() {
   function nav(p: Page) {
     const nextDepth = historyDepthRef.current + 1
     historyDepthRef.current = nextDepth
-    window.history.pushState(historyStateForPage(p, nextDepth), '', window.location.href)
+    window.history.pushState(historyStateForPage(p, nextDepth), '', pagePath(p))
     setPage(p)
   }
 
   function replacePage(p: Page) {
     historyDepthRef.current = 0
-    window.history.replaceState(historyStateForPage(p, 0), '', window.location.href)
+    window.history.replaceState(historyStateForPage(p, 0), '', pagePath(p))
     setPage(p)
+  }
+
+  // resolveDeepLink loads the board/thread named in a /b/{id} or /t/{id} URL
+  // (cold load, refresh, or shared link) and navigates to it, falling back to
+  // the board list when the target is missing or not guest-readable. Uses the
+  // current token (empty for guests — the content is public either way).
+  async function resolveDeepLink(path: string) {
+    const tok = auth.token
+    const land = (p: Page) => {
+      historyDepthRef.current = 0
+      window.history.replaceState(historyStateForPage(p, 0), '', pagePath(p))
+      setPage(p)
+    }
+    try {
+      const tMatch = path.match(/^\/t\/([^/]+)/)
+      const bMatch = path.match(/^\/b\/([^/]+)/)
+      if (tMatch) {
+        const res = await api.getThread(tok, decodeURIComponent(tMatch[1]))
+        if (res.data?.thread) {
+          const thread = res.data.thread
+          const info = await api.getBoardInfo(tok, thread.board)
+          const board = info.data?.board ?? ({ id: thread.board, name: thread.boardName || thread.board } as Board)
+          land({ name: 'thread', board, thread })
+          return
+        }
+      } else if (bMatch) {
+        const res = await api.getBoardInfo(tok, decodeURIComponent(bMatch[1]))
+        if (res.data?.board) {
+          land({ name: 'threads', board: res.data.board })
+          return
+        }
+      }
+    } catch { /* fall through to the board list */ }
+    land({ name: 'boards' })
   }
 
   function goBack(fallback: Page = { name: 'boards' }) {
@@ -506,6 +571,23 @@ export function App() {
 
 function historyStateForPage(page: Page, depth: number) {
   return { budgiePage: page, budgieDepth: depth }
+}
+
+// pagePath maps a page to its shareable, crawlable URL. Only boards and threads
+// get distinct paths (these are what the sitemap lists); every other page lives
+// at "/" and is restored from history state, not the URL.
+function pagePath(page: Page): string {
+  switch (page.name) {
+    case 'threads': return `/b/${encodeURIComponent(page.board.id)}`
+    case 'thread': return `/t/${encodeURIComponent(page.thread.id)}`
+    default: return '/'
+  }
+}
+
+// isDeepLinkPath reports whether a URL path targets a specific board or thread
+// (so a cold load should resolve it rather than show the login wall / homepage).
+function isDeepLinkPath(path: string): boolean {
+  return /^\/(b|t)\/[^/]+/.test(path)
 }
 
 function pageFromHistoryState(state: unknown): Page | null {
