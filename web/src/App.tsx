@@ -536,7 +536,7 @@ export function App() {
           <PrivatePage
             token={token}
             onBack={() => goBack({ name: 'boards' })}
-            currentUserRole={auth.user.role}
+            currentUserRole={user.role}
             initialMessageTo={page.messageTo}
           />
         )}

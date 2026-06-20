@@ -1,6 +1,6 @@
 import { type MouseEvent, useEffect, useState } from 'react'
 import * as api from '../api/client'
-import type { Board, BoardSummary, Category, FavoriteBoardEntry, FavoriteFolder, FavoriteTree, RecommendedBoard } from '../api/types'
+import type { ApiResponse, Board, BoardSummary, Category, FavoriteBoardEntry, FavoriteFolder, FavoriteTree, RecommendedBoard } from '../api/types'
 import { Spinner } from '../components/Spinner'
 import { useI18n } from '../i18n'
 
@@ -44,8 +44,8 @@ export function BoardListPage({ token, currentUserRole, isGuest = false, onSelec
     let cancelled = false
     setLoading(true)
     setError(null)
-    const recReq = isGuest ? Promise.resolve({ data: [] as RecommendedBoard[] }) : api.listRecommendedBoards(token)
-    const favReq = isGuest ? Promise.resolve({ data: GUEST_FAV_TREE }) : api.listFavoriteTree(token)
+    const recReq = isGuest ? Promise.resolve({ data: [] } as ApiResponse<RecommendedBoard[]>) : api.listRecommendedBoards(token)
+    const favReq = isGuest ? Promise.resolve({ data: GUEST_FAV_TREE } as ApiResponse<FavoriteTree>) : api.listFavoriteTree(token)
     Promise.all([api.listBoardSummaries(token), recReq, favReq, api.listCategories(token)]).then(([boardsRes, recommendedRes, treeRes, categoriesRes]) => {
       if (cancelled) return
       setLoading(false)
@@ -105,8 +105,8 @@ export function BoardListPage({ token, currentUserRole, isGuest = false, onSelec
   }
 
   async function reloadBoards(previousBoards = boards, previousTree = favoriteTree, previousRecommended = recommendedBoards) {
-    const recReq = isGuest ? Promise.resolve({ data: [] as RecommendedBoard[] }) : api.listRecommendedBoards(token)
-    const favReq = isGuest ? Promise.resolve({ data: GUEST_FAV_TREE }) : api.listFavoriteTree(token)
+    const recReq = isGuest ? Promise.resolve({ data: [] } as ApiResponse<RecommendedBoard[]>) : api.listRecommendedBoards(token)
+    const favReq = isGuest ? Promise.resolve({ data: GUEST_FAV_TREE } as ApiResponse<FavoriteTree>) : api.listFavoriteTree(token)
     const [boardsRes, recommendedRes, treeRes, categoriesRes] = await Promise.all([api.listBoardSummaries(token), recReq, favReq, api.listCategories(token)])
     if (boardsRes.error) {
       setBoards(previousBoards)
