@@ -919,7 +919,7 @@ they preserve the same interfaces.
   replies, and the shared `commandLogDrain` budget, then names the runtime,
   promotion-readiness, event-projection, and materialization-audit JSON fields
   that must prove the run used durable staging and reached zero lag/loss.
-- Added `cmd/budgie-commandlog-report-check`, a strict archived-artifact
+- Added `cmd/budgie-report-check commandlog`, a strict archived-artifact
   verifier for saved `budgie-commandlog-loadgen` JSON reports. Promotion
   reviewers can now re-run the same `commandLogDrain` budget evaluation against
   captured durable staging evidence without rerunning the load fixture, and the
@@ -932,7 +932,7 @@ they preserve the same interfaces.
   durable native NATS/Postgres staging gate. It validates the required
   `BUDGIE_NATS_URL` and `BUDGIE_POSTGRES_DSN` inputs, enforces distinct command
   and event streams, writes the archived load report, and immediately re-checks
-  it with `cmd/budgie-commandlog-report-check` so promotion evidence is produced
+  it with `cmd/budgie-report-check commandlog` so promotion evidence is produced
   and verified by one repeatable operator command.
 - Command-log load reports now include an `evidence` block with the producing
   tool, budget file, git revision, and git-modified state. The shared
@@ -2118,7 +2118,7 @@ of magnitude. They must not re-create a hot ordered bottleneck.
   the remote budget mode to the child gates, and explicit gateway-only bundles
   require `BUDGIE_INTERNET_SCALE_GATE_TARGETS=gateway` so local fanout evidence
   is not mistaken for durable staging signoff.
-- Added `cmd/budgie-gateway-report-check`, a standalone verifier for archived
+- Added `cmd/budgie-report-check gateway`, a standalone verifier for archived
   gateway fanout reports. `scripts/gateway-fanout-gate.sh` now checks the temp
   report with that verifier before archiving, so remote handoffs can re-verify
   gateway evidence against the selected local or remote staging budget just like
@@ -2541,14 +2541,14 @@ single authoritative write region unless a later design explicitly changes that.
   alongside the gateway, NATS, and Kafka reports, recording redacted endpoints,
   git state, selected targets, generated create/delete resources, and probe
   timing for handoff review.
-- Added `cmd/budgie-internet-scale-preflight-report-check` and wired
+- Added `cmd/budgie-report-check preflight` and wired
   `scripts/internet-scale-report-check.sh` to require that preflight report for
   remote NATS/Kafka bundle verification. The read-only handoff checker now
   rejects failed preflight probes, dirty git evidence, missing generated
   resources, wrong target sets, unsanitized endpoint evidence, and loopback
   endpoint evidence before accepting the archived gateway or command-log
   reports.
-- Added `cmd/budgie-internet-scale-bundle-report-check` and wired the archived
+- Added `cmd/budgie-report-check bundle` and wired the archived
   bundle verifier to run it after individual report checks. Handoff
   verification now rejects mixed bundles whose preflight, gateway, NATS, or
   Kafka artifacts were produced from different git revisions or from dirty
@@ -2566,7 +2566,7 @@ single authoritative write region unless a later design explicitly changes that.
   SHA-256 hashes so remote handoff can transfer one machine-readable evidence
   index with the artifacts.
 - Bundle manifests now have a read-only transfer verification path. Reviewers
-  can run `cmd/budgie-internet-scale-bundle-report-check -verify-manifest` or
+  can run `cmd/budgie-report-check bundle -verify-manifest` or
   set `BUDGIE_INTERNET_SCALE_REPORT_CHECK_VERIFY_MANIFEST` on
   `scripts/internet-scale-report-check.sh`; the verifier reopens every
   referenced report, recomputes SHA-256 hashes, checks the report labels against

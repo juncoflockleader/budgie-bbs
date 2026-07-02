@@ -339,7 +339,7 @@ func TestCommandLogNativeNATSGateScriptPinsDurablePromotionShape(t *testing.T) {
 		"-directed-replies",
 		"-budget-file",
 		"cmd/budgie-commandlog-loadgen",
-		"cmd/budgie-commandlog-report-check",
+		"cmd/budgie-report-check commandlog",
 		"\"$GO_CLI\" run ./cmd/budgie-commandlog-loadgen",
 		"-report-file",
 	} {
@@ -425,7 +425,7 @@ func TestCommandLogNativeKafkaGateScriptPinsDurablePromotionShape(t *testing.T) 
 		"-directed-replies",
 		"-budget-file",
 		"cmd/budgie-commandlog-loadgen",
-		"cmd/budgie-commandlog-report-check",
+		"cmd/budgie-report-check commandlog",
 		"\"$GO_CLI\" run ./cmd/budgie-commandlog-loadgen",
 		"-report-file",
 	} {
@@ -484,9 +484,9 @@ func TestGatewayFanoutGateScriptPinsPromotedCapacityShape(t *testing.T) {
 		"mv \"$REPORT_TMP\" \"$REPORT_FILE\"",
 		"archived verified gateway fanout report",
 		"cmd/budgie-gateway-loadgen",
-		"cmd/budgie-gateway-report-check",
+		"cmd/budgie-report-check gateway",
 		"\"$GO_CLI\" run ./cmd/budgie-gateway-loadgen",
-		"\"$GO_CLI\" run ./cmd/budgie-gateway-report-check",
+		"\"$GO_CLI\" run ./cmd/budgie-report-check gateway",
 		"-hot-subscribers",
 		"-idle-subscribers",
 		"-buffer-size",
@@ -646,10 +646,10 @@ func TestInternetScaleReportCheckScriptPinsArchivedBundleShape(t *testing.T) {
 		"commandlog-native-nats-report-${suffix}.json",
 		"commandlog-native-kafka-report-${suffix}.json",
 		"preflight-report-${suffix}.json",
-		"cmd/budgie-gateway-report-check",
-		"cmd/budgie-commandlog-report-check",
-		"cmd/budgie-internet-scale-preflight-report-check",
-		"cmd/budgie-internet-scale-bundle-report-check",
+		"cmd/budgie-report-check gateway",
+		"cmd/budgie-report-check commandlog",
+		"cmd/budgie-report-check preflight",
+		"cmd/budgie-report-check bundle",
 		"-manifest-file",
 		"-verify-manifest",
 		"remote staging preflight report",
@@ -862,7 +862,7 @@ func TestCommandLogNativeNATSGateUsesRemoteStagingBudget(t *testing.T) {
   printf '{"ok":true}\n'
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-commandlog-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" ]]; then
   exit 0
 fi
 exit 9
@@ -1164,7 +1164,7 @@ func TestCommandLogNativeNATSGateArchivesReportOnlyAfterVerification(t *testing.
   printf '{"ok":true}\n'
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-commandlog-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" ]]; then
   report=""
   prev=""
   for arg in "$@"; do
@@ -1229,7 +1229,7 @@ exit 9
 		t.Fatalf("read call log: %v", err)
 	}
 	if strings.Count(string(calls), "./cmd/budgie-commandlog-loadgen") != 1 ||
-		strings.Count(string(calls), "./cmd/budgie-commandlog-report-check") != 1 {
+		strings.Count(string(calls), "./cmd/budgie-report-check commandlog") != 1 {
 		t.Fatalf("unexpected fake go calls:\n%s", calls)
 	}
 	if !strings.Contains(string(calls), "-command-log-nats-stream BUDGIE_COMMAND_LOG_LOAD_") ||
@@ -1257,7 +1257,7 @@ func TestCommandLogNativeKafkaGateArchivesReportOnlyAfterVerification(t *testing
   printf '{"ok":true}\n'
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-commandlog-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" ]]; then
   report=""
   prev=""
   for arg in "$@"; do
@@ -1323,7 +1323,7 @@ exit 9
 	}
 	callBody := string(calls)
 	if strings.Count(callBody, "./cmd/budgie-commandlog-loadgen") != 1 ||
-		strings.Count(callBody, "./cmd/budgie-commandlog-report-check") != 1 {
+		strings.Count(callBody, "./cmd/budgie-report-check commandlog") != 1 {
 		t.Fatalf("unexpected fake go calls:\n%s", calls)
 	}
 	for _, token := range []string{
@@ -1358,7 +1358,7 @@ func TestCommandLogNativeKafkaGateUsesRemoteStagingBudget(t *testing.T) {
   printf '{"ok":true}\n'
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-commandlog-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" ]]; then
   exit 0
 fi
 exit 9
@@ -1403,7 +1403,7 @@ func TestGatewayFanoutGateArchivesReportAfterLoadgenPasses(t *testing.T) {
   printf '{"ok":true}\n'
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-gateway-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "gateway" ]]; then
   exit 0
 fi
 exit 9
@@ -1444,7 +1444,7 @@ exit 9
 		"-events 1",
 		"-target-connections 1000000",
 		"-budget-file ops/internet-scale-budgets.example.json",
-		"./cmd/budgie-gateway-report-check",
+		"./cmd/budgie-report-check gateway",
 		"-report-file artifacts/internet-scale/",
 	} {
 		if !strings.Contains(callBody, token) {
@@ -1463,7 +1463,7 @@ func TestGatewayFanoutGateUsesRemoteStagingBudget(t *testing.T) {
   printf '{"ok":true}\n'
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-gateway-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "gateway" ]]; then
   exit 0
 fi
 exit 9
@@ -1592,7 +1592,7 @@ func TestInternetScaleReportCheckRunsGatewayAndKafkaTargets(t *testing.T) {
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/gateway-fanout-report-bundle-test.json")
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/commandlog-native-kafka-report-bundle-test.json")
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/preflight-report-bundle-test.json")
-	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-gateway-report-check" || "$2" == "./cmd/budgie-commandlog-report-check" || "$2" == "./cmd/budgie-internet-scale-preflight-report-check" || "$2" == "./cmd/budgie-internet-scale-bundle-report-check" ]]; then
+	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "gateway" || "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" || "$2" == "./cmd/budgie-report-check" && "$3" == "preflight" || "$2" == "./cmd/budgie-report-check" && "$3" == "bundle" ]]; then
   exit 0
 fi
 exit 9
@@ -1631,10 +1631,10 @@ exit 9
 	}
 	callBody := string(calls)
 	for _, token := range []string{
-		"./cmd/budgie-internet-scale-preflight-report-check -report-file artifacts/internet-scale/preflight-report-bundle-test.json -targets kafka -remote-staging",
-		"./cmd/budgie-gateway-report-check -report-file artifacts/internet-scale/gateway-fanout-report-bundle-test.json -budget-file ops/internet-scale-remote-staging-budgets.example.json",
-		"./cmd/budgie-commandlog-report-check -report-file artifacts/internet-scale/commandlog-native-kafka-report-bundle-test.json -budget-file ops/internet-scale-kafka-remote-staging-budgets.example.json",
-		"./cmd/budgie-internet-scale-bundle-report-check -targets gateway,kafka -remote-staging -preflight-report artifacts/internet-scale/preflight-report-bundle-test.json -gateway-report artifacts/internet-scale/gateway-fanout-report-bundle-test.json -kafka-report artifacts/internet-scale/commandlog-native-kafka-report-bundle-test.json -manifest-file artifacts/internet-scale/bundle-manifest-bundle-test.json",
+		"./cmd/budgie-report-check preflight -report-file artifacts/internet-scale/preflight-report-bundle-test.json -targets kafka -remote-staging",
+		"./cmd/budgie-report-check gateway -report-file artifacts/internet-scale/gateway-fanout-report-bundle-test.json -budget-file ops/internet-scale-remote-staging-budgets.example.json",
+		"./cmd/budgie-report-check commandlog -report-file artifacts/internet-scale/commandlog-native-kafka-report-bundle-test.json -budget-file ops/internet-scale-kafka-remote-staging-budgets.example.json",
+		"./cmd/budgie-report-check bundle -targets gateway,kafka -remote-staging -preflight-report artifacts/internet-scale/preflight-report-bundle-test.json -gateway-report artifacts/internet-scale/gateway-fanout-report-bundle-test.json -kafka-report artifacts/internet-scale/commandlog-native-kafka-report-bundle-test.json -manifest-file artifacts/internet-scale/bundle-manifest-bundle-test.json",
 	} {
 		if !strings.Contains(callBody, token) {
 			t.Fatalf("fake go calls missing %q:\n%s", token, calls)
@@ -1652,7 +1652,7 @@ func TestInternetScaleReportCheckVerifiesExistingBundleManifest(t *testing.T) {
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/commandlog-native-kafka-report-bundle-test.json")
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/preflight-report-bundle-test.json")
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/bundle-manifest-bundle-test.json")
-	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-gateway-report-check" || "$2" == "./cmd/budgie-commandlog-report-check" || "$2" == "./cmd/budgie-internet-scale-preflight-report-check" || "$2" == "./cmd/budgie-internet-scale-bundle-report-check" ]]; then
+	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "gateway" || "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" || "$2" == "./cmd/budgie-report-check" && "$3" == "preflight" || "$2" == "./cmd/budgie-report-check" && "$3" == "bundle" ]]; then
   exit 0
 fi
 exit 9
@@ -1686,7 +1686,7 @@ exit 9
 		t.Fatalf("read call log: %v", err)
 	}
 	callBody := string(calls)
-	if !strings.Contains(callBody, "./cmd/budgie-internet-scale-bundle-report-check -verify-manifest artifacts/internet-scale/bundle-manifest-bundle-test.json -targets gateway,kafka -remote-staging") {
+	if !strings.Contains(callBody, "./cmd/budgie-report-check bundle -verify-manifest artifacts/internet-scale/bundle-manifest-bundle-test.json -targets gateway,kafka -remote-staging") {
 		t.Fatalf("fake go calls missing manifest verify invocation:\n%s", calls)
 	}
 	if strings.Contains(callBody, "-manifest-file") {
@@ -1727,10 +1727,10 @@ func TestInternetScaleReportCheckPropagatesBundleConsistencyFailure(t *testing.T
 	callLog := filepath.Join(dir, "calls.log")
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/gateway-fanout-report-mixed-revision.json")
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/commandlog-native-nats-report-mixed-revision.json")
-	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-gateway-report-check" || "$2" == "./cmd/budgie-commandlog-report-check" ]]; then
+	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "gateway" || "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" ]]; then
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-internet-scale-bundle-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "bundle" ]]; then
   echo "mixed git revision" >&2
   exit 3
 fi
@@ -1757,7 +1757,7 @@ exit 9
 	if err != nil {
 		t.Fatalf("read call log: %v", err)
 	}
-	if !strings.Contains(string(calls), "./cmd/budgie-internet-scale-bundle-report-check -targets gateway,nats -gateway-report artifacts/internet-scale/gateway-fanout-report-mixed-revision.json -nats-report artifacts/internet-scale/commandlog-native-nats-report-mixed-revision.json") {
+	if !strings.Contains(string(calls), "./cmd/budgie-report-check bundle -targets gateway,nats -gateway-report artifacts/internet-scale/gateway-fanout-report-mixed-revision.json -nats-report artifacts/internet-scale/commandlog-native-nats-report-mixed-revision.json") {
 		t.Fatalf("fake go calls missing bundle consistency invocation:\n%s", calls)
 	}
 }
@@ -1766,7 +1766,7 @@ func TestInternetScaleReportCheckAcceptsStagingGateSuffixAlias(t *testing.T) {
 	dir := t.TempDir()
 	callLog := filepath.Join(dir, "calls.log")
 	writeFakeInternetScaleReport(t, "artifacts/internet-scale/commandlog-native-nats-report-gate-suffix.json")
-	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-commandlog-report-check" || "$2" == "./cmd/budgie-internet-scale-bundle-report-check" ]]; then
+	fakeGo := writeFakeCommandLogGateGo(t, dir, `if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" || "$2" == "./cmd/budgie-report-check" && "$3" == "bundle" ]]; then
   exit 0
 fi
 exit 9
@@ -2073,7 +2073,7 @@ func TestCommandLogNativeNATSGateDoesNotArchiveReportWhenVerificationFails(t *te
   printf '{"ok":false}\n'
   exit 0
 fi
-if [[ "$2" == "./cmd/budgie-commandlog-report-check" ]]; then
+if [[ "$2" == "./cmd/budgie-report-check" && "$3" == "commandlog" ]]; then
   exit 6
 fi
 exit 9

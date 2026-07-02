@@ -230,7 +230,7 @@ evidence.
 
 The script writes
 `artifacts/internet-scale/commandlog-native-nats-report.json` by default, then
-runs `cmd/budgie-commandlog-report-check` against the same budget before
+runs `cmd/budgie-report-check commandlog` against the same budget before
 exiting. Tune load size with `BUDGIE_COMMANDLOG_GATE_BOARDS`,
 `BUDGIE_COMMANDLOG_GATE_COMMANDS`, `BUDGIE_COMMANDLOG_GATE_REPLIES`,
 `BUDGIE_COMMANDLOG_GATE_WRITERS`, `BUDGIE_COMMANDLOG_GATE_BATCH_SIZE`, and
@@ -252,7 +252,7 @@ locations for both the load generator and report checker, rather than accepting
 a separate `GO_BIN` override. It also refuses to replace an existing report
 unless `BUDGIE_COMMANDLOG_GATE_ALLOW_OVERWRITE=1` is set. Reports are written
 to a temporary file first; the final report path is archived only after
-`cmd/budgie-commandlog-report-check` accepts the artifact. Custom report paths
+`cmd/budgie-report-check commandlog` accepts the artifact. Custom report paths
 must stay under `artifacts/internet-scale/`, which is ignored by git. The
 wrapper requires a clean git worktree before launching the load because the
 promoted budget requires archived report evidence to show
@@ -280,7 +280,7 @@ auto-create disabled, runs `-kafka-scalar-allocator
 sql-event-partition-offsets`, pins
 `ops/internet-scale-kafka-budgets.example.json`, and archives
 `artifacts/internet-scale/commandlog-native-kafka-report.json` only after
-`cmd/budgie-commandlog-report-check` accepts the temporary report. For shared
+`cmd/budgie-report-check commandlog` accepts the temporary report. For shared
 or remote staging signoff, set `BUDGIE_COMMANDLOG_GATE_REMOTE_STAGING=1`; the
 wrapper then uses
 `ops/internet-scale-kafka-remote-staging-budgets.example.json`, which rejects
@@ -436,7 +436,7 @@ Archive the JSON report with the release evidence, then re-check it before
 promotion approval:
 
 ```sh
-go run ./cmd/budgie-commandlog-report-check \
+go run ./cmd/budgie-report-check commandlog \
   -report-file artifacts/internet-scale/commandlog-native-nats-report.json \
   -budget-file ops/internet-scale-budgets.example.json
 ```
@@ -455,7 +455,7 @@ BUDGIE_COMMANDLOG_GATE_REMOTE_STAGING=1 \
 The archived report can then be re-checked with:
 
 ```sh
-go run ./cmd/budgie-commandlog-report-check \
+go run ./cmd/budgie-report-check commandlog \
   -report-file artifacts/internet-scale/commandlog-native-nats-report.json \
   -budget-file ops/internet-scale-remote-staging-budgets.example.json
 ```

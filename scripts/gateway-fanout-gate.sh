@@ -177,7 +177,7 @@ echo "    report:             $REPORT_FILE"
   -budget-file "$PROMOTED_BUDGET_FILE" >"$REPORT_TMP"
 
 echo "==> verifying archived gateway fanout report against gatewayFanout budget"
-"$GO_CLI" run ./cmd/budgie-gateway-report-check \
+"$GO_CLI" run ./cmd/budgie-report-check gateway \
   -report-file "$REPORT_TMP" \
   -budget-file "$PROMOTED_BUDGET_FILE"
 

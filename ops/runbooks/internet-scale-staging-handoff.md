@@ -329,7 +329,7 @@ The wrapper will:
   replies, and the promoted minimum load shape
 - create and later drop a disposable Postgres schema
 - write a temporary JSON report first
-- run `cmd/budgie-commandlog-report-check`
+- run `cmd/budgie-report-check commandlog`
 - move only a passing report to
   `artifacts/internet-scale/commandlog-native-nats-report.json`
 
@@ -389,7 +389,7 @@ The archived report must pass the shared `commandLogDrain` budget and show:
 For remote/shared staging signoff, the archived report should also pass:
 
 ```sh
-go run ./cmd/budgie-commandlog-report-check \
+go run ./cmd/budgie-report-check commandlog \
   -report-file artifacts/internet-scale/commandlog-native-nats-report.json \
   -budget-file ops/internet-scale-remote-staging-budgets.example.json
 ```
@@ -429,7 +429,7 @@ For gateway fanout reports, the archived report must also show:
 Validate archived gateway fanout reports with:
 
 ```sh
-go run ./cmd/budgie-gateway-report-check \
+go run ./cmd/budgie-report-check gateway \
   -report-file artifacts/internet-scale/gateway-fanout-report.json \
   -budget-file ops/internet-scale-remote-staging-budgets.example.json
 ```
@@ -449,11 +449,11 @@ reused during handoff verification. In remote staging mode, this read-only
 bundle check also requires and verifies
 `artifacts/internet-scale/preflight-report-<shared-report-suffix>.json` for
 selected NATS/Kafka targets by running
-`cmd/budgie-internet-scale-preflight-report-check`; it rejects failed probes,
+`cmd/budgie-report-check preflight`; it rejects failed probes,
 dirty git evidence, missing generated resources, unsanitized endpoint evidence
 with credentials/query strings/fragments, and loopback endpoints before checking
 the gateway or command-log reports. After the individual budget checks pass, the
-same wrapper runs `cmd/budgie-internet-scale-bundle-report-check` across the
+same wrapper runs `cmd/budgie-report-check bundle` across the
 selected artifacts and rejects bundles whose reports were produced from
 different git revisions or dirty worktrees.
 
@@ -470,7 +470,7 @@ BUDGIE_INTERNET_SCALE_REPORT_CHECK_VERIFY_MANIFEST=artifacts/internet-scale/bund
 For a direct manifest-only read-back, run:
 
 ```sh
-go run ./cmd/budgie-internet-scale-bundle-report-check \
+go run ./cmd/budgie-report-check bundle \
   -verify-manifest artifacts/internet-scale/bundle-manifest-<shared-report-suffix>.json \
   -targets gateway,nats,kafka \
   -remote-staging

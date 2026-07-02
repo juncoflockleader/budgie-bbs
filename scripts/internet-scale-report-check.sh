@@ -232,7 +232,7 @@ fi
 
 if [[ "$REMOTE_STAGING" == "1" && -n "$PREFLIGHT_TARGETS" ]]; then
   require_report preflight "$PREFLIGHT_REPORT"
-  run_check "remote staging preflight report" "$GO_CLI" run ./cmd/budgie-internet-scale-preflight-report-check \
+  run_check "remote staging preflight report" "$GO_CLI" run ./cmd/budgie-report-check preflight \
     -report-file "$PREFLIGHT_REPORT" \
     -targets "$PREFLIGHT_TARGETS" \
     -remote-staging
@@ -240,21 +240,21 @@ fi
 
 if target_enabled gateway; then
   require_report gateway "$GATEWAY_REPORT"
-  run_check "gateway fanout report" "$GO_CLI" run ./cmd/budgie-gateway-report-check \
+  run_check "gateway fanout report" "$GO_CLI" run ./cmd/budgie-report-check gateway \
     -report-file "$GATEWAY_REPORT" \
     -budget-file "$GATEWAY_BUDGET"
 fi
 
 if target_enabled nats; then
   require_report nats "$NATS_REPORT"
-  run_check "native NATS command-log report" "$GO_CLI" run ./cmd/budgie-commandlog-report-check \
+  run_check "native NATS command-log report" "$GO_CLI" run ./cmd/budgie-report-check commandlog \
     -report-file "$NATS_REPORT" \
     -budget-file "$NATS_BUDGET"
 fi
 
 if target_enabled kafka; then
   require_report kafka "$KAFKA_REPORT"
-  run_check "native Kafka command-log report" "$GO_CLI" run ./cmd/budgie-commandlog-report-check \
+  run_check "native Kafka command-log report" "$GO_CLI" run ./cmd/budgie-report-check commandlog \
     -report-file "$KAFKA_REPORT" \
     -budget-file "$KAFKA_BUDGET"
 fi
@@ -265,14 +265,14 @@ if [[ -n "$VERIFY_BUNDLE_MANIFEST" ]]; then
   while IFS= read -r arg; do
     BUNDLE_VERIFY_ARGS+=("$arg")
   done < <(bundle_manifest_verify_args)
-  run_check "bundle manifest read-back" "$GO_CLI" run ./cmd/budgie-internet-scale-bundle-report-check "${BUNDLE_VERIFY_ARGS[@]}"
+  run_check "bundle manifest read-back" "$GO_CLI" run ./cmd/budgie-report-check bundle "${BUNDLE_VERIFY_ARGS[@]}"
 else
   BUNDLE_CONSISTENCY_ARGS=()
   while IFS= read -r arg; do
     BUNDLE_CONSISTENCY_ARGS+=("$arg")
   done < <(bundle_consistency_args)
   if [[ "${#BUNDLE_CONSISTENCY_ARGS[@]}" -gt 0 ]]; then
-    run_check "bundle evidence consistency" "$GO_CLI" run ./cmd/budgie-internet-scale-bundle-report-check "${BUNDLE_CONSISTENCY_ARGS[@]}"
+    run_check "bundle evidence consistency" "$GO_CLI" run ./cmd/budgie-report-check bundle "${BUNDLE_CONSISTENCY_ARGS[@]}"
   fi
 fi
 

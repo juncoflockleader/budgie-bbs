@@ -328,7 +328,7 @@ echo "    load:           boards=$BOARDS commandsPerBoard=$COMMANDS_PER_BOARD re
 "$GO_CLI" run ./cmd/budgie-commandlog-loadgen "${loadgen_args[@]}" >"$REPORT_TMP"
 
 echo "==> verifying archived report against Kafka commandLogDrain budget"
-"$GO_CLI" run ./cmd/budgie-commandlog-report-check \
+"$GO_CLI" run ./cmd/budgie-report-check commandlog \
   -report-file "$REPORT_TMP" \
   -budget-file "$BUDGET_FILE"
 
