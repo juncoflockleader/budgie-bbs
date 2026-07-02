@@ -10,10 +10,10 @@ import (
 
 const memoryPresenceCoalesceWindowMS int64 = 30 * 1000
 
-// MemoryPresenceStore is a non-SQL PresenceStore implementation for
-// development, tests, and adapter fixtures. It keeps high-churn presence
-// sessions in memory while reading durable user/profile metadata from SQL for
-// roster responses.
+// MemoryPresenceStore is a test-only non-SQL PresenceStore fixture. It keeps
+// high-churn presence sessions in memory while reading durable user/profile
+// metadata from SQL for roster responses. Production backends are sql and
+// nats-kv (see -presence-store).
 type MemoryPresenceStore struct {
 	mu                sync.Mutex
 	db                *sql.DB

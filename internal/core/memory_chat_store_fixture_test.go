@@ -10,9 +10,9 @@ import (
 
 const memoryChatRoomHistoryLimit = 200
 
-// MemoryChatStore is a non-SQL ChatStore implementation for development,
-// tests, and adapter fixtures. It keeps bounded recent chat history per room,
-// matching the SQL store's 200-line retention policy.
+// MemoryChatStore is a test-only non-SQL ChatStore fixture. It keeps bounded
+// recent chat history per room, matching the SQL store's 200-line retention
+// policy. Production backends are sql and nats-kv (see -chat-store).
 type MemoryChatStore struct {
 	mu    sync.Mutex
 	rooms map[string]ChatRoom

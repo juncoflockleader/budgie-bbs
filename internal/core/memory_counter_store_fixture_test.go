@@ -9,10 +9,10 @@ import (
 
 const defaultMemoryCounterStoreShards = 64
 
-// MemoryCounterStore is a non-SQL CounterStore implementation for development,
-// tests, and adapter fixtures. It keeps identity rows and aggregate counts in
-// identity-sharded memory maps so command handlers can exercise the same
-// backend-neutral contract expected from future Redis/Scylla/CRDT stores.
+// MemoryCounterStore is a test-only non-SQL CounterStore fixture. It keeps
+// identity rows and aggregate counts in identity-sharded memory maps so
+// command handlers can exercise the same backend-neutral contract as the
+// production backends (sql and nats-kv, see -counter-store).
 type MemoryCounterStore struct {
 	mu     sync.Mutex
 	shards []memoryCounterShard
