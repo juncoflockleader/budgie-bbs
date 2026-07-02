@@ -191,6 +191,72 @@ anyway, not as a standalone project.
   test files are symptoms of duplicated logic, not thoroughness.
   Consolidating the logic (directions 1 and 5) collapses them naturally.
 
+## Architectural follow-ups (added 2026-07-02)
+
+These came out of the "is the architecture sound?" question after the
+quick-win batch. The skeleton is sound; these are the open structural items
+that cleanup alone does not answer.
+
+### F1. Decide the consistency model of the native decide path
+
+The deep design question in the internet-scale write path, and the one thing
+deduplication (direction 1) does not resolve: when the broker log is
+authoritative, `decide()` reads state from SQL projections that are only
+*eventually* consistent with that log. Within a partition the worker
+serializes decisions, but cross-partition reads (a user's trust level, a
+board's settings living under a different partition key) can be stale at
+decision time. The SQL path never had this problem because decision and state
+shared one transaction.
+
+**Deliverable:** a per-command design table answering, for every command the
+native executor handles: which state reads are partition-local (safe), which
+tolerate bounded staleness (and what the blast radius of a stale read is),
+and which are unsafe and force either a partition-key change or exclusion
+from the native path. Record the decision in
+[design-internet-scale-writes.md](../design-internet-scale-writes.md). This
+must land **before** native promotion — ideally alongside the shared decide
+functions, since extracting them is when each command's reads get enumerated
+anyway.
+
+### F2. Modularize/layerize the core package
+
+`internal/core` is ~67k production lines in effectively one Go package, so
+nothing enforces layering — any file can reach any other file's internals.
+`handler/` and `projections/` are the right precedent; continue carving
+compile-enforced seams. Candidate cuts, roughly in order of value:
+
+- **log machinery** (command/event log, partitioning, workers, broker
+  bridges — the 20k-line bucket) behind an interface core consumes;
+- **derived-view processors** (the ~4.4k of rankings/summaries/search
+  processors, which already share a worker pattern);
+- **feature services** (twofactor, email verification, captcha glue, AI
+  processor) that only need narrow core interfaces.
+
+Do this incrementally — one seam per PR, moving files with `git mv` and
+introducing an interface only where the new package boundary demands it. The
+goal is compile-enforced dependency direction, not a package count.
+
+### F3. Isolate the internet-scale path so it is removable at any time
+
+We probably still need the internet-scale path, so the goal is not deletion —
+it is making the *option* to delete (or promote) it cheap and permanent.
+Target state: the entire path lives behind a small set of interfaces wired up
+only in `cmd/budgied`, such that removing it is deleting packages plus wiring,
+with zero edits inside core's domain logic.
+
+- Define the seam: core exposes narrow ports (command submission, event
+  append, projection apply); the broker-native machinery implements them from
+  its own package(s) (natural home once F2's log-machinery cut exists).
+- Move the remaining load-harness files out of core
+  (`command_log_drain_load.go`, `partition_write_load.go`,
+  `gateway_fanout_load.go` — ~2.5k lines, the unfinished half of direction 3).
+- Add a CI-checkable guard for the seam, e.g. a `go list`-based test
+  asserting that core's domain packages do not import the internet-scale
+  packages, so the isolation cannot silently erode.
+- Payoff either way: if the epic is promoted, shadow/hybrid deletion is
+  contained; if it is shelved, removal is one commit; and until then, the
+  default single-node build carries the path only as unused wiring.
+
 ## Suggested sequencing
 
 1. **Quick wins (days):** memory stores → fixtures; gap-replay extraction;
@@ -211,9 +277,15 @@ anyway, not as a standalone project.
      archived staging evidence still verifies.
    - The `internal/policy` merge was **rejected** on inspection (see
      "Explicitly rejected").
-2. **Before native promotion:** shared decide functions (direction 1).
+2. **Before native promotion:** shared decide functions (direction 1)
+   together with the consistency-model decision table (follow-up F1) — the
+   extraction enumerates each command's state reads, which is exactly the
+   input F1 needs.
 3. **Strategic decision:** broker choice (direction 2), then delete the
    losing log path and its gates/docs.
-4. **At promotion milestone:** delete shadow/hybrid paths and parity
+4. **Structural:** internet-scale isolation seam (follow-up F3), starting
+   with the log-machinery package cut from F2 and moving the load-harness
+   files out of core; then continue core layering (F2) one seam at a time.
+5. **At promotion milestone:** delete shadow/hybrid paths and parity
    machinery; introduce named profiles.
-5. **Opportunistic:** table-driven HTTP handlers; web data-loading hook.
+6. **Opportunistic:** table-driven HTTP handlers; web data-loading hook.
