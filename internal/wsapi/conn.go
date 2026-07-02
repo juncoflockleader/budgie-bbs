@@ -290,64 +290,22 @@ func (c *wsConn) replayBacklog(limit int) error {
 	return nil
 }
 
-// deliverEvent writes an event to the client, handling gap detection and cursor
-// deduplication for durable events.
-//
-// For ephemeral events (no Seq) it writes directly. For durable events it:
-//   - skips events the client has already seen
-//   - replays any scalar or partition gap before writing the current event
-//   - updates the durable cursor on each delivered event
+// deliverEvent delivers via the shared gap-repair path. A failed gap replay is
+// logged and the current event still delivered (the gap stays visible in the
+// cursor, so a later durable event retries the repair).
 func (c *wsConn) deliverEvent(evt *proto.Event) error {
-	if !evt.IsDurable() {
-		return c.write(proto.EventToOutbound(evt))
-	}
-	// Duplicate: already delivered (can happen when cross-node NOTIFY arrives
-	// for an event the command handler already published locally).
-	if c.cursor.SeenEvent(evt) {
-		return nil
-	}
-	// Gap: one or more durable events were dropped by MemBus (slow-consumer path).
-	if c.cursor.PartitionGapBeforeEvent(evt) || c.cursor.ScalarGapBeforeEvent(evt) {
-		if err := c.repairGapBefore(evt); err != nil {
-			return err
-		}
-	}
-	if err := c.write(proto.EventToOutbound(evt)); err != nil {
-		return err
-	}
-	c.cursor.ObserveEvent(evt)
-	return nil
-}
-
-func (c *wsConn) repairGapBefore(evt *proto.Event) error {
-	replayCursor := c.cursor
-	if c.cursor.PartitionGapBeforeEvent(evt) {
-		replayCursor = replayCursor.PartitionOnly()
-	}
-	missed, err := c.core.ReplayCursor(replayCursor, c.scopes, 1000)
-	if err != nil {
-		slog.Warn("ws: gap replay error",
-			"seq", evt.Seq,
-			"cursor_seq", c.cursor.Seq,
-			"partition_kind", evt.PartitionKind,
-			"partition_key", evt.PartitionKey,
-			"partition_offset", evt.PartitionOffset,
-			"err", err)
-		return nil
-	}
-	metrics.GatewayReplayRepairs.Inc()
-	metrics.ReplayTotal.Inc()
-	metrics.ReplayBatchSize.Observe(float64(len(missed)))
-	for _, m := range missed {
-		if c.cursor.SeenEvent(m) || proto.DurableEventAtOrAfter(m, evt) {
-			continue
-		}
-		if err := c.write(proto.EventToOutbound(m)); err != nil {
-			return err
-		}
-		c.cursor.ObserveEvent(m)
-	}
-	return nil
+	return c.core.DeliverWithGapRepair(&c.cursor, evt, c.scopes,
+		func(e *proto.Event) error { return c.write(proto.EventToOutbound(e)) },
+		func(err error) error {
+			slog.Warn("ws: gap replay error",
+				"seq", evt.Seq,
+				"cursor_seq", c.cursor.Seq,
+				"partition_kind", evt.PartitionKind,
+				"partition_key", evt.PartitionKey,
+				"partition_offset", evt.PartitionOffset,
+				"err", err)
+			return nil
+		})
 }
 
 func (s *Server) validateToken(tok string) (*core.User, error) {

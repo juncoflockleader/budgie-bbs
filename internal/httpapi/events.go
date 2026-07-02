@@ -232,43 +232,12 @@ func observeEventPartition(cursor *proto.Cursor, evt *proto.Event) bool {
 	return true
 }
 
+// deliverSSEEvent delivers via the shared gap-repair path; a failed replay
+// aborts the stream so the client reconnects with its Last-Event-ID cursor.
 func (s *Server) deliverSSEEvent(w http.ResponseWriter, evt *proto.Event, scopes []string, cursor *proto.Cursor) error {
-	if cursor == nil {
-		cursor = &proto.Cursor{}
-	}
-	if !evt.IsDurable() {
-		return writeSSEEvent(w, evt)
-	}
-	if cursor.SeenEvent(evt) {
-		return nil
-	}
-	if cursor.PartitionGapBeforeEvent(evt) || cursor.ScalarGapBeforeEvent(evt) {
-		replayCursor := *cursor
-		if cursor.PartitionGapBeforeEvent(evt) {
-			replayCursor = replayCursor.PartitionOnly()
-		}
-		missed, err := s.core.ReplayCursor(replayCursor, scopes, 1000)
-		if err != nil {
-			return err
-		}
-		metrics.GatewayReplayRepairs.Inc()
-		metrics.ReplayTotal.Inc()
-		metrics.ReplayBatchSize.Observe(float64(len(missed)))
-		for _, m := range missed {
-			if cursor.SeenEvent(m) || proto.DurableEventAtOrAfter(m, evt) {
-				continue
-			}
-			if err := writeSSEEvent(w, m); err != nil {
-				return err
-			}
-			cursor.ObserveEvent(m)
-		}
-	}
-	if err := writeSSEEvent(w, evt); err != nil {
-		return err
-	}
-	cursor.ObserveEvent(evt)
-	return nil
+	return s.core.DeliverWithGapRepair(cursor, evt, scopes,
+		func(e *proto.Event) error { return writeSSEEvent(w, e) },
+		func(err error) error { return err })
 }
 
 func writeSSEEvent(w http.ResponseWriter, evt *proto.Event) error {
