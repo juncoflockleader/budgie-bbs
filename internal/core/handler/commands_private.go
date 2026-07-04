@@ -384,21 +384,9 @@ func (h *Handler) setMailGroup(actor *User, p proto.SetMailGroupPayload) Reply {
 	}
 	defer tx.Rollback()
 
-	groupID, errReply := ResolveMailGroupID(tx, actor.ID, p.Group, name, func() string {
+	groupID, memberIDs, errReply := ResolveMailGroupMutation(tx, actor.ID, p, func() string {
 		return newID("mgrp_")
 	})
-	if errReply.Err != nil {
-		return errReply
-	}
-	conflictID, err := projections.MailGroupIDByName(tx, actor.ID, name)
-	if err != nil {
-		return internalErr(err)
-	}
-	if conflictID != "" && conflictID != groupID {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "mail group name already exists", false)}
-	}
-
-	memberIDs, errReply := ResolveUniqueMailGroupMembers(tx, p.Members, actor.ID)
 	if errReply.Err != nil {
 		return errReply
 	}
@@ -409,6 +397,25 @@ func (h *Handler) setMailGroup(actor *User, p proto.SetMailGroupPayload) Reply {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: groupID}}
+}
+
+func ResolveMailGroupMutation(queryable sqlQueryable, ownerID string, p proto.SetMailGroupPayload, idForNewGroup func() string) (string, []string, Reply) {
+	groupID, reply := ResolveMailGroupID(queryable, ownerID, p.Group, p.Name, idForNewGroup)
+	if reply.Err != nil {
+		return "", nil, reply
+	}
+	conflictID, err := projections.MailGroupIDByName(queryable, ownerID, p.Name)
+	if err != nil {
+		return "", nil, internalErr(err)
+	}
+	if conflictID != "" && conflictID != groupID {
+		return "", nil, Reply{Err: errDetail(proto.ErrValidationFailed, "mail group name already exists", false)}
+	}
+	memberIDs, reply := ResolveUniqueMailGroupMembers(queryable, p.Members, ownerID)
+	if reply.Err != nil {
+		return "", nil, reply
+	}
+	return groupID, memberIDs, Reply{}
 }
 
 func ResolveMailGroupID(queryable sqlQueryable, ownerID, groupRef, name string, idForNewGroup func() string) (string, Reply) {

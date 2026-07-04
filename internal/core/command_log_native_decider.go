@@ -3381,20 +3381,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSetMailGroup(ctx context.Contex
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	groupID, reply := corehandler.ResolveMailGroupID(e.core.DB, actor.ID, groupRef, name, func() string {
+	groupID, memberIDs, reply := corehandler.ResolveMailGroupMutation(e.core.DB, actor.ID, payload, func() string {
 		return stableCommandLogDecisionID("mgrp_", record, 0)
 	})
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
-	}
-	conflictID, err := projections.MailGroupIDByName(e.core.DB, actor.ID, name)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if conflictID != "" && conflictID != groupID {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "mail group name already exists", false)
-	}
-	memberIDs, reply := corehandler.ResolveUniqueMailGroupMembers(e.core.DB, payload.Members, actor.ID)
 	if reply.Err != nil {
 		return nativeCommandDecision{}, reply.Err
 	}
