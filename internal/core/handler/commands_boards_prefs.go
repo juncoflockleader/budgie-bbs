@@ -134,25 +134,7 @@ func (h *Handler) importFavoriteTree(actor *User, p proto.ImportFavoriteTreePayl
 	if p.Replace != nil {
 		replace = *p.Replace
 	}
-	tree := &projections.FavoriteTree{
-		Folders: make([]projections.FavoriteFolder, 0, len(p.Folders)),
-		Boards:  make([]projections.FavoriteBoardEntry, 0, len(p.Boards)),
-	}
-	for _, folder := range p.Folders {
-		tree.Folders = append(tree.Folders, projections.FavoriteFolder{
-			ID:       folder.ID,
-			ParentID: folder.ParentID,
-			Name:     folder.Name,
-			Position: folder.Position,
-		})
-	}
-	for _, board := range p.Boards {
-		tree.Boards = append(tree.Boards, projections.FavoriteBoardEntry{
-			ID:       board.ID,
-			FolderID: board.FolderID,
-			Position: board.Position,
-		})
-	}
+	tree := commandrules.FavoriteTreeFromImportPayload(p)
 	if err := currentRuntime().ImportFavoriteTree(h.db, actor.ID, tree, replace); err != nil {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, err.Error(), false)}
 	}
