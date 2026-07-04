@@ -2768,7 +2768,7 @@ func (e *CommandLogNativeDecisionExecutor) decideForwardMail(ctx context.Context
 	if source == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "mail not found", false)
 	}
-	return e.decideSendMailPayload(record, actor, corehandler.ForwardMailSendPayload(payload, source))
+	return e.decideSendMailPayload(record, actor, commandrules.ForwardMailSendPayload(payload, source))
 }
 
 func (e *CommandLogNativeDecisionExecutor) decidePostMailToBoard(ctx context.Context, record CommandLogRecord) (nativeCommandDecision, *proto.ErrorDetail) {
@@ -2804,7 +2804,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePostMailToBoard(ctx context.Con
 	if source == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "mail not found", false)
 	}
-	title, body := corehandler.PostMailToBoardContent(payload, source)
+	title, body := commandrules.PostMailToBoardContent(payload, source)
 	if threadID != "" {
 		thread, err := projections.GetThread(e.core.DB, threadID)
 		if err != nil {
@@ -2877,9 +2877,9 @@ func (e *CommandLogNativeDecisionExecutor) decideMailPostAuthor(ctx context.Cont
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
 		}
 	}
-	sendPayload, reply := corehandler.MailPostAuthorSendPayload(actor, payload, thread, post)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	sendPayload, errDetail := commandrules.MailPostAuthorSendPayload(actor, payload, thread, post)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	return e.decideSendMailPayload(record, actor, sendPayload)
 }
@@ -2918,7 +2918,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSendDigestEntryMail(ctx context
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
 		}
 	}
-	return e.decideSendMailPayload(record, actor, corehandler.DigestEntryMailSendPayload(payload, export))
+	return e.decideSendMailPayload(record, actor, commandrules.DigestEntryMailSendPayload(payload, export))
 }
 
 func (e *CommandLogNativeDecisionExecutor) decideCuratePost(ctx context.Context, record CommandLogRecord) (nativeCommandDecision, *proto.ErrorDetail) {

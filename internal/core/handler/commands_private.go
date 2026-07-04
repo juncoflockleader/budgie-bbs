@@ -170,7 +170,7 @@ func (h *Handler) forwardMail(actor *User, p proto.ForwardMailPayload) Reply {
 	if source == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
 	}
-	return h.sendMail(actor, ForwardMailSendPayload(p, source))
+	return h.sendMail(actor, commandrules.ForwardMailSendPayload(p, source))
 }
 
 func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) Reply {
@@ -189,7 +189,7 @@ func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) R
 	if source == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
 	}
-	title, body := PostMailToBoardContent(p, source)
+	title, body := commandrules.PostMailToBoardContent(p, source)
 	threadID := p.Thread
 	if threadID != "" {
 		return h.appendPost(actor, proto.AppendPostPayload{
@@ -231,56 +231,7 @@ func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPa
 	if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, export.Entry.BoardID) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	return h.sendMail(actor, DigestEntryMailSendPayload(p, export))
-}
-
-func ForwardMailSendPayload(p proto.ForwardMailPayload, source *projections.MailItem) proto.SendMailPayload {
-	return proto.SendMailPayload{
-		To:        p.To,
-		ToGroups:  p.ToGroups,
-		ToFriends: p.ToFriends,
-		ToAll:     p.ToAll,
-		Subject:   proto.NormalizeForwardMailSubject(p.Subject, source.Subject),
-		Body:      proto.FormatForwardMailBody(p.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body),
-		SaveSent:  p.SaveSent,
-	}
-}
-
-func PostMailToBoardContent(p proto.PostMailToBoardPayload, source *projections.MailItem) (title, body string) {
-	return proto.PostMailToBoardTitle(p.Subject, source.Subject),
-		proto.FormatMailBoardBody(p.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body)
-}
-
-func DigestEntryMailSendPayload(p proto.SendDigestEntryMailPayload, export *projections.DigestExport) proto.SendMailPayload {
-	body := projections.FormatDigestExportText(export)
-	if note := p.Note; note != "" {
-		body = note + "\n\n" + body
-	}
-	return proto.SendMailPayload{
-		To:        p.To,
-		ToGroups:  p.ToGroups,
-		ToFriends: p.ToFriends,
-		ToAll:     p.ToAll,
-		Subject:   proto.DigestEntryMailSubject(p.Subject, export.Entry.Title),
-		Body:      body,
-		SaveSent:  p.SaveSent,
-	}
-}
-
-func MailPostAuthorSendPayload(actor *User, p proto.MailPostAuthorPayload, thread *Thread, post *Post) (proto.SendMailPayload, Reply) {
-	recipient := strings.TrimSpace(post.AuthorID)
-	if recipient == "" {
-		recipient = strings.TrimSpace(post.Author)
-	}
-	if recipient == "" || strings.EqualFold(strings.TrimSpace(post.Author), "anonymous") {
-		return proto.SendMailPayload{}, Reply{Err: errDetail(proto.ErrValidationFailed, "anonymous article author cannot receive mail", false)}
-	}
-	return proto.SendMailPayload{
-		To:       []string{recipient},
-		Subject:  proto.MailPostAuthorSubject(p.Subject, thread.Title),
-		Body:     proto.FormatPostAuthorMailBody(thread.Board, thread.Title, post.CreatedSeq, post.ID, post.Author, actor.Name, p.Body, post.Body),
-		SaveSent: p.SaveSent,
-	}, Reply{}
+	return h.sendMail(actor, commandrules.DigestEntryMailSendPayload(p, export))
 }
 
 func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Reply {
@@ -317,9 +268,9 @@ func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Rep
 	if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	sendPayload, errReply := MailPostAuthorSendPayload(actor, p, thread, post)
-	if errReply.Err != nil {
-		return errReply
+	sendPayload, ruleErr := commandrules.MailPostAuthorSendPayload(actor, p, thread, post)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	return h.sendMail(actor, sendPayload)
 }
