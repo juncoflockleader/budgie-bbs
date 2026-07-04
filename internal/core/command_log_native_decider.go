@@ -14,7 +14,6 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
-	corehandler "github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/statsplan"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -2591,7 +2590,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishStatsSnapshot(ctx contex
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
-	plan, err := corehandler.PlanStatsSnapshotSystemPosts(e.core.DB, actor, dateLabel, ts)
+	plan, err := statsplan.PlanStatsSnapshotSystemPosts(e.core.DB, dateLabel, ts)
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
