@@ -1454,105 +1454,28 @@ func main() {
 		slog.Info("derived view processors selected",
 			"views", strings.Join(derivedViewProcessorViews, ","))
 	}
-	if *postSearchProcessor {
-		if _, err := c.StartPostSearchProcessor(ctx, *postSearchProcessorInterval, *postSearchProcessorBatchSize); err != nil {
-			slog.Error("post search processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("post search processor enabled",
-			"asyncPostSearch", *asyncPostSearch,
-			"interval", postSearchProcessorInterval.String(),
-			"batchSize", *postSearchProcessorBatchSize)
-	}
-	if *digestSearchProcessor {
-		if _, err := c.StartDigestSearchProcessor(ctx, *digestSearchProcessorInterval, *digestSearchProcessorBatchSize); err != nil {
-			slog.Error("digest search processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("digest search processor enabled",
-			"interval", digestSearchProcessorInterval.String(),
-			"batchSize", *digestSearchProcessorBatchSize)
-	}
-	if *communityStatsProcessor {
-		if _, err := c.StartCommunityStatsProcessor(ctx, *communityStatsProcessorInterval, *communityStatsProcessorBatchSize); err != nil {
-			slog.Error("community stats processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("community stats processor enabled",
-			"interval", communityStatsProcessorInterval.String(),
-			"batchSize", *communityStatsProcessorBatchSize)
-	}
-	if *latestFeedProcessor {
-		if _, err := c.StartLatestFeedProcessor(ctx, *latestFeedProcessorInterval, *latestFeedProcessorBatchSize); err != nil {
-			slog.Error("latest feed processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("latest feed processor enabled",
-			"interval", latestFeedProcessorInterval.String(),
-			"batchSize", *latestFeedProcessorBatchSize)
-	}
-	if *residentFeedProcessor {
-		if _, err := c.StartResidentFeedProcessor(ctx, *residentFeedProcessorInterval, *residentFeedProcessorBatchSize); err != nil {
-			slog.Error("resident feed processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("resident feed processor enabled",
-			"interval", residentFeedProcessorInterval.String(),
-			"batchSize", *residentFeedProcessorBatchSize)
-	}
-	if *boardSummariesProcessor {
-		if _, err := c.StartBoardSummariesProcessor(ctx, *boardSummariesProcessorInterval, *boardSummariesProcessorBatchSize); err != nil {
-			slog.Error("board summaries processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("board summaries processor enabled",
-			"interval", boardSummariesProcessorInterval.String(),
-			"batchSize", *boardSummariesProcessorBatchSize)
-	}
-	if *unreadThreadSummariesProcessor {
-		if _, err := c.StartUnreadThreadSummariesProcessor(ctx, *unreadThreadSummariesInterval, *unreadThreadSummariesBatchSize); err != nil {
-			slog.Error("unread thread summaries processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("unread thread summaries processor enabled",
-			"interval", unreadThreadSummariesInterval.String(),
-			"batchSize", *unreadThreadSummariesBatchSize)
-	}
-	if *boardRankingsProcessor {
-		if _, err := c.StartBoardRankingsProcessor(ctx, *boardRankingsProcessorInterval, *boardRankingsProcessorBatchSize); err != nil {
-			slog.Error("board rankings processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("board rankings processor enabled",
-			"interval", boardRankingsProcessorInterval.String(),
-			"batchSize", *boardRankingsProcessorBatchSize)
-	}
-	if *threadRankingsProcessor {
-		if _, err := c.StartThreadRankingsProcessor(ctx, *threadRankingsProcessorInterval, *threadRankingsProcessorBatchSize); err != nil {
-			slog.Error("thread rankings processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("thread rankings processor enabled",
-			"interval", threadRankingsProcessorInterval.String(),
-			"batchSize", *threadRankingsProcessorBatchSize)
-	}
-	if *replyRankingsProcessor {
-		if _, err := c.StartReplyRankingsProcessor(ctx, *replyRankingsProcessorInterval, *replyRankingsProcessorBatchSize); err != nil {
-			slog.Error("reply rankings processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("reply rankings processor enabled",
-			"interval", replyRankingsProcessorInterval.String(),
-			"batchSize", *replyRankingsProcessorBatchSize)
-	}
-	if *userRankingsProcessor {
-		if _, err := c.StartUserRankingsProcessor(ctx, *userRankingsProcessorInterval, *userRankingsProcessorBatchSize); err != nil {
-			slog.Error("user rankings processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("user rankings processor enabled",
-			"interval", userRankingsProcessorInterval.String(),
-			"batchSize", *userRankingsProcessorBatchSize)
+	if label, err := startDerivedViewProcessors(ctx, c, []derivedViewProcessorStarter{
+		{
+			label:      "post search",
+			enabled:    postSearchProcessor,
+			interval:   postSearchProcessorInterval,
+			batchSize:  postSearchProcessorBatchSize,
+			start:      derivedViewCoreStarter((*core.Core).StartPostSearchProcessor),
+			extraAttrs: func() []any { return []any{"asyncPostSearch", *asyncPostSearch} },
+		},
+		{label: "digest search", enabled: digestSearchProcessor, interval: digestSearchProcessorInterval, batchSize: digestSearchProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartDigestSearchProcessor)},
+		{label: "community stats", enabled: communityStatsProcessor, interval: communityStatsProcessorInterval, batchSize: communityStatsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartCommunityStatsProcessor)},
+		{label: "latest feed", enabled: latestFeedProcessor, interval: latestFeedProcessorInterval, batchSize: latestFeedProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartLatestFeedProcessor)},
+		{label: "resident feed", enabled: residentFeedProcessor, interval: residentFeedProcessorInterval, batchSize: residentFeedProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartResidentFeedProcessor)},
+		{label: "board summaries", enabled: boardSummariesProcessor, interval: boardSummariesProcessorInterval, batchSize: boardSummariesProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBoardSummariesProcessor)},
+		{label: "unread thread summaries", enabled: unreadThreadSummariesProcessor, interval: unreadThreadSummariesInterval, batchSize: unreadThreadSummariesBatchSize, start: derivedViewCoreStarter((*core.Core).StartUnreadThreadSummariesProcessor)},
+		{label: "board rankings", enabled: boardRankingsProcessor, interval: boardRankingsProcessorInterval, batchSize: boardRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBoardRankingsProcessor)},
+		{label: "thread rankings", enabled: threadRankingsProcessor, interval: threadRankingsProcessorInterval, batchSize: threadRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartThreadRankingsProcessor)},
+		{label: "reply rankings", enabled: replyRankingsProcessor, interval: replyRankingsProcessorInterval, batchSize: replyRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartReplyRankingsProcessor)},
+		{label: "user rankings", enabled: userRankingsProcessor, interval: userRankingsProcessorInterval, batchSize: userRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartUserRankingsProcessor)},
+	}); err != nil {
+		slog.Error(label+" processor failed to start", "err", err)
+		os.Exit(1)
 	}
 	if roles["worker"] && *aiResponderProcessor {
 		if _, err := c.StartAIResponderProcessor(ctx, *aiResponderProcessorInterval, *aiResponderProcessorBatchSize); err != nil {
@@ -1563,23 +1486,12 @@ func main() {
 			"interval", aiResponderProcessorInterval.String(),
 			"batchSize", *aiResponderProcessorBatchSize)
 	}
-	if *blessingRankingsProcessor {
-		if _, err := c.StartBlessingRankingsProcessor(ctx, *blessingRankingsProcessorInterval, *blessingRankingsProcessorBatchSize); err != nil {
-			slog.Error("blessing rankings processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("blessing rankings processor enabled",
-			"interval", blessingRankingsProcessorInterval.String(),
-			"batchSize", *blessingRankingsProcessorBatchSize)
-	}
-	if *archiveRankingsProcessor {
-		if _, err := c.StartArchiveRankingsProcessor(ctx, *archiveRankingsProcessorInterval, *archiveRankingsProcessorBatchSize); err != nil {
-			slog.Error("archive rankings processor failed to start", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("archive rankings processor enabled",
-			"interval", archiveRankingsProcessorInterval.String(),
-			"batchSize", *archiveRankingsProcessorBatchSize)
+	if label, err := startDerivedViewProcessors(ctx, c, []derivedViewProcessorStarter{
+		{label: "blessing rankings", enabled: blessingRankingsProcessor, interval: blessingRankingsProcessorInterval, batchSize: blessingRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBlessingRankingsProcessor)},
+		{label: "archive rankings", enabled: archiveRankingsProcessor, interval: archiveRankingsProcessorInterval, batchSize: archiveRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartArchiveRankingsProcessor)},
+	}); err != nil {
+		slog.Error(label+" processor failed to start", "err", err)
+		os.Exit(1)
 	}
 
 	// OpenTelemetry distributed tracing (opt-in). Enabled by -otel-tracing or by
@@ -1875,6 +1787,15 @@ type derivedViewDedicatedProcessor struct {
 	enabled  *bool
 }
 
+type derivedViewProcessorStarter struct {
+	label      string
+	enabled    *bool
+	interval   *time.Duration
+	batchSize  *int
+	start      func(context.Context, *core.Core, time.Duration, int) error
+	extraAttrs func() []any
+}
+
 type derivedViewWatermarkConflict struct {
 	message string
 	hint    string
@@ -1895,6 +1816,33 @@ func derivedViewDedicatedProcessors(flags derivedViewProcessorFlags) []derivedVi
 		{view: core.DerivedViewUserRankings, label: "user rankings", flagName: "user-rankings-processor", enabled: flags.userRankingsProcessor},
 		{view: core.DerivedViewBlessingRankings, label: "blessing rankings", flagName: "blessing-rankings-processor", enabled: flags.blessingRankingsProcessor},
 		{view: core.DerivedViewArchiveRankings, label: "archive rankings", flagName: "archive-rankings-processor", enabled: flags.archiveRankingsProcessor},
+	}
+}
+
+func startDerivedViewProcessors(ctx context.Context, c *core.Core, processors []derivedViewProcessorStarter) (string, error) {
+	for _, processor := range processors {
+		if !boolValue(processor.enabled) {
+			continue
+		}
+		interval := durationValue(processor.interval)
+		batchSize := intValue(processor.batchSize)
+		if err := processor.start(ctx, c, interval, batchSize); err != nil {
+			return processor.label, err
+		}
+		attrs := []any{}
+		if processor.extraAttrs != nil {
+			attrs = append(attrs, processor.extraAttrs()...)
+		}
+		attrs = append(attrs, "interval", interval.String(), "batchSize", batchSize)
+		slog.Info(processor.label+" processor enabled", attrs...)
+	}
+	return "", nil
+}
+
+func derivedViewCoreStarter[T any](start func(*core.Core, context.Context, time.Duration, int) (T, error)) func(context.Context, *core.Core, time.Duration, int) error {
+	return func(ctx context.Context, c *core.Core, interval time.Duration, batchSize int) error {
+		_, err := start(c, ctx, interval, batchSize)
+		return err
 	}
 }
 
@@ -1967,6 +1915,20 @@ func setBool(target *bool, value bool) {
 
 func boolValue(value *bool) bool {
 	return value != nil && *value
+}
+
+func durationValue(value *time.Duration) time.Duration {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func intValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 // parseRoles turns a comma-separated role list into a set, exiting on an
