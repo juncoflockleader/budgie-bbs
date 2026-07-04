@@ -3844,14 +3844,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardFavorite(ctx context.Co
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardFavoriteSet, []string{"board:" + boardID, "user:" + actor.ID}, &proto.BoardFavoriteSetPayload{
-		UserID:   actor.ID,
-		Board:    boardID,
-		Favorite: payload.Favorite,
-		FolderID: payload.FolderID,
-		Position: payload.Position,
-		TS:       ts,
-	}, ts)
+	scopes, eventPayload := corehandler.BoardFavoriteSetEvent(actor, boardID, payload.FolderID, payload.Favorite, payload.Position, ts)
+	event := nativeEvent(record, 0, proto.EvtBoardFavoriteSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(boardID, event), nil
 }
 
@@ -4004,14 +3998,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveBoardFavorite(ctx context.C
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "favorite folder not found", false)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardFavoriteSet, []string{"board:" + payload.Board, "user:" + actor.ID}, &proto.BoardFavoriteSetPayload{
-		UserID:   actor.ID,
-		Board:    payload.Board,
-		Favorite: true,
-		FolderID: payload.FolderID,
-		Position: payload.Position,
-		TS:       ts,
-	}, ts)
+	scopes, eventPayload := corehandler.BoardFavoriteSetEvent(actor, payload.Board, payload.FolderID, true, payload.Position, ts)
+	event := nativeEvent(record, 0, proto.EvtBoardFavoriteSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(payload.Board, event), nil
 }
 

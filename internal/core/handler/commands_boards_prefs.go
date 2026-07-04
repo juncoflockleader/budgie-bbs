@@ -31,6 +31,11 @@ func (h *Handler) setBoardFavorite(actor *User, p proto.SetBoardFavoritePayload)
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
+func BoardFavoriteSetEvent(actor *User, boardID, folderID string, favorite bool, position *int, ts int64) ([]string, *proto.BoardFavoriteSetPayload) {
+	payload := &proto.BoardFavoriteSetPayload{UserID: actor.ID, Board: boardID, Favorite: favorite, FolderID: folderID, Position: position, TS: ts}
+	return []string{"board:" + boardID, "user:" + actor.ID}, payload
+}
+
 func (h *Handler) setBoardZap(actor *User, p proto.SetBoardZapPayload) Reply {
 	p, msg := proto.NormalizeSetBoardZapPayload(p)
 	if msg != "" {
