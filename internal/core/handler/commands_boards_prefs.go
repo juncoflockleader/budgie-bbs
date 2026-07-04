@@ -1010,25 +1010,11 @@ func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*digestEn
 }
 
 func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath, toPath string) (string, string, string, string, Reply) {
-	boardID, msg := proto.NormalizeDigestPathMutationBoard(boardID)
-	if msg != "" {
-		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	prepared, errDetail := commandrules.PrepareDigestPathMutation(h.db, actor, boardID, kind, fromPath, toPath)
+	if errDetail != nil {
+		return "", "", "", "", Reply{Err: errDetail}
 	}
-	if errReply := h.requireBoard(boardID); errReply.Err != nil {
-		return "", "", "", "", errReply
-	}
-	normalizedKind, msg := proto.NormalizeDigestPathMutationKind(kind)
-	if msg != "" {
-		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
-	}
-	if !commandrules.ActorCanCurateBoardKind(h.db, actor, boardID, normalizedKind) {
-		return "", "", "", "", Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(normalizedKind), false)}
-	}
-	normalizedFrom, normalizedTo, msg := proto.NormalizeDigestPathMutationPaths(fromPath, toPath)
-	if msg != "" {
-		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
-	}
-	return boardID, normalizedKind, normalizedFrom, normalizedTo, Reply{}
+	return prepared.BoardID, prepared.Kind, prepared.FromPath, prepared.ToPath, Reply{}
 }
 
 func (h *Handler) publishSystemNotice(actor *User, p proto.PublishSystemNoticePayload) Reply {
