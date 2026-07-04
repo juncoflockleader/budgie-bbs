@@ -645,8 +645,7 @@ func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayloa
 		return reply
 	}
 	id := newID("dm_")
-	payload := proto.NewDirectMessageSentPayload(id, actor.ID, actor.Name, target.ID, target.Name, p.Body, ts)
-	scopes := proto.DirectMessageEventScopes(actor.ID, target.ID)
+	scopes, payload := DirectMessageSentEvent(actor, target, id, p.Body, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDirectMessageSent, scopes, payload)
 	if err != nil {
 		return internalErr(err)
@@ -660,6 +659,11 @@ func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayloa
 
 	h.publishEvent(proto.EvtDirectMessageSent, seq, scopes, payload, ts)
 	return Reply{Result: &proto.AckResult{ID: id, Seq: seq}}
+}
+
+func DirectMessageSentEvent(actor, target *User, messageID, body string, ts int64) ([]string, *proto.DirectMessageSentPayload) {
+	return proto.DirectMessageEventScopes(actor.ID, target.ID),
+		proto.NewDirectMessageSentPayload(messageID, actor.ID, actor.Name, target.ID, target.Name, body, ts)
 }
 
 func (h *Handler) setDirectMessageSettings(actor *User, p proto.SetDirectMessageSettingsPayload) Reply {

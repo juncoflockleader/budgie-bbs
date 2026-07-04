@@ -3543,21 +3543,7 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateMail(ctx context.Context,
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(
-		record,
-		0,
-		proto.EvtMailCopyUpdated,
-		nativeMailCopyUpdateScopes(target.FromUserID, actor.ID, mailID),
-		&proto.MailCopyUpdatedPayload{
-			Mail:    mailID,
-			UserID:  actor.ID,
-			Mailbox: mailbox,
-			Read:    payload.Read,
-			Kept:    payload.Kept,
-			TS:      ts,
-		},
-		ts,
-	)
+	event := nativeMailCopyUpdatedEvent(record, 0, target, actor.ID, mailID, mailbox, payload.Read, payload.Kept, ts)
 	return nativeDecisionAckEvent(mailID, event), nil
 }
 
@@ -3580,19 +3566,7 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteMail(ctx context.Context,
 	}
 	ts := nativeCommandTimestamp(record)
 	mailbox := "trash"
-	event := nativeEvent(
-		record,
-		0,
-		proto.EvtMailCopyUpdated,
-		nativeMailCopyUpdateScopes(target.FromUserID, actor.ID, mailID),
-		&proto.MailCopyUpdatedPayload{
-			Mail:    mailID,
-			UserID:  actor.ID,
-			Mailbox: &mailbox,
-			TS:      ts,
-		},
-		ts,
-	)
+	event := nativeMailCopyUpdatedEvent(record, 0, target, actor.ID, mailID, &mailbox, nil, nil, ts)
 	return nativeDecisionAckEvent(mailID, event), nil
 }
 
@@ -3625,12 +3599,7 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteMailRange(ctx context.Con
 	for i, mailID := range mailIDs {
 		target := targets[i]
 		mailbox := "trash"
-		events = append(events, nativeEvent(record, i, proto.EvtMailCopyUpdated, nativeMailCopyUpdateScopes(target.FromUserID, actor.ID, mailID), &proto.MailCopyUpdatedPayload{
-			Mail:    mailID,
-			UserID:  actor.ID,
-			Mailbox: &mailbox,
-			TS:      ts,
-		}, ts))
+		events = append(events, nativeMailCopyUpdatedEvent(record, i, target, actor.ID, mailID, &mailbox, nil, nil, ts))
 	}
 	return nativeDecisionAckEvents(fmt.Sprintf("%d", len(mailIDs)), events), nil
 }
@@ -3722,8 +3691,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSendDirectMessage(ctx context.C
 	}
 	ts := nativeCommandTimestamp(record)
 	messageID := stableCommandLogDecisionID("dm_", record, 0)
-	scopes := proto.DirectMessageEventScopes(actor.ID, target.ID)
-	event := nativeEvent(record, 0, proto.EvtDirectMessageSent, scopes, proto.NewDirectMessageSentPayload(messageID, actor.ID, actor.Name, target.ID, target.Name, payload.Body, ts), ts)
+	scopes, eventPayload := corehandler.DirectMessageSentEvent(actor, target, messageID, payload.Body, ts)
+	event := nativeEvent(record, 0, proto.EvtDirectMessageSent, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(messageID, event), nil
 }
 
@@ -4975,6 +4944,17 @@ func nativeMailCopyUpdateScopes(fromUserID, actorID, mailID string) []string {
 		scopes = append(scopes, "account:"+actorID)
 	}
 	return append(scopes, "mail:"+mailID)
+}
+
+func nativeMailCopyUpdatedEvent(record CommandLogRecord, index int, target projections.MailCopyUpdateTarget, actorID, mailID string, mailbox *string, read, kept *bool, ts int64) EventAppend {
+	return nativeEvent(record, index, proto.EvtMailCopyUpdated, nativeMailCopyUpdateScopes(target.FromUserID, actorID, mailID), &proto.MailCopyUpdatedPayload{
+		Mail:    mailID,
+		UserID:  actorID,
+		Mailbox: mailbox,
+		Read:    read,
+		Kept:    kept,
+		TS:      ts,
+	}, ts)
 }
 
 func nativeValidateStagedPostAttachmentBlob(db *sql.DB, stagedBlobID, attachmentID string, expectedSize int64, contentType string) *proto.ErrorDetail {
