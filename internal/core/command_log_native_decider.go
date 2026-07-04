@@ -2714,37 +2714,16 @@ func (e *CommandLogNativeDecisionExecutor) decideBlessUser(ctx context.Context, 
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
-	target, reply := corehandler.ResolveOtherUser(e.core.DB, actor, targetRef, "user not found", "cannot bless yourself")
+	target, reply := corehandler.ValidateBlessUserMutation(e.core.DB, actor, targetRef)
 	if reply.Err != nil {
 		return nativeCommandDecision{}, reply.Err
-	}
-	ignored, err := projections.UserRelationshipExists(e.core.DB, target.ID, actor.ID, "ignore")
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if ignored {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "target user ignores you", false)
-	}
-	// One blessing per (blesser, target): the ranking counts rows, so repeated
-	// blessings of the same target would otherwise inflate it.
-	if already, err := projections.BlessingExists(e.core.DB, actor.ID, target.ID); err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	} else if already {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "you have already blessed this user", false)
 	}
 
 	ts := nativeCommandTimestamp(record)
 	blessingID := stableCommandLogDecisionID("bless_", record, 0)
+	scopes, eventPayload := corehandler.UserBlessedEvent(actor, target, blessingID, payload.Message, ts)
 	events := []EventAppend{
-		nativeEvent(record, 0, proto.EvtUserBlessed, []string{"user:" + actor.ID, "user:" + target.ID, "blessing:" + blessingID}, &proto.UserBlessedPayload{
-			ID:         blessingID,
-			FromUserID: actor.ID,
-			From:       actor.Name,
-			ToUserID:   target.ID,
-			To:         target.Name,
-			Message:    payload.Message,
-			TS:         ts,
-		}, ts),
+		nativeEvent(record, 0, proto.EvtUserBlessed, scopes, eventPayload, ts),
 	}
 	auditEvents, errDetail := nativeBlessingSystemLogEvents(e.core.DB, record, actor, target, blessingID, payload.Message, ts, len(events))
 	if errDetail != nil {

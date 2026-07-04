@@ -129,37 +129,14 @@ func (h *Handler) blessUser(actor *User, p proto.BlessUserPayload) Reply {
 	}
 	defer tx.Rollback()
 
-	target, reply := ResolveOtherUser(tx, actor, p.User, "user not found", "cannot bless yourself")
+	target, reply := ValidateBlessUserMutation(tx, actor, p.User)
 	if reply.Err != nil {
 		return reply
-	}
-	ignored, err := projections.UserRelationshipExists(tx, target.ID, actor.ID, "ignore")
-	if err != nil {
-		return internalErr(err)
-	}
-	if ignored {
-		return Reply{Err: errDetail(proto.ErrForbidden, "target user ignores you", false)}
-	}
-	// One blessing per (blesser, target): the blessing ranking counts rows, so
-	// without this a user could bless the same target repeatedly to inflate it.
-	if already, err := projections.BlessingExists(tx, actor.ID, target.ID); err != nil {
-		return internalErr(err)
-	} else if already {
-		return Reply{Err: errDetail(proto.ErrConflict, "you have already blessed this user", false)}
 	}
 
 	ts := nowMS()
 	blessingID := newID("bless_")
-	scopes := []string{"user:" + actor.ID, "user:" + target.ID, "blessing:" + blessingID}
-	payload := &proto.UserBlessedPayload{
-		ID:         blessingID,
-		FromUserID: actor.ID,
-		From:       actor.Name,
-		ToUserID:   target.ID,
-		To:         target.Name,
-		Message:    p.Message,
-		TS:         ts,
-	}
+	scopes, payload := UserBlessedEvent(actor, target, blessingID, p.Message, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserBlessed, scopes, payload)
 	if err != nil {
 		return internalErr(err)
@@ -185,6 +162,38 @@ func (h *Handler) blessUser(actor *User, p proto.BlessUserPayload) Reply {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: blessingID, Seq: seq}}
+}
+
+func ValidateBlessUserMutation(queryable sqlQueryable, actor *User, targetRef string) (*User, Reply) {
+	target, reply := ResolveOtherUser(queryable, actor, targetRef, "user not found", "cannot bless yourself")
+	if reply.Err != nil {
+		return nil, reply
+	}
+	ignored, err := projections.UserRelationshipExists(queryable, target.ID, actor.ID, "ignore")
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if ignored {
+		return nil, Reply{Err: errDetail(proto.ErrForbidden, "target user ignores you", false)}
+	}
+	if already, err := projections.BlessingExists(queryable, actor.ID, target.ID); err != nil {
+		return nil, internalErr(err)
+	} else if already {
+		return nil, Reply{Err: errDetail(proto.ErrConflict, "you have already blessed this user", false)}
+	}
+	return target, Reply{}
+}
+
+func UserBlessedEvent(actor, target *User, blessingID, message string, ts int64) ([]string, *proto.UserBlessedPayload) {
+	return []string{"user:" + actor.ID, "user:" + target.ID, "blessing:" + blessingID}, &proto.UserBlessedPayload{
+		ID:         blessingID,
+		FromUserID: actor.ID,
+		From:       actor.Name,
+		ToUserID:   target.ID,
+		To:         target.Name,
+		Message:    message,
+		TS:         ts,
+	}
 }
 
 func (h *Handler) notifyLoginWatchers(actor *User, ts int64) error {
