@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"encoding/json"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -69,7 +69,7 @@ func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostReacted, Scopes: scopes,
 		Payload: &proto.PostReactedPayload{PostID: post.ID, Thread: post.Thread, User: actor.Name, Emoji: emoji, ReactionCount: count, TS: ts}, TS: ts})
-	pgNotifyEphemeral(h.db, string(proto.EvtPostReacted), encodePostReactionWakeup(post.ID, actor.ID, emoji, ts), stringsJoinScopes(scopes))
+	pgNotifyEphemeral(h.db, string(proto.EvtPostReacted), eventwakeup.EncodePostReaction(post.ID, actor.ID, emoji, ts), strings.Join(scopes, ","))
 
 	return Reply{Result: &proto.AckResult{ID: post.ID}}
 }
@@ -134,26 +134,7 @@ func (h *Handler) unreactPost(actor *User, p proto.ReactPostPayload) Reply {
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostUnreacted, Scopes: scopes,
 		Payload: &proto.PostUnreactedPayload{PostID: post.ID, Thread: post.Thread, User: actor.Name, Emoji: emoji, ReactionCount: count, TS: ts}, TS: ts})
-	pgNotifyEphemeral(h.db, string(proto.EvtPostUnreacted), encodePostReactionWakeup(post.ID, actor.ID, emoji, ts), stringsJoinScopes(scopes))
+	pgNotifyEphemeral(h.db, string(proto.EvtPostUnreacted), eventwakeup.EncodePostReaction(post.ID, actor.ID, emoji, ts), strings.Join(scopes, ","))
 
 	return Reply{Result: &proto.AckResult{ID: post.ID}}
-}
-
-type postReactionWakeup struct {
-	Post  string `json:"post"`
-	User  string `json:"user"`
-	Emoji string `json:"emoji,omitempty"`
-	TS    int64  `json:"ts"`
-}
-
-func encodePostReactionWakeup(postID, userID, emoji string, ts int64) string {
-	raw, err := json.Marshal(postReactionWakeup{Post: postID, User: userID, Emoji: emoji, TS: ts})
-	if err != nil {
-		return ""
-	}
-	return string(raw)
-}
-
-func stringsJoinScopes(scopes []string) string {
-	return strings.Join(scopes, ",")
 }

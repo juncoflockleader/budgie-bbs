@@ -8,6 +8,7 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -156,7 +157,7 @@ func TestHandlePGEphemeralUnorderedTrafficWakeups(t *testing.T) {
 	}
 
 	execPGListenerTestCmd(t, c, bob, proto.CmdReactPost, proto.ReactPostPayload{Post: posts[0].ID, Emoji: "heart"})
-	reactionWakeup := marshalCoreTestJSON(t, "marshal reaction wakeup", postReactionWakeup{Post: posts[0].ID, User: bob.ID, Emoji: "heart", TS: 1234})
+	reactionWakeup := marshalCoreTestJSON(t, "marshal reaction wakeup", eventwakeup.PostReaction{Post: posts[0].ID, User: bob.ID, Emoji: "heart", TS: 1234})
 	reactionBus := &mockBus{}
 	handlePGEphemeralNotification(pgWakeupPayload{
 		Event:  string(proto.EvtPostReacted),
@@ -172,7 +173,7 @@ func TestHandlePGEphemeralUnorderedTrafficWakeups(t *testing.T) {
 	}
 
 	execPGListenerTestCmd(t, c, bob, proto.CmdVotePoll, proto.VotePollPayload{Poll: poll.ID, Option: fullPoll.Options[0].ID})
-	voteWakeup := marshalCoreTestJSON(t, "marshal vote wakeup", pollVoteWakeup{Poll: poll.ID, User: bob.ID, TS: 2345})
+	voteWakeup := marshalCoreTestJSON(t, "marshal vote wakeup", eventwakeup.PollVote{Poll: poll.ID, User: bob.ID, TS: 2345})
 	voteBus := &mockBus{}
 	handlePGEphemeralNotification(pgWakeupPayload{
 		Event:  string(proto.EvtPollVoted),

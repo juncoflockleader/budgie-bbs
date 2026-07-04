@@ -11,6 +11,7 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -149,7 +150,7 @@ func handlePGEphemeralNotification(p pgWakeupPayload, db *sql.DB, bus Bus) {
 			TS:      line.TS,
 		})
 	case proto.EvtPostReacted, proto.EvtPostUnreacted:
-		var wakeup postReactionWakeup
+		var wakeup eventwakeup.PostReaction
 		if err := json.Unmarshal([]byte(p.EID), &wakeup); err != nil {
 			slog.Warn("pg listener: malformed reaction wakeup", "eid", p.EID, "err", err)
 			return
@@ -162,7 +163,7 @@ func handlePGEphemeralNotification(p pgWakeupPayload, db *sql.DB, bus Bus) {
 		recordRemoteWakeup(wakeup.TS)
 		publishLocal(bus, evt)
 	case proto.EvtPollVoted:
-		var wakeup pollVoteWakeup
+		var wakeup eventwakeup.PollVote
 		if err := json.Unmarshal([]byte(p.EID), &wakeup); err != nil {
 			slog.Warn("pg listener: malformed poll vote wakeup", "eid", p.EID, "err", err)
 			return
@@ -179,20 +180,7 @@ func handlePGEphemeralNotification(p pgWakeupPayload, db *sql.DB, bus Bus) {
 	}
 }
 
-type postReactionWakeup struct {
-	Post  string `json:"post"`
-	User  string `json:"user"`
-	Emoji string `json:"emoji,omitempty"`
-	TS    int64  `json:"ts"`
-}
-
-type pollVoteWakeup struct {
-	Poll string `json:"poll"`
-	User string `json:"user"`
-	TS   int64  `json:"ts"`
-}
-
-func postReactionWakeupEvent(db *sql.DB, kind proto.EventKind, scopes []string, wakeup postReactionWakeup) (*proto.Event, error) {
+func postReactionWakeupEvent(db *sql.DB, kind proto.EventKind, scopes []string, wakeup eventwakeup.PostReaction) (*proto.Event, error) {
 	emoji := strings.TrimSpace(wakeup.Emoji)
 	if emoji == "" {
 		emoji = "heart"
@@ -234,7 +222,7 @@ func postReactionWakeupEvent(db *sql.DB, kind proto.EventKind, scopes []string, 
 	}
 }
 
-func pollVoteWakeupEvent(db *sql.DB, scopes []string, wakeup pollVoteWakeup) (*proto.Event, error) {
+func pollVoteWakeupEvent(db *sql.DB, scopes []string, wakeup eventwakeup.PollVote) (*proto.Event, error) {
 	var (
 		option string
 		user   string

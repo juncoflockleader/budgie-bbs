@@ -1,8 +1,9 @@
 package handler
 
 import (
-	"encoding/json"
+	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -61,23 +62,9 @@ func (h *Handler) votePoll(actor *User, p proto.VotePollPayload) Reply {
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPollVoted, Scopes: scopes,
 		Payload: &proto.PollVotedPayload{Poll: p.Poll, Option: p.Option, User: actor.Name, TS: ts}, TS: ts})
-	pgNotifyEphemeral(h.db, string(proto.EvtPollVoted), encodePollVoteWakeup(p.Poll, actor.ID, ts), stringsJoinScopes(scopes))
+	pgNotifyEphemeral(h.db, string(proto.EvtPollVoted), eventwakeup.EncodePollVote(p.Poll, actor.ID, ts), strings.Join(scopes, ","))
 
 	return Reply{Result: &proto.AckResult{ID: p.Poll}}
-}
-
-type pollVoteWakeup struct {
-	Poll string `json:"poll"`
-	User string `json:"user"`
-	TS   int64  `json:"ts"`
-}
-
-func encodePollVoteWakeup(pollID, userID string, ts int64) string {
-	raw, err := json.Marshal(pollVoteWakeup{Poll: pollID, User: userID, TS: ts})
-	if err != nil {
-		return ""
-	}
-	return string(raw)
 }
 
 func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayload) Reply {
