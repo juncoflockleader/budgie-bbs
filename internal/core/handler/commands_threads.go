@@ -1226,16 +1226,16 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 	}
 	defer tx.Rollback() //nolint
 
-	if errReply := EnsureRangeBoardAccess(tx, actor, boardID); errReply.Err != nil {
-		return errReply
+	if ruleErr := commandrules.EnsureRangeBoardAccess(tx, actor, boardID); ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 
 	published := make([]proto.Event, 0, len(postIDs))
 	var lastSeq int64
 	for _, postID := range postIDs {
-		post, thread, errReply := loadRangePostTx(tx, postID, boardID)
-		if errReply.Err != nil {
-			return errReply
+		post, thread, ruleErr := loadRangePostTx(tx, postID, boardID)
+		if ruleErr != nil {
+			return Reply{Err: ruleErr}
 		}
 		if post.Redacted {
 			return Reply{Err: errDetail(proto.ErrConflict, "post is already redacted: "+postID, false)}
@@ -1284,16 +1284,16 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 	}
 	defer tx.Rollback() //nolint
 
-	if errReply := EnsureRangeBoardAccess(tx, actor, boardID); errReply.Err != nil {
-		return errReply
+	if ruleErr := commandrules.EnsureRangeBoardAccess(tx, actor, boardID); ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 
 	published := make([]proto.Event, 0, len(postIDs))
 	var lastSeq int64
 	for _, postID := range postIDs {
-		post, thread, errReply := loadRangePostTx(tx, postID, boardID)
-		if errReply.Err != nil {
-			return errReply
+		post, thread, ruleErr := loadRangePostTx(tx, postID, boardID)
+		if ruleErr != nil {
+			return Reply{Err: ruleErr}
 		}
 		if !post.Redacted {
 			return Reply{Err: errDetail(proto.ErrConflict, "post is not redacted: "+postID, false)}
@@ -1338,20 +1338,20 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 	}
 	defer tx.Rollback() //nolint
 
-	if errReply := EnsureRangeBoardAccess(tx, actor, boardID); errReply.Err != nil {
-		return errReply
+	if ruleErr := commandrules.EnsureRangeBoardAccess(tx, actor, boardID); ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
-	postIDs, errReply := BoardJunkPostIDs(tx, boardID, p.Posts)
-	if errReply.Err != nil {
-		return errReply
+	postIDs, ruleErr := commandrules.BoardJunkPostIDs(tx, boardID, p.Posts)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 
 	published := make([]proto.Event, 0, len(postIDs))
 	var lastSeq int64
 	for _, postID := range postIDs {
-		threadID, errReply := JunkPostThreadID(tx, postID, boardID)
-		if errReply.Err != nil {
-			return errReply
+		threadID, ruleErr := commandrules.JunkPostThreadID(tx, postID, boardID)
+		if ruleErr != nil {
+			return Reply{Err: ruleErr}
 		}
 		scopes := []string{"thread:" + threadID, "board:" + boardID}
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostDeletionCleared, scopes, &proto.PostDeletionClearedPayload{
@@ -1376,76 +1376,12 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
 }
 
-func EnsureRangeBoardAccess(queryable sqlQueryable, actor *User, boardID string) Reply {
-	if exists, err := projections.BoardExists(queryable, boardID); err != nil {
-		return internalErr(err)
-	} else if !exists {
-		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
-	}
-	canModeratePosts, err := projections.ActorCanModerateBoardPosts(queryable, actor, boardID)
-	if err != nil {
-		return internalErr(err)
-	}
-	if !canModeratePosts {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board post moderation permission required", false)}
-	}
-	return Reply{}
-}
-
-func LoadRangePost(postID, boardID string, getPost func(string) (*Post, error), getThread func(string) (*Thread, error)) (*Post, *Thread, Reply) {
-	post, err := getPost(postID)
-	if err != nil {
-		return nil, nil, internalErr(err)
-	}
-	if post == nil {
-		return nil, nil, Reply{Err: errDetail(proto.ErrNotFound, "post not found: "+postID, false)}
-	}
-	thread, err := getThread(post.Thread)
-	if err != nil {
-		return nil, nil, internalErr(err)
-	}
-	if thread == nil || thread.Board != boardID {
-		return nil, nil, Reply{Err: errDetail(proto.ErrNotFound, "post not found in board: "+postID, false)}
-	}
-	return post, thread, Reply{}
-}
-
-func LoadRangePostFromDB(db *sql.DB, postID, boardID string) (*Post, *Thread, Reply) {
-	return LoadRangePost(postID, boardID, func(id string) (*Post, error) {
-		return projections.GetPost(db, id)
-	}, func(id string) (*Thread, error) {
-		return projections.GetThread(db, id)
-	})
-}
-
-func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*Post, *Thread, Reply) {
-	return LoadRangePost(postID, boardID, func(id string) (*Post, error) {
+func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*Post, *Thread, *proto.ErrorDetail) {
+	return commandrules.LoadRangePost(postID, boardID, func(id string) (*Post, error) {
 		return currentRuntime().GetPostTx(tx, id)
 	}, func(id string) (*Thread, error) {
 		return currentRuntime().GetThreadTx(tx, id)
 	})
-}
-
-func BoardJunkPostIDs(queryable sqlQueryable, boardID string, requested []string) ([]string, Reply) {
-	ids, msg, err := projections.BoardJunkPostIDs(queryable, boardID, requested)
-	if msg != "" {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
-	}
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	return ids, Reply{}
-}
-
-func JunkPostThreadID(queryable sqlQueryable, postID, boardID string) (string, Reply) {
-	threadID, ok, err := projections.BoardJunkPostThreadID(queryable, postID, boardID)
-	if err != nil {
-		return "", internalErr(err)
-	}
-	if !ok {
-		return "", Reply{Err: errDetail(proto.ErrNotFound, "junk post not found: "+postID, false)}
-	}
-	return threadID, Reply{}
 }
 
 func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Reply {

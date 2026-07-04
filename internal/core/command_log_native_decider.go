@@ -1317,15 +1317,15 @@ func (e *CommandLogNativeDecisionExecutor) decideRedactPostRange(ctx context.Con
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if reply := corehandler.EnsureRangeBoardAccess(e.core.DB, actor, payload.Board); reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail := commandrules.EnsureRangeBoardAccess(e.core.DB, actor, payload.Board); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	events := make([]EventAppend, 0, len(postIDs))
 	for i, postID := range postIDs {
-		post, thread, reply := corehandler.LoadRangePostFromDB(e.core.DB, postID, payload.Board)
-		if reply.Err != nil {
-			return nativeCommandDecision{}, reply.Err
+		post, thread, errDetail := commandrules.LoadRangePostFromDB(e.core.DB, postID, payload.Board)
+		if errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 		if post.Redacted {
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "post is already redacted: "+postID, false)
@@ -1352,15 +1352,15 @@ func (e *CommandLogNativeDecisionExecutor) decideRestorePostRange(ctx context.Co
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if reply := corehandler.EnsureRangeBoardAccess(e.core.DB, actor, payload.Board); reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail := commandrules.EnsureRangeBoardAccess(e.core.DB, actor, payload.Board); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	events := make([]EventAppend, 0, len(postIDs))
 	for i, postID := range postIDs {
-		post, thread, reply := corehandler.LoadRangePostFromDB(e.core.DB, postID, payload.Board)
-		if reply.Err != nil {
-			return nativeCommandDecision{}, reply.Err
+		post, thread, errDetail := commandrules.LoadRangePostFromDB(e.core.DB, postID, payload.Board)
+		if errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 		if !post.Redacted {
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "post is not redacted: "+postID, false)
@@ -1384,19 +1384,19 @@ func (e *CommandLogNativeDecisionExecutor) decideClearBoardJunk(ctx context.Cont
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if reply := corehandler.EnsureRangeBoardAccess(e.core.DB, actor, payload.Board); reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail := commandrules.EnsureRangeBoardAccess(e.core.DB, actor, payload.Board); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
-	postIDs, reply := corehandler.BoardJunkPostIDs(e.core.DB, payload.Board, payload.Posts)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	postIDs, errDetail := commandrules.BoardJunkPostIDs(e.core.DB, payload.Board, payload.Posts)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	events := make([]EventAppend, 0, len(postIDs))
 	for i, postID := range postIDs {
-		threadID, reply := corehandler.JunkPostThreadID(e.core.DB, postID, payload.Board)
-		if reply.Err != nil {
-			return nativeCommandDecision{}, reply.Err
+		threadID, errDetail := commandrules.JunkPostThreadID(e.core.DB, postID, payload.Board)
+		if errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 		events = append(events, nativeEvent(record, i, proto.EvtPostDeletionCleared, []string{"thread:" + threadID, "board:" + payload.Board}, &proto.PostDeletionClearedPayload{
 			ID:     postID,
