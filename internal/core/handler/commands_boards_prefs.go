@@ -1351,45 +1351,24 @@ func (h *Handler) ensureSyssecuritySystemPost(actor *User, title string, lines [
 }
 
 func (h *Handler) requireFavoriteFolder(userID, folderID string) Reply {
-	exists, err := projections.FavoriteFolderExists(h.db, userID, folderID)
-	if err != nil {
-		return internalErr(err)
-	}
-	if !exists {
-		return Reply{Err: errDetail(proto.ErrNotFound, "favorite folder not found", false)}
-	}
-	return Reply{}
+	return replyFromCommandRule(commandrules.RequireFavoriteFolder(h.db, userID, folderID))
 }
 
 func (h *Handler) requireBoard(boardID string) Reply {
-	exists, err := projections.BoardExists(h.db, boardID)
-	if err != nil {
-		return internalErr(err)
-	}
-	if !exists {
-		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
-	}
-	return Reply{}
+	return replyFromCommandRule(commandrules.RequireBoard(h.db, boardID))
 }
 
 func (h *Handler) requirePost(postID string) Reply {
-	exists, err := projections.PostExists(h.db, postID)
-	if err != nil {
-		return internalErr(err)
-	}
-	if !exists {
-		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
-	}
-	return Reply{}
+	return replyFromCommandRule(commandrules.RequirePost(h.db, postID))
 }
 
 func (h *Handler) requireThread(threadID string) Reply {
-	exists, err := projections.ThreadExists(h.db, threadID)
-	if err != nil {
-		return internalErr(err)
-	}
-	if !exists {
-		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+	return replyFromCommandRule(commandrules.RequireThread(h.db, threadID))
+}
+
+func replyFromCommandRule(errDetail *proto.ErrorDetail) Reply {
+	if errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	return Reply{}
 }
