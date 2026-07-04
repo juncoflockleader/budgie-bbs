@@ -56,15 +56,6 @@ func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 	if errReply.Err != nil {
 		return errReply
 	}
-	if len(recipientRefs) == 0 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "at least one recipient is required", false)}
-	}
-	// Cap per-send fan-out for ordinary users (the admin-only mail-all path is
-	// exempt). Without this a single send can fan out to an unbounded recipient
-	// list, multiplying DB work and stored copies.
-	if !p.ToAll && len(recipientRefs) > maxMailRecipientsPerSend {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "too many recipients in one message", false)}
-	}
 	var msg string
 	p, msg = proto.NormalizeSendMailContentPayload(p)
 	if msg != "" {
@@ -866,6 +857,12 @@ func ExpandMailRecipients(db *sql.DB, actor *User, p proto.SendMailPayload) ([]s
 			return nil, internalErr(err)
 		}
 		refs = append(refs, friendIDs...)
+	}
+	if len(refs) == 0 {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "at least one recipient is required", false)}
+	}
+	if !p.ToAll && len(refs) > maxMailRecipientsPerSend {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "too many recipients in one message", false)}
 	}
 	return refs, Reply{}
 }

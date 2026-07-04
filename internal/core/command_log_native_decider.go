@@ -3684,9 +3684,6 @@ func (e *CommandLogNativeDecisionExecutor) decideSendMailPayload(record CommandL
 	if reply.Err != nil {
 		return nativeCommandDecision{}, reply.Err
 	}
-	if len(recipientRefs) == 0 {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "at least one recipient is required", false)
-	}
 	var msg string
 	payload, msg = proto.NormalizeSendMailContentPayload(payload)
 	if msg != "" {

@@ -4456,6 +4456,35 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 	}
 }
 
+func TestNativeCommandLogDecisionExecutorRejectsOversizedSendMailFanout(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	sender := registerNativeDecisionTestUser(t, c, "sender")
+	const oversizedFanout = 51
+	recipients := make([]string, 0, oversizedFanout)
+	for i := 0; i < oversizedFanout; i++ {
+		user := registerNativeDecisionTestUser(t, c, fmt.Sprintf("fanout%02d", i))
+		recipients = append(recipients, user.Name)
+	}
+
+	executor := NewCommandLogNativeDecisionExecutor(c)
+	payload := marshalCoreTestJSON(t, "marshal oversized send mail payload", proto.SendMailPayload{
+		To:      recipients,
+		Subject: "Too many",
+		Body:    "This should stay bounded.",
+	})
+	reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  LogPartition{Kind: partitionMail, Key: sender.ID},
+		Offset:     1,
+		ActorID:    sender.ID,
+		CID:        "cid-native-send-mail-over-fanout",
+		Command:    proto.CmdSendMail,
+		Payload:    payload,
+		EnqueuedAt: 1234,
+	})
+	requireNativeDecisionTerminalError(t, reply, proto.ErrValidationFailed, "oversized send-mail fanout", "too many recipients in one message")
+}
+
 func TestNativeCommandLogDecisionExecutorProjectsAttachMail(t *testing.T) {
 	ctx := context.Background()
 	c := newCoreTestCore(t)
