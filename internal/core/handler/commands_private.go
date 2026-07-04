@@ -168,16 +168,7 @@ func (h *Handler) forwardMail(actor *User, p proto.ForwardMailPayload) Reply {
 	if source == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
 	}
-	subject := proto.NormalizeForwardMailSubject(p.Subject, source.Subject)
-	return h.sendMail(actor, proto.SendMailPayload{
-		To:        p.To,
-		ToGroups:  p.ToGroups,
-		ToFriends: p.ToFriends,
-		ToAll:     p.ToAll,
-		Subject:   subject,
-		Body:      proto.FormatForwardMailBody(p.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body),
-		SaveSent:  p.SaveSent,
-	})
+	return h.sendMail(actor, ForwardMailSendPayload(p, source))
 }
 
 func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) Reply {
@@ -196,7 +187,7 @@ func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) R
 	if source == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
 	}
-	body := proto.FormatMailBoardBody(p.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body)
+	title, body := PostMailToBoardContent(p, source)
 	threadID := p.Thread
 	if threadID != "" {
 		return h.appendPost(actor, proto.AppendPostPayload{
@@ -209,7 +200,6 @@ func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) R
 	if targetMsg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, targetMsg, false)}
 	}
-	title := proto.PostMailToBoardTitle(p.Subject, source.Subject)
 	return h.createThread(actor, proto.CreateThreadPayload{
 		Board:       boardID,
 		Title:       title,
@@ -239,20 +229,40 @@ func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPa
 	if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, export.Entry.BoardID) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	subject := proto.DigestEntryMailSubject(p.Subject, export.Entry.Title)
-	body := projections.FormatDigestExportText(export)
-	if note := p.Note; note != "" {
-		body = note + "\n\n" + body
-	}
-	return h.sendMail(actor, proto.SendMailPayload{
+	return h.sendMail(actor, DigestEntryMailSendPayload(p, export))
+}
+
+func ForwardMailSendPayload(p proto.ForwardMailPayload, source *projections.MailItem) proto.SendMailPayload {
+	return proto.SendMailPayload{
 		To:        p.To,
 		ToGroups:  p.ToGroups,
 		ToFriends: p.ToFriends,
 		ToAll:     p.ToAll,
-		Subject:   subject,
+		Subject:   proto.NormalizeForwardMailSubject(p.Subject, source.Subject),
+		Body:      proto.FormatForwardMailBody(p.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body),
+		SaveSent:  p.SaveSent,
+	}
+}
+
+func PostMailToBoardContent(p proto.PostMailToBoardPayload, source *projections.MailItem) (title, body string) {
+	return proto.PostMailToBoardTitle(p.Subject, source.Subject),
+		proto.FormatMailBoardBody(p.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body)
+}
+
+func DigestEntryMailSendPayload(p proto.SendDigestEntryMailPayload, export *projections.DigestExport) proto.SendMailPayload {
+	body := projections.FormatDigestExportText(export)
+	if note := p.Note; note != "" {
+		body = note + "\n\n" + body
+	}
+	return proto.SendMailPayload{
+		To:        p.To,
+		ToGroups:  p.ToGroups,
+		ToFriends: p.ToFriends,
+		ToAll:     p.ToAll,
+		Subject:   proto.DigestEntryMailSubject(p.Subject, export.Entry.Title),
 		Body:      body,
 		SaveSent:  p.SaveSent,
-	})
+	}
 }
 
 func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Reply {

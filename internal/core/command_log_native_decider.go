@@ -2787,16 +2787,7 @@ func (e *CommandLogNativeDecisionExecutor) decideForwardMail(ctx context.Context
 	if source == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "mail not found", false)
 	}
-	subject := proto.NormalizeForwardMailSubject(payload.Subject, source.Subject)
-	return e.decideSendMailPayload(record, actor, proto.SendMailPayload{
-		To:        payload.To,
-		ToGroups:  payload.ToGroups,
-		ToFriends: payload.ToFriends,
-		ToAll:     payload.ToAll,
-		Subject:   subject,
-		Body:      proto.FormatForwardMailBody(payload.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body),
-		SaveSent:  payload.SaveSent,
-	})
+	return e.decideSendMailPayload(record, actor, corehandler.ForwardMailSendPayload(payload, source))
 }
 
 func (e *CommandLogNativeDecisionExecutor) decidePostMailToBoard(ctx context.Context, record CommandLogRecord) (nativeCommandDecision, *proto.ErrorDetail) {
@@ -2832,7 +2823,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePostMailToBoard(ctx context.Con
 	if source == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "mail not found", false)
 	}
-	body := proto.FormatMailBoardBody(payload.Note, source.FromName, source.ToNames, source.Subject, projections.MailAttachmentFilenames(source.Attachments), source.Body)
+	title, body := corehandler.PostMailToBoardContent(payload, source)
 	if threadID != "" {
 		thread, err := projections.GetThread(e.core.DB, threadID)
 		if err != nil {
@@ -2846,7 +2837,6 @@ func (e *CommandLogNativeDecisionExecutor) decidePostMailToBoard(ctx context.Con
 	if targetMsg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, targetMsg, false)
 	}
-	title := proto.PostMailToBoardTitle(payload.Subject, source.Subject)
 	threadPayload := proto.CreateThreadPayload{
 		Board:       boardID,
 		Title:       title,
@@ -2957,20 +2947,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSendDigestEntryMail(ctx context
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
 		}
 	}
-	subject := proto.DigestEntryMailSubject(payload.Subject, export.Entry.Title)
-	body := projections.FormatDigestExportText(export)
-	if note := payload.Note; note != "" {
-		body = note + "\n\n" + body
-	}
-	return e.decideSendMailPayload(record, actor, proto.SendMailPayload{
-		To:        payload.To,
-		ToGroups:  payload.ToGroups,
-		ToFriends: payload.ToFriends,
-		ToAll:     payload.ToAll,
-		Subject:   subject,
-		Body:      body,
-		SaveSent:  payload.SaveSent,
-	})
+	return e.decideSendMailPayload(record, actor, corehandler.DigestEntryMailSendPayload(payload, export))
 }
 
 func (e *CommandLogNativeDecisionExecutor) decideCuratePost(ctx context.Context, record CommandLogRecord) (nativeCommandDecision, *proto.ErrorDetail) {
