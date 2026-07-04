@@ -3804,29 +3804,13 @@ func (e *CommandLogNativeDecisionExecutor) decideSetLoginWatch(ctx context.Conte
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	target, reply := corehandler.ResolveOtherUser(e.core.DB, actor, payload.User, "user not found", "cannot wait for yourself")
+	target, online, reply := corehandler.ValidateLoginWatchMutation(e.core.DB, actor, payload.User, payload.Active)
 	if reply.Err != nil {
 		return nativeCommandDecision{}, reply.Err
 	}
-	relationshipActive := payload.Active
-	online := false
-	if payload.Active {
-		friend, err := projections.UserRelationshipExists(e.core.DB, actor.ID, target.ID, "friend")
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !friend {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "friend relationship required", false)
-		}
-		online, err = projections.UserRecentlyOnline(e.core.DB, target.ID)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if online {
-			relationshipActive = false
-		}
-	} else {
-		exists, err := projections.UserRelationshipExists(e.core.DB, actor.ID, target.ID, "login_watch")
+	relationshipActive := payload.Active && !online
+	if !payload.Active {
+		exists, err := projections.UserRelationshipExists(e.core.DB, actor.ID, target.ID, corehandler.LoginWatchRelationshipKind)
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
@@ -3848,7 +3832,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetLoginWatch(ctx context.Conte
 	events = append(events, nativeEvent(record, len(events), proto.EvtUserRelationshipSet, []string{"user:" + actor.ID, "user:" + target.ID}, &proto.UserRelationshipSetPayload{
 		UserID:       actor.ID,
 		TargetUserID: target.ID,
-		Kind:         "login_watch",
+		Kind:         corehandler.LoginWatchRelationshipKind,
 		Active:       relationshipActive,
 		TS:           ts,
 	}, ts))

@@ -5,7 +5,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-const loginWatchRelationshipKind = "login_watch"
+const LoginWatchRelationshipKind = "login_watch"
 
 func ResolveOtherUser(queryable sqlQueryable, actor *User, ref, missingMessage, selfMessage string) (*User, Reply) {
 	if actor == nil {
@@ -33,6 +33,29 @@ func ResolveUserRef(queryable sqlQueryable, ref string) (*User, Reply) {
 		return nil, Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
 	}
 	return user, Reply{}
+}
+
+func ValidateLoginWatchMutation(queryable sqlQueryable, actor *User, targetRef string, active bool) (*User, bool, Reply) {
+	target, reply := ResolveOtherUser(queryable, actor, targetRef, "user not found", "cannot wait for yourself")
+	if reply.Err != nil {
+		return nil, false, reply
+	}
+	if !active {
+		return target, false, Reply{}
+	}
+
+	friend, err := projections.UserRelationshipExists(queryable, actor.ID, target.ID, "friend")
+	if err != nil {
+		return nil, false, internalErr(err)
+	}
+	if !friend {
+		return nil, false, Reply{Err: errDetail(proto.ErrForbidden, "friend relationship required", false)}
+	}
+	online, err := projections.UserRecentlyOnline(queryable, target.ID)
+	if err != nil {
+		return nil, false, internalErr(err)
+	}
+	return target, online, Reply{}
 }
 
 func (h *Handler) setUserRelationship(actor *User, p proto.SetUserRelationshipPayload) Reply {
@@ -73,30 +96,16 @@ func (h *Handler) setLoginWatch(actor *User, p proto.SetLoginWatchPayload) Reply
 	}
 	defer tx.Rollback()
 
-	target, reply := ResolveOtherUser(tx, actor, p.User, "user not found", "cannot wait for yourself")
+	target, online, reply := ValidateLoginWatchMutation(tx, actor, p.User, p.Active)
 	if reply.Err != nil {
 		return reply
-	}
-	online := false
-	if p.Active {
-		friend, err := projections.UserRelationshipExists(tx, actor.ID, target.ID, "friend")
-		if err != nil {
-			return internalErr(err)
-		}
-		if !friend {
-			return Reply{Err: errDetail(proto.ErrForbidden, "friend relationship required", false)}
-		}
-		online, err = projections.UserRecentlyOnline(tx, target.ID)
-		if err != nil {
-			return internalErr(err)
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
 
 	if !p.Active {
-		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, loginWatchRelationshipKind, "", false); err != nil {
+		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, LoginWatchRelationshipKind, "", false); err != nil {
 			return internalErr(err)
 		}
 		return Reply{Result: &proto.AckResult{ID: target.ID}}
@@ -106,12 +115,12 @@ func (h *Handler) setLoginWatch(actor *User, p proto.SetLoginWatchPayload) Reply
 		if err := currentRuntime().InsertNotification(h.db, newID("notif_"), actor.ID, "login", "", "", target.Name, ts); err != nil {
 			return internalErr(err)
 		}
-		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, loginWatchRelationshipKind, "", false); err != nil {
+		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, LoginWatchRelationshipKind, "", false); err != nil {
 			return internalErr(err)
 		}
 		return Reply{Result: &proto.AckResult{ID: target.ID}}
 	}
-	if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, loginWatchRelationshipKind, "", true); err != nil {
+	if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, LoginWatchRelationshipKind, "", true); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: target.ID}}
@@ -208,7 +217,7 @@ func (h *Handler) notifyLoginWatchers(actor *User, ts int64) error {
 		if err := currentRuntime().InsertNotification(h.db, newID("notif_"), watcherID, "login", "", "", actor.Name, ts); err != nil {
 			return err
 		}
-		if err := currentRuntime().SetUserRelationship(h.db, watcherID, actor.ID, loginWatchRelationshipKind, "", false); err != nil {
+		if err := currentRuntime().SetUserRelationship(h.db, watcherID, actor.ID, LoginWatchRelationshipKind, "", false); err != nil {
 			return err
 		}
 	}
