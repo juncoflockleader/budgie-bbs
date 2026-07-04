@@ -38,3 +38,25 @@ func DigestEntryForCuration(queryable Queryable, actor *projections.User, entryI
 	}
 	return &entry, nil
 }
+
+func RequireDigestEntryPathAvailable(queryable Queryable, entry *DigestEntryForCommand, path string) *proto.ErrorDetail {
+	if path == entry.Path {
+		return nil
+	}
+	var conflictID string
+	err := projections.QQueryRow(
+		queryable,
+		`SELECT id
+		   FROM digest_entries
+		  WHERE board_id=? AND target_kind=? AND target_id=? AND kind=? AND path=? AND id<>?
+		  LIMIT 1`,
+		entry.BoardID, entry.TargetKind, entry.TargetID, entry.Kind, path, entry.ID,
+	).Scan(&conflictID)
+	if err == nil {
+		return newErrDetail(proto.ErrConflict, "digest entry already exists at that path", false)
+	}
+	if err != sql.ErrNoRows {
+		return internalErr(err)
+	}
+	return nil
+}

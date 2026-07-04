@@ -632,22 +632,8 @@ func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayloa
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	if path != entry.Path {
-		var conflictID string
-		err := qQueryRow(
-			tx,
-			`SELECT id
-			   FROM digest_entries
-			  WHERE board_id=? AND target_kind=? AND target_id=? AND kind=? AND path=? AND id<>?
-			  LIMIT 1`,
-			entry.BoardID, entry.TargetKind, entry.TargetID, entry.Kind, path, entry.ID,
-		).Scan(&conflictID)
-		if err == nil {
-			return Reply{Err: errDetail(proto.ErrConflict, "digest entry already exists at that path", false)}
-		}
-		if err != sql.ErrNoRows {
-			return internalErr(err)
-		}
+	if errReply := replyFromCommandRule(commandrules.RequireDigestEntryPathAvailable(tx, entry, path)); errReply.Err != nil {
+		return errReply
 	}
 	if err := currentRuntime().UpdateDigestEntryTx(tx, entry.ID, title, path, note, ts); err != nil {
 		return internalErr(err)
