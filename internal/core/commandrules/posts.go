@@ -31,3 +31,11 @@ func NormalizePostAttachments(input []proto.AttachmentPayload, allowed bool, can
 	}
 	return proto.WithAttachmentIDs(attachments, idFor), nil
 }
+
+func ActiveBoardSanctionError(kind string) *proto.ErrorDetail {
+	code := proto.ErrMuted
+	if kind == "ban" {
+		code = proto.ErrBanned
+	}
+	return newErrDetail(code, "you are "+kind+"d in this board", false)
+}

@@ -28,11 +28,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 
 	// Sanction check.
 	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, p.Board); ok {
-		code := proto.ErrMuted
-		if kind == "ban" {
-			code = proto.ErrBanned
-		}
-		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
+		return Reply{Err: commandrules.ActiveBoardSanctionError(kind)}
 	}
 	settings, err := currentRuntime().GetBoardSettings(h.db, p.Board)
 	if err != nil {
@@ -263,11 +259,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 
 	// Sanction check.
 	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, thread.Board); ok {
-		code := proto.ErrMuted
-		if kind == "ban" {
-			code = proto.ErrBanned
-		}
-		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
+		return Reply{Err: commandrules.ActiveBoardSanctionError(kind)}
 	}
 
 	var mailBackTarget *Post
@@ -559,11 +551,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
 	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, p.Board); ok {
-		code := proto.ErrMuted
-		if kind == "ban" {
-			code = proto.ErrBanned
-		}
-		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
+		return Reply{Err: commandrules.ActiveBoardSanctionError(kind)}
 	}
 
 	title := p.Title

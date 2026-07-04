@@ -402,11 +402,7 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateThread(ctx context.Contex
 		}
 	}
 	if kind := decisionCtx.SanctionKind; kind != "" {
-		code := proto.ErrMuted
-		if kind == "ban" {
-			code = proto.ErrBanned
-		}
-		return nativeCommandDecision{}, nativeDecisionErr(code, "you are "+kind+"d in this board", false)
+		return nativeCommandDecision{}, commandrules.ActiveBoardSanctionError(kind)
 	}
 	settings := decisionCtx.Settings
 	if settings == nil {
@@ -611,11 +607,7 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 		postCommitBody = &notificationBody
 	}
 	if kind := decisionCtx.SanctionKind; kind != "" {
-		code := proto.ErrMuted
-		if kind == "ban" {
-			code = proto.ErrBanned
-		}
-		return nativeCommandDecision{}, nativeDecisionErr(code, "you are "+kind+"d in this board", false)
+		return nativeCommandDecision{}, commandrules.ActiveBoardSanctionError(kind)
 	}
 	contentFilter, err := projections.MatchContentFilter(e.core.DB, thread.Board, rawBody)
 	if err != nil {
@@ -807,11 +799,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 		mailBackTarget = root
 	}
 	if kind, ok := projections.ActiveSanction(e.core.DB, actor.ID, thread.Board); ok {
-		code := proto.ErrMuted
-		if kind == "ban" {
-			code = proto.ErrBanned
-		}
-		return nativeCommandDecision{}, nativeDecisionErr(code, "you are "+kind+"d in this board", false)
+		return nativeCommandDecision{}, commandrules.ActiveBoardSanctionError(kind)
 	}
 	rawBody := body
 	contentFilter, err := projections.MatchContentFilter(e.core.DB, thread.Board, rawBody)
@@ -924,11 +912,7 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 		}
 	}
 	if kind, ok := projections.ActiveSanction(e.core.DB, actor.ID, payload.Board); ok {
-		code := proto.ErrMuted
-		if kind == "ban" {
-			code = proto.ErrBanned
-		}
-		return nativeCommandDecision{}, nativeDecisionErr(code, "you are "+kind+"d in this board", false)
+		return nativeCommandDecision{}, commandrules.ActiveBoardSanctionError(kind)
 	}
 
 	title := payload.Title
