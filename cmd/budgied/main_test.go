@@ -487,6 +487,51 @@ func TestApplyDerivedViewProcessorSelectionRejectsUnknownView(t *testing.T) {
 	}
 }
 
+func TestMissingDerivedViewProcessorWorkerRoleUsesRegistryOrder(t *testing.T) {
+	var latestFeed bool
+	flags := derivedViewProcessorFlags{latestFeedProcessor: &latestFeed}
+	if got := missingDerivedViewProcessorWorkerRole(flags); got != "" {
+		t.Fatalf("disabled processor role message = %q, want empty", got)
+	}
+	latestFeed = true
+	if got := missingDerivedViewProcessorWorkerRole(flags); got != "latest feed processor requires the worker role" {
+		t.Fatalf("processor role message = %q, want latest feed", got)
+	}
+}
+
+func TestDerivedViewWatermarkOwnershipConflictUsesRegistry(t *testing.T) {
+	var digestSearch bool
+	conflict, ok := derivedViewWatermarkOwnershipConflict(
+		[]string{core.DerivedViewDigestSearch},
+		derivedViewProcessorFlags{digestSearchProcessor: &digestSearch},
+		"sql-fts",
+	)
+	if ok {
+		t.Fatalf("disabled digest conflict = %+v, want none", conflict)
+	}
+	digestSearch = true
+	conflict, ok = derivedViewWatermarkOwnershipConflict(
+		[]string{core.DerivedViewDigestSearch},
+		derivedViewProcessorFlags{digestSearchProcessor: &digestSearch},
+		"sql-fts",
+	)
+	if !ok || conflict.message != "digest search processor ownership cannot use compatibility watermark sync for search.digest" {
+		t.Fatalf("digest conflict = %+v/%v, want digest search message", conflict, ok)
+	}
+	if conflict.hint != "remove search.digest from -derived-view-watermarks and run -digest-search-processor on a worker node" {
+		t.Fatalf("digest conflict hint = %q", conflict.hint)
+	}
+
+	conflict, ok = derivedViewWatermarkOwnershipConflict(
+		[]string{core.DerivedViewPostSearch},
+		derivedViewProcessorFlags{},
+		"meilisearch",
+	)
+	if !ok || conflict.message != "post search processor ownership cannot use compatibility watermark sync for search.posts" {
+		t.Fatalf("post search index conflict = %+v/%v, want post search message", conflict, ok)
+	}
+}
+
 func TestParseCommandLogWorkerGroupMembers(t *testing.T) {
 	got := parseCommandLogWorkerGroupMembers("writer-b, writer-a,writer-a,,")
 	want := []string{"writer-a", "writer-b"}

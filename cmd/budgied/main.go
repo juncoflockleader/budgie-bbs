@@ -232,6 +232,23 @@ func main() {
 		*commandLogWorkerClaimTTL,
 		*commandLogWorkerClaimRefresh,
 	)
+	derivedViewProcessorFlagSet := derivedViewProcessorFlags{
+		asyncPostSearch:                asyncPostSearch,
+		postSearchProcessor:            postSearchProcessor,
+		digestSearchProcessor:          digestSearchProcessor,
+		communityStatsProcessor:        communityStatsProcessor,
+		asyncCommunityStatHistory:      asyncCommunityStatHistory,
+		latestFeedProcessor:            latestFeedProcessor,
+		residentFeedProcessor:          residentFeedProcessor,
+		boardSummariesProcessor:        boardSummariesProcessor,
+		unreadThreadSummariesProcessor: unreadThreadSummariesProcessor,
+		boardRankingsProcessor:         boardRankingsProcessor,
+		threadRankingsProcessor:        threadRankingsProcessor,
+		replyRankingsProcessor:         replyRankingsProcessor,
+		userRankingsProcessor:          userRankingsProcessor,
+		blessingRankingsProcessor:      blessingRankingsProcessor,
+		archiveRankingsProcessor:       archiveRankingsProcessor,
+	}
 	var derivedViewWatermarkViews []string
 	if strings.TrimSpace(*derivedViewWatermarks) != "" {
 		var err error
@@ -246,23 +263,7 @@ func main() {
 		var err error
 		derivedViewProcessorViews, err = applyDerivedViewProcessorSelection(
 			*derivedViewProcessors,
-			derivedViewProcessorFlags{
-				asyncPostSearch:                asyncPostSearch,
-				postSearchProcessor:            postSearchProcessor,
-				digestSearchProcessor:          digestSearchProcessor,
-				communityStatsProcessor:        communityStatsProcessor,
-				asyncCommunityStatHistory:      asyncCommunityStatHistory,
-				latestFeedProcessor:            latestFeedProcessor,
-				residentFeedProcessor:          residentFeedProcessor,
-				boardSummariesProcessor:        boardSummariesProcessor,
-				unreadThreadSummariesProcessor: unreadThreadSummariesProcessor,
-				boardRankingsProcessor:         boardRankingsProcessor,
-				threadRankingsProcessor:        threadRankingsProcessor,
-				replyRankingsProcessor:         replyRankingsProcessor,
-				userRankingsProcessor:          userRankingsProcessor,
-				blessingRankingsProcessor:      blessingRankingsProcessor,
-				archiveRankingsProcessor:       archiveRankingsProcessor,
-			},
+			derivedViewProcessorFlagSet,
 		)
 		if err != nil {
 			slog.Error("invalid derived view processor selection", "views", *derivedViewProcessors, "err", err)
@@ -675,140 +676,14 @@ func main() {
 		slog.Error("counter checkpoint scheduler requires the worker role", "interval", counterCheckpointInterval.String(), "roles", *roleList)
 		os.Exit(1)
 	}
-	if *postSearchProcessor && !roles["worker"] {
-		slog.Error("post search processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
+	if !roles["worker"] {
+		if message := missingDerivedViewProcessorWorkerRole(derivedViewProcessorFlagSet); message != "" {
+			slog.Error(message, "roles", *roleList)
+			os.Exit(1)
+		}
 	}
-	if *digestSearchProcessor && !roles["worker"] {
-		slog.Error("digest search processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *communityStatsProcessor && !roles["worker"] {
-		slog.Error("community stats processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *latestFeedProcessor && !roles["worker"] {
-		slog.Error("latest feed processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *residentFeedProcessor && !roles["worker"] {
-		slog.Error("resident feed processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *boardSummariesProcessor && !roles["worker"] {
-		slog.Error("board summaries processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *unreadThreadSummariesProcessor && !roles["worker"] {
-		slog.Error("unread thread summaries processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *boardRankingsProcessor && !roles["worker"] {
-		slog.Error("board rankings processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *threadRankingsProcessor && !roles["worker"] {
-		slog.Error("thread rankings processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *replyRankingsProcessor && !roles["worker"] {
-		slog.Error("reply rankings processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *userRankingsProcessor && !roles["worker"] {
-		slog.Error("user rankings processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *blessingRankingsProcessor && !roles["worker"] {
-		slog.Error("blessing rankings processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if *archiveRankingsProcessor && !roles["worker"] {
-		slog.Error("archive rankings processor requires the worker role", "roles", *roleList)
-		os.Exit(1)
-	}
-	if (*asyncPostSearch || *postSearchProcessor || postSearchIndexMode != "sql-fts") && slices.Contains(derivedViewWatermarkViews, core.DerivedViewPostSearch) {
-		slog.Error("post search processor ownership cannot use compatibility watermark sync for search.posts",
-			"views", *derivedViewWatermarks,
-			"hint", "remove search.posts from -derived-view-watermarks and run -post-search-processor on a worker node")
-		os.Exit(1)
-	}
-	if *digestSearchProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewDigestSearch) {
-		slog.Error("digest search processor ownership cannot use compatibility watermark sync for search.digest",
-			"views", *derivedViewWatermarks,
-			"hint", "remove search.digest from -derived-view-watermarks and run -digest-search-processor on a worker node")
-		os.Exit(1)
-	}
-	if *communityStatsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewCommunityStats) {
-		slog.Error("community stats processor ownership cannot use compatibility watermark sync for community_stats",
-			"views", *derivedViewWatermarks,
-			"hint", "remove community_stats from -derived-view-watermarks and run -community-stats-processor on a worker node")
-		os.Exit(1)
-	}
-	if *latestFeedProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewLatestFeed) {
-		slog.Error("latest feed processor ownership cannot use compatibility watermark sync for feeds.latest",
-			"views", *derivedViewWatermarks,
-			"hint", "remove feeds.latest from -derived-view-watermarks and run -latest-feed-processor on a worker node")
-		os.Exit(1)
-	}
-	if *residentFeedProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewResidentFeed) {
-		slog.Error("resident feed processor ownership cannot use compatibility watermark sync for feeds.resident",
-			"views", *derivedViewWatermarks,
-			"hint", "remove feeds.resident from -derived-view-watermarks and run -resident-feed-processor on a worker node")
-		os.Exit(1)
-	}
-	if *boardSummariesProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewBoardSummaries) {
-		slog.Error("board summaries processor ownership cannot use compatibility watermark sync for summaries.boards",
-			"views", *derivedViewWatermarks,
-			"hint", "remove summaries.boards from -derived-view-watermarks and run -board-summaries-processor on a worker node")
-		os.Exit(1)
-	}
-	if *unreadThreadSummariesProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewUnreadThreads) {
-		slog.Error("unread thread summaries processor ownership cannot use compatibility watermark sync for summaries.unread_threads",
-			"views", *derivedViewWatermarks,
-			"hint", "remove summaries.unread_threads from -derived-view-watermarks and run -unread-thread-summaries-processor on a worker node")
-		os.Exit(1)
-	}
-	if *boardRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewBoardRankings) {
-		slog.Error("board rankings processor ownership cannot use compatibility watermark sync for rankings.boards",
-			"views", *derivedViewWatermarks,
-			"hint", "remove rankings.boards from -derived-view-watermarks and run -board-rankings-processor on a worker node")
-		os.Exit(1)
-	}
-	if *threadRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewThreadRankings) {
-		slog.Error("thread rankings processor ownership cannot use compatibility watermark sync for rankings.threads",
-			"views", *derivedViewWatermarks,
-			"hint", "remove rankings.threads from -derived-view-watermarks and run -thread-rankings-processor on a worker node")
-		os.Exit(1)
-	}
-	if *replyRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewReplyRankings) {
-		slog.Error("reply rankings processor ownership cannot use compatibility watermark sync for rankings.replies",
-			"views", *derivedViewWatermarks,
-			"hint", "remove rankings.replies from -derived-view-watermarks and run -reply-rankings-processor on a worker node")
-		os.Exit(1)
-	}
-	if *userRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewUserRankings) {
-		slog.Error("user rankings processor ownership cannot use compatibility watermark sync for rankings.users",
-			"views", *derivedViewWatermarks,
-			"hint", "remove rankings.users from -derived-view-watermarks and run -user-rankings-processor on a worker node")
-		os.Exit(1)
-	}
-	if *blessingRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewBlessingRankings) {
-		slog.Error("blessing rankings processor ownership cannot use compatibility watermark sync for rankings.blessings",
-			"views", *derivedViewWatermarks,
-			"hint", "remove rankings.blessings from -derived-view-watermarks and run -blessing-rankings-processor on a worker node")
-		os.Exit(1)
-	}
-	if *archiveRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewArchiveRankings) {
-		slog.Error("archive rankings processor ownership cannot use compatibility watermark sync for rankings.archives",
-			"views", *derivedViewWatermarks,
-			"hint", "remove rankings.archives from -derived-view-watermarks and run -archive-rankings-processor on a worker node")
-		os.Exit(1)
-	}
-	if *asyncCommunityStatHistory && slices.Contains(derivedViewWatermarkViews, core.DerivedViewCommunityStatHistory) {
-		slog.Error("community stat history ownership cannot use compatibility watermark sync for community_stat_history",
-			"views", *derivedViewWatermarks,
-			"hint", "remove community_stat_history from -derived-view-watermarks; queued snapshot jobs advance the view watermark")
+	if conflict, ok := derivedViewWatermarkOwnershipConflict(derivedViewWatermarkViews, derivedViewProcessorFlagSet, postSearchIndexMode); ok {
+		slog.Error(conflict.message, "views", *derivedViewWatermarks, "hint", conflict.hint)
 		os.Exit(1)
 	}
 	if commandLogOneShot && commandWorkerMode == "" {
@@ -1993,51 +1868,105 @@ type derivedViewProcessorFlags struct {
 	archiveRankingsProcessor       *bool
 }
 
+type derivedViewDedicatedProcessor struct {
+	view     string
+	label    string
+	flagName string
+	enabled  *bool
+}
+
+type derivedViewWatermarkConflict struct {
+	message string
+	hint    string
+}
+
+func derivedViewDedicatedProcessors(flags derivedViewProcessorFlags) []derivedViewDedicatedProcessor {
+	return []derivedViewDedicatedProcessor{
+		{view: core.DerivedViewPostSearch, label: "post search", flagName: "post-search-processor", enabled: flags.postSearchProcessor},
+		{view: core.DerivedViewDigestSearch, label: "digest search", flagName: "digest-search-processor", enabled: flags.digestSearchProcessor},
+		{view: core.DerivedViewCommunityStats, label: "community stats", flagName: "community-stats-processor", enabled: flags.communityStatsProcessor},
+		{view: core.DerivedViewLatestFeed, label: "latest feed", flagName: "latest-feed-processor", enabled: flags.latestFeedProcessor},
+		{view: core.DerivedViewResidentFeed, label: "resident feed", flagName: "resident-feed-processor", enabled: flags.residentFeedProcessor},
+		{view: core.DerivedViewBoardSummaries, label: "board summaries", flagName: "board-summaries-processor", enabled: flags.boardSummariesProcessor},
+		{view: core.DerivedViewUnreadThreads, label: "unread thread summaries", flagName: "unread-thread-summaries-processor", enabled: flags.unreadThreadSummariesProcessor},
+		{view: core.DerivedViewBoardRankings, label: "board rankings", flagName: "board-rankings-processor", enabled: flags.boardRankingsProcessor},
+		{view: core.DerivedViewThreadRankings, label: "thread rankings", flagName: "thread-rankings-processor", enabled: flags.threadRankingsProcessor},
+		{view: core.DerivedViewReplyRankings, label: "reply rankings", flagName: "reply-rankings-processor", enabled: flags.replyRankingsProcessor},
+		{view: core.DerivedViewUserRankings, label: "user rankings", flagName: "user-rankings-processor", enabled: flags.userRankingsProcessor},
+		{view: core.DerivedViewBlessingRankings, label: "blessing rankings", flagName: "blessing-rankings-processor", enabled: flags.blessingRankingsProcessor},
+		{view: core.DerivedViewArchiveRankings, label: "archive rankings", flagName: "archive-rankings-processor", enabled: flags.archiveRankingsProcessor},
+	}
+}
+
 func applyDerivedViewProcessorSelection(raw string, flags derivedViewProcessorFlags) ([]string, error) {
 	resolved, err := core.ResolveDerivedViews([]string{raw})
 	if err != nil {
 		return nil, err
 	}
+	processors := derivedViewDedicatedProcessors(flags)
 	for _, view := range resolved {
 		switch view {
 		case core.DerivedViewPostSearch:
 			setBool(flags.asyncPostSearch, true)
-			setBool(flags.postSearchProcessor, true)
-		case core.DerivedViewDigestSearch:
-			setBool(flags.digestSearchProcessor, true)
-		case core.DerivedViewCommunityStats:
-			setBool(flags.communityStatsProcessor, true)
 		case core.DerivedViewCommunityStatHistory:
 			setBool(flags.asyncCommunityStatHistory, true)
-		case core.DerivedViewLatestFeed:
-			setBool(flags.latestFeedProcessor, true)
-		case core.DerivedViewResidentFeed:
-			setBool(flags.residentFeedProcessor, true)
-		case core.DerivedViewBoardSummaries:
-			setBool(flags.boardSummariesProcessor, true)
-		case core.DerivedViewUnreadThreads:
-			setBool(flags.unreadThreadSummariesProcessor, true)
-		case core.DerivedViewBoardRankings:
-			setBool(flags.boardRankingsProcessor, true)
-		case core.DerivedViewThreadRankings:
-			setBool(flags.threadRankingsProcessor, true)
-		case core.DerivedViewReplyRankings:
-			setBool(flags.replyRankingsProcessor, true)
-		case core.DerivedViewUserRankings:
-			setBool(flags.userRankingsProcessor, true)
-		case core.DerivedViewBlessingRankings:
-			setBool(flags.blessingRankingsProcessor, true)
-		case core.DerivedViewArchiveRankings:
-			setBool(flags.archiveRankingsProcessor, true)
+		}
+		for _, processor := range processors {
+			if processor.view == view {
+				setBool(processor.enabled, true)
+				break
+			}
 		}
 	}
 	return resolved, nil
+}
+
+func missingDerivedViewProcessorWorkerRole(flags derivedViewProcessorFlags) string {
+	for _, processor := range derivedViewDedicatedProcessors(flags) {
+		if boolValue(processor.enabled) {
+			return processor.label + " processor requires the worker role"
+		}
+	}
+	return ""
+}
+
+func derivedViewWatermarkOwnershipConflict(views []string, flags derivedViewProcessorFlags, postSearchIndexMode string) (derivedViewWatermarkConflict, bool) {
+	postSearchOwned := boolValue(flags.asyncPostSearch) || boolValue(flags.postSearchProcessor) || postSearchIndexMode != "sql-fts"
+	if postSearchOwned && slices.Contains(views, core.DerivedViewPostSearch) {
+		return derivedViewProcessorWatermarkConflict("post search", core.DerivedViewPostSearch, "post-search-processor"), true
+	}
+	for _, processor := range derivedViewDedicatedProcessors(flags) {
+		if processor.view == core.DerivedViewPostSearch {
+			continue
+		}
+		if boolValue(processor.enabled) && slices.Contains(views, processor.view) {
+			return derivedViewProcessorWatermarkConflict(processor.label, processor.view, processor.flagName), true
+		}
+	}
+	if boolValue(flags.asyncCommunityStatHistory) && slices.Contains(views, core.DerivedViewCommunityStatHistory) {
+		return derivedViewWatermarkConflict{
+			message: "community stat history ownership cannot use compatibility watermark sync for community_stat_history",
+			hint:    "remove community_stat_history from -derived-view-watermarks; queued snapshot jobs advance the view watermark",
+		}, true
+	}
+	return derivedViewWatermarkConflict{}, false
+}
+
+func derivedViewProcessorWatermarkConflict(label, view, flagName string) derivedViewWatermarkConflict {
+	return derivedViewWatermarkConflict{
+		message: fmt.Sprintf("%s processor ownership cannot use compatibility watermark sync for %s", label, view),
+		hint:    fmt.Sprintf("remove %s from -derived-view-watermarks and run -%s on a worker node", view, flagName),
+	}
 }
 
 func setBool(target *bool, value bool) {
 	if target != nil {
 		*target = value
 	}
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
 }
 
 // parseRoles turns a comma-separated role list into a set, exiting on an
