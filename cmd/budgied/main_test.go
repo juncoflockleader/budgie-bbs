@@ -423,19 +423,21 @@ func TestApplyDerivedViewProcessorSelectionEnablesGroups(t *testing.T) {
 	var blessingRankings bool
 	var archiveRankings bool
 
-	views, err := applyDerivedViewProcessorSelection(" search, feeds, rankings ", derivedViewProcessorFlags{
-		asyncPostSearch:           &asyncPostSearch,
-		postSearchProcessor:       &postSearch,
-		digestSearchProcessor:     &digestSearch,
-		latestFeedProcessor:       &latestFeed,
-		residentFeedProcessor:     &residentFeed,
-		boardRankingsProcessor:    &boardRankings,
-		threadRankingsProcessor:   &threadRankings,
-		replyRankingsProcessor:    &replyRankings,
-		userRankingsProcessor:     &userRankings,
-		blessingRankingsProcessor: &blessingRankings,
-		archiveRankingsProcessor:  &archiveRankings,
-	})
+	views, err := applyDerivedViewProcessorSelection(" search, feeds, rankings ",
+		derivedViewProcessorSpecialFlags{asyncPostSearch: &asyncPostSearch},
+		[]derivedViewProcessorSpec{
+			{view: core.DerivedViewPostSearch, enabled: &postSearch},
+			{view: core.DerivedViewDigestSearch, enabled: &digestSearch},
+			{view: core.DerivedViewLatestFeed, enabled: &latestFeed},
+			{view: core.DerivedViewResidentFeed, enabled: &residentFeed},
+			{view: core.DerivedViewBoardRankings, enabled: &boardRankings},
+			{view: core.DerivedViewThreadRankings, enabled: &threadRankings},
+			{view: core.DerivedViewReplyRankings, enabled: &replyRankings},
+			{view: core.DerivedViewUserRankings, enabled: &userRankings},
+			{view: core.DerivedViewBlessingRankings, enabled: &blessingRankings},
+			{view: core.DerivedViewArchiveRankings, enabled: &archiveRankings},
+		},
+	)
 	if err != nil {
 		t.Fatalf("apply derived view processor selection: %v", err)
 	}
@@ -466,10 +468,10 @@ func TestApplyDerivedViewProcessorSelectionEnablesCommunityHistory(t *testing.T)
 	var communityStats bool
 	var asyncCommunityStatHistory bool
 
-	views, err := applyDerivedViewProcessorSelection("community", derivedViewProcessorFlags{
-		communityStatsProcessor:   &communityStats,
-		asyncCommunityStatHistory: &asyncCommunityStatHistory,
-	})
+	views, err := applyDerivedViewProcessorSelection("community",
+		derivedViewProcessorSpecialFlags{asyncCommunityStatHistory: &asyncCommunityStatHistory},
+		[]derivedViewProcessorSpec{{view: core.DerivedViewCommunityStats, enabled: &communityStats}},
+	)
 	if err != nil {
 		t.Fatalf("apply community processors: %v", err)
 	}
@@ -482,28 +484,35 @@ func TestApplyDerivedViewProcessorSelectionEnablesCommunityHistory(t *testing.T)
 }
 
 func TestApplyDerivedViewProcessorSelectionRejectsUnknownView(t *testing.T) {
-	if _, err := applyDerivedViewProcessorSelection("search,unknown", derivedViewProcessorFlags{}); err == nil {
+	if _, err := applyDerivedViewProcessorSelection("search,unknown", derivedViewProcessorSpecialFlags{}, nil); err == nil {
 		t.Fatal("unknown derived view processor selection succeeded, want error")
 	}
 }
 
 func TestMissingDerivedViewProcessorWorkerRoleUsesRegistryOrder(t *testing.T) {
 	var latestFeed bool
-	flags := derivedViewProcessorFlags{latestFeedProcessor: &latestFeed}
-	if got := missingDerivedViewProcessorWorkerRole(flags); got != "" {
+	processors := []derivedViewProcessorSpec{{label: "latest feed", enabled: &latestFeed}}
+	if got := missingDerivedViewProcessorWorkerRole(processors); got != "" {
 		t.Fatalf("disabled processor role message = %q, want empty", got)
 	}
 	latestFeed = true
-	if got := missingDerivedViewProcessorWorkerRole(flags); got != "latest feed processor requires the worker role" {
+	if got := missingDerivedViewProcessorWorkerRole(processors); got != "latest feed processor requires the worker role" {
 		t.Fatalf("processor role message = %q, want latest feed", got)
 	}
 }
 
 func TestDerivedViewWatermarkOwnershipConflictUsesRegistry(t *testing.T) {
 	var digestSearch bool
+	processors := []derivedViewProcessorSpec{{
+		view:     core.DerivedViewDigestSearch,
+		label:    "digest search",
+		flagName: "digest-search-processor",
+		enabled:  &digestSearch,
+	}}
 	conflict, ok := derivedViewWatermarkOwnershipConflict(
 		[]string{core.DerivedViewDigestSearch},
-		derivedViewProcessorFlags{digestSearchProcessor: &digestSearch},
+		derivedViewProcessorSpecialFlags{},
+		processors,
 		"sql-fts",
 	)
 	if ok {
@@ -512,7 +521,8 @@ func TestDerivedViewWatermarkOwnershipConflictUsesRegistry(t *testing.T) {
 	digestSearch = true
 	conflict, ok = derivedViewWatermarkOwnershipConflict(
 		[]string{core.DerivedViewDigestSearch},
-		derivedViewProcessorFlags{digestSearchProcessor: &digestSearch},
+		derivedViewProcessorSpecialFlags{},
+		processors,
 		"sql-fts",
 	)
 	if !ok || conflict.message != "digest search processor ownership cannot use compatibility watermark sync for search.digest" {
@@ -524,7 +534,8 @@ func TestDerivedViewWatermarkOwnershipConflictUsesRegistry(t *testing.T) {
 
 	conflict, ok = derivedViewWatermarkOwnershipConflict(
 		[]string{core.DerivedViewPostSearch},
-		derivedViewProcessorFlags{},
+		derivedViewProcessorSpecialFlags{},
+		nil,
 		"meilisearch",
 	)
 	if !ok || conflict.message != "post search processor ownership cannot use compatibility watermark sync for search.posts" {
