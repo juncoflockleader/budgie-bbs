@@ -3733,11 +3733,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetDirectMessageSettings(ctx co
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtDirectMessageSettingsSet, []string{"user:" + actor.ID}, &proto.DirectMessageSettingsSetPayload{
-		UserID: actor.ID,
-		Policy: policy,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.DirectMessageSettingsSet(actor.ID, policy, ts)
+	event := nativeEvent(record, 0, proto.EvtDirectMessageSettingsSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(actor.ID, event), nil
 }
 
@@ -3872,14 +3869,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateFavoriteFolder(ctx contex
 	}
 	ts := nativeCommandTimestamp(record)
 	folderID := stableCommandLogDecisionID("favfld_", record, 0)
-	event := nativeEvent(record, 0, proto.EvtFavoriteFolderCreated, []string{"user:" + actor.ID}, &proto.FavoriteFolderCreatedPayload{
-		ID:       folderID,
-		UserID:   actor.ID,
-		ParentID: payload.ParentID,
-		Name:     payload.Name,
-		Position: position,
-		TS:       ts,
-	}, ts)
+	scopes, eventPayload := commandevents.FavoriteFolderCreated(actor.ID, folderID, payload.ParentID, payload.Name, position, ts)
+	event := nativeEvent(record, 0, proto.EvtFavoriteFolderCreated, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(folderID, event), nil
 }
 
@@ -3938,14 +3929,8 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateFavoriteFolder(ctx contex
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtFavoriteFolderUpdated, []string{"user:" + actor.ID}, &proto.FavoriteFolderUpdatedPayload{
-		ID:       payload.Folder,
-		UserID:   actor.ID,
-		ParentID: nextParent,
-		Name:     name,
-		Position: targetPosition,
-		TS:       ts,
-	}, ts)
+	scopes, eventPayload := commandevents.FavoriteFolderUpdated(actor.ID, payload.Folder, nextParent, name, targetPosition, ts)
+	event := nativeEvent(record, 0, proto.EvtFavoriteFolderUpdated, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(payload.Folder, event), nil
 }
 
@@ -3966,12 +3951,8 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteFavoriteFolder(ctx contex
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "favorite folder not found", false)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtFavoriteFolderDeleted, []string{"user:" + actor.ID}, &proto.FavoriteFolderDeletedPayload{
-		ID:       payload.Folder,
-		UserID:   actor.ID,
-		ParentID: current.ParentID,
-		TS:       ts,
-	}, ts)
+	scopes, eventPayload := commandevents.FavoriteFolderDeleted(actor.ID, payload.Folder, current.ParentID, ts)
+	event := nativeEvent(record, 0, proto.EvtFavoriteFolderDeleted, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(payload.Folder, event), nil
 }
 
@@ -4110,12 +4091,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardZap(ctx context.Context
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "board cannot be zapped", false)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardZapSet, []string{"board:" + boardID, "user:" + actor.ID}, &proto.BoardZapSetPayload{
-		UserID: actor.ID,
-		Board:  boardID,
-		Zapped: payload.Zapped,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.BoardZapSet(actor.ID, boardID, payload.Zapped, ts)
+	event := nativeEvent(record, 0, proto.EvtBoardZapSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(boardID, event), nil
 }
 

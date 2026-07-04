@@ -9,6 +9,26 @@ func BoardFavoriteSet(userID, boardID, folderID string, favorite bool, position 
 	return []string{"board:" + boardID, "user:" + userID}, payload
 }
 
+func BoardZapSet(userID, boardID string, zapped bool, ts int64) ([]string, *proto.BoardZapSetPayload) {
+	payload := &proto.BoardZapSetPayload{UserID: userID, Board: boardID, Zapped: zapped, TS: ts}
+	return []string{"board:" + boardID, "user:" + userID}, payload
+}
+
+func FavoriteFolderCreated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderCreatedPayload) {
+	payload := &proto.FavoriteFolderCreatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
+	return []string{"user:" + userID}, payload
+}
+
+func FavoriteFolderUpdated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderUpdatedPayload) {
+	payload := &proto.FavoriteFolderUpdatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
+	return []string{"user:" + userID}, payload
+}
+
+func FavoriteFolderDeleted(userID, folderID, parentID string, ts int64) ([]string, *proto.FavoriteFolderDeletedPayload) {
+	payload := &proto.FavoriteFolderDeletedPayload{ID: folderID, UserID: userID, ParentID: parentID, TS: ts}
+	return []string{"user:" + userID}, payload
+}
+
 func DirectMessageSent(messageID, fromUserID, fromName, toUserID, toName, body string, ts int64) ([]string, *proto.DirectMessageSentPayload) {
 	return proto.DirectMessageEventScopes(fromUserID, toUserID),
 		proto.NewDirectMessageSentPayload(messageID, fromUserID, fromName, toUserID, toName, body, ts)
@@ -26,6 +46,11 @@ func DirectMessageDeleted(
 ) ([]string, *proto.DirectMessageDeletedPayload) {
 	payload := &proto.DirectMessageDeletedPayload{MessageID: messageID, UserID: userID, SenderDeleted: senderDeleted, RecipientDeleted: recipientDeleted, TS: ts}
 	return proto.DirectMessageEventScopes(fromUserID, toUserID), payload
+}
+
+func DirectMessageSettingsSet(userID, policy string, ts int64) ([]string, *proto.DirectMessageSettingsSetPayload) {
+	payload := &proto.DirectMessageSettingsSetPayload{UserID: userID, Policy: policy, TS: ts}
+	return []string{"user:" + userID}, payload
 }
 
 func UserRelationshipSet(userID, targetUserID, kind, note string, active bool, ts int64) ([]string, *proto.UserRelationshipSetPayload) {
