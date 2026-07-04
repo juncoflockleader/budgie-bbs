@@ -4,6 +4,7 @@ import (
 	"database/sql"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
@@ -11,8 +12,8 @@ import (
 )
 
 type Handler = handler.Handler
-type Reply = handler.Reply
-type CommandPartition = handler.CommandPartition
+type Reply = commandexec.Reply
+type CommandPartition = commandexec.Partition
 type CounterStore = counterstore.Store
 type CounterMutation = counterstore.Mutation
 type CounterUserIdentity = counterstore.UserIdentity

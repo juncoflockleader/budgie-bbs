@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -152,10 +153,7 @@ type Runtime struct {
 	PGNotifyEphemeral func(db *sql.DB, event, eid, scopes string)
 }
 
-type Bus interface {
-	Publish(evt *proto.Event)
-}
-
+type Bus = commandexec.EventPublisher
 type CounterStore = counterstore.Store
 type CounterMutation = counterstore.Mutation
 type CounterUserIdentity = counterstore.UserIdentity
@@ -218,16 +216,8 @@ type postCommittedJob struct {
 // editWindowDur is how long an author may edit their own post without mod role.
 const editWindowDur = 24 * time.Hour
 
-// Reply is the result returned by the command handler.
-type Reply struct {
-	Result *proto.AckResult
-	Err    *proto.ErrorDetail
-}
-
-type CommandPartition struct {
-	Kind string
-	Key  string
-}
+type Reply = commandexec.Reply
+type CommandPartition = commandexec.Partition
 
 // cmdEnvelope is the internal queue message for the command dispatcher.
 type cmdEnvelope struct {
