@@ -484,28 +484,11 @@ func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
 	}
 	defer tx.Rollback()
 
-	fromUserID, found, err := projections.MailSenderID(tx, mailID)
-	if err != nil {
-		return internalErr(err)
+	copyCounts, errReply := ValidateMailAttachmentMutation(tx, actor, mailID)
+	if errReply.Err != nil {
+		return errReply
 	}
-	if !found {
-		return Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
-	}
-	if fromUserID != actor.ID {
-		return Reply{Err: errDetail(proto.ErrForbidden, "only the sender can attach files to this mail", false)}
-	}
-	count, err := projections.MailAttachmentCount(tx, mailID)
-	if err != nil {
-		return internalErr(err)
-	}
-	if msg := proto.ValidateMailAttachmentCount(count + 1); msg != "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
-	}
-	copyCounts, err := projections.ActiveMailCopyCounts(tx, mailID)
-	if err == nil {
-		err = h.lockMailboxes(tx, copyCounts)
-	}
-	if err != nil {
+	if err := h.lockMailboxes(tx, copyCounts); err != nil {
 		return internalErr(err)
 	}
 	if errReply := EnsureMailQuota(tx, copyCounts, p.SizeBytes); errReply.Err != nil {
@@ -542,6 +525,31 @@ func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
 	}
 	h.publishEvent(proto.EvtMailAttachmentAdded, seq, scopes, payload, ts)
 	return Reply{Result: &proto.AckResult{ID: attachmentID, Seq: seq}}
+}
+
+func ValidateMailAttachmentMutation(queryable sqlQueryable, actor *User, mailID string) (map[string]int, Reply) {
+	fromUserID, found, err := projections.MailSenderID(queryable, mailID)
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if !found {
+		return nil, Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
+	}
+	if fromUserID != actor.ID {
+		return nil, Reply{Err: errDetail(proto.ErrForbidden, "only the sender can attach files to this mail", false)}
+	}
+	count, err := projections.MailAttachmentCount(queryable, mailID)
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if msg := proto.ValidateMailAttachmentCount(count + 1); msg != "" {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
+	copyCounts, err := projections.ActiveMailCopyCounts(queryable, mailID)
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	return copyCounts, Reply{}
 }
 
 func (h *Handler) updateMail(actor *User, p proto.UpdateMailPayload) Reply {

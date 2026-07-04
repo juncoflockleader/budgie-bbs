@@ -3457,26 +3457,9 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachMail(ctx context.Context,
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	fromUserID, found, err := projections.MailSenderID(e.core.DB, mailID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !found {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "mail not found", false)
-	}
-	if fromUserID != actor.ID {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "only the sender can attach files to this mail", false)
-	}
-	count, err := projections.MailAttachmentCount(e.core.DB, mailID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if msg := proto.ValidateMailAttachmentCount(count + 1); msg != "" {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
-	}
-	copyCounts, err := projections.ActiveMailCopyCounts(e.core.DB, mailID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
+	copyCounts, reply := corehandler.ValidateMailAttachmentMutation(e.core.DB, actor, mailID)
+	if reply.Err != nil {
+		return nativeCommandDecision{}, reply.Err
 	}
 	if reply := corehandler.EnsureMailQuota(e.core.DB, copyCounts, payload.SizeBytes); reply.Err != nil {
 		return nativeCommandDecision{}, reply.Err
