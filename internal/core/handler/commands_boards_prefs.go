@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -226,9 +227,9 @@ func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayloa
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	user, errReply := ResolveUserRef(h.db, p.User)
-	if errReply.Err != nil {
-		return errReply
+	user, ruleErr := commandrules.ResolveUserRef(h.db, p.User)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	if err := currentRuntime().SetBoardModerator(h.db, p.Board, user.ID, actor.ID, p.Moderator, p.Position); err != nil {
 		return internalErr(err)
@@ -261,9 +262,9 @@ func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Rep
 	if failure := proto.CheckBoardMemberManagerPermission(canModerateBoard, canManageMembers); failure != nil {
 		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 	}
-	user, errReply := ResolveUserRef(h.db, p.User)
-	if errReply.Err != nil {
-		return errReply
+	user, ruleErr := commandrules.ResolveUserRef(h.db, p.User)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	userID := user.ID
 	if !canModerateBoard {

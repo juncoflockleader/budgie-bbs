@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	corehandler "github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -1938,9 +1939,9 @@ func (e *CommandLogNativeDecisionExecutor) decideClearUserSanction(ctx context.C
 	kind := payload.Kind
 	scope := payload.Scope
 	reason := payload.Reason
-	target, reply := corehandler.ResolveUserRef(e.core.DB, targetRef)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	target, errDetail := commandrules.ResolveUserRef(e.core.DB, targetRef)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if target.IsMod() && !actor.IsAdmin() {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "only admins can clear moderator sanctions", false)
@@ -2166,9 +2167,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardModerator(ctx context.C
 	if !exists {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
 	}
-	target, reply := corehandler.ResolveUserRef(e.core.DB, userRef)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	target, errDetail := commandrules.ResolveUserRef(e.core.DB, userRef)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	position, err := projections.BoardModeratorEventPosition(e.core.DB, boardID, target.ID, actor.ID, payload.Moderator, payload.Position, ts)
@@ -2239,9 +2240,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardMember(ctx context.Cont
 	if failure := proto.CheckBoardMemberManagerPermission(canModerateBoard, canManageMembers); failure != nil {
 		return nativeCommandDecision{}, nativeDecisionErr(failure.Code, failure.Message, false)
 	}
-	target, reply := corehandler.ResolveUserRef(e.core.DB, userRef)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	target, errDetail := commandrules.ResolveUserRef(e.core.DB, userRef)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if !canModerateBoard {
 		if failure := proto.CheckSetBoardMemberPermissionChange(payload, canModerateBoard); failure != nil {
@@ -2715,9 +2716,9 @@ func (e *CommandLogNativeDecisionExecutor) decideBlessUser(ctx context.Context, 
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
-	target, reply := corehandler.ValidateBlessUserMutation(e.core.DB, actor, targetRef)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	target, errDetail := commandrules.ValidateBlessUserMutation(e.core.DB, actor, targetRef)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 
 	ts := nativeCommandTimestamp(record)
@@ -3757,9 +3758,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSetUserRelationship(ctx context
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	target, reply := corehandler.ResolveOtherUser(e.core.DB, actor, targetRef, "user not found", "cannot create a relationship with yourself")
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	target, errDetail := commandrules.ResolveOtherUser(e.core.DB, actor, targetRef, "user not found", "cannot create a relationship with yourself")
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if !payload.Active {
 		exists, err := projections.UserRelationshipExists(e.core.DB, actor.ID, target.ID, payload.Kind)
@@ -3785,9 +3786,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSetLoginWatch(ctx context.Conte
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	target, online, reply := corehandler.ValidateLoginWatchMutation(e.core.DB, actor, payload.User, payload.Active)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	target, online, errDetail := commandrules.ValidateLoginWatchMutation(e.core.DB, actor, payload.User, payload.Active)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	relationshipActive := payload.Active && !online
 	if !payload.Active {
