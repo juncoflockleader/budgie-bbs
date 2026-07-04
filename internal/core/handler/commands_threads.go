@@ -48,15 +48,15 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	attachments, errReply := NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
+	attachments, ruleErr := commandrules.NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
 		return newID("att_")
 	})
-	if errReply.Err != nil {
-		return errReply
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
-	authorName, authorID, errReply := PostIdentity(actor, settings, p.Anonymous, canModerateBoard)
-	if errReply.Err != nil {
-		return errReply
+	authorName, authorID, ruleErr := commandrules.PostIdentity(actor, settings, p.Anonymous, canModerateBoard)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	signature, err := h.currentPostSignature(authorID)
 	if err != nil {
@@ -246,15 +246,15 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	attachments, errReply := NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
+	attachments, ruleErr := commandrules.NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
 		return newID("att_")
 	})
-	if errReply.Err != nil {
-		return errReply
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
-	authorName, authorID, errReply := PostIdentity(actor, settings, p.Anonymous, canModerateBoard)
-	if errReply.Err != nil {
-		return errReply
+	authorName, authorID, ruleErr := commandrules.PostIdentity(actor, settings, p.Anonymous, canModerateBoard)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	signature, err := h.currentPostSignature(authorID)
 	if err != nil {
@@ -603,9 +603,9 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		title = sourceThread.Title
 	}
 	body := proto.FormatRepostBody(sourceThread.Board, sourceThread.Title, sourcePost.Author, sourcePost.ID, sourcePost.Body)
-	authorName, authorID, errReply := PostIdentity(actor, settings, false, canModerateBoard)
-	if errReply.Err != nil {
-		return errReply
+	authorName, authorID, ruleErr := commandrules.PostIdentity(actor, settings, false, canModerateBoard)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	signature, err := h.currentPostSignature(authorID)
 	if err != nil {
@@ -1603,33 +1603,6 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 		Payload: &proto.ThreadMovedPayload{Thread: thread.ID, FromBoard: thread.Board, ToBoard: p.ToBoard, By: actor.Name, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
-}
-
-func PostIdentity(actor *User, settings *BoardSettings, anonymous bool, canModerateBoard bool) (string, string, Reply) {
-	actorName, actorID := "", ""
-	if actor != nil {
-		actorName, actorID = actor.Name, actor.ID
-	}
-	anonymousAllowed := settings != nil && settings.AnonymousAllowed
-	author, authorID, msg := proto.ResolvePostAuthorIdentity(actorName, actorID, anonymous, anonymousAllowed, canModerateBoard)
-	if msg != "" {
-		return "", "", Reply{Err: errDetail(proto.ErrForbidden, msg, false)}
-	}
-	return author, authorID, Reply{}
-}
-
-func NormalizePostAttachments(input []proto.AttachmentPayload, allowed bool, canModerateBoard bool, idFor func(int) string) ([]proto.AttachmentPayload, Reply) {
-	if len(input) == 0 {
-		return nil, Reply{}
-	}
-	if !allowed && !canModerateBoard {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, "attachments are not enabled for this board", false)}
-	}
-	attachments, msg := proto.NormalizePostAttachments(input)
-	if msg != "" {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
-	}
-	return proto.WithAttachmentIDs(attachments, idFor), Reply{}
 }
 
 func (h *Handler) insertAttachments(tx *sql.Tx, postID, authorID string, ts int64, attachments []proto.AttachmentPayload) error {

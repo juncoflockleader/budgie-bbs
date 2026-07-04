@@ -425,15 +425,15 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateThread(ctx context.Contex
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
 		}
 	}
-	authorName, authorID, reply := corehandler.PostIdentity(actor, settings, payload.Anonymous, canModerateBoard)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	authorName, authorID, errDetail := commandrules.PostIdentity(actor, settings, payload.Anonymous, canModerateBoard)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
-	attachments, reply := corehandler.NormalizePostAttachments(payload.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(i int) string {
+	attachments, errDetail := commandrules.NormalizePostAttachments(payload.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(i int) string {
 		return stableCommandLogDecisionID("att_", record, 100+i)
 	})
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	contentFilter, err := projections.MatchContentFilter(e.core.DB, payload.Board, payload.Title+"\n"+payload.Body)
 	if err != nil {
@@ -546,15 +546,15 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
 		}
 	}
-	authorName, authorID, reply := corehandler.PostIdentity(actor, settings, payload.Anonymous, canModerateBoard)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	authorName, authorID, errDetail := commandrules.PostIdentity(actor, settings, payload.Anonymous, canModerateBoard)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
-	attachments, reply := corehandler.NormalizePostAttachments(payload.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(i int) string {
+	attachments, errDetail := commandrules.NormalizePostAttachments(payload.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(i int) string {
 		return stableCommandLogDecisionID("att_", record, 100+i)
 	})
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if rootReplyGuards.NoReply && !canModerateThread {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread starter is not accepting replies", false)
@@ -781,15 +781,15 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
 		}
 	}
-	authorName, authorID, reply := corehandler.PostIdentity(actor, settings, false, canModerateBoard)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	authorName, authorID, errDetail := commandrules.PostIdentity(actor, settings, false, canModerateBoard)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
-	attachments, reply := corehandler.NormalizePostAttachments(attachmentsIn, settings.AttachmentsAllowed, canModerateBoard, func(i int) string {
+	attachments, errDetail := commandrules.NormalizePostAttachments(attachmentsIn, settings.AttachmentsAllowed, canModerateBoard, func(i int) string {
 		return stableCommandLogDecisionID("att_", record, 100+i)
 	})
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	rootReplyGuards, err := projections.ThreadRootReplyGuardsForThread(e.core.DB, thread.ID)
 	if err != nil {
@@ -936,9 +936,9 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 		title = sourceThread.Title
 	}
 	body := proto.FormatRepostBody(sourceThread.Board, sourceThread.Title, sourcePost.Author, sourcePost.ID, sourcePost.Body)
-	authorName, authorID, reply := corehandler.PostIdentity(actor, settings, false, canModerateBoard)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	authorName, authorID, errDetail := commandrules.PostIdentity(actor, settings, false, canModerateBoard)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	signature, err := nativePostSignature(e.core.DB, authorID, record)
 	if err != nil {
