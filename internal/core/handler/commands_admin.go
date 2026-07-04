@@ -163,9 +163,9 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 		if err != nil {
 			return internalErr(err)
 		}
-		if settings != nil && settings.MemberReadMode && !commandrules.ActorCanUseMemberBoard(h.db, actor, boardID) {
+		if errDetail := commandrules.RequireMemberBoardReadAccess(h.db, actor, boardID, settings, "board members only"); errDetail != nil {
 			if explicitBoard || explicitThread {
-				return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
+				return Reply{Err: errDetail}
 			}
 			boardID = ""
 			threadID = ""

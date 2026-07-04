@@ -38,11 +38,8 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
 	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, p.Board)
-	if settings.ReadOnly && !canModerateBoard {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board is read-only", false)}
-	}
-	if (settings.MemberReadMode || settings.MemberPostMode) && !commandrules.ActorCanUseMemberBoard(h.db, actor, p.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
+	if errDetail := commandrules.RequireThreadCreationBoardAccess(h.db, actor, p.Board, settings, canModerateBoard); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	attachments, ruleErr := commandrules.NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
 		return newID("att_")
@@ -229,8 +226,8 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if thread.Locked && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrThreadLocked, "thread is locked", false)}
 	}
-	if (settings.ReadOnly || settings.NoReply) && !canModerateBoard {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board is not accepting replies", false)}
+	if errDetail := commandrules.RequireReplyBoardAccess(h.db, actor, thread.Board, settings, canModerateBoard); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	rootReplyGuards, err := projections.ThreadRootReplyGuardsForThread(h.db, thread.ID)
 	if err != nil {
@@ -238,9 +235,6 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 	if rootReplyGuards.NoReply && !canModerateThread {
 		return Reply{Err: errDetail(proto.ErrForbidden, "thread starter is not accepting replies", false)}
-	}
-	if (settings.MemberReadMode || settings.MemberPostMode) && !commandrules.ActorCanUseMemberBoard(h.db, actor, thread.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
 	attachments, ruleErr := commandrules.NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
 		return newID("att_")
@@ -532,8 +526,8 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if sourceSettings != nil && sourceSettings.MemberReadMode && !commandrules.ActorCanUseMemberBoard(h.db, actor, sourceThread.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "source board members only", false)}
+	if errDetail := commandrules.RequireMemberBoardReadAccess(h.db, actor, sourceThread.Board, sourceSettings, "source board members only"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	settings, err := currentRuntime().GetBoardSettings(h.db, p.Board)
@@ -544,11 +538,8 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
 	}
 	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, p.Board)
-	if settings.ReadOnly && !canModerateBoard {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board is read-only", false)}
-	}
-	if (settings.MemberReadMode || settings.MemberPostMode) && !commandrules.ActorCanUseMemberBoard(h.db, actor, p.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
+	if errDetail := commandrules.RequireThreadCreationBoardAccess(h.db, actor, p.Board, settings, canModerateBoard); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, p.Board); ok {
 		return Reply{Err: commandrules.ActiveBoardSanctionError(kind)}

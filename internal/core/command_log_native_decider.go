@@ -409,17 +409,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateThread(ctx context.Contex
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
 	}
 	canModerateBoard := decisionCtx.CanModerateBoard
-	if settings.ReadOnly && !canModerateBoard {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board is read-only", false)
-	}
-	if settings.MemberReadMode || settings.MemberPostMode {
-		canUseMemberBoard, err := projections.ActorCanUseMemberBoard(e.core.DB, actor, payload.Board)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !canUseMemberBoard {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
-		}
+	if errDetail := commandrules.RequireThreadCreationBoardAccessStrict(e.core.DB, actor, payload.Board, settings, canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	authorName, authorID, errDetail := commandrules.PostIdentity(actor, settings, payload.Anonymous, canModerateBoard)
 	if errDetail != nil {
@@ -530,17 +521,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 	if thread.Locked && !canModerateBoard {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrThreadLocked, "thread is locked", false)
 	}
-	if (settings.ReadOnly || settings.NoReply) && !canModerateBoard {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board is not accepting replies", false)
-	}
-	if settings.MemberReadMode || settings.MemberPostMode {
-		canUseMemberBoard, err := projections.ActorCanUseMemberBoard(e.core.DB, actor, thread.Board)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !canUseMemberBoard {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
-		}
+	if errDetail := commandrules.RequireReplyBoardAccessStrict(e.core.DB, actor, thread.Board, settings, canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	authorName, authorID, errDetail := commandrules.PostIdentity(actor, settings, payload.Anonymous, canModerateBoard)
 	if errDetail != nil {
@@ -761,17 +743,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 	if thread.Locked && !canModerateBoard {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrThreadLocked, "thread is locked", false)
 	}
-	if (settings.ReadOnly || settings.NoReply) && !canModerateBoard {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board is not accepting replies", false)
-	}
-	if settings.MemberReadMode || settings.MemberPostMode {
-		canUseMemberBoard, err := projections.ActorCanUseMemberBoard(e.core.DB, actor, thread.Board)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !canUseMemberBoard {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
-		}
+	if errDetail := commandrules.RequireReplyBoardAccessStrict(e.core.DB, actor, thread.Board, settings, canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	authorName, authorID, errDetail := commandrules.PostIdentity(actor, settings, false, canModerateBoard)
 	if errDetail != nil {
@@ -879,14 +852,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if sourceSettings != nil && sourceSettings.MemberReadMode {
-		canUseSource, err := projections.ActorCanUseMemberBoard(e.core.DB, actor, sourceThread.Board)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !canUseSource {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "source board members only", false)
-		}
+	if errDetail := commandrules.RequireMemberBoardReadAccessStrict(e.core.DB, actor, sourceThread.Board, sourceSettings, "source board members only"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	settings, err := projections.GetBoardSettings(e.core.DB, payload.Board)
 	if err != nil {
@@ -899,17 +866,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if settings.ReadOnly && !canModerateBoard {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board is read-only", false)
-	}
-	if settings.MemberReadMode || settings.MemberPostMode {
-		canUseDestination, err := projections.ActorCanUseMemberBoard(e.core.DB, actor, payload.Board)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !canUseDestination {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
-		}
+	if errDetail := commandrules.RequireThreadCreationBoardAccessStrict(e.core.DB, actor, payload.Board, settings, canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if kind, ok := projections.ActiveSanction(e.core.DB, actor.ID, payload.Board); ok {
 		return nativeCommandDecision{}, commandrules.ActiveBoardSanctionError(kind)
@@ -2852,14 +2810,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMailPostAuthor(ctx context.Cont
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if settings != nil && settings.MemberReadMode {
-		canUse, err := projections.ActorCanUseMemberBoard(e.core.DB, actor, thread.Board)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !canUse {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
-		}
+	if errDetail := commandrules.RequireMemberBoardReadAccessStrict(e.core.DB, actor, thread.Board, settings, "board members only"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	sendPayload, errDetail := commandrules.MailPostAuthorSendPayload(actor, payload, thread, post)
 	if errDetail != nil {
@@ -2893,14 +2845,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSendDigestEntryMail(ctx context
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if settings != nil && settings.MemberReadMode {
-		canUse, err := projections.ActorCanUseMemberBoard(e.core.DB, actor, export.Entry.BoardID)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !canUse {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
-		}
+	if errDetail := commandrules.RequireMemberBoardReadAccessStrict(e.core.DB, actor, export.Entry.BoardID, settings, "board members only"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	return e.decideSendMailPayload(record, actor, commandrules.DigestEntryMailSendPayload(payload, export))
 }

@@ -32,6 +32,106 @@ func NormalizePostAttachments(input []proto.AttachmentPayload, allowed bool, can
 	return proto.WithAttachmentIDs(attachments, idFor), nil
 }
 
+func boardRequiresPostingMembership(settings *projections.BoardSettings) bool {
+	return settings != nil && (settings.MemberReadMode || settings.MemberPostMode)
+}
+
+func boardRequiresReadMembership(settings *projections.BoardSettings) bool {
+	return settings != nil && settings.MemberReadMode
+}
+
+func RequireThreadCreationBoardAccess(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
+	return requireThreadCreationBoardAccess(settings, canModerateBoard, func() (bool, *proto.ErrorDetail) {
+		return ActorCanUseMemberBoard(queryable, actor, boardID), nil
+	})
+}
+
+func RequireThreadCreationBoardAccessStrict(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
+	return requireThreadCreationBoardAccess(settings, canModerateBoard, func() (bool, *proto.ErrorDetail) {
+		return actorCanUseMemberBoardStrict(queryable, actor, boardID)
+	})
+}
+
+func requireThreadCreationBoardAccess(settings *projections.BoardSettings, canModerateBoard bool, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
+	if settings == nil {
+		return nil
+	}
+	if settings.ReadOnly && !canModerateBoard {
+		return newErrDetail(proto.ErrForbidden, "board is read-only", false)
+	}
+	return requirePostingMemberAccess(settings, canUseMemberBoard, "board members only")
+}
+
+func RequireReplyBoardAccess(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
+	return requireReplyBoardAccess(settings, canModerateBoard, func() (bool, *proto.ErrorDetail) {
+		return ActorCanUseMemberBoard(queryable, actor, boardID), nil
+	})
+}
+
+func RequireReplyBoardAccessStrict(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
+	return requireReplyBoardAccess(settings, canModerateBoard, func() (bool, *proto.ErrorDetail) {
+		return actorCanUseMemberBoardStrict(queryable, actor, boardID)
+	})
+}
+
+func requireReplyBoardAccess(settings *projections.BoardSettings, canModerateBoard bool, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
+	if settings == nil {
+		return nil
+	}
+	if (settings.ReadOnly || settings.NoReply) && !canModerateBoard {
+		return newErrDetail(proto.ErrForbidden, "board is not accepting replies", false)
+	}
+	return requirePostingMemberAccess(settings, canUseMemberBoard, "board members only")
+}
+
+func RequireMemberBoardReadAccess(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, message string) *proto.ErrorDetail {
+	return requireMemberBoardReadAccess(settings, message, func() (bool, *proto.ErrorDetail) {
+		return ActorCanUseMemberBoard(queryable, actor, boardID), nil
+	})
+}
+
+func RequireMemberBoardReadAccessStrict(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, message string) *proto.ErrorDetail {
+	return requireMemberBoardReadAccess(settings, message, func() (bool, *proto.ErrorDetail) {
+		return actorCanUseMemberBoardStrict(queryable, actor, boardID)
+	})
+}
+
+func requireMemberBoardReadAccess(settings *projections.BoardSettings, message string, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
+	if !boardRequiresReadMembership(settings) {
+		return nil
+	}
+	canUse, errDetail := canUseMemberBoard()
+	if errDetail != nil {
+		return errDetail
+	}
+	if !canUse {
+		return newErrDetail(proto.ErrForbidden, message, false)
+	}
+	return nil
+}
+
+func requirePostingMemberAccess(settings *projections.BoardSettings, canUseMemberBoard func() (bool, *proto.ErrorDetail), message string) *proto.ErrorDetail {
+	if !boardRequiresPostingMembership(settings) {
+		return nil
+	}
+	canUse, errDetail := canUseMemberBoard()
+	if errDetail != nil {
+		return errDetail
+	}
+	if !canUse {
+		return newErrDetail(proto.ErrForbidden, message, false)
+	}
+	return nil
+}
+
+func actorCanUseMemberBoardStrict(queryable Queryable, actor *projections.User, boardID string) (bool, *proto.ErrorDetail) {
+	canUse, err := projections.ActorCanUseMemberBoard(queryable, actor, boardID)
+	if err != nil {
+		return false, internalErr(err)
+	}
+	return canUse, nil
+}
+
 func ActiveBoardSanctionError(kind string) *proto.ErrorDetail {
 	code := proto.ErrMuted
 	if kind == "ban" {
