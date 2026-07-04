@@ -163,7 +163,7 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 		if err != nil {
 			return internalErr(err)
 		}
-		if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, boardID) {
+		if settings != nil && settings.MemberReadMode && !commandrules.ActorCanUseMemberBoard(h.db, actor, boardID) {
 			if explicitBoard || explicitThread {
 				return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 			}
@@ -254,7 +254,7 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 		} else if !found {
 			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		}
-		if !h.actorCanModerateBoardPostsTx(tx, actor, scope) {
+		if !commandrules.ActorCanModerateBoardPosts(tx, actor, scope) {
 			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
 		}
 	}
@@ -325,7 +325,7 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 		} else if !found {
 			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		}
-		if !h.actorCanModerateBoardPostsTx(tx, actor, scope) {
+		if !commandrules.ActorCanModerateBoardPosts(tx, actor, scope) {
 			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
 		}
 	}

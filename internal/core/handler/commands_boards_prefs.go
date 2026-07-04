@@ -167,7 +167,7 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if !h.actorCanSetBoardSettings(actor, p.Board) {
+	if !commandrules.ActorCanSetBoardSettings(h.db, actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
 	}
 	if err := currentRuntime().SetBoardSettings(h.db, p.Board, projections.BoardSettingsPatchFromPayload(p)); err != nil {
@@ -256,8 +256,8 @@ func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Rep
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	canModerateBoard := h.actorCanModerateBoard(actor, p.Board)
-	canManageMembers := h.actorCanManageBoardMembers(actor, p.Board)
+	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, p.Board)
+	canManageMembers := commandrules.ActorCanManageBoardMembers(h.db, actor, p.Board)
 	if failure := proto.CheckBoardMemberManagerPermission(canModerateBoard, canManageMembers); failure != nil {
 		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 	}
@@ -270,7 +270,7 @@ func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Rep
 		if failure := proto.CheckSetBoardMemberPermissionChange(p, canModerateBoard); failure != nil {
 			return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 		}
-		targetIsModerator := boardPermissionAllowed(projections.BoardModeratorExists(h.db, p.Board, userID))
+		targetIsModerator := commandrules.BoardPermissionAllowed(projections.BoardModeratorExists(h.db, p.Board, userID))
 		if failure := proto.CheckSetBoardMemberTargetPermission(canModerateBoard, targetIsModerator, false); failure != nil {
 			return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 		}
@@ -299,7 +299,7 @@ func (h *Handler) setBoardMemberRequirements(actor *User, p proto.SetBoardMember
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if !h.actorCanSetBoardSettings(actor, p.Board) {
+	if !commandrules.ActorCanSetBoardSettings(h.db, actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
 	}
 	if msg != "" {
@@ -319,7 +319,7 @@ func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembership
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if boardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
+	if commandrules.BoardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
 		return Reply{Err: errDetail(proto.ErrConflict, "already a board member", false)}
 	}
 	status, err := projections.LatestBoardMemberApplicationStatus(h.db, p.Board, actor.ID)
@@ -372,8 +372,8 @@ func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembersh
 	if app.Status != "pending" {
 		return Reply{Err: errDetail(proto.ErrConflict, "membership application is already reviewed", false)}
 	}
-	canModerateBoard := h.actorCanModerateBoard(actor, app.BoardID)
-	canManageMembers := h.actorCanManageBoardMembers(actor, app.BoardID)
+	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, app.BoardID)
+	canManageMembers := commandrules.ActorCanManageBoardMembers(h.db, actor, app.BoardID)
 	if failure := proto.CheckReviewBoardMembershipPermission(canModerateBoard, canManageMembers, actor.ID, app.UserID, p.Status); failure != nil {
 		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 	}
@@ -407,7 +407,7 @@ func (h *Handler) leaveBoardMembership(actor *User, p proto.LeaveBoardMembership
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if !boardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
+	if !commandrules.BoardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board membership not found", false)}
 	}
 	if err := currentRuntime().SetBoardMember(h.db, p.Board, actor.ID, false, BoardMemberPatch{}); err != nil {
@@ -442,7 +442,7 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if !h.actorCanCurateBoardKind(actor, thread.Board, kind) {
+	if !commandrules.ActorCanCurateBoardKind(h.db, actor, thread.Board, kind) {
 		return Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(kind), false)}
 	}
 	if title == "" {
@@ -520,7 +520,7 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if !h.actorCanCurateBoardKind(actor, thread.Board, kind) {
+	if !commandrules.ActorCanCurateBoardKind(h.db, actor, thread.Board, kind) {
 		return Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(kind), false)}
 	}
 	if title == "" {
@@ -1027,7 +1027,7 @@ func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*digestEn
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	if !h.actorCanCurateBoardKind(actor, entry.BoardID, entry.Kind) {
+	if !commandrules.ActorCanCurateBoardKind(h.db, actor, entry.BoardID, entry.Kind) {
 		return nil, Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(entry.Kind), false)}
 	}
 	return &entry, Reply{}
@@ -1045,7 +1045,7 @@ func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath
 	if msg != "" {
 		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if !h.actorCanCurateBoardKind(actor, boardID, normalizedKind) {
+	if !commandrules.ActorCanCurateBoardKind(h.db, actor, boardID, normalizedKind) {
 		return "", "", "", "", Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(normalizedKind), false)}
 	}
 	normalizedFrom, normalizedTo, msg := proto.NormalizeDigestPathMutationPaths(fromPath, toPath)
@@ -1366,50 +1366,6 @@ func (h *Handler) ensureSyssecuritySystemPost(actor *User, title string, lines [
 
 	h.publishGeneratedEvents(events)
 	return nil
-}
-
-func boardPermissionAllowed(ok bool, err error) bool {
-	return err == nil && ok
-}
-
-func (h *Handler) actorCanModerateBoard(actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanModerateBoard(h.db, actor, boardID))
-}
-
-func (h *Handler) actorCanUseMemberBoard(actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanUseMemberBoard(h.db, actor, boardID))
-}
-
-func (h *Handler) actorCanManageBoardMembers(actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanManageBoardMembers(h.db, actor, boardID))
-}
-
-func (h *Handler) actorCanSetBoardSettings(actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanSetBoardSettings(h.db, actor, boardID))
-}
-
-func (h *Handler) actorCanCurateBoard(actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanCurateBoard(h.db, actor, boardID))
-}
-
-func (h *Handler) actorCanModerateBoardThreads(actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanModerateBoardThreads(h.db, actor, boardID))
-}
-
-func (h *Handler) actorCanManageBoardPolls(actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanManageBoardPolls(h.db, actor, boardID))
-}
-
-func (h *Handler) actorCanCurateBoardKind(actor *User, boardID, kind string) bool {
-	return boardPermissionAllowed(projections.ActorCanCurateBoardKind(h.db, actor, boardID, kind))
-}
-
-func (h *Handler) actorCanModerateBoardPostsTx(tx *sql.Tx, actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanModerateBoardPosts(tx, actor, boardID))
-}
-
-func (h *Handler) actorCanModerateBoardThreadsTx(tx *sql.Tx, actor *User, boardID string) bool {
-	return boardPermissionAllowed(projections.ActorCanModerateBoardThreads(tx, actor, boardID))
 }
 
 func (h *Handler) requireFavoriteFolder(userID, folderID string) Reply {

@@ -41,11 +41,11 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if settings == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
-	canModerateBoard := h.actorCanModerateBoard(actor, p.Board)
+	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, p.Board)
 	if settings.ReadOnly && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board is read-only", false)}
 	}
-	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, p.Board) {
+	if (settings.MemberReadMode || settings.MemberPostMode) && !commandrules.ActorCanUseMemberBoard(h.db, actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
 	attachments, ruleErr := commandrules.NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
@@ -228,8 +228,8 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if settings == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
-	canModerateBoard := h.actorCanModerateBoard(actor, thread.Board)
-	canModerateThread := h.actorCanModerateBoardThreads(actor, thread.Board)
+	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, thread.Board)
+	canModerateThread := commandrules.ActorCanModerateBoardThreads(h.db, actor, thread.Board)
 	if thread.Locked && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrThreadLocked, "thread is locked", false)}
 	}
@@ -243,7 +243,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if rootReplyGuards.NoReply && !canModerateThread {
 		return Reply{Err: errDetail(proto.ErrForbidden, "thread starter is not accepting replies", false)}
 	}
-	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, thread.Board) {
+	if (settings.MemberReadMode || settings.MemberPostMode) && !commandrules.ActorCanUseMemberBoard(h.db, actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
 	attachments, ruleErr := commandrules.NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
@@ -572,7 +572,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if sourceSettings != nil && sourceSettings.MemberReadMode && !h.actorCanUseMemberBoard(actor, sourceThread.Board) {
+	if sourceSettings != nil && sourceSettings.MemberReadMode && !commandrules.ActorCanUseMemberBoard(h.db, actor, sourceThread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "source board members only", false)}
 	}
 
@@ -583,11 +583,11 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if settings == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
 	}
-	canModerateBoard := h.actorCanModerateBoard(actor, p.Board)
+	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, p.Board)
 	if settings.ReadOnly && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board is read-only", false)}
 	}
-	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, p.Board) {
+	if (settings.MemberReadMode || settings.MemberPostMode) && !commandrules.ActorCanUseMemberBoard(h.db, actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
 	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, p.Board); ok {
@@ -806,7 +806,7 @@ func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply
 	if settings == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
-	if !settings.MailInAllowed && !h.actorCanModerateBoard(actor, boardID) {
+	if !settings.MailInAllowed && !commandrules.ActorCanModerateBoard(h.db, actor, boardID) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board mail-in is disabled", false)}
 	}
 	if threadID != "" {
@@ -869,7 +869,7 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if settings == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
-	canModerateBoard := h.actorCanModerateBoard(actor, thread.Board)
+	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, thread.Board)
 	if !settings.AttachmentsAllowed && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrForbidden, "attachments are not enabled for this board", false)}
 	}
@@ -1049,13 +1049,13 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 		authorMetadataChange = authorMetadataChange || *p.MailBack != post.MailBack
 		mailBack = *p.MailBack
 	}
-	if curatorChange && !h.actorCanCurateBoard(actor, thread.Board) {
+	if curatorChange && !commandrules.ActorCanCurateBoard(h.db, actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board curator permission required", false)}
 	}
-	if threadModerationChange && !h.actorCanModerateBoardThreads(actor, thread.Board) {
+	if threadModerationChange && !commandrules.ActorCanModerateBoardThreads(h.db, actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
 	}
-	if authorMetadataChange && (actor == nil || (actor.ID != post.AuthorID && !h.actorCanModerateBoardThreads(actor, thread.Board))) {
+	if authorMetadataChange && (actor == nil || (actor.ID != post.AuthorID && !commandrules.ActorCanModerateBoardThreads(h.db, actor, thread.Board))) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "post author or board thread moderation permission required", false)}
 	}
 	if !curatorChange && !threadModerationChange && !authorMetadataChange {
@@ -1121,7 +1121,7 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
-	canModeratePosts := h.actorCanModerateBoardPostsTx(tx, actor, thread.Board)
+	canModeratePosts := commandrules.ActorCanModerateBoardPosts(tx, actor, thread.Board)
 	if !canModeratePosts && !(isAuthor && withinWindow) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "insufficient permissions to redact this post", false)}
 	}
@@ -1184,7 +1184,7 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
-	if !h.actorCanModerateBoardPostsTx(tx, actor, thread.Board) {
+	if !commandrules.ActorCanModerateBoardPosts(tx, actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board post moderation permission required", false)}
 	}
 
@@ -1412,7 +1412,7 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 		return Reply{Result: &proto.AckResult{ID: thread.ID}}
 	}
 
-	canModerateThread := h.actorCanModerateBoardThreadsTx(tx, actor, thread.Board)
+	canModerateThread := commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board)
 	isAuthor := thread.AuthorID == actor.ID
 	if thread.AuthorID == "" {
 		isAuthor = thread.Author == actor.Name
@@ -1467,7 +1467,7 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	if !h.actorCanModerateBoardThreadsTx(tx, actor, thread.Board) {
+	if !commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
 	}
 
@@ -1511,7 +1511,7 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	if !h.actorCanModerateBoardThreadsTx(tx, actor, thread.Board) {
+	if !commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
 	}
 

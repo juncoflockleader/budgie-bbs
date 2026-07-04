@@ -3,6 +3,7 @@ package handler
 import (
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -87,7 +88,7 @@ func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayloa
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
-	if !h.actorCanManageBoardPolls(actor, thread.Board) && post.AuthorID != actor.ID && thread.AuthorID != actor.ID {
+	if !commandrules.ActorCanManageBoardPolls(h.db, actor, thread.Board) && post.AuthorID != actor.ID && thread.AuthorID != actor.ID {
 		return Reply{Err: errDetail(proto.ErrForbidden, "poll author or board poll manager required", false)}
 	}
 	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, thread.Board)

@@ -218,7 +218,7 @@ func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPa
 	if err != nil {
 		return internalErr(err)
 	}
-	if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, export.Entry.BoardID) {
+	if settings != nil && settings.MemberReadMode && !commandrules.ActorCanUseMemberBoard(h.db, actor, export.Entry.BoardID) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
 	return h.sendMail(actor, commandrules.DigestEntryMailSendPayload(p, export))
@@ -255,7 +255,7 @@ func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Rep
 	if err != nil {
 		return internalErr(err)
 	}
-	if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, thread.Board) {
+	if settings != nil && settings.MemberReadMode && !commandrules.ActorCanUseMemberBoard(h.db, actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
 	sendPayload, ruleErr := commandrules.MailPostAuthorSendPayload(actor, p, thread, post)

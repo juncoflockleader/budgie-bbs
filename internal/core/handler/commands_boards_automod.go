@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -154,11 +155,11 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 	req := proto.AutomodActionPermissionRequirements(actions)
 	canModerateThreads := false
 	if req.ThreadModeration {
-		canModerateThreads = h.actorCanModerateBoardThreadsTx(tx, actor, board)
+		canModerateThreads = commandrules.ActorCanModerateBoardThreads(tx, actor, board)
 	}
 	canModeratePosts := false
 	if req.PostModeration {
-		canModeratePosts = h.actorCanModerateBoardPostsTx(tx, actor, board)
+		canModeratePosts = commandrules.ActorCanModerateBoardPosts(tx, actor, board)
 	}
 	if failure := proto.CheckAutomodActionPermissions(req, actor.IsAdmin(), canModerateThreads, canModeratePosts); failure != nil {
 		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
@@ -209,7 +210,7 @@ func (h *Handler) deleteBoardAutomodRule(actor *User, p proto.DeleteBoardAutomod
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	if !h.actorCanModerateBoardPostsTx(tx, actor, board) && !h.actorCanModerateBoardThreadsTx(tx, actor, board) {
+	if !commandrules.ActorCanModerateBoardPosts(tx, actor, board) && !commandrules.ActorCanModerateBoardThreads(tx, actor, board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board moderation permission required", false)}
 	}
 	ts := nowMS()
