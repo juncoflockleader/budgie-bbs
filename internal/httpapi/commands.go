@@ -40,19 +40,11 @@ func (s *Server) handleCommand(w http.ResponseWriter, r *http.Request) {
 // --- RESTful alias handlers ---
 
 func (s *Server) handleSetPresence(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-	var p proto.SetPresencePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	if p.FromHost == "" {
-		p.FromHost = requestHost(r)
-	}
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetPresence, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSetPresence, func(p *proto.SetPresencePayload) {
+		if p.FromHost == "" {
+			p.FromHost = requestHost(r)
+		}
+	})
 }
 
 type guestPresenceRequest struct {
@@ -99,123 +91,69 @@ func requestHost(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func (s *Server) handleCreateThread(w http.ResponseWriter, r *http.Request) {
+func handleJSONCommand[T any](s *Server, w http.ResponseWriter, r *http.Request, command proto.CommandName, prepare func(*T)) {
 	actor := userFromCtx(r.Context())
-	boardID := r.PathValue("board")
-
-	var p proto.CreateThreadPayload
+	var p T
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
 		return
 	}
-	p.Board = boardID
-
+	if prepare != nil {
+		prepare(&p)
+	}
 	raw, _ := json.Marshal(p)
 	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdCreateThread, raw, cid)
+	reply := s.core.ExecCmd(r.Context(), actor, command, raw, cid)
 	writeAck(w, cid, reply)
+}
+
+func (s *Server) handleCreateThread(w http.ResponseWriter, r *http.Request) {
+	boardID := r.PathValue("board")
+	handleJSONCommand(s, w, r, proto.CmdCreateThread, func(p *proto.CreateThreadPayload) {
+		p.Board = boardID
+	})
 }
 
 func (s *Server) handleAppendPost(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	threadID := r.PathValue("thread")
-
-	var p proto.AppendPostPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Thread = threadID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdAppendPost, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdAppendPost, func(p *proto.AppendPostPayload) {
+		p.Thread = threadID
+	})
 }
 
 func (s *Server) handleRepostPost(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	postID := r.PathValue("post")
-
-	var p proto.RepostPostPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Post = postID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdRepostPost, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdRepostPost, func(p *proto.RepostPostPayload) {
+		p.Post = postID
+	})
 }
 
 func (s *Server) handlePostBoardMail(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.PostBoardMailPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdPostBoardMail, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdPostBoardMail, func(p *proto.PostBoardMailPayload) {
+		p.Board = boardID
+	})
 }
 
 func (s *Server) handlePostThreadMail(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	threadID := r.PathValue("thread")
-
-	var p proto.PostBoardMailPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Thread = threadID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdPostBoardMail, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdPostBoardMail, func(p *proto.PostBoardMailPayload) {
+		p.Thread = threadID
+	})
 }
 
 func (s *Server) handleEditPost(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	postID := r.PathValue("post")
-
-	var p proto.EditPostPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Post = postID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdEditPost, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdEditPost, func(p *proto.EditPostPayload) {
+		p.Post = postID
+	})
 }
 
 func (s *Server) handleSetPostFlag(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	postID := r.PathValue("post")
-
-	var p proto.SetPostFlagPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Post = postID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetPostFlag, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSetPostFlag, func(p *proto.SetPostFlagPayload) {
+		p.Post = postID
+	})
 }
 
 func (s *Server) handleRedactPost(w http.ResponseWriter, r *http.Request) {
@@ -246,122 +184,52 @@ func (s *Server) handleRestorePost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRedactPostRange(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.RedactPostRangePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdRedactPostRange, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdRedactPostRange, func(p *proto.RedactPostRangePayload) {
+		p.Board = boardID
+	})
 }
 
 func (s *Server) handleRestorePostRange(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.RestorePostRangePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdRestorePostRange, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdRestorePostRange, func(p *proto.RestorePostRangePayload) {
+		p.Board = boardID
+	})
 }
 
 func (s *Server) handleClearBoardJunk(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.ClearBoardJunkPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdClearBoardJunk, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdClearBoardJunk, func(p *proto.ClearBoardJunkPayload) {
+		p.Board = boardID
+	})
 }
 
 func (s *Server) handleMailPostAuthor(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	postID := r.PathValue("post")
-
-	var p proto.MailPostAuthorPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Post = postID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdMailPostAuthor, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdMailPostAuthor, func(p *proto.MailPostAuthorPayload) {
+		p.Post = postID
+	})
 }
 
 func (s *Server) handleSetThreadTitle(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	threadID := r.PathValue("thread")
-
-	var p proto.SetThreadTitlePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Thread = threadID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetThreadTitle, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSetThreadTitle, func(p *proto.SetThreadTitlePayload) {
+		p.Thread = threadID
+	})
 }
 
 func (s *Server) handleLockThread(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	threadID := r.PathValue("thread")
-
-	var p proto.LockThreadPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Thread = threadID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdLockThread, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdLockThread, func(p *proto.LockThreadPayload) {
+		p.Thread = threadID
+	})
 }
 
 func (s *Server) handleSendChatLine(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	room := r.PathValue("room")
-
-	var p proto.SendChatLinePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Room = room
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSendChatLine, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSendChatLine, func(p *proto.SendChatLinePayload) {
+		p.Room = room
+	})
 }
 
 // POST /api/v1/posts/{post}/react
@@ -395,20 +263,10 @@ func (s *Server) handleUnreactPost(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/v1/polls/{poll}/vote
 func (s *Server) handleVotePoll(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	pollID := r.PathValue("poll")
-
-	var p proto.VotePollPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Poll = pollID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdVotePoll, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdVotePoll, func(p *proto.VotePollPayload) {
+		p.Poll = pollID
+	})
 }
 
 // POST /api/v1/polls/{poll}/publish-result
@@ -472,20 +330,10 @@ func (s *Server) handleDeleteNotifications(w http.ResponseWriter, r *http.Reques
 
 // PUT /api/v1/threads/{thread}/prefs
 func (s *Server) handleSetThreadPref(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	threadID := r.PathValue("thread")
-
-	var p proto.SetThreadPrefPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Thread = threadID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetThreadPref, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSetThreadPref, func(p *proto.SetThreadPrefPayload) {
+		p.Thread = threadID
+	})
 }
 
 // PUT /api/v1/boards/{board}/favorite
@@ -549,38 +397,18 @@ func (s *Server) handleImportFavoriteTree(w http.ResponseWriter, r *http.Request
 
 // PATCH /api/v1/boards/{board}/settings
 func (s *Server) handleSetBoardSettings(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.SetBoardSettingsPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetBoardSettings, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSetBoardSettings, func(p *proto.SetBoardSettingsPayload) {
+		p.Board = boardID
+	})
 }
 
 // PATCH /api/v1/boards/{board}/member-requirements
 func (s *Server) handleSetBoardMemberRequirements(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.SetBoardMemberRequirementsPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetBoardMemberRequirements, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSetBoardMemberRequirements, func(p *proto.SetBoardMemberRequirementsPayload) {
+		p.Board = boardID
+	})
 }
 
 // PUT /api/v1/boards/{board}/moderators/{user}
@@ -664,20 +492,10 @@ func (s *Server) handleApplyBoardMembership(w http.ResponseWriter, r *http.Reque
 
 // POST /api/v1/board-member-applications/{application}/review
 func (s *Server) handleReviewBoardMembership(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	applicationID := r.PathValue("application")
-
-	var p proto.ReviewBoardMembershipPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Application = applicationID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdReviewBoardMembership, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdReviewBoardMembership, func(p *proto.ReviewBoardMembershipPayload) {
+		p.Application = applicationID
+	})
 }
 
 // POST /api/v1/boards/{board}/members/leave
@@ -728,56 +546,26 @@ func (s *Server) handleCurateThread(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/v1/boards/{board}/digest/directories
 func (s *Server) handleCreateDigestDirectory(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.CreateDigestDirectoryPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdCreateDigestDirectory, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdCreateDigestDirectory, func(p *proto.CreateDigestDirectoryPayload) {
+		p.Board = boardID
+	})
 }
 
 // POST /api/v1/boards/{board}/digest/paths/move
 func (s *Server) handleMoveDigestPath(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.MoveDigestPathPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdMoveDigestPath, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdMoveDigestPath, func(p *proto.MoveDigestPathPayload) {
+		p.Board = boardID
+	})
 }
 
 // POST /api/v1/boards/{board}/digest/paths/copy
 func (s *Server) handleCopyDigestPath(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.CopyDigestPathPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdCopyDigestPath, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdCopyDigestPath, func(p *proto.CopyDigestPathPayload) {
+		p.Board = boardID
+	})
 }
 
 // DELETE /api/v1/boards/{board}/digest/paths?kind=&path=
@@ -809,38 +597,18 @@ func (s *Server) handleRemoveDigestEntry(w http.ResponseWriter, r *http.Request)
 
 // PATCH /api/v1/digest/{entry}
 func (s *Server) handleUpdateDigestEntry(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	entryID := r.PathValue("entry")
-
-	var p proto.UpdateDigestEntryPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Entry = entryID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdUpdateDigestEntry, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdUpdateDigestEntry, func(p *proto.UpdateDigestEntryPayload) {
+		p.Entry = entryID
+	})
 }
 
 // PUT /api/v1/digest/{entry}/body
 func (s *Server) handleSetDigestEntryBody(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	entryID := r.PathValue("entry")
-
-	var p proto.SetDigestEntryBodyPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Entry = entryID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetDigestEntryBody, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSetDigestEntryBody, func(p *proto.SetDigestEntryBodyPayload) {
+		p.Entry = entryID
+	})
 }
 
 // DELETE /api/v1/digest/{entry}/body
@@ -857,90 +625,40 @@ func (s *Server) handleResetDigestEntryBody(w http.ResponseWriter, r *http.Reque
 
 // POST /api/v1/digest/{entry}/mail
 func (s *Server) handleSendDigestEntryMail(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	entryID := r.PathValue("entry")
-
-	var p proto.SendDigestEntryMailPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Entry = entryID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSendDigestEntryMail, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSendDigestEntryMail, func(p *proto.SendDigestEntryMailPayload) {
+		p.Entry = entryID
+	})
 }
 
 // POST /api/v1/mail
 func (s *Server) handleSendMail(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-
-	var p proto.SendMailPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSendMail, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand[proto.SendMailPayload](s, w, r, proto.CmdSendMail, nil)
 }
 
 // POST /api/v1/mail/{mail}/forward
 func (s *Server) handleForwardMail(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	mailID := r.PathValue("mail")
-
-	var p proto.ForwardMailPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Mail = mailID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdForwardMail, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdForwardMail, func(p *proto.ForwardMailPayload) {
+		p.Mail = mailID
+	})
 }
 
 // POST /api/v1/mail/{mail}/board
 func (s *Server) handlePostMailToBoard(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	mailID := r.PathValue("mail")
-
-	var p proto.PostMailToBoardPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Mail = mailID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdPostMailToBoard, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdPostMailToBoard, func(p *proto.PostMailToBoardPayload) {
+		p.Mail = mailID
+	})
 }
 
 // POST /api/v1/mail/groups
 // PUT/PATCH /api/v1/mail/groups/{group}
 func (s *Server) handleSetMailGroup(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-
-	var p proto.SetMailGroupPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Group = r.PathValue("group")
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetMailGroup, raw, cid)
-	writeAck(w, cid, reply)
+	groupID := r.PathValue("group")
+	handleJSONCommand(s, w, r, proto.CmdSetMailGroup, func(p *proto.SetMailGroupPayload) {
+		p.Group = groupID
+	})
 }
 
 // DELETE /api/v1/mail/groups/{group}
@@ -956,20 +674,10 @@ func (s *Server) handleDeleteMailGroup(w http.ResponseWriter, r *http.Request) {
 
 // PATCH /api/v1/mail/{mail}
 func (s *Server) handleUpdateMail(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	mailID := r.PathValue("mail")
-
-	var p proto.UpdateMailPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Mail = mailID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdUpdateMail, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdUpdateMail, func(p *proto.UpdateMailPayload) {
+		p.Mail = mailID
+	})
 }
 
 // DELETE /api/v1/mail/{mail}
@@ -986,50 +694,17 @@ func (s *Server) handleDeleteMail(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/v1/mail/range-delete
 func (s *Server) handleDeleteMailRange(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-
-	var p proto.DeleteMailRangePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdDeleteMailRange, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand[proto.DeleteMailRangePayload](s, w, r, proto.CmdDeleteMailRange, nil)
 }
 
 // POST /api/v1/messages
 func (s *Server) handleSendDirectMessage(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-
-	var p proto.SendDirectMessagePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSendDirectMessage, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand[proto.SendDirectMessagePayload](s, w, r, proto.CmdSendDirectMessage, nil)
 }
 
 // PATCH /api/v1/messages/settings
 func (s *Server) handleSetDirectMessageSettings(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-
-	var p proto.SetDirectMessageSettingsPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetDirectMessageSettings, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand[proto.SetDirectMessageSettingsPayload](s, w, r, proto.CmdSetDirectMessageSettings, nil)
 }
 
 // POST /api/v1/messages/{message}/read
@@ -1123,36 +798,15 @@ func (s *Server) handleBlessUser(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/v1/boards/favorites/folders
 func (s *Server) handleCreateFavoriteFolder(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-
-	var p proto.CreateFavoriteFolderPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdCreateFavoriteFolder, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand[proto.CreateFavoriteFolderPayload](s, w, r, proto.CmdCreateFavoriteFolder, nil)
 }
 
 // PATCH /api/v1/boards/favorites/folders/{folder}
 func (s *Server) handleUpdateFavoriteFolder(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	folderID := r.PathValue("folder")
-
-	var p proto.UpdateFavoriteFolderPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Folder = folderID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdUpdateFavoriteFolder, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdUpdateFavoriteFolder, func(p *proto.UpdateFavoriteFolderPayload) {
+		p.Folder = folderID
+	})
 }
 
 // DELETE /api/v1/boards/favorites/folders/{folder}
@@ -1169,20 +823,10 @@ func (s *Server) handleDeleteFavoriteFolder(w http.ResponseWriter, r *http.Reque
 
 // PATCH /api/v1/boards/{board}/favorite
 func (s *Server) handleMoveBoardFavorite(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	boardID := r.PathValue("board")
-
-	var p proto.MoveBoardFavoritePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Board = boardID
-
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdMoveBoardFavorite, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdMoveBoardFavorite, func(p *proto.MoveBoardFavoritePayload) {
+		p.Board = boardID
+	})
 }
 
 // POST /api/v1/boards/{board}/read
@@ -1827,39 +1471,22 @@ func (s *Server) handleFlagPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResolveReview(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	reviewID := r.PathValue("id")
-
-	var p proto.ResolveReviewPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.Review = reviewID
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdResolveReview, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdResolveReview, func(p *proto.ResolveReviewPayload) {
+		p.Review = reviewID
+	})
 }
 
 func (s *Server) handleSanctionUser(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
 	name := r.PathValue("name")
 	target, err := s.core.UserByName(name)
 	if err != nil || target == nil {
 		writeError(w, http.StatusNotFound, "not_found", "user not found", false)
 		return
 	}
-	var p proto.SanctionUserPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	p.User = target.ID
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSanctionUser, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand(s, w, r, proto.CmdSanctionUser, func(p *proto.SanctionUserPayload) {
+		p.User = target.ID
+	})
 }
 
 func (s *Server) handleClearUserSanction(w http.ResponseWriter, r *http.Request) {
@@ -1891,32 +1518,16 @@ func (s *Server) handleClearUserSanction(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleSetContentFilter(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-	var p proto.SetContentFilterPayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	if id := strings.TrimSpace(r.PathValue("filter")); id != "" {
-		p.ID = id
-	}
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdSetContentFilter, raw, cid)
-	writeAck(w, cid, reply)
+	filterID := strings.TrimSpace(r.PathValue("filter"))
+	handleJSONCommand(s, w, r, proto.CmdSetContentFilter, func(p *proto.SetContentFilterPayload) {
+		if filterID != "" {
+			p.ID = filterID
+		}
+	})
 }
 
 func (s *Server) handleCreateBoard(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-	var req proto.CreateBoardPayload
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	raw, _ := json.Marshal(req)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdCreateBoard, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand[proto.CreateBoardPayload](s, w, r, proto.CmdCreateBoard, nil)
 }
 
 func (s *Server) handlePublishStatsSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -1955,16 +1566,7 @@ func (s *Server) handleSetRecommendedBoard(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handlePublishSystemNotice(w http.ResponseWriter, r *http.Request) {
-	actor := userFromCtx(r.Context())
-	var p proto.PublishSystemNoticePayload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
-		return
-	}
-	raw, _ := json.Marshal(p)
-	cid := r.Header.Get("X-Command-Id")
-	reply := s.core.ExecCmd(r.Context(), actor, proto.CmdPublishSystemNotice, raw, cid)
-	writeAck(w, cid, reply)
+	handleJSONCommand[proto.PublishSystemNoticePayload](s, w, r, proto.CmdPublishSystemNotice, nil)
 }
 
 // writeAck serialises a handler Reply into the wire ack envelope.
