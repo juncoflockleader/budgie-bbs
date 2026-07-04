@@ -512,11 +512,9 @@ func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, command
 			reply := executor.ExecuteCommandLogRecord(ctx, record)
 			if reply.Err != nil && reply.Err.Retryable {
 				results, pending = commandLogDrainLoadQueuePendingPartition(results, pending, pendingPartition)
-				if err := c.flushCommandLogDrainLoadNativePending(ctx, commandLog, transactions, pending); err != nil {
-					results = commandLogDrainLoadAppendPendingResults(results, pending)
+				if err := c.flushCommandLogDrainLoadNativePendingResults(ctx, commandLog, transactions, &results, pending); err != nil {
 					return results, err
 				}
-				results = commandLogDrainLoadAppendPendingResults(results, pending)
 				pending = nil
 				retryResult := commandLogWorkerClaimedAssignmentResult(partition, assignment, ownerID, committed)
 				retryResult.LastOffset = pendingLastOffset
@@ -537,12 +535,18 @@ func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, command
 		}
 		results, pending = commandLogDrainLoadQueuePendingPartition(results, pending, pendingPartition)
 	}
-	if err := c.flushCommandLogDrainLoadNativePending(ctx, commandLog, transactions, pending); err != nil {
-		results = commandLogDrainLoadAppendPendingResults(results, pending)
+	if err := c.flushCommandLogDrainLoadNativePendingResults(ctx, commandLog, transactions, &results, pending); err != nil {
 		return results, err
 	}
-	results = commandLogDrainLoadAppendPendingResults(results, pending)
 	return results, nil
+}
+
+func (c *Core) flushCommandLogDrainLoadNativePendingResults(ctx context.Context, commandLog CommandLog, transactions CommandEventTransactionBatchStore, results *[]CommandLogWorkerResult, pending []commandLogDrainLoadNativePendingPartition) error {
+	err := c.flushCommandLogDrainLoadNativePending(ctx, commandLog, transactions, pending)
+	for _, partition := range pending {
+		*results = append(*results, partition.result)
+	}
+	return err
 }
 
 func (c *Core) flushCommandLogDrainLoadNativePending(ctx context.Context, commandLog CommandLog, transactions CommandEventTransactionBatchStore, pending []commandLogDrainLoadNativePendingPartition) error {
@@ -655,13 +659,6 @@ func commandLogDrainLoadMarkPendingCommitFailure(pending []commandLogDrainLoadNa
 		pending[i].result.CommitFailures++
 		pending[i].result.CommitFailure = err.Error()
 	}
-}
-
-func commandLogDrainLoadAppendPendingResults(results []CommandLogWorkerResult, pending []commandLogDrainLoadNativePendingPartition) []CommandLogWorkerResult {
-	for _, partition := range pending {
-		results = append(results, partition.result)
-	}
-	return results
 }
 
 func commandLogDrainLoadMemberPartitionCursors(ctx context.Context, commandLog CommandLog, assigner CommandPartitionAssigner, ownerID string, partitionLimit int) ([]commandLogDrainLoadMemberPartitionCursor, error) {
