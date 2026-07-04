@@ -5,6 +5,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandparse"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
@@ -173,15 +174,11 @@ func newHandler(db *sql.DB, bus Bus, counterStore CounterStore, presenceStore Pr
 }
 
 func parseMentions(body string) []string {
-	return handler.ParseMentions(body)
-}
-
-func parsePollExpires(raw string) (int64, error) {
-	return handler.ParsePollExpires(raw)
+	return commandparse.ParseMentions(body)
 }
 
 func extractPoll(body string) (*pollBlock, string) {
-	pb, cleanBody := handler.ParsePoll(body)
+	pb, cleanBody := commandparse.ParsePoll(body)
 	if pb == nil {
 		return nil, cleanBody
 	}
