@@ -4430,10 +4430,7 @@ func nativeRequireBoardMembershipAdmission(c *Core, boardID, userID string, requ
 	if counterStore == nil {
 		counterStore = sqlCounterStore{db: db}
 	}
-	if reply := corehandler.RequireBoardMembershipAdmission(db, counterStore, boardID, userID, requirements); reply.Err != nil {
-		return reply.Err
-	}
-	return nil
+	return commandrules.RequireBoardMembershipAdmission(db, counterStore, boardID, userID, requirements)
 }
 
 func nativeBoardMembershipApplicationEvents(db *sql.DB, record CommandLogRecord, actor *User, applicationID, boardID, userID, note string, autoApprove bool, ts int64) ([]EventAppend, *proto.ErrorDetail) {

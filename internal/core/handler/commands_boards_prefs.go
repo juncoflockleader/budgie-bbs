@@ -340,8 +340,8 @@ func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembership
 	if err != nil {
 		return internalErr(err)
 	}
-	if errReply := RequireBoardMembershipAdmission(h.db, counterStore(), p.Board, actor.ID, requirements); errReply.Err != nil {
-		return errReply
+	if ruleErr := commandrules.RequireBoardMembershipAdmission(h.db, counterStore(), p.Board, actor.ID, requirements); ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	appID := newID("bmap_")
 	if err := currentRuntime().InsertBoardMemberApplication(h.db, appID, p.Board, actor.ID, p.Note); err != nil {
@@ -387,8 +387,8 @@ func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembersh
 		if err != nil {
 			return internalErr(err)
 		}
-		if errReply := RequireBoardMembershipAdmission(h.db, counterStore(), app.BoardID, app.UserID, requirements); errReply.Err != nil {
-			return errReply
+		if ruleErr := commandrules.RequireBoardMembershipAdmission(h.db, counterStore(), app.BoardID, app.UserID, requirements); ruleErr != nil {
+			return Reply{Err: ruleErr}
 		}
 	}
 	if err := currentRuntime().ReviewBoardMemberApplication(h.db, p.Application, actor.ID, p.Status, p.Title, p.Note); err != nil {
@@ -3809,34 +3809,6 @@ func (h *Handler) actorCanModerateBoardPostsTx(tx *sql.Tx, actor *User, boardID 
 
 func (h *Handler) actorCanModerateBoardThreadsTx(tx *sql.Tx, actor *User, boardID string) bool {
 	return boardPermissionAllowed(projections.ActorCanModerateBoardThreads(tx, actor, boardID))
-}
-
-func RequireBoardMembershipAdmission(db *sql.DB, store CounterStore, boardID, userID string, requirements *BoardMemberRequirements) Reply {
-	if requirements == nil {
-		return Reply{}
-	}
-	stats, err := projections.BoardMembershipAdmissionStatsForUser(db, boardID, userID, requirements)
-	if err != nil {
-		return internalErr(err)
-	}
-	if requirements.MinScore > 0 {
-		score, err := projections.UserReactionScore(db, store, userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		stats.ReactionScore = score
-	}
-	if requirements.MinBoardMarkCount > 0 {
-		boardMarks, err := projections.UserBoardMarkCount(db, store, boardID, userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		stats.BoardMarkCount = boardMarks
-	}
-	if failure := projections.CheckBoardMembershipAdmission(requirements, stats); failure != nil {
-		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
-	}
-	return Reply{}
 }
 
 func (h *Handler) requireFavoriteFolder(userID, folderID string) Reply {
