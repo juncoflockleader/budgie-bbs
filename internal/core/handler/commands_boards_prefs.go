@@ -977,36 +977,12 @@ func (h *Handler) applyReadMarker(targetID string, require func() *proto.ErrorDe
 	return replyFromCommandResult(commandrules.ApplyReadMarker(targetID, require, update))
 }
 
-type digestEntryForCommand struct {
-	ID         string
-	BoardID    string
-	TargetKind string
-	TargetID   string
-	Kind       string
-	Title      string
-	Path       string
-	Note       string
-}
-
-func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*digestEntryForCommand, Reply) {
-	var entry digestEntryForCommand
-	err := qQueryRow(
-		h.db,
-		`SELECT id, board_id, target_kind, target_id, kind, title, path, note
-		   FROM digest_entries
-		  WHERE id=?`,
-		entryID,
-	).Scan(&entry.ID, &entry.BoardID, &entry.TargetKind, &entry.TargetID, &entry.Kind, &entry.Title, &entry.Path, &entry.Note)
-	if err == sql.ErrNoRows {
-		return nil, Reply{Err: errDetail(proto.ErrNotFound, "digest entry not found", false)}
+func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*commandrules.DigestEntryForCommand, Reply) {
+	entry, errDetail := commandrules.DigestEntryForCuration(h.db, actor, entryID)
+	if errDetail != nil {
+		return nil, Reply{Err: errDetail}
 	}
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	if !commandrules.ActorCanCurateBoardKind(h.db, actor, entry.BoardID, entry.Kind) {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(entry.Kind), false)}
-	}
-	return &entry, Reply{}
+	return entry, Reply{}
 }
 
 func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath, toPath string) (string, string, string, string, Reply) {
