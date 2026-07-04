@@ -753,9 +753,9 @@ func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, a
 
 	subject := "Article reply: " + thread.Title
 	body := proto.FormatArticleMailBackBody(thread.Board, thread.Title, target.ID, replyPostID, authorName, replyBody)
-	if errReply := EnsureMailQuota(tx, map[string]int{recipient.ID: 1}, proto.MailMessageSize(subject, body, nil)); errReply.Err != nil {
-		if errReply.Err.Code != proto.ErrValidationFailed {
-			return nil, fmt.Errorf("article mail-back quota check: %s", errReply.Err.Message)
+	if ruleErr := commandrules.EnsureMailQuota(tx, map[string]int{recipient.ID: 1}, proto.MailMessageSize(subject, body, nil)); ruleErr != nil {
+		if ruleErr.Code != proto.ErrValidationFailed {
+			return nil, fmt.Errorf("article mail-back quota check: %s", ruleErr.Message)
 		}
 		return nil, nil
 	}

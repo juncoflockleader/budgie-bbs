@@ -3362,11 +3362,11 @@ func (e *CommandLogNativeDecisionExecutor) decideSetMailGroup(ctx context.Contex
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	groupID, memberIDs, reply := corehandler.ResolveMailGroupMutation(e.core.DB, actor.ID, payload, func() string {
+	groupID, memberIDs, errDetail := commandrules.ResolveMailGroupMutation(e.core.DB, actor.ID, payload, func() string {
 		return stableCommandLogDecisionID("mgrp_", record, 0)
 	})
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	event := nativeEvent(
@@ -3438,12 +3438,12 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachMail(ctx context.Context,
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	copyCounts, reply := corehandler.ValidateMailAttachmentMutation(e.core.DB, actor, mailID)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	copyCounts, errDetail := commandrules.ValidateMailAttachmentMutation(e.core.DB, actor, mailID)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
-	if reply := corehandler.EnsureMailQuota(e.core.DB, copyCounts, payload.SizeBytes); reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail := commandrules.EnsureMailQuota(e.core.DB, copyCounts, payload.SizeBytes); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	attachmentID := payload.ID
 	if attachmentID == "" {
@@ -3502,8 +3502,8 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateMail(ctx context.Context,
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
-		if reply := corehandler.EnsureMailQuota(e.core.DB, map[string]int{actor.ID: target.TrashedCopies}, size); reply.Err != nil {
-			return nativeCommandDecision{}, reply.Err
+		if errDetail := commandrules.EnsureMailQuota(e.core.DB, map[string]int{actor.ID: target.TrashedCopies}, size); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 	}
 	ts := nativeCommandTimestamp(record)
@@ -3569,9 +3569,9 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteMailRange(ctx context.Con
 }
 
 func (e *CommandLogNativeDecisionExecutor) decideSendMailPayload(record CommandLogRecord, actor *User, payload proto.SendMailPayload) (nativeCommandDecision, *proto.ErrorDetail) {
-	recipientRefs, reply := corehandler.ExpandMailRecipients(e.core.DB, actor, payload)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	recipientRefs, errDetail := commandrules.ExpandMailRecipients(e.core.DB, actor, payload)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	var msg string
 	payload, msg = proto.NormalizeSendMailContentPayload(payload)
@@ -3580,24 +3580,24 @@ func (e *CommandLogNativeDecisionExecutor) decideSendMailPayload(record CommandL
 	}
 	body := payload.Body
 	subject := payload.Subject
-	attachments, reply := corehandler.NormalizeMailAttachments(payload.Attachments, func(i int) string {
+	attachments, errDetail := commandrules.NormalizeMailAttachments(payload.Attachments, func(i int) string {
 		return stableCommandLogDecisionID("matt_", record, 100+i)
 	})
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	saveSent := true
 	if payload.SaveSent != nil {
 		saveSent = *payload.SaveSent
 	}
-	recipients, reply := corehandler.ResolveMailRecipients(e.core.DB, actor, recipientRefs, payload.ToAll)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	recipients, errDetail := commandrules.ResolveMailRecipients(e.core.DB, actor, recipientRefs, payload.ToAll)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	addedBytes := proto.MailMessageSize(subject, body, attachments)
-	copyCounts := corehandler.MailCopyCounts(recipients, actor.ID, saveSent)
-	if reply := corehandler.EnsureMailQuota(e.core.DB, copyCounts, addedBytes); reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	copyCounts := commandrules.MailCopyCounts(recipients, actor.ID, saveSent)
+	if errDetail := commandrules.EnsureMailQuota(e.core.DB, copyCounts, addedBytes); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	parentID := payload.ReplyTo
 	if parentID != "" {
@@ -4910,9 +4910,9 @@ func nativeArticleMailBackEvent(db *sql.DB, record CommandLogRecord, actor *User
 	}
 	subject := "Article reply: " + thread.Title
 	body := proto.FormatArticleMailBackBody(thread.Board, thread.Title, target.ID, replyPostID, actor.Name, replyBody)
-	if reply := corehandler.EnsureMailQuota(db, map[string]int{recipient.ID: 1}, proto.MailMessageSize(subject, body, nil)); reply.Err != nil {
-		if reply.Err.Code != proto.ErrValidationFailed {
-			return nil, reply.Err
+	if errDetail := commandrules.EnsureMailQuota(db, map[string]int{recipient.ID: 1}, proto.MailMessageSize(subject, body, nil)); errDetail != nil {
+		if errDetail.Code != proto.ErrValidationFailed {
+			return nil, errDetail
 		}
 		return nil, nil
 	}

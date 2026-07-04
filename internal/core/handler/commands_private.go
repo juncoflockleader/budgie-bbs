@@ -6,19 +6,12 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sort"
-	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
-
-type sqlQueryable interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-}
 
 // lockMailboxes serializes concurrent writers to the same mailbox so the
 // recipient mail-quota check and insert are race-free. CmdSendMail/CmdForwardMail
@@ -50,13 +43,10 @@ func mailboxAdvisoryKey(mailbox string) int64 {
 	return int64(hsh.Sum64())
 }
 
-// maxMailRecipientsPerSend bounds the fan-out of a single non-admin mail send.
-const maxMailRecipientsPerSend = 50
-
 func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
-	recipientRefs, errReply := ExpandMailRecipients(h.db, actor, p)
-	if errReply.Err != nil {
-		return errReply
+	recipientRefs, ruleErr := commandrules.ExpandMailRecipients(h.db, actor, p)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	var msg string
 	p, msg = proto.NormalizeSendMailContentPayload(p)
@@ -65,11 +55,11 @@ func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 	}
 	body := p.Body
 	subject := p.Subject
-	attachments, errReply := NormalizeMailAttachments(p.Attachments, func(int) string {
+	attachments, ruleErr := commandrules.NormalizeMailAttachments(p.Attachments, func(int) string {
 		return newID("matt_")
 	})
-	if errReply.Err != nil {
-		return errReply
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	saveSent := true
 	if p.SaveSent != nil {
@@ -83,16 +73,16 @@ func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 	}
 	defer tx.Rollback()
 
-	recipients, errReply := ResolveMailRecipients(tx, actor, recipientRefs, p.ToAll)
-	if errReply.Err != nil {
-		return errReply
+	recipients, ruleErr := commandrules.ResolveMailRecipients(tx, actor, recipientRefs, p.ToAll)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
-	copyCounts := MailCopyCounts(recipients, actor.ID, saveSent)
+	copyCounts := commandrules.MailCopyCounts(recipients, actor.ID, saveSent)
 	if err := h.lockMailboxes(tx, copyCounts); err != nil {
 		return internalErr(err)
 	}
-	if errReply := EnsureMailQuota(tx, copyCounts, proto.MailMessageSize(subject, body, attachments)); errReply.Err != nil {
-		return errReply
+	if ruleErr := commandrules.EnsureMailQuota(tx, copyCounts, proto.MailMessageSize(subject, body, attachments)); ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	parentID := p.ReplyTo
 	if parentID != "" {
@@ -337,11 +327,11 @@ func (h *Handler) setMailGroup(actor *User, p proto.SetMailGroupPayload) Reply {
 	}
 	defer tx.Rollback()
 
-	groupID, memberIDs, errReply := ResolveMailGroupMutation(tx, actor.ID, p, func() string {
+	groupID, memberIDs, ruleErr := commandrules.ResolveMailGroupMutation(tx, actor.ID, p, func() string {
 		return newID("mgrp_")
 	})
-	if errReply.Err != nil {
-		return errReply
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
@@ -350,46 +340,6 @@ func (h *Handler) setMailGroup(actor *User, p proto.SetMailGroupPayload) Reply {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: groupID}}
-}
-
-func ResolveMailGroupMutation(queryable sqlQueryable, ownerID string, p proto.SetMailGroupPayload, idForNewGroup func() string) (string, []string, Reply) {
-	groupID, reply := ResolveMailGroupID(queryable, ownerID, p.Group, p.Name, idForNewGroup)
-	if reply.Err != nil {
-		return "", nil, reply
-	}
-	conflictID, err := projections.MailGroupIDByName(queryable, ownerID, p.Name)
-	if err != nil {
-		return "", nil, internalErr(err)
-	}
-	if conflictID != "" && conflictID != groupID {
-		return "", nil, Reply{Err: errDetail(proto.ErrValidationFailed, "mail group name already exists", false)}
-	}
-	memberIDs, reply := ResolveUniqueMailGroupMembers(queryable, p.Members, ownerID)
-	if reply.Err != nil {
-		return "", nil, reply
-	}
-	return groupID, memberIDs, Reply{}
-}
-
-func ResolveMailGroupID(queryable sqlQueryable, ownerID, groupRef, name string, idForNewGroup func() string) (string, Reply) {
-	if groupRef != "" {
-		groupID, err := projections.GetMailGroupID(queryable, ownerID, groupRef)
-		if err != nil {
-			return "", internalErr(err)
-		}
-		if groupID == "" {
-			return "", Reply{Err: errDetail(proto.ErrNotFound, "mail group not found", false)}
-		}
-		return groupID, Reply{}
-	}
-	groupID, err := projections.MailGroupIDByName(queryable, ownerID, name)
-	if err != nil {
-		return "", internalErr(err)
-	}
-	if groupID != "" {
-		return groupID, Reply{}
-	}
-	return idForNewGroup(), Reply{}
 }
 
 func (h *Handler) deleteMailGroup(actor *User, p proto.DeleteMailGroupPayload) Reply {
@@ -437,15 +387,15 @@ func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
 	}
 	defer tx.Rollback()
 
-	copyCounts, errReply := ValidateMailAttachmentMutation(tx, actor, mailID)
-	if errReply.Err != nil {
-		return errReply
+	copyCounts, ruleErr := commandrules.ValidateMailAttachmentMutation(tx, actor, mailID)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	if err := h.lockMailboxes(tx, copyCounts); err != nil {
 		return internalErr(err)
 	}
-	if errReply := EnsureMailQuota(tx, copyCounts, p.SizeBytes); errReply.Err != nil {
-		return errReply
+	if ruleErr := commandrules.EnsureMailQuota(tx, copyCounts, p.SizeBytes); ruleErr != nil {
+		return Reply{Err: ruleErr}
 	}
 	scopes, err := projections.MailAccountScopes(tx, mailID, actor.ID)
 	if err != nil {
@@ -480,31 +430,6 @@ func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: attachmentID, Seq: seq}}
 }
 
-func ValidateMailAttachmentMutation(queryable sqlQueryable, actor *User, mailID string) (map[string]int, Reply) {
-	fromUserID, found, err := projections.MailSenderID(queryable, mailID)
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	if !found {
-		return nil, Reply{Err: errDetail(proto.ErrNotFound, "mail not found", false)}
-	}
-	if fromUserID != actor.ID {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, "only the sender can attach files to this mail", false)}
-	}
-	count, err := projections.MailAttachmentCount(queryable, mailID)
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	if msg := proto.ValidateMailAttachmentCount(count + 1); msg != "" {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
-	}
-	copyCounts, err := projections.ActiveMailCopyCounts(queryable, mailID)
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	return copyCounts, Reply{}
-}
-
 func (h *Handler) updateMail(actor *User, p proto.UpdateMailPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeUpdateMailPayload(p)
@@ -522,8 +447,8 @@ func (h *Handler) updateMail(actor *User, p proto.UpdateMailPayload) Reply {
 			if err != nil {
 				return internalErr(err)
 			}
-			if errReply := EnsureMailQuota(h.db, map[string]int{actor.ID: restoreCount}, size); errReply.Err != nil {
-				return errReply
+			if ruleErr := commandrules.EnsureMailQuota(h.db, map[string]int{actor.ID: restoreCount}, size); ruleErr != nil {
+				return Reply{Err: ruleErr}
 			}
 		}
 	}
@@ -660,17 +585,6 @@ func (h *Handler) updateDirectMessage(rawMessageID string, update func(string) (
 	return Reply{Result: &proto.AckResult{ID: messageID}}
 }
 
-func NormalizeMailAttachments(input []proto.AttachmentPayload, idFor func(int) string) ([]proto.AttachmentPayload, Reply) {
-	if len(input) == 0 {
-		return nil, Reply{}
-	}
-	attachments, msg := proto.NormalizeMailAttachments(input)
-	if msg != "" {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
-	}
-	return proto.WithAttachmentIDs(attachments, idFor), Reply{}
-}
-
 func insertMailAttachments(tx *sql.Tx, mailID, authorID string, ts int64, attachments []proto.AttachmentPayload) error {
 	for _, item := range attachments {
 		if err := currentRuntime().InsertMailAttachment(tx, item.ID, mailID, item.Filename, item.ContentType, item.SizeBytes, item.URL, authorID, ts); err != nil {
@@ -678,159 +592,6 @@ func insertMailAttachments(tx *sql.Tx, mailID, authorID string, ts int64, attach
 		}
 	}
 	return nil
-}
-
-func MailCopyCounts(recipients []*User, senderID string, saveSent bool) map[string]int {
-	copyCounts := map[string]int{}
-	for _, recipient := range recipients {
-		if recipient == nil {
-			continue
-		}
-		copyCounts[recipient.ID]++
-	}
-	if saveSent {
-		copyCounts[senderID]++
-	}
-	return copyCounts
-}
-
-func ResolveMailRecipients(queryable sqlQueryable, actor *User, refs []string, mailAll bool) ([]*User, Reply) {
-	if actor == nil {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
-	}
-	recipients := []*User{}
-	seen := map[string]bool{}
-	for _, ref := range refs {
-		target, err := projections.FindUserRef(queryable, ref)
-		if err != nil {
-			return nil, internalErr(err)
-		}
-		if target == nil {
-			return nil, Reply{Err: errDetail(proto.ErrNotFound, "recipient not found: "+strings.TrimSpace(ref), false)}
-		}
-		if target.ID != actor.ID && !mailAll {
-			ignored, err := projections.UserRelationshipExists(queryable, target.ID, actor.ID, "ignore")
-			if err != nil {
-				return nil, internalErr(err)
-			}
-			if ignored {
-				return nil, Reply{Err: errDetail(proto.ErrForbidden, "recipient does not accept mail from this user", false)}
-			}
-		}
-		if !seen[target.ID] {
-			seen[target.ID] = true
-			recipients = append(recipients, target)
-		}
-	}
-	if len(recipients) == 0 {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "at least one recipient is required", false)}
-	}
-	return recipients, Reply{}
-}
-
-func EnsureMailQuota(queryable sqlQueryable, copyCounts map[string]int, addedPerCopy int64) Reply {
-	if addedPerCopy <= 0 {
-		return Reply{}
-	}
-	for userID, copies := range copyCounts {
-		if strings.TrimSpace(userID) == "" || copies <= 0 {
-			continue
-		}
-		added := addedPerCopy * int64(copies)
-		ok, err := projections.MailQuotaAllows(queryable, userID, added)
-		if err != nil {
-			return internalErr(err)
-		}
-		if !ok {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, "mail quota exceeded for user "+userID, false)}
-		}
-	}
-	return Reply{}
-}
-
-func ExpandMailRecipients(db *sql.DB, actor *User, p proto.SendMailPayload) ([]string, Reply) {
-	if actor == nil {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
-	}
-	ownerID := actor.ID
-	refs := []string{}
-	if p.ToAll {
-		if !actor.IsAdmin() {
-			return nil, Reply{Err: errDetail(proto.ErrForbidden, "admin role required for mail-all", false)}
-		}
-		allUserIDs, err := projections.ListMailAllRecipientIDs(db, actor.ID)
-		if err != nil {
-			return nil, internalErr(err)
-		}
-		refs = append(refs, allUserIDs...)
-	}
-	for _, ref := range p.To {
-		ref = strings.TrimSpace(ref)
-		if ref == "" {
-			continue
-		}
-		if groupRef, ok := strings.CutPrefix(ref, "group:"); ok {
-			p.ToGroups = append(p.ToGroups, strings.TrimSpace(groupRef))
-			continue
-		}
-		refs = append(refs, ref)
-	}
-	for _, groupRef := range p.ToGroups {
-		groupRef = strings.TrimSpace(groupRef)
-		if groupRef == "" {
-			continue
-		}
-		if proto.IsFriendMailGroupRef(groupRef) {
-			friendIDs, err := currentRuntime().ListFriendUserIDs(db, ownerID)
-			if err != nil {
-				return nil, internalErr(err)
-			}
-			refs = append(refs, friendIDs...)
-			continue
-		}
-		groupID, err := currentRuntime().GetMailGroupID(db, ownerID, groupRef)
-		if err != nil {
-			return nil, internalErr(err)
-		}
-		if groupID == "" {
-			return nil, Reply{Err: errDetail(proto.ErrNotFound, "mail group not found: "+groupRef, false)}
-		}
-		members, err := currentRuntime().ListMailGroupMembers(db, ownerID, groupID)
-		if err != nil {
-			return nil, internalErr(err)
-		}
-		for _, member := range members {
-			refs = append(refs, member.UserID)
-		}
-	}
-	if p.ToFriends {
-		friendIDs, err := currentRuntime().ListFriendUserIDs(db, ownerID)
-		if err != nil {
-			return nil, internalErr(err)
-		}
-		refs = append(refs, friendIDs...)
-	}
-	if len(refs) == 0 {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "at least one recipient is required", false)}
-	}
-	if !p.ToAll && len(refs) > maxMailRecipientsPerSend {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "too many recipients in one message", false)}
-	}
-	return refs, Reply{}
-}
-
-func ResolveUniqueMailGroupMembers(queryable sqlQueryable, refs []string, ownerID string) ([]string, Reply) {
-	ids, missingRef, includesOwner, err := projections.ResolveMailGroupMemberIDs(queryable, refs, ownerID)
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	if missingRef != "" {
-		return nil, Reply{Err: errDetail(proto.ErrNotFound, "user not found: "+missingRef, false)}
-	}
-	if includesOwner {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "mail group cannot include yourself", false)}
-	}
-	return ids, Reply{}
 }
 
 type errString string
