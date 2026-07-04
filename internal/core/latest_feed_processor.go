@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -86,34 +85,13 @@ func (c *Core) processFeedMaterializationOnce(batchSize int, spec feedMaterializ
 		return result, c.finishEmptyDerivedViewEventBatch(batch)
 	}
 
-	tx, err := c.DB.Begin()
+	events, changes, appliedSeq, err := c.applyDerivedViewEventBatchTx(batch, spec.errPrefix, spec.apply)
 	if err != nil {
 		return result, err
 	}
-	defer tx.Rollback() //nolint
-
-	for _, evt := range batch.Events {
-		if evt == nil {
-			continue
-		}
-		changed, err := spec.apply(tx, evt)
-		if err != nil {
-			return result, fmt.Errorf("%s event %d (%s): %w", spec.errPrefix, evt.Seq, evt.Kind, err)
-		}
-		result.Events++
-		if changed {
-			result.FeedChanges++
-		}
-		if evt.Seq > result.AppliedSeq {
-			result.AppliedSeq = evt.Seq
-		}
-	}
-	if err := recordDerivedViewAppliedTx(tx, batch.View, result.AppliedSeq); err != nil {
-		return result, err
-	}
-	if err := tx.Commit(); err != nil {
-		return result, err
-	}
+	result.Events = events
+	result.FeedChanges = changes
+	result.AppliedSeq = appliedSeq
 	return result, nil
 }
 

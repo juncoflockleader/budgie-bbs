@@ -215,6 +215,45 @@ func (c *Core) finishEmptyDerivedViewEventBatch(batch derivedViewEventBatch) err
 	return c.RecordDerivedViewApplied(batch.View, batch.FromSeq)
 }
 
+func (c *Core) applyDerivedViewEventBatchTx(batch derivedViewEventBatch, errPrefix string, apply func(*sql.Tx, *proto.Event) (bool, error)) (events, changed int, appliedSeq int64, err error) {
+	appliedSeq = batch.AppliedSeq
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return 0, 0, appliedSeq, err
+	}
+	defer tx.Rollback() //nolint
+
+	for _, evt := range batch.Events {
+		if evt == nil {
+			continue
+		}
+		eventChanged, err := apply(tx, evt)
+		if err != nil {
+			return events, changed, appliedSeq, fmt.Errorf("%s event %d (%s): %w", errPrefix, evt.Seq, evt.Kind, err)
+		}
+		events++
+		if eventChanged {
+			changed++
+		}
+		if evt.Seq > appliedSeq {
+			appliedSeq = evt.Seq
+		}
+	}
+	if err := recordDerivedViewAppliedTx(tx, batch.View, appliedSeq); err != nil {
+		return events, changed, appliedSeq, err
+	}
+	if err := tx.Commit(); err != nil {
+		return events, changed, appliedSeq, err
+	}
+	return events, changed, appliedSeq, nil
+}
+
+func derivedViewEventPredicate(predicate func(*proto.Event) bool) func(*sql.Tx, *proto.Event) (bool, error) {
+	return func(_ *sql.Tx, evt *proto.Event) (bool, error) {
+		return predicate(evt), nil
+	}
+}
+
 func (c *Core) processDerivedRebuildOnce(batchSize int, spec derivedRebuildSpec) (derivedRebuildProcessResult, error) {
 	batch, err := c.replayDerivedViewEventBatch(spec.view, batchSize)
 	result := derivedRebuildProcessResult{

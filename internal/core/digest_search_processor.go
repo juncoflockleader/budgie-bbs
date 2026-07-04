@@ -67,30 +67,13 @@ func (c *Core) ProcessDigestSearchOnce(batchSize int) (DigestSearchProcessResult
 		return result, c.finishEmptyDerivedViewEventBatch(batch)
 	}
 
-	tx, err := c.DB.Begin()
+	events, changes, appliedSeq, err := c.applyDerivedViewEventBatchTx(batch, "digest search", derivedViewEventPredicate(isDigestSearchEvent))
 	if err != nil {
 		return result, err
 	}
-	defer tx.Rollback() //nolint
-
-	for _, evt := range batch.Events {
-		if evt == nil {
-			continue
-		}
-		result.Events++
-		if isDigestSearchEvent(evt) {
-			result.DigestChanges++
-		}
-		if evt.Seq > result.AppliedSeq {
-			result.AppliedSeq = evt.Seq
-		}
-	}
-	if err := recordDerivedViewAppliedTx(tx, batch.View, result.AppliedSeq); err != nil {
-		return result, err
-	}
-	if err := tx.Commit(); err != nil {
-		return result, err
-	}
+	result.Events = events
+	result.DigestChanges = changes
+	result.AppliedSeq = appliedSeq
 	return result, nil
 }
 

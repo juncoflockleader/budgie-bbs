@@ -74,34 +74,13 @@ func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, er
 		return result, c.finishEmptyDerivedViewEventBatch(batch)
 	}
 
-	tx, err := c.DB.Begin()
+	events, indexed, appliedSeq, err := c.applyDerivedViewEventBatchTx(batch, "post search", applyPostSearchEvent)
 	if err != nil {
 		return result, err
 	}
-	defer tx.Rollback() //nolint
-
-	for _, evt := range batch.Events {
-		if evt == nil {
-			continue
-		}
-		indexed, err := applyPostSearchEvent(tx, evt)
-		if err != nil {
-			return result, fmt.Errorf("post search event %d (%s): %w", evt.Seq, evt.Kind, err)
-		}
-		result.Events++
-		if indexed {
-			result.Indexed++
-		}
-		if evt.Seq > result.AppliedSeq {
-			result.AppliedSeq = evt.Seq
-		}
-	}
-	if err := recordDerivedViewAppliedTx(tx, batch.View, result.AppliedSeq); err != nil {
-		return result, err
-	}
-	if err := tx.Commit(); err != nil {
-		return result, err
-	}
+	result.Events = events
+	result.Indexed = indexed
+	result.AppliedSeq = appliedSeq
 	return result, nil
 }
 
