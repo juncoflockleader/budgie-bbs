@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -653,7 +654,7 @@ func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayloa
 		return reply
 	}
 	id := newID("dm_")
-	scopes, payload := DirectMessageSentEvent(actor, target, id, p.Body, ts)
+	scopes, payload := commandevents.DirectMessageSent(id, actor.ID, actor.Name, target.ID, target.Name, p.Body, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDirectMessageSent, scopes, payload)
 	if err != nil {
 		return internalErr(err)
@@ -667,25 +668,6 @@ func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayloa
 
 	h.publishEvent(proto.EvtDirectMessageSent, seq, scopes, payload, ts)
 	return Reply{Result: &proto.AckResult{ID: id, Seq: seq}}
-}
-
-func DirectMessageSentEvent(actor, target *User, messageID, body string, ts int64) ([]string, *proto.DirectMessageSentPayload) {
-	return proto.DirectMessageEventScopes(actor.ID, target.ID),
-		proto.NewDirectMessageSentPayload(messageID, actor.ID, actor.Name, target.ID, target.Name, body, ts)
-}
-
-func DirectMessageReadEvent(messageID, userID, fromUserID, toUserID string, ts int64) ([]string, *proto.DirectMessageReadPayload) {
-	payload := &proto.DirectMessageReadPayload{MessageID: messageID, UserID: userID, ReadAt: ts, TS: ts}
-	return proto.DirectMessageEventScopes(fromUserID, toUserID), payload
-}
-
-func DirectMessageDeletedEvent(
-	messageID, userID, fromUserID, toUserID string,
-	senderDeleted, recipientDeleted bool,
-	ts int64,
-) ([]string, *proto.DirectMessageDeletedPayload) {
-	payload := &proto.DirectMessageDeletedPayload{MessageID: messageID, UserID: userID, SenderDeleted: senderDeleted, RecipientDeleted: recipientDeleted, TS: ts}
-	return proto.DirectMessageEventScopes(fromUserID, toUserID), payload
 }
 
 func (h *Handler) setDirectMessageSettings(actor *User, p proto.SetDirectMessageSettingsPayload) Reply {

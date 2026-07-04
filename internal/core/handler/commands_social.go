@@ -1,11 +1,10 @@
 package handler
 
 import (
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
-
-const LoginWatchRelationshipKind = "login_watch"
 
 func ResolveOtherUser(queryable sqlQueryable, actor *User, ref, missingMessage, selfMessage string) (*User, Reply) {
 	if actor == nil {
@@ -58,11 +57,6 @@ func ValidateLoginWatchMutation(queryable sqlQueryable, actor *User, targetRef s
 	return target, online, Reply{}
 }
 
-func UserRelationshipSetEvent(actor, target *User, kind, note string, active bool, ts int64) ([]string, *proto.UserRelationshipSetPayload) {
-	payload := &proto.UserRelationshipSetPayload{UserID: actor.ID, TargetUserID: target.ID, Kind: kind, Active: active, Note: note, TS: ts}
-	return []string{"user:" + actor.ID, "user:" + target.ID}, payload
-}
-
 func (h *Handler) setUserRelationship(actor *User, p proto.SetUserRelationshipPayload) Reply {
 	p, msg := proto.NormalizeSetUserRelationshipPayload(p)
 	if msg != "" {
@@ -110,7 +104,7 @@ func (h *Handler) setLoginWatch(actor *User, p proto.SetLoginWatchPayload) Reply
 	}
 
 	if !p.Active {
-		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, LoginWatchRelationshipKind, "", false); err != nil {
+		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, commandevents.LoginWatchRelationshipKind, "", false); err != nil {
 			return internalErr(err)
 		}
 		return Reply{Result: &proto.AckResult{ID: target.ID}}
@@ -120,12 +114,12 @@ func (h *Handler) setLoginWatch(actor *User, p proto.SetLoginWatchPayload) Reply
 		if err := currentRuntime().InsertNotification(h.db, newID("notif_"), actor.ID, "login", "", "", target.Name, ts); err != nil {
 			return internalErr(err)
 		}
-		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, LoginWatchRelationshipKind, "", false); err != nil {
+		if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, commandevents.LoginWatchRelationshipKind, "", false); err != nil {
 			return internalErr(err)
 		}
 		return Reply{Result: &proto.AckResult{ID: target.ID}}
 	}
-	if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, LoginWatchRelationshipKind, "", true); err != nil {
+	if err := currentRuntime().SetUserRelationship(h.db, actor.ID, target.ID, commandevents.LoginWatchRelationshipKind, "", true); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: target.ID}}
@@ -150,7 +144,7 @@ func (h *Handler) blessUser(actor *User, p proto.BlessUserPayload) Reply {
 
 	ts := nowMS()
 	blessingID := newID("bless_")
-	scopes, payload := UserBlessedEvent(actor, target, blessingID, p.Message, ts)
+	scopes, payload := commandevents.UserBlessed(actor.ID, actor.Name, target.ID, target.Name, blessingID, p.Message, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserBlessed, scopes, payload)
 	if err != nil {
 		return internalErr(err)
@@ -198,18 +192,6 @@ func ValidateBlessUserMutation(queryable sqlQueryable, actor *User, targetRef st
 	return target, Reply{}
 }
 
-func UserBlessedEvent(actor, target *User, blessingID, message string, ts int64) ([]string, *proto.UserBlessedPayload) {
-	return []string{"user:" + actor.ID, "user:" + target.ID, "blessing:" + blessingID}, &proto.UserBlessedPayload{
-		ID:         blessingID,
-		FromUserID: actor.ID,
-		From:       actor.Name,
-		ToUserID:   target.ID,
-		To:         target.Name,
-		Message:    message,
-		TS:         ts,
-	}
-}
-
 func (h *Handler) notifyLoginWatchers(actor *User, ts int64) error {
 	watcherIDs, err := currentRuntime().ListLoginWatchers(h.db, actor.ID)
 	if err != nil {
@@ -222,7 +204,7 @@ func (h *Handler) notifyLoginWatchers(actor *User, ts int64) error {
 		if err := currentRuntime().InsertNotification(h.db, newID("notif_"), watcherID, "login", "", "", actor.Name, ts); err != nil {
 			return err
 		}
-		if err := currentRuntime().SetUserRelationship(h.db, watcherID, actor.ID, LoginWatchRelationshipKind, "", false); err != nil {
+		if err := currentRuntime().SetUserRelationship(h.db, watcherID, actor.ID, commandevents.LoginWatchRelationshipKind, "", false); err != nil {
 			return err
 		}
 	}

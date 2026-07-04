@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	corehandler "github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -2721,7 +2722,7 @@ func (e *CommandLogNativeDecisionExecutor) decideBlessUser(ctx context.Context, 
 
 	ts := nativeCommandTimestamp(record)
 	blessingID := stableCommandLogDecisionID("bless_", record, 0)
-	scopes, eventPayload := corehandler.UserBlessedEvent(actor, target, blessingID, payload.Message, ts)
+	scopes, eventPayload := commandevents.UserBlessed(actor.ID, actor.Name, target.ID, target.Name, blessingID, payload.Message, ts)
 	events := []EventAppend{
 		nativeEvent(record, 0, proto.EvtUserBlessed, scopes, eventPayload, ts),
 	}
@@ -3653,7 +3654,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSendDirectMessage(ctx context.C
 	}
 	ts := nativeCommandTimestamp(record)
 	messageID := stableCommandLogDecisionID("dm_", record, 0)
-	scopes, eventPayload := corehandler.DirectMessageSentEvent(actor, target, messageID, payload.Body, ts)
+	scopes, eventPayload := commandevents.DirectMessageSent(messageID, actor.ID, actor.Name, target.ID, target.Name, payload.Body, ts)
 	event := nativeEvent(record, 0, proto.EvtDirectMessageSent, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(messageID, event), nil
 }
@@ -3682,7 +3683,7 @@ func (e *CommandLogNativeDecisionExecutor) decideMarkDirectMessageRead(ctx conte
 		return nativeDecisionAckEvents(messageID, nil), nil
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes, eventPayload := corehandler.DirectMessageReadEvent(messageID, actor.ID, message.FromUserID, message.ToUserID, ts)
+	scopes, eventPayload := commandevents.DirectMessageRead(messageID, actor.ID, message.FromUserID, message.ToUserID, ts)
 	event := nativeEvent(record, 0, proto.EvtDirectMessageRead, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(messageID, event), nil
 }
@@ -3713,7 +3714,7 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteDirectMessage(ctx context
 		return nativeDecisionAckEvents(messageID, nil), nil
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes, eventPayload := corehandler.DirectMessageDeletedEvent(messageID, actor.ID, message.FromUserID, message.ToUserID, deleteSenderCopy, deleteRecipientCopy, ts)
+	scopes, eventPayload := commandevents.DirectMessageDeleted(messageID, actor.ID, message.FromUserID, message.ToUserID, deleteSenderCopy, deleteRecipientCopy, ts)
 	event := nativeEvent(record, 0, proto.EvtDirectMessageDeleted, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(messageID, event), nil
 }
@@ -3773,7 +3774,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetUserRelationship(ctx context
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes, eventPayload := corehandler.UserRelationshipSetEvent(actor, target, payload.Kind, payload.Note, payload.Active, ts)
+	scopes, eventPayload := commandevents.UserRelationshipSet(actor.ID, target.ID, payload.Kind, payload.Note, payload.Active, ts)
 	event := nativeEvent(record, 0, proto.EvtUserRelationshipSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(target.ID, event), nil
 }
@@ -3793,7 +3794,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetLoginWatch(ctx context.Conte
 	}
 	relationshipActive := payload.Active && !online
 	if !payload.Active {
-		exists, err := projections.UserRelationshipExists(e.core.DB, actor.ID, target.ID, corehandler.LoginWatchRelationshipKind)
+		exists, err := projections.UserRelationshipExists(e.core.DB, actor.ID, target.ID, commandevents.LoginWatchRelationshipKind)
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
@@ -3812,7 +3813,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetLoginWatch(ctx context.Conte
 			TS:     ts,
 		}, ts))
 	}
-	scopes, eventPayload := corehandler.UserRelationshipSetEvent(actor, target, corehandler.LoginWatchRelationshipKind, "", relationshipActive, ts)
+	scopes, eventPayload := commandevents.UserRelationshipSet(actor.ID, target.ID, commandevents.LoginWatchRelationshipKind, "", relationshipActive, ts)
 	events = append(events, nativeEvent(record, len(events), proto.EvtUserRelationshipSet, scopes, eventPayload, ts))
 	return nativeDecisionAckEvents(target.ID, events), nil
 }
@@ -3844,7 +3845,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardFavorite(ctx context.Co
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes, eventPayload := corehandler.BoardFavoriteSetEvent(actor, boardID, payload.FolderID, payload.Favorite, payload.Position, ts)
+	scopes, eventPayload := commandevents.BoardFavoriteSet(actor.ID, boardID, payload.FolderID, payload.Favorite, payload.Position, ts)
 	event := nativeEvent(record, 0, proto.EvtBoardFavoriteSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(boardID, event), nil
 }
@@ -3998,7 +3999,7 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveBoardFavorite(ctx context.C
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "favorite folder not found", false)
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes, eventPayload := corehandler.BoardFavoriteSetEvent(actor, payload.Board, payload.FolderID, true, payload.Position, ts)
+	scopes, eventPayload := commandevents.BoardFavoriteSet(actor.ID, payload.Board, payload.FolderID, true, payload.Position, ts)
 	event := nativeEvent(record, 0, proto.EvtBoardFavoriteSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(payload.Board, event), nil
 }
