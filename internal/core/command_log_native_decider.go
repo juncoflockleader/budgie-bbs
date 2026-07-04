@@ -397,8 +397,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateThread(ctx context.Contex
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrUnauthenticated, "command actor not found", false)
 	}
 	if pollStripped {
-		if reply := corehandler.RequireMinTrustForPoll(e.core.DB, actor, 2, "create thread", userTrustLevel); reply.Err != nil {
-			return nativeCommandDecision{}, reply.Err
+		if errDetail := commandrules.RequireMinTrustForPoll(e.core.DB, actor, 2, "create thread", userTrustLevel); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 	}
 	if kind := decisionCtx.SanctionKind; kind != "" {
@@ -516,8 +516,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrUnauthenticated, "command actor not found", false)
 	}
 	if pollStripped {
-		if reply := corehandler.RequireMinTrustForPoll(e.core.DB, actor, 2, "reply", userTrustLevel); reply.Err != nil {
-			return nativeCommandDecision{}, reply.Err
+		if errDetail := commandrules.RequireMinTrustForPoll(e.core.DB, actor, 2, "reply", userTrustLevel); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 	}
 	thread := decisionCtx.Thread
@@ -747,8 +747,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 	pollBlock, cleanBody := extractPoll(body)
 	pollStripped := pollBlock != nil && cleanBody != body
 	if pollStripped {
-		if reply := corehandler.RequireMinTrustForPoll(e.core.DB, actor, 2, "reply", userTrustLevel); reply.Err != nil {
-			return nativeCommandDecision{}, reply.Err
+		if errDetail := commandrules.RequireMinTrustForPoll(e.core.DB, actor, 2, "reply", userTrustLevel); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 	}
 	settings, err := projections.GetBoardSettings(e.core.DB, thread.Board)

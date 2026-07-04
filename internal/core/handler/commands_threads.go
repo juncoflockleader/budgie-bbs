@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -20,8 +21,8 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 	pollBlock, cleanBody := extractPoll(p.Body)
 	if pollBlock != nil && cleanBody != p.Body {
-		if errReply := RequireMinTrustForPoll(h.db, actor, 2, "create thread", currentRuntime().UserTrustLevel); errReply.Err != nil {
-			return errReply
+		if errDetail := commandrules.RequireMinTrustForPoll(h.db, actor, 2, "create thread", currentRuntime().UserTrustLevel); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 	}
 
@@ -203,8 +204,8 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	pollBlock, cleanBody := extractPoll(userBody)
 	pollStripped := pollBlock != nil && cleanBody != userBody
 	if pollStripped {
-		if errReply := RequireMinTrustForPoll(h.db, actor, 2, "reply", currentRuntime().UserTrustLevel); errReply.Err != nil {
-			return errReply
+		if errDetail := commandrules.RequireMinTrustForPoll(h.db, actor, 2, "reply", currentRuntime().UserTrustLevel); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 	}
 	ct := proto.NormalizePostContentType(p.ContentType)
