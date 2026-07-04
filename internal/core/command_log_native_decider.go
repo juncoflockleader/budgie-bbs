@@ -2866,7 +2866,6 @@ func (e *CommandLogNativeDecisionExecutor) decideMailPostAuthor(ctx context.Cont
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
-	body := payload.Body
 	post, err := projections.GetPost(e.core.DB, postID)
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
@@ -2897,20 +2896,11 @@ func (e *CommandLogNativeDecisionExecutor) decideMailPostAuthor(ctx context.Cont
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board members only", false)
 		}
 	}
-	recipient := strings.TrimSpace(post.AuthorID)
-	if recipient == "" {
-		recipient = strings.TrimSpace(post.Author)
+	sendPayload, reply := corehandler.MailPostAuthorSendPayload(actor, payload, thread, post)
+	if reply.Err != nil {
+		return nativeCommandDecision{}, reply.Err
 	}
-	if recipient == "" || strings.EqualFold(strings.TrimSpace(post.Author), "anonymous") {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "anonymous article author cannot receive mail", false)
-	}
-	subject := proto.MailPostAuthorSubject(payload.Subject, thread.Title)
-	return e.decideSendMailPayload(record, actor, proto.SendMailPayload{
-		To:       []string{recipient},
-		Subject:  subject,
-		Body:     proto.FormatPostAuthorMailBody(thread.Board, thread.Title, post.CreatedSeq, post.ID, post.Author, actor.Name, body, post.Body),
-		SaveSent: payload.SaveSent,
-	})
+	return e.decideSendMailPayload(record, actor, sendPayload)
 }
 
 func (e *CommandLogNativeDecisionExecutor) decideSendDigestEntryMail(ctx context.Context, record CommandLogRecord) (nativeCommandDecision, *proto.ErrorDetail) {

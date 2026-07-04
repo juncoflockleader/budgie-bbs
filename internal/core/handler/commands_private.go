@@ -265,6 +265,22 @@ func DigestEntryMailSendPayload(p proto.SendDigestEntryMailPayload, export *proj
 	}
 }
 
+func MailPostAuthorSendPayload(actor *User, p proto.MailPostAuthorPayload, thread *Thread, post *Post) (proto.SendMailPayload, Reply) {
+	recipient := strings.TrimSpace(post.AuthorID)
+	if recipient == "" {
+		recipient = strings.TrimSpace(post.Author)
+	}
+	if recipient == "" || strings.EqualFold(strings.TrimSpace(post.Author), "anonymous") {
+		return proto.SendMailPayload{}, Reply{Err: errDetail(proto.ErrValidationFailed, "anonymous article author cannot receive mail", false)}
+	}
+	return proto.SendMailPayload{
+		To:       []string{recipient},
+		Subject:  proto.MailPostAuthorSubject(p.Subject, thread.Title),
+		Body:     proto.FormatPostAuthorMailBody(thread.Board, thread.Title, post.CreatedSeq, post.ID, post.Author, actor.Name, p.Body, post.Body),
+		SaveSent: p.SaveSent,
+	}, Reply{}
+}
+
 func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Reply {
 	if actor == nil {
 		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
@@ -275,7 +291,6 @@ func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Rep
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	postID := p.Post
-	body := p.Body
 	post, err := currentRuntime().GetPost(h.db, postID)
 	if err != nil {
 		return internalErr(err)
@@ -300,20 +315,11 @@ func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Rep
 	if settings != nil && settings.MemberReadMode && !h.actorCanUseMemberBoard(actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	recipient := strings.TrimSpace(post.AuthorID)
-	if recipient == "" {
-		recipient = strings.TrimSpace(post.Author)
+	sendPayload, errReply := MailPostAuthorSendPayload(actor, p, thread, post)
+	if errReply.Err != nil {
+		return errReply
 	}
-	if recipient == "" || strings.EqualFold(strings.TrimSpace(post.Author), "anonymous") {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "anonymous article author cannot receive mail", false)}
-	}
-	subject := proto.MailPostAuthorSubject(p.Subject, thread.Title)
-	return h.sendMail(actor, proto.SendMailPayload{
-		To:       []string{recipient},
-		Subject:  subject,
-		Body:     proto.FormatPostAuthorMailBody(thread.Board, thread.Title, post.CreatedSeq, post.ID, post.Author, actor.Name, body, post.Body),
-		SaveSent: p.SaveSent,
-	})
+	return h.sendMail(actor, sendPayload)
 }
 
 func (h *Handler) appendSysmailSystemPostTx(tx *sql.Tx, actor *User, mailID, subject, mailBody string, recipientCount int, ts int64) ([]*proto.Event, error) {
