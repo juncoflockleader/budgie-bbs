@@ -13,34 +13,27 @@ import (
 
 // --- Thread/post command implementations ---
 
-// maxPostBodyLen bounds a thread/post body. Without it a single body is
-// unbounded — amplifying memory/storage use, FTS indexing, and content/automod
-// scanning. Matches the cap already used for editable bodies.
-const maxPostBodyLen = 20000
-
 func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
-	if p.Board == "" || p.Title == "" || p.Body == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board, title, and body are required", false)}
-	}
-	if len(p.Body) > maxPostBodyLen {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "body must be 20000 characters or less", false)}
+	p, msg := proto.NormalizeCreateThreadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	pollBlock, cleanBody := extractPoll(p.Body)
 	if pollBlock != nil && cleanBody != p.Body {
-		if errReply := h.requireMinTrustForPoll(actor, 2, "create thread"); errReply.Err != nil {
+		if errReply := RequireMinTrustForPoll(h.db, actor, 2, "create thread", currentRuntime().UserTrustLevel); errReply.Err != nil {
 			return errReply
 		}
 	}
 
 	// Sanction check.
-	if kind, ok := activeSanction(h.db, actor.ID, p.Board); ok {
+	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, p.Board); ok {
 		code := proto.ErrMuted
 		if kind == "ban" {
 			code = proto.ErrBanned
 		}
 		return Reply{Err: errDetail(code, "you are "+kind+"d in this board", false)}
 	}
-	settings, err := getBoardSettings(h.db, p.Board)
+	settings, err := currentRuntime().GetBoardSettings(h.db, p.Board)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -54,11 +47,13 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	attachments, errReply := h.normalizeAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard)
+	attachments, errReply := NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
+		return newID("att_")
+	})
 	if errReply.Err != nil {
 		return errReply
 	}
-	authorName, authorID, errReply := h.postIdentity(actor, settings, p.Anonymous, canModerateBoard)
+	authorName, authorID, errReply := PostIdentity(actor, settings, p.Anonymous, canModerateBoard)
 	if errReply.Err != nil {
 		return errReply
 	}
@@ -66,16 +61,16 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	contentFilter, err := matchContentFilter(h.db, p.Board, p.Title+"\n"+p.Body)
+	contentFilter, err := currentRuntime().MatchContentFilter(h.db, p.Board, p.Title+"\n"+p.Body)
 	if err != nil {
 		return internalErr(err)
 	}
-	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, p.Board, p.Title+"\n"+p.Body, actor.ID)
+	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := currentRuntime().EvaluateBoardAutomod(h.db, p.Board, p.Title+"\n"+p.Body, actor.ID)
 	if err != nil {
 		return internalErr(err)
 	}
 
-	ct := contentType(p.ContentType)
+	ct := proto.NormalizePostContentType(p.ContentType)
 	ts := nowMS()
 	threadID := newID("thr_")
 	postID := newID("pst_")
@@ -87,19 +82,19 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	defer tx.Rollback() //nolint
 
 	// Verify board exists.
-	var boardName string
-	if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, p.Board).Scan(&boardName); err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
-	} else if err != nil {
+	if _, found, err := projections.BoardName(tx, p.Board); err != nil {
 		return internalErr(err)
+	} else if !found {
+		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
 
 	scopes := []string{"board:" + p.Board}
 
 	// Append thread.new
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+	threadPayload := &proto.ThreadNewPayload{
 		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: p.Title, TS: ts,
-	})
+	}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, threadPayload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -107,12 +102,13 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	threadScopes := append(scopes, "thread:"+threadID)
 
 	// Append post.appended (the first post in the thread)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
+	postPayload := &proto.PostAppendedPayload{
 		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: cleanBody,
 		RawBody:     p.Body,
 		Signature:   signature,
 		ContentType: ct, Attachments: attachments, TS: ts,
-	})
+	}
+	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, postPayload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -122,10 +118,10 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: p.Title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}
-	if err := insertThread(tx, newThread); err != nil {
+	if err := currentRuntime().InsertThread(tx, newThread); err != nil {
 		return internalErr(err)
 	}
-	if err := insertPost(tx, &Post{
+	if err := currentRuntime().InsertPost(tx, &Post{
 		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
 		Body: cleanBody, Signature: signature, ContentType: ct, CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
@@ -135,14 +131,14 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 		return internalErr(err)
 	}
 	if settings.RelayEnabled {
-		if err := insertRelayDelivery(tx, newID("relay_"), p.Board, threadID, postID, authorID, authorName, p.Title, cleanBody, ts, pseq); err != nil {
+		if err := currentRuntime().InsertRelayDelivery(tx, newID("relay_"), p.Board, threadID, postID, authorID, authorName, p.Title, cleanBody, ts, pseq); err != nil {
 			return internalErr(err)
 		}
 	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
+	if err := currentRuntime().BumpThread(tx, threadID, pseq); err != nil {
 		return internalErr(err)
 	}
-	if err := ftsInsertPost(tx, postID, threadID, p.Board, authorName, cleanBody); err != nil {
+	if err := currentRuntime().FtsInsertPost(tx, postID, threadID, p.Board, authorName, cleanBody); err != nil {
 		return internalErr(err)
 	}
 	var filterEvent *proto.Event
@@ -162,17 +158,17 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 	if pollBlock != nil && cleanBody != p.Body {
 		pollID := newID("pol_")
-		if err := insertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
+		if err := currentRuntime().InsertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
 			return internalErr(err)
 		}
 		for i, opt := range pollBlock.options {
 			optID := newID("opt_")
-			if err := insertPollOption(tx, optID, pollID, opt, i); err != nil {
+			if err := currentRuntime().InsertPollOption(tx, optID, pollID, opt, i); err != nil {
 				return internalErr(err)
 			}
 		}
 	}
-	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
+	if err := currentRuntime().EnqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
 		ActorID: actor.ID, ActorName: authorName, PostID: postID, ThreadID: threadID,
 		BoardID: p.Board, Body: cleanBody, TS: ts, Seq: pseq,
 	}, ts); err != nil {
@@ -187,10 +183,8 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 
 	// Publish both events.
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: p.Title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: cleanBody, RawBody: p.Body, Signature: signature, ContentType: ct, Attachments: attachments, TS: ts}, TS: ts})
+	h.publishEvent(proto.EvtThreadNew, tseq, scopes, threadPayload, ts)
+	h.publishEvent(proto.EvtPostAppended, pseq, threadScopes, postPayload, ts)
 	if filterEvent != nil {
 		h.bus.Publish(filterEvent)
 	}
@@ -201,34 +195,32 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 }
 
 func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
-	if p.Thread == "" || p.Body == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread and body are required", false)}
-	}
-	if len(p.Body) > maxPostBodyLen {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "body must be 20000 characters or less", false)}
+	p, msg := proto.NormalizeAppendPostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	userBody := p.Body
 	pollBlock, cleanBody := extractPoll(userBody)
 	pollStripped := pollBlock != nil && cleanBody != userBody
 	if pollStripped {
-		if errReply := h.requireMinTrustForPoll(actor, 2, "reply"); errReply.Err != nil {
+		if errReply := RequireMinTrustForPoll(h.db, actor, 2, "reply", currentRuntime().UserTrustLevel); errReply.Err != nil {
 			return errReply
 		}
 	}
-	ct := contentType(p.ContentType)
+	ct := proto.NormalizePostContentType(p.ContentType)
 	ts := nowMS()
 	postID := newID("pst_")
 
 	// All reads happen before the TX so we don't exhaust the single DB connection
 	// (SetMaxOpenConns(1) means the TX holds the only connection).
-	thread, err := getThread(h.db, p.Thread)
+	thread, err := currentRuntime().GetThread(h.db, p.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	settings, err := getBoardSettings(h.db, thread.Board)
+	settings, err := currentRuntime().GetBoardSettings(h.db, thread.Board)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -243,21 +235,23 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if (settings.ReadOnly || settings.NoReply) && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board is not accepting replies", false)}
 	}
-	rootNoReply, err := threadRootPostNoReply(h.db, thread.ID)
+	rootReplyGuards, err := projections.ThreadRootReplyGuardsForThread(h.db, thread.ID)
 	if err != nil {
 		return internalErr(err)
 	}
-	if rootNoReply && !canModerateThread {
+	if rootReplyGuards.NoReply && !canModerateThread {
 		return Reply{Err: errDetail(proto.ErrForbidden, "thread starter is not accepting replies", false)}
 	}
 	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, thread.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	attachments, errReply := h.normalizeAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard)
+	attachments, errReply := NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
+		return newID("att_")
+	})
 	if errReply.Err != nil {
 		return errReply
 	}
-	authorName, authorID, errReply := h.postIdentity(actor, settings, p.Anonymous, canModerateBoard)
+	authorName, authorID, errReply := PostIdentity(actor, settings, p.Anonymous, canModerateBoard)
 	if errReply.Err != nil {
 		return errReply
 	}
@@ -267,7 +261,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 
 	// Sanction check.
-	if kind, ok := activeSanction(h.db, actor.ID, thread.Board); ok {
+	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, thread.Board); ok {
 		code := proto.ErrMuted
 		if kind == "ban" {
 			code = proto.ErrBanned
@@ -280,7 +274,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	var replyNotifyTarget *Post
 	// Threading depth cap: max 1 level. If replyTo is itself a reply, flatten.
 	if p.ReplyTo != "" {
-		parent, err := getPost(h.db, p.ReplyTo)
+		parent, err := currentRuntime().GetPost(h.db, p.ReplyTo)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -311,7 +305,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		if p.QuotePost {
 			return Reply{Err: errDetail(proto.ErrValidationFailed, "replyTo is required for quoted replies", false)}
 		}
-		root, err := threadRootPost(h.db, thread.ID)
+		root, err := projections.ThreadRootPost(h.db, thread.ID)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -322,15 +316,15 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	rawBody := userBody
 	notificationBody := cleanBody
 	if quoteSource != nil {
-		prefix := formatQuotedReplyPrefix(quoteSource)
+		prefix := proto.FormatQuotedReplyPrefix(quoteSource.Author, quoteSource.Body)
 		cleanBody = prefix + cleanBody
 		rawBody = prefix + userBody
 	}
-	contentFilter, err := matchContentFilter(h.db, thread.Board, rawBody)
+	contentFilter, err := currentRuntime().MatchContentFilter(h.db, thread.Board, rawBody)
 	if err != nil {
 		return internalErr(err)
 	}
-	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, thread.Board, rawBody, actor.ID)
+	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := currentRuntime().EvaluateBoardAutomod(h.db, thread.Board, rawBody, actor.ID)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -342,16 +336,17 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	defer tx.Rollback() //nolint
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, &proto.PostAppendedPayload{
+	eventPayload := &proto.PostAppendedPayload{
 		ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID, Body: cleanBody,
 		RawBody:     rawBody,
 		Signature:   signature,
 		ContentType: ct, ReplyTo: p.ReplyTo, Attachments: attachments, TS: ts,
-	})
+	}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := insertPost(tx, &Post{
+	if err := currentRuntime().InsertPost(tx, &Post{
 		ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID,
 		Body: cleanBody, Signature: signature, ContentType: ct, ReplyTo: p.ReplyTo, CreatedSeq: seq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
@@ -361,14 +356,14 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		return internalErr(err)
 	}
 	if settings.RelayEnabled {
-		if err := insertRelayDelivery(tx, newID("relay_"), thread.Board, p.Thread, postID, authorID, authorName, thread.Title, cleanBody, ts, seq); err != nil {
+		if err := currentRuntime().InsertRelayDelivery(tx, newID("relay_"), thread.Board, p.Thread, postID, authorID, authorName, thread.Title, cleanBody, ts, seq); err != nil {
 			return internalErr(err)
 		}
 	}
-	if err := bumpThread(tx, p.Thread, seq); err != nil {
+	if err := currentRuntime().BumpThread(tx, p.Thread, seq); err != nil {
 		return internalErr(err)
 	}
-	if err := ftsInsertPost(tx, postID, p.Thread, thread.Board, authorName, cleanBody); err != nil {
+	if err := currentRuntime().FtsInsertPost(tx, postID, p.Thread, thread.Board, authorName, cleanBody); err != nil {
 		return internalErr(err)
 	}
 	var filterEvent *proto.Event
@@ -393,17 +388,17 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if pollStripped {
 		// Create poll rows within the same TX.
 		pollID := newID("pol_")
-		if err := insertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
+		if err := currentRuntime().InsertPoll(tx, pollID, postID, pollBlock.question, pollBlock.expiresAt, ts); err != nil {
 			return internalErr(err)
 		}
 		for i, opt := range pollBlock.options {
 			optID := newID("opt_")
-			if err := insertPollOption(tx, optID, pollID, opt, i); err != nil {
+			if err := currentRuntime().InsertPollOption(tx, optID, pollID, opt, i); err != nil {
 				return internalErr(err)
 			}
 		}
 	}
-	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
+	if err := currentRuntime().EnqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
 		ActorID: actor.ID, ActorName: authorName, PostID: postID, ThreadID: p.Thread,
 		BoardID: thread.Board, Body: cleanBody, ReplyTo: p.ReplyTo, TS: ts, Seq: seq,
 	}, ts); err != nil {
@@ -417,8 +412,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID, Body: cleanBody, RawBody: rawBody, Signature: signature, ContentType: ct, ReplyTo: p.ReplyTo, Attachments: attachments, TS: ts}, TS: ts})
+	h.publishEvent(proto.EvtPostAppended, seq, scopes, eventPayload, ts)
 	if filterEvent != nil {
 		h.bus.Publish(filterEvent)
 	}
@@ -460,7 +454,7 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 	}
 
 	for _, ref := range parseMentions(body) {
-		target, err := findUserRefTx(tx, ref)
+		target, err := projections.FindUserRef(tx, ref)
 		if err != nil {
 			return err
 		}
@@ -471,7 +465,7 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 	if replyTarget != nil {
 		addRecipient(replyTarget.AuthorID, "reply")
 	}
-	watchers, err := watchersOfThreadTx(tx, thread.ID, senderID)
+	watchers, err := currentRuntime().WatchersOfThreadTx(tx, thread.ID, senderID)
 	if err != nil {
 		return err
 	}
@@ -480,7 +474,7 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 	}
 
 	for userID, kind := range recipients {
-		recipient, err := getUserTx(tx, userID)
+		recipient, err := currentRuntime().GetUserTx(tx, userID)
 		if err != nil {
 			return err
 		}
@@ -501,14 +495,14 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 		if level == "mute" {
 			continue
 		}
-		ignored, err := relationshipExistsTx(tx, recipient.ID, senderID, "ignore")
+		ignored, err := projections.UserRelationshipExists(tx, recipient.ID, senderID, "ignore")
 		if err != nil {
 			return err
 		}
 		if ignored {
 			continue
 		}
-		if err := insertNotificationTx(tx, newID("notif_"), recipient.ID, kind, thread.ID, postID, actorLabel, ts); err != nil {
+		if err := currentRuntime().InsertNotificationTx(tx, newID("notif_"), recipient.ID, kind, thread.ID, postID, actorLabel, ts); err != nil {
 			return err
 		}
 	}
@@ -544,66 +538,19 @@ func userCanReceivePostNotificationTx(tx *sql.Tx, user *User, boardID string, se
 	if settings == nil || !settings.MemberReadMode {
 		return true, nil
 	}
-	if user.IsMod() {
-		return true, nil
-	}
-	var exists int
-	err := qQueryRow(tx, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, user.ID).Scan(&exists)
-	if err == nil {
-		return true, nil
-	}
-	if err != sql.ErrNoRows {
-		return false, err
-	}
-	err = qQueryRow(tx, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, user.ID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
-}
-
-func formatQuotedReplyPrefix(source *Post) string {
-	author := strings.TrimSpace(source.Author)
-	if author == "" {
-		author = "Unknown"
-	}
-	body := strings.TrimSpace(source.Body)
-	if body == "" {
-		body = "[empty article]"
-	}
-	lines := strings.Split(body, "\n")
-	const maxQuoteLines = 24
-	const maxQuoteBytes = 2400
-	var b strings.Builder
-	fmt.Fprintf(&b, "> %s wrote:\n", author)
-	for i, line := range lines {
-		if i >= maxQuoteLines || b.Len()+len(line)+8 > maxQuoteBytes {
-			b.WriteString("> ...\n")
-			break
-		}
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			b.WriteString(">\n")
-			continue
-		}
-		fmt.Fprintf(&b, "> %s\n", line)
-	}
-	b.WriteString("\n")
-	return b.String()
+	return projections.ActorCanUseMemberBoard(tx, user, boardID)
 }
 
 func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if actor == nil {
 		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
 	}
-	p.Post = strings.TrimSpace(p.Post)
-	p.Board = strings.TrimSpace(p.Board)
-	p.Title = strings.TrimSpace(p.Title)
-	if p.Post == "" || p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post and board are required", false)}
+	p, msg := proto.NormalizeRepostPostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 
-	sourcePost, err := getPost(h.db, p.Post)
+	sourcePost, err := currentRuntime().GetPost(h.db, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -613,14 +560,14 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if sourcePost.Redacted {
 		return Reply{Err: errDetail(proto.ErrConflict, "cannot repost a redacted post", false)}
 	}
-	sourceThread, err := getThread(h.db, sourcePost.Thread)
+	sourceThread, err := currentRuntime().GetThread(h.db, sourcePost.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
 	if sourceThread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "source thread not found", false)}
 	}
-	sourceSettings, err := getBoardSettings(h.db, sourceThread.Board)
+	sourceSettings, err := currentRuntime().GetBoardSettings(h.db, sourceThread.Board)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -628,7 +575,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrForbidden, "source board members only", false)}
 	}
 
-	settings, err := getBoardSettings(h.db, p.Board)
+	settings, err := currentRuntime().GetBoardSettings(h.db, p.Board)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -642,7 +589,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if (settings.MemberReadMode || settings.MemberPostMode) && !h.actorCanUseMemberBoard(actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board members only", false)}
 	}
-	if kind, ok := activeSanction(h.db, actor.ID, p.Board); ok {
+	if kind, ok := currentRuntime().ActiveSanction(h.db, actor.ID, p.Board); ok {
 		code := proto.ErrMuted
 		if kind == "ban" {
 			code = proto.ErrBanned
@@ -654,8 +601,8 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if title == "" {
 		title = sourceThread.Title
 	}
-	body := repostBody(sourcePost, sourceThread)
-	authorName, authorID, errReply := h.postIdentity(actor, settings, false, canModerateBoard)
+	body := proto.FormatRepostBody(sourceThread.Board, sourceThread.Title, sourcePost.Author, sourcePost.ID, sourcePost.Body)
+	authorName, authorID, errReply := PostIdentity(actor, settings, false, canModerateBoard)
 	if errReply.Err != nil {
 		return errReply
 	}
@@ -663,16 +610,16 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	contentFilter, err := matchContentFilter(h.db, p.Board, title+"\n"+body)
+	contentFilter, err := currentRuntime().MatchContentFilter(h.db, p.Board, title+"\n"+body)
 	if err != nil {
 		return internalErr(err)
 	}
-	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := evaluateBoardAutomod(h.db, p.Board, title+"\n"+body, actor.ID)
+	automodMatched, automodRuleID, automodMatchType, automodAction, automodRuleReason, automodDuration, err := currentRuntime().EvaluateBoardAutomod(h.db, p.Board, title+"\n"+body, actor.ID)
 	if err != nil {
 		return internalErr(err)
 	}
 
-	ct := contentType(sourcePost.ContentType)
+	ct := proto.NormalizePostContentType(sourcePost.ContentType)
 	ts := nowMS()
 	threadID := newID("thr_")
 	postID := newID("pst_")
@@ -683,17 +630,17 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	var boardName string
-	if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, p.Board).Scan(&boardName); err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
-	} else if err != nil {
+	if _, found, err := projections.BoardName(tx, p.Board); err != nil {
 		return internalErr(err)
+	} else if !found {
+		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
 	}
 
 	scopes := []string{"board:" + p.Board}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
+	threadPayload := &proto.ThreadNewPayload{
 		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
-	})
+	}
+	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, threadPayload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -717,13 +664,13 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	if err := insertThread(tx, &Thread{
+	if err := currentRuntime().InsertThread(tx, &Thread{
 		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
-	if err := insertPost(tx, &Post{
+	if err := currentRuntime().InsertPost(tx, &Post{
 		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
 		Body: body, Signature: signature, ContentType: ct,
 		SourcePost: sourcePost.ID, SourceThread: sourceThread.ID, SourceBoard: sourceThread.Board,
@@ -733,14 +680,14 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return internalErr(err)
 	}
 	if settings.RelayEnabled {
-		if err := insertRelayDelivery(tx, newID("relay_"), p.Board, threadID, postID, authorID, authorName, title, body, ts, pseq); err != nil {
+		if err := currentRuntime().InsertRelayDelivery(tx, newID("relay_"), p.Board, threadID, postID, authorID, authorName, title, body, ts, pseq); err != nil {
 			return internalErr(err)
 		}
 	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
+	if err := currentRuntime().BumpThread(tx, threadID, pseq); err != nil {
 		return internalErr(err)
 	}
-	if err := ftsInsertPost(tx, postID, threadID, p.Board, authorName, body); err != nil {
+	if err := currentRuntime().FtsInsertPost(tx, postID, threadID, p.Board, authorName, body); err != nil {
 		return internalErr(err)
 	}
 	var filterEvent *proto.Event
@@ -758,7 +705,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 			return internalErr(err)
 		}
 	}
-	if err := enqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
+	if err := currentRuntime().EnqueueOutboxJob(tx, outboxPostCommitted, postCommittedJob{
 		ActorID: actor.ID, ActorName: authorName, PostID: postID, ThreadID: threadID,
 		BoardID: p.Board, Body: body, TS: ts, Seq: pseq,
 	}, ts); err != nil {
@@ -769,9 +716,8 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes, Payload: postPayload, TS: ts})
+	h.publishEvent(proto.EvtThreadNew, tseq, scopes, threadPayload, ts)
+	h.publishEvent(proto.EvtPostAppended, pseq, threadScopes, postPayload, ts)
 	if filterEvent != nil {
 		h.bus.Publish(filterEvent)
 	}
@@ -779,44 +725,6 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	h.publishGeneratedEvents(automodEvents)
 
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
-}
-
-func repostBody(sourcePost *Post, sourceThread *Thread) string {
-	return strings.TrimSpace(fmt.Sprintf(
-		"Reposted from %s / %s\nOriginal author: %s\nOriginal post: %s\n\n%s",
-		sourceThread.Board,
-		sourceThread.Title,
-		sourcePost.Author,
-		sourcePost.ID,
-		sourcePost.Body,
-	))
-}
-
-func threadRootPostNoReply(db *sql.DB, threadID string) (bool, error) {
-	var noReply int
-	err := qQueryRow(db,
-		`SELECT no_reply FROM posts WHERE thread=? ORDER BY created_seq LIMIT 1`,
-		threadID,
-	).Scan(&noReply)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return noReply != 0, err
-}
-
-func threadRootPost(db *sql.DB, threadID string) (*Post, error) {
-	var postID string
-	err := qQueryRow(db,
-		`SELECT id FROM posts WHERE thread=? ORDER BY created_seq LIMIT 1`,
-		threadID,
-	).Scan(&postID)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return getPost(db, postID)
 }
 
 func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, authorID string, target *Post, thread *Thread, replyPostID, replyBody string, ts int64) (*proto.Event, error) {
@@ -827,14 +735,14 @@ func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, a
 	if authorID == "" || strings.TrimSpace(target.AuthorID) == "" || target.AuthorID == authorID {
 		return nil, nil
 	}
-	recipient, err := findUserRefTx(tx, target.AuthorID)
+	recipient, err := projections.FindUserRef(tx, target.AuthorID)
 	if err != nil {
 		return nil, err
 	}
 	if recipient == nil {
 		return nil, nil
 	}
-	ignored, err := relationshipExistsTx(tx, recipient.ID, actor.ID, "ignore")
+	ignored, err := projections.UserRelationshipExists(tx, recipient.ID, actor.ID, "ignore")
 	if err != nil {
 		return nil, err
 	}
@@ -843,8 +751,8 @@ func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, a
 	}
 
 	subject := "Article reply: " + thread.Title
-	body := formatArticleMailBackBody(thread, target, replyPostID, authorName, replyBody)
-	if errReply := ensureMailQuotaTx(tx, map[string]int{recipient.ID: 1}, mailMessageSize(subject, body, nil)); errReply.Err != nil {
+	body := proto.FormatArticleMailBackBody(thread.Board, thread.Title, target.ID, replyPostID, authorName, replyBody)
+	if errReply := EnsureMailQuota(tx, map[string]int{recipient.ID: 1}, proto.MailMessageSize(subject, body, nil)); errReply.Err != nil {
 		if errReply.Err.Code != proto.ErrValidationFailed {
 			return nil, fmt.Errorf("article mail-back quota check: %s", errReply.Err.Message)
 		}
@@ -852,44 +760,29 @@ func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, a
 	}
 	mailID := newID("mail_")
 	scopes := []string{"account:" + actor.ID, "account:" + recipient.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtMailSent, scopes, &proto.MailSentPayload{
-		ID: mailID, FromUserID: authorID, From: authorName, ToUserIDs: []string{recipient.ID}, To: []string{recipient.Name},
-		Subject: subject, Body: body, SaveSent: false, TS: ts,
-	})
+	eventPayload := proto.NewMailSentPayload(mailID, authorID, authorName, []string{recipient.ID}, []string{recipient.Name}, subject, body, "", false, nil, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtMailSent, scopes, eventPayload)
 	if err != nil {
 		return nil, err
 	}
-	if err := insertMailMessage(tx, mailID, authorID, subject, body, "", ts, seq); err != nil {
+	if err := currentRuntime().InsertMailMessage(tx, mailID, authorID, subject, body, "", ts, seq); err != nil {
 		return nil, err
 	}
-	if err := insertMailCopy(tx, mailID, recipient.ID, "recipient", "inbox", false, false, ts); err != nil {
+	if err := currentRuntime().InsertMailCopy(tx, mailID, recipient.ID, "recipient", "inbox", false, false, ts); err != nil {
 		return nil, err
 	}
-	return &proto.Event{Kind: proto.EvtMailSent, Seq: seq, Scopes: scopes,
-		Payload: &proto.MailSentPayload{ID: mailID, FromUserID: authorID, From: authorName, ToUserIDs: []string{recipient.ID}, To: []string{recipient.Name}, Subject: subject, Body: body, SaveSent: false, TS: ts}, TS: ts}, nil
-}
-
-func formatArticleMailBackBody(thread *Thread, target *Post, replyPostID, authorName, replyBody string) string {
-	return strings.TrimSpace(fmt.Sprintf(
-		"Article reply mail-back\n\nBoard: %s\nThread: %s\nOriginal post: %s\nReply post: %s\nReply author: %s\n\n%s",
-		thread.Board,
-		thread.Title,
-		target.ID,
-		replyPostID,
-		authorName,
-		replyBody,
-	))
+	return &proto.Event{Kind: proto.EvtMailSent, Seq: seq, Scopes: scopes, Payload: eventPayload, TS: ts}, nil
 }
 
 func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply {
-	body := strings.TrimSpace(p.Body)
-	if body == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "body is required", false)}
+	p, msg := proto.NormalizePostBoardMailPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	boardID := strings.TrimSpace(p.Board)
-	threadID := strings.TrimSpace(p.Thread)
+	boardID := p.Board
+	threadID := p.Thread
 	if threadID != "" {
-		thread, err := getThread(h.db, threadID)
+		thread, err := currentRuntime().GetThread(h.db, threadID)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -905,7 +798,7 @@ func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply
 	if boardID == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
 	}
-	settings, err := getBoardSettings(h.db, boardID)
+	settings, err := currentRuntime().GetBoardSettings(h.db, boardID)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -915,129 +808,43 @@ func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply
 	if !settings.MailInAllowed && !h.actorCanModerateBoard(actor, boardID) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board mail-in is disabled", false)}
 	}
-	contentType := strings.TrimSpace(p.ContentType)
 	if threadID != "" {
 		return h.appendPost(actor, proto.AppendPostPayload{
 			Thread:      threadID,
-			Body:        body,
-			ContentType: contentType,
+			Body:        p.Body,
+			ContentType: p.ContentType,
 			Attachments: p.Attachments,
 		})
 	}
-	title := strings.TrimSpace(p.Subject)
+	title := p.Subject
 	if title == "" {
 		title = "(no subject)"
 	}
 	return h.createThread(actor, proto.CreateThreadPayload{
 		Board:       boardID,
 		Title:       title,
-		Body:        body,
-		ContentType: contentType,
+		Body:        p.Body,
+		ContentType: p.ContentType,
 		Attachments: p.Attachments,
 	})
 }
 
 func (h *Handler) currentPostSignature(authorID string) (string, error) {
-	authorID = strings.TrimSpace(authorID)
-	if authorID == "" {
-		return "", nil
-	}
-	var selectedID string
-	var randomEnabled int
-	err := qQueryRow(h.db,
-		`SELECT selected_signature_id, random_enabled FROM user_signature_settings WHERE user_id=?`,
-		authorID,
-	).Scan(&selectedID, &randomEnabled)
-	if err != nil && err != sql.ErrNoRows {
-		return "", err
-	}
-	if randomEnabled != 0 {
-		var count int
-		if err := qQueryRow(h.db,
-			`SELECT COUNT(*) FROM user_signatures
-			  WHERE user_id=? AND active=1 AND TRIM(COALESCE(body,'')) <> ''`,
-			authorID,
-		).Scan(&count); err != nil {
-			return "", err
-		}
-		if count > 0 {
-			var signature string
-			offset := int(nowMS() % int64(count))
-			if err := qQueryRow(h.db,
-				`SELECT COALESCE(body,'') FROM user_signatures
-				  WHERE user_id=? AND active=1 AND TRIM(COALESCE(body,'')) <> ''
-				  ORDER BY position, updated_at, id LIMIT 1 OFFSET ?`,
-				authorID, offset,
-			).Scan(&signature); err != nil {
-				return "", err
-			}
-			return trimSignature(signature), nil
-		}
-	}
-	if selectedID != "" {
-		var signature string
-		err := qQueryRow(h.db,
-			`SELECT COALESCE(body,'') FROM user_signatures WHERE user_id=? AND id=? AND active=1`,
-			authorID, selectedID,
-		).Scan(&signature)
-		if err != nil && err != sql.ErrNoRows {
-			return "", err
-		}
-		signature = trimSignature(signature)
-		if signature != "" {
-			return signature, nil
-		}
-	}
-	var bankSignature string
-	err = qQueryRow(h.db,
-		`SELECT COALESCE(body,'') FROM user_signatures
-		  WHERE user_id=? AND active=1 AND TRIM(COALESCE(body,'')) <> ''
-		  ORDER BY position, updated_at, id LIMIT 1`,
-		authorID,
-	).Scan(&bankSignature)
-	if err != nil && err != sql.ErrNoRows {
-		return "", err
-	}
-	bankSignature = trimSignature(bankSignature)
-	if bankSignature != "" {
-		return bankSignature, nil
-	}
-	var signature string
-	err = qQueryRow(h.db, `SELECT COALESCE(signature,'') FROM user_profiles WHERE user_id=?`, authorID).Scan(&signature)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return trimSignature(signature), nil
-}
-
-func trimSignature(signature string) string {
-	signature = strings.TrimSpace(signature)
-	if len(signature) > 500 {
-		signature = signature[:500]
-	}
-	return signature
+	return projections.CurrentPostSignature(h.db, authorID, func(count int) int {
+		return int(nowMS() % int64(count))
+	})
 }
 
 func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
-	if p.Post == "" || strings.TrimSpace(p.Filename) == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post and filename are required", false)}
+	var msg string
+	p, msg = proto.NormalizeAttachPostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	filename := strings.TrimSpace(p.Filename)
-	contentType := strings.TrimSpace(p.ContentType)
-	if len(filename) > 160 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "attachment filename must be 160 characters or less", false)}
-	}
-	if len(contentType) > 120 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "attachment content type must be 120 characters or less", false)}
-	}
-	if p.SizeBytes < 0 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "attachment size cannot be negative", false)}
-	}
+	filename := p.Filename
+	contentType := p.ContentType
 
-	post, err := getPost(h.db, p.Post)
+	post, err := currentRuntime().GetPost(h.db, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1047,14 +854,14 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if post.Redacted {
 		return Reply{Err: errDetail(proto.ErrConflict, "cannot attach to a redacted post", false)}
 	}
-	thread, err := getThread(h.db, post.Thread)
+	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	settings, err := getBoardSettings(h.db, thread.Board)
+	settings, err := currentRuntime().GetBoardSettings(h.db, thread.Board)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1073,15 +880,15 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if !canModerateBoard && !(isAuthor && withinWindow) {
 		return Reply{Err: errDetail(proto.ErrEditWindowExpired, "edit window has expired", false)}
 	}
-	var count int
-	if err := qQueryRow(h.db, `SELECT COUNT(*) FROM post_attachments WHERE post_id=?`, p.Post).Scan(&count); err != nil {
+	count, err := projections.PostAttachmentCount(h.db, p.Post)
+	if err != nil {
 		return internalErr(err)
 	}
-	if count >= 8 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "a post can have at most 8 attachments", false)}
+	if msg := proto.ValidatePostAttachmentCount(count + 1); msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 
-	attachmentID := strings.TrimSpace(p.ID)
+	attachmentID := p.ID
 	if attachmentID == "" {
 		attachmentID = newID("att_")
 	}
@@ -1101,11 +908,11 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := insertPostAttachment(tx, attachmentID, p.Post, filename, contentType, p.SizeBytes, "", actor.ID, ts); err != nil {
+	if err := currentRuntime().InsertPostAttachment(tx, attachmentID, p.Post, filename, contentType, p.SizeBytes, "", actor.ID, ts); err != nil {
 		return internalErr(err)
 	}
-	if stagedBlobID := strings.TrimSpace(p.StagedBlobID); stagedBlobID != "" {
-		if err := promoteStagedPostAttachmentBlob(tx, stagedBlobID, attachmentID, p.SizeBytes, contentType); err != nil {
+	if stagedBlobID := p.StagedBlobID; stagedBlobID != "" {
+		if err := currentRuntime().PromoteStagedPostBlob(tx, stagedBlobID, attachmentID, p.SizeBytes, contentType); err != nil {
 			if errors.Is(err, projections.ErrStagedAttachmentBlobMissing) {
 				return Reply{Err: errDetail(proto.ErrBlobStagingRequired, "staged attachment blob is not available yet", true)}
 			}
@@ -1118,25 +925,23 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAttachmentAdded, Seq: seq, Scopes: scopes, Payload: payload, TS: ts})
+	h.publishEvent(proto.EvtPostAttachmentAdded, seq, scopes, payload, ts)
 	return Reply{Result: &proto.AckResult{ID: attachmentID, Seq: seq}}
 }
 
 func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
-	if p.Post == "" || p.Body == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post and body are required", false)}
+	p, msg := proto.NormalizeEditPostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	pollBlock, _ := extractPoll(p.Body)
 	if pollBlock != nil {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "editing posts with poll markup is not supported", false)}
 	}
-	var existingPollID string
-	err := qQueryRow(h.db, `SELECT id FROM polls WHERE post_id=?`, p.Post).Scan(&existingPollID)
-	if err == nil {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "editing posts that contain a poll is not supported", false)}
-	}
-	if err != nil && err != sql.ErrNoRows {
+	if _, found, err := projections.PollIDForPost(h.db, p.Post); err != nil {
 		return internalErr(err)
+	} else if found {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "editing posts that contain a poll is not supported", false)}
 	}
 
 	ts := nowMS()
@@ -1147,7 +952,7 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	post, err := getPostTx(tx, p.Post)
+	post, err := currentRuntime().GetPostTx(tx, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1167,42 +972,40 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrEditWindowExpired, "edit window has expired", false)}
 	}
 
-	thread, err := getThreadTx(tx, post.Thread)
+	thread, err := currentRuntime().GetThreadTx(tx, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
 
 	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostEdited, scopes, &proto.PostEditedPayload{
+	eventPayload := &proto.PostEditedPayload{
 		ID: post.ID, Thread: post.Thread, NewBody: p.Body, Version: post.Version + 1, TS: ts,
-	})
+	}
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostEdited, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := updatePostBody(tx, post.ID, p.Body, seq); err != nil {
+	if err := currentRuntime().UpdatePostBody(tx, post.ID, p.Body, seq); err != nil {
 		return internalErr(err)
 	}
-	if err := ftsUpdatePost(tx, post.ID, p.Body); err != nil {
+	if err := currentRuntime().FtsUpdatePost(tx, post.ID, p.Body); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostEdited, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostEditedPayload{ID: post.ID, Thread: post.Thread, NewBody: p.Body, Version: post.Version + 1, TS: ts}, TS: ts})
+	h.publishEvent(proto.EvtPostEdited, seq, scopes, eventPayload, ts)
 
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
 func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
-	if p.Post == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	p, msg := proto.NormalizeSetPostFlagPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if p.Marked == nil && p.Recommended == nil && p.NoReply == nil && p.TeX == nil && p.MailBack == nil {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "at least one article flag is required", false)}
-	}
-	post, err := getPost(h.db, p.Post)
+	post, err := currentRuntime().GetPost(h.db, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1212,7 +1015,7 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	if post.Redacted {
 		return Reply{Err: errDetail(proto.ErrConflict, "cannot flag a redacted post", false)}
 	}
-	thread, err := getThread(h.db, post.Thread)
+	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
@@ -1272,7 +1075,7 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := setPostFlags(tx, post.ID, marked, recommended, noReply, tex, mailBack, seq); err != nil {
+	if err := currentRuntime().SetPostFlags(tx, post.ID, marked, recommended, noReply, tex, mailBack, seq); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1285,8 +1088,9 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 }
 
 func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
-	if p.Post == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	p, msg := proto.NormalizeRedactPostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	ts := nowMS()
 
@@ -1296,7 +1100,7 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	post, err := getPostTx(tx, p.Post)
+	post, err := currentRuntime().GetPostTx(tx, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1312,7 +1116,7 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		isAuthor = post.Author == actor.Name
 	}
 	withinWindow := time.Now().UnixMilli()-post.CreatedAt < editWindowDur.Milliseconds()
-	thread, err := getThreadTx(tx, post.Thread)
+	thread, err := currentRuntime().GetThreadTx(tx, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
@@ -1332,13 +1136,13 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := markPostRedacted(tx, post.ID, seq); err != nil {
+	if err := currentRuntime().MarkPostRedacted(tx, post.ID, seq); err != nil {
 		return internalErr(err)
 	}
-	if err := recordPostDeletion(tx, post.ID, post.Thread, thread.Board, actor.ID, actor.Name, p.Reason, deletionKind, ts, seq); err != nil {
+	if err := currentRuntime().RecordPostDeletion(tx, post.ID, post.Thread, thread.Board, actor.ID, actor.Name, p.Reason, deletionKind, ts, seq); err != nil {
 		return internalErr(err)
 	}
-	if err := ftsDeletePost(tx, post.ID); err != nil {
+	if err := currentRuntime().FtsDeletePost(tx, post.ID); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1352,8 +1156,9 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 }
 
 func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
-	if p.Post == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	p, msg := proto.NormalizeRestorePostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	ts := nowMS()
 
@@ -1363,7 +1168,7 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	post, err := getPostTx(tx, p.Post)
+	post, err := currentRuntime().GetPostTx(tx, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1374,7 +1179,7 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrConflict, "post is not redacted", false)}
 	}
 
-	thread, err := getThreadTx(tx, post.Thread)
+	thread, err := currentRuntime().GetThreadTx(tx, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
@@ -1389,10 +1194,10 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := markPostRestored(tx, post.ID, seq); err != nil {
+	if err := currentRuntime().MarkPostRestored(tx, post.ID, seq); err != nil {
 		return internalErr(err)
 	}
-	if err := clearPostDeletion(tx, post.ID); err != nil {
+	if err := currentRuntime().ClearPostDeletion(tx, post.ID); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1406,14 +1211,12 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 }
 
 func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) Reply {
-	boardID := strings.TrimSpace(p.Board)
-	if boardID == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeRedactPostRangePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	postIDs, errReply := normalizePostRangeIDs(p.Posts)
-	if errReply.Err != nil {
-		return errReply
-	}
+	boardID := p.Board
+	postIDs := p.Posts
 	ts := nowMS()
 
 	tx, err := h.db.Begin()
@@ -1422,7 +1225,7 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 	}
 	defer tx.Rollback() //nolint
 
-	if errReply := ensureRangeBoardAccessTx(tx, h, actor, boardID); errReply.Err != nil {
+	if errReply := EnsureRangeBoardAccess(tx, actor, boardID); errReply.Err != nil {
 		return errReply
 	}
 
@@ -1443,13 +1246,13 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 		if err != nil {
 			return internalErr(err)
 		}
-		if err := markPostRedacted(tx, post.ID, seq); err != nil {
+		if err := currentRuntime().MarkPostRedacted(tx, post.ID, seq); err != nil {
 			return internalErr(err)
 		}
-		if err := recordPostDeletion(tx, post.ID, post.Thread, thread.Board, actor.ID, actor.Name, p.Reason, "recycle", ts, seq); err != nil {
+		if err := currentRuntime().RecordPostDeletion(tx, post.ID, post.Thread, thread.Board, actor.ID, actor.Name, p.Reason, "recycle", ts, seq); err != nil {
 			return internalErr(err)
 		}
-		if err := ftsDeletePost(tx, post.ID); err != nil {
+		if err := currentRuntime().FtsDeletePost(tx, post.ID); err != nil {
 			return internalErr(err)
 		}
 		lastSeq = seq
@@ -1466,14 +1269,12 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 }
 
 func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload) Reply {
-	boardID := strings.TrimSpace(p.Board)
-	if boardID == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeRestorePostRangePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	postIDs, errReply := normalizePostRangeIDs(p.Posts)
-	if errReply.Err != nil {
-		return errReply
-	}
+	boardID := p.Board
+	postIDs := p.Posts
 	ts := nowMS()
 
 	tx, err := h.db.Begin()
@@ -1482,7 +1283,7 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 	}
 	defer tx.Rollback() //nolint
 
-	if errReply := ensureRangeBoardAccessTx(tx, h, actor, boardID); errReply.Err != nil {
+	if errReply := EnsureRangeBoardAccess(tx, actor, boardID); errReply.Err != nil {
 		return errReply
 	}
 
@@ -1503,10 +1304,10 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 		if err != nil {
 			return internalErr(err)
 		}
-		if err := markPostRestored(tx, post.ID, seq); err != nil {
+		if err := currentRuntime().MarkPostRestored(tx, post.ID, seq); err != nil {
 			return internalErr(err)
 		}
-		if err := clearPostDeletion(tx, post.ID); err != nil {
+		if err := currentRuntime().ClearPostDeletion(tx, post.ID); err != nil {
 			return internalErr(err)
 		}
 		lastSeq = seq
@@ -1523,10 +1324,11 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 }
 
 func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Reply {
-	boardID := strings.TrimSpace(p.Board)
-	if boardID == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeClearBoardJunkPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
+	boardID := p.Board
 	ts := nowMS()
 
 	tx, err := h.db.Begin()
@@ -1535,10 +1337,10 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 	}
 	defer tx.Rollback() //nolint
 
-	if errReply := ensureRangeBoardAccessTx(tx, h, actor, boardID); errReply.Err != nil {
+	if errReply := EnsureRangeBoardAccess(tx, actor, boardID); errReply.Err != nil {
 		return errReply
 	}
-	postIDs, errReply := boardJunkIDsTx(tx, boardID, p.Posts)
+	postIDs, errReply := BoardJunkPostIDs(tx, boardID, p.Posts)
 	if errReply.Err != nil {
 		return errReply
 	}
@@ -1546,16 +1348,9 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 	published := make([]proto.Event, 0, len(postIDs))
 	var lastSeq int64
 	for _, postID := range postIDs {
-		var threadID string
-		err := qQueryRow(tx,
-			`SELECT thread_id FROM post_deletions WHERE post_id=? AND board_id=? AND kind='junk'`,
-			postID, boardID,
-		).Scan(&threadID)
-		if err == sql.ErrNoRows {
-			return Reply{Err: errDetail(proto.ErrNotFound, "junk post not found: "+postID, false)}
-		}
-		if err != nil {
-			return internalErr(err)
+		threadID, errReply := JunkPostThreadID(tx, postID, boardID)
+		if errReply.Err != nil {
+			return errReply
 		}
 		scopes := []string{"thread:" + threadID, "board:" + boardID}
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostDeletionCleared, scopes, &proto.PostDeletionClearedPayload{
@@ -1564,7 +1359,7 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 		if err != nil {
 			return internalErr(err)
 		}
-		if err := clearPostDeletion(tx, postID); err != nil {
+		if err := currentRuntime().ClearPostDeletion(tx, postID); err != nil {
 			return internalErr(err)
 		}
 		lastSeq = seq
@@ -1580,28 +1375,31 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
 }
 
-func ensureRangeBoardAccessTx(tx *sql.Tx, h *Handler, actor *User, boardID string) Reply {
-	var exists int
-	if err := qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists); err == sql.ErrNoRows {
+func EnsureRangeBoardAccess(queryable sqlQueryable, actor *User, boardID string) Reply {
+	if exists, err := projections.BoardExists(queryable, boardID); err != nil {
+		return internalErr(err)
+	} else if !exists {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
-	} else if err != nil {
+	}
+	canModeratePosts, err := projections.ActorCanModerateBoardPosts(queryable, actor, boardID)
+	if err != nil {
 		return internalErr(err)
 	}
-	if !h.actorCanModerateBoardPostsTx(tx, actor, boardID) {
+	if !canModeratePosts {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board post moderation permission required", false)}
 	}
 	return Reply{}
 }
 
-func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*Post, *Thread, Reply) {
-	post, err := getPostTx(tx, postID)
+func LoadRangePost(postID, boardID string, getPost func(string) (*Post, error), getThread func(string) (*Thread, error)) (*Post, *Thread, Reply) {
+	post, err := getPost(postID)
 	if err != nil {
 		return nil, nil, internalErr(err)
 	}
 	if post == nil {
 		return nil, nil, Reply{Err: errDetail(proto.ErrNotFound, "post not found: "+postID, false)}
 	}
-	thread, err := getThreadTx(tx, post.Thread)
+	thread, err := getThread(post.Thread)
 	if err != nil {
 		return nil, nil, internalErr(err)
 	}
@@ -1611,64 +1409,48 @@ func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*Post, *Thread, Reply)
 	return post, thread, Reply{}
 }
 
-func boardJunkIDsTx(tx *sql.Tx, boardID string, requested []string) ([]string, Reply) {
-	if len(requested) > 0 {
-		return normalizePostRangeIDs(requested)
+func LoadRangePostFromDB(db *sql.DB, postID, boardID string) (*Post, *Thread, Reply) {
+	return LoadRangePost(postID, boardID, func(id string) (*Post, error) {
+		return projections.GetPost(db, id)
+	}, func(id string) (*Thread, error) {
+		return projections.GetThread(db, id)
+	})
+}
+
+func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*Post, *Thread, Reply) {
+	return LoadRangePost(postID, boardID, func(id string) (*Post, error) {
+		return currentRuntime().GetPostTx(tx, id)
+	}, func(id string) (*Thread, error) {
+		return currentRuntime().GetThreadTx(tx, id)
+	})
+}
+
+func BoardJunkPostIDs(queryable sqlQueryable, boardID string, requested []string) ([]string, Reply) {
+	ids, msg, err := projections.BoardJunkPostIDs(queryable, boardID, requested)
+	if msg != "" {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	rows, err := projections.QQuery(tx,
-		`SELECT post_id FROM post_deletions WHERE board_id=? AND kind='junk' ORDER BY deleted_at DESC, seq DESC`,
-		boardID,
-	)
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var postID string
-		if err := rows.Scan(&postID); err != nil {
-			return nil, internalErr(err)
-		}
-		out = append(out, postID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, internalErr(err)
-	}
-	return out, Reply{}
+	return ids, Reply{}
 }
 
-func normalizePostRangeIDs(input []string) ([]string, Reply) {
-	if len(input) == 0 {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "posts are required", false)}
+func JunkPostThreadID(queryable sqlQueryable, postID, boardID string) (string, Reply) {
+	threadID, ok, err := projections.BoardJunkPostThreadID(queryable, postID, boardID)
+	if err != nil {
+		return "", internalErr(err)
 	}
-	if len(input) > 100 {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "post range can include at most 100 items", false)}
+	if !ok {
+		return "", Reply{Err: errDetail(proto.ErrNotFound, "junk post not found: "+postID, false)}
 	}
-	out := make([]string, 0, len(input))
-	seen := map[string]bool{}
-	for _, raw := range input {
-		id := strings.TrimSpace(raw)
-		if id == "" {
-			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "post id cannot be empty", false)}
-		}
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	return out, Reply{}
+	return threadID, Reply{}
 }
 
 func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Reply {
-	if p.Thread == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
-	}
-	title := strings.TrimSpace(p.Title)
-	if title == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "title is required", false)}
-	}
-	if len(title) > 160 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "title must be 160 characters or less", false)}
+	p, msg := proto.NormalizeSetThreadTitlePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if actor == nil {
 		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
@@ -1682,14 +1464,14 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 	}
 	defer tx.Rollback() //nolint
 
-	thread, err := getThreadTx(tx, p.Thread)
+	thread, err := currentRuntime().GetThreadTx(tx, p.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	if thread.Title == title {
+	if thread.Title == p.Title {
 		return Reply{Result: &proto.AckResult{ID: thread.ID}}
 	}
 
@@ -1710,12 +1492,12 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadTitleSet, scopes, &proto.ThreadTitleSetPayload{
-		Thread: thread.ID, Title: title, By: actor.ID, TS: ts,
+		Thread: thread.ID, Title: p.Title, By: actor.ID, TS: ts,
 	})
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := setThreadTitle(tx, thread.ID, title, ts); err != nil {
+	if err := currentRuntime().SetThreadTitle(tx, thread.ID, p.Title, ts); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1723,12 +1505,16 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadTitleSet, Seq: seq, Scopes: scopes,
-		Payload: &proto.ThreadTitleSetPayload{Thread: thread.ID, Title: title, By: actor.Name, TS: ts}, TS: ts})
+		Payload: &proto.ThreadTitleSetPayload{Thread: thread.ID, Title: p.Title, By: actor.Name, TS: ts}, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
 }
 
 func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
+	p, msg := proto.NormalizeLockThreadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
 	ts := nowMS()
 
 	tx, err := h.db.Begin()
@@ -1737,7 +1523,7 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	thread, err := getThreadTx(tx, p.Thread)
+	thread, err := currentRuntime().GetThreadTx(tx, p.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1755,7 +1541,7 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := setThreadLocked(tx, thread.ID, p.Locked); err != nil {
+	if err := currentRuntime().SetThreadLocked(tx, thread.ID, p.Locked); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1769,6 +1555,10 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 }
 
 func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
+	p, msg := proto.NormalizeMoveThreadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
 	ts := nowMS()
 
 	tx, err := h.db.Begin()
@@ -1777,7 +1567,7 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	thread, err := getThreadTx(tx, p.Thread)
+	thread, err := currentRuntime().GetThreadTx(tx, p.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1788,11 +1578,10 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
 	}
 
-	var destName string
-	if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, p.ToBoard).Scan(&destName); err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
-	} else if err != nil {
+	if _, found, err := projections.BoardName(tx, p.ToBoard); err != nil {
 		return internalErr(err)
+	} else if !found {
+		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
 	}
 
 	scopes := []string{"board:" + thread.Board, "board:" + p.ToBoard}
@@ -1802,7 +1591,7 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := moveThreadBoard(tx, thread.ID, p.ToBoard); err != nil {
+	if err := currentRuntime().MoveThreadBoard(tx, thread.ID, p.ToBoard); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1815,60 +1604,36 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
 }
 
-func (h *Handler) postIdentity(actor *User, settings *BoardSettings, anonymous bool, canModerateBoard bool) (string, string, Reply) {
-	if !anonymous {
-		return actor.Name, actor.ID, Reply{}
+func PostIdentity(actor *User, settings *BoardSettings, anonymous bool, canModerateBoard bool) (string, string, Reply) {
+	actorName, actorID := "", ""
+	if actor != nil {
+		actorName, actorID = actor.Name, actor.ID
 	}
-	if settings == nil || (!settings.AnonymousAllowed && !canModerateBoard) {
-		return "", "", Reply{Err: errDetail(proto.ErrForbidden, "anonymous posting is not enabled for this board", false)}
+	anonymousAllowed := settings != nil && settings.AnonymousAllowed
+	author, authorID, msg := proto.ResolvePostAuthorIdentity(actorName, actorID, anonymous, anonymousAllowed, canModerateBoard)
+	if msg != "" {
+		return "", "", Reply{Err: errDetail(proto.ErrForbidden, msg, false)}
 	}
-	return "Anonymous", "", Reply{}
+	return author, authorID, Reply{}
 }
 
-func (h *Handler) normalizeAttachments(input []proto.AttachmentPayload, allowed bool, canModerateBoard bool) ([]proto.AttachmentPayload, Reply) {
+func NormalizePostAttachments(input []proto.AttachmentPayload, allowed bool, canModerateBoard bool, idFor func(int) string) ([]proto.AttachmentPayload, Reply) {
 	if len(input) == 0 {
 		return nil, Reply{}
 	}
 	if !allowed && !canModerateBoard {
 		return nil, Reply{Err: errDetail(proto.ErrForbidden, "attachments are not enabled for this board", false)}
 	}
-	if len(input) > 8 {
-		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "a post can have at most 8 attachments", false)}
+	attachments, msg := proto.NormalizePostAttachments(input)
+	if msg != "" {
+		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	out := make([]proto.AttachmentPayload, 0, len(input))
-	for _, item := range input {
-		filename := strings.TrimSpace(item.Filename)
-		contentType := strings.TrimSpace(item.ContentType)
-		url := strings.TrimSpace(item.URL)
-		if filename == "" {
-			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "attachment filename is required", false)}
-		}
-		if len(filename) > 160 {
-			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "attachment filename must be 160 characters or less", false)}
-		}
-		if len(contentType) > 120 {
-			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "attachment content type must be 120 characters or less", false)}
-		}
-		if len(url) > 500 {
-			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "attachment URL must be 500 characters or less", false)}
-		}
-		if item.SizeBytes < 0 {
-			return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "attachment size cannot be negative", false)}
-		}
-		out = append(out, proto.AttachmentPayload{
-			ID:          newID("att_"),
-			Filename:    filename,
-			ContentType: contentType,
-			SizeBytes:   item.SizeBytes,
-			URL:         url,
-		})
-	}
-	return out, Reply{}
+	return proto.WithAttachmentIDs(attachments, idFor), Reply{}
 }
 
 func (h *Handler) insertAttachments(tx *sql.Tx, postID, authorID string, ts int64, attachments []proto.AttachmentPayload) error {
 	for _, item := range attachments {
-		if err := insertPostAttachment(tx, item.ID, postID, item.Filename, item.ContentType, item.SizeBytes, item.URL, authorID, ts); err != nil {
+		if err := currentRuntime().InsertPostAttachment(tx, item.ID, postID, item.Filename, item.ContentType, item.SizeBytes, item.URL, authorID, ts); err != nil {
 			return err
 		}
 	}

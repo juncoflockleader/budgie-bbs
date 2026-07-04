@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"os"
+	"strings"
 	"time"
 
 	nats "github.com/nats-io/nats.go"
@@ -14,9 +15,26 @@ type Conn struct {
 	nc *nats.Conn
 }
 
+type DialOptions struct {
+	Name    string
+	Timeout time.Duration
+}
+
 func Dial(url string) (*Conn, error) {
-	opts := append([]nats.Option{nats.Name("budgie-bbs"), nats.Timeout(5 * time.Second)}, securityOptionsFromEnv()...)
-	nc, err := nats.Connect(url, opts...)
+	return DialWithOptions(url, DialOptions{})
+}
+
+func DialWithOptions(url string, options DialOptions) (*Conn, error) {
+	name := strings.TrimSpace(options.Name)
+	if name == "" {
+		name = "budgie-bbs"
+	}
+	timeout := options.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	opts := append([]nats.Option{nats.Name(name), nats.Timeout(timeout)}, securityOptionsFromEnv()...)
+	nc, err := nats.Connect(strings.TrimSpace(url), opts...)
 	if err != nil {
 		return nil, err
 	}

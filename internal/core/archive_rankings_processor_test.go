@@ -2,18 +2,14 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestArchiveRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "archive-rankings-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -215,7 +211,7 @@ func archiveRankingsBoolPtr(v bool) *bool {
 
 func archiveRankingStatsRows(t *testing.T, c *Core) int {
 	t.Helper()
-	count, err := archiveRankingStatsRowCount(c.DB)
+	count, err := projections.ArchiveRankingStatsRowCount(c.DB)
 	if err != nil {
 		t.Fatalf("count archive ranking stats rows: %v", err)
 	}

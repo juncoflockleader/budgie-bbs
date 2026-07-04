@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,7 +13,8 @@ import (
 )
 
 const (
-	defaultJetStreamEventLogStream          = "BUDGIE_EVENT_LOG"
+	DefaultJetStreamEventLogStream          = "BUDGIE_EVENT_LOG"
+	defaultJetStreamEventLogStream          = DefaultJetStreamEventLogStream
 	defaultJetStreamEventLogWait            = 5 * time.Second
 	defaultJetStreamEventLogDuplicateWindow = 24 * time.Hour
 	jetStreamEventLogAppendRetries          = 64
@@ -52,22 +52,10 @@ func NewJetStreamEventLogClient(ctx context.Context, conn *Conn, options JetStre
 	if conn == nil || conn.nc == nil {
 		return nil, fmt.Errorf("nats event log: nil connection")
 	}
-	stream := strings.TrimSpace(options.Stream)
-	if stream == "" {
-		stream = defaultJetStreamEventLogStream
-	}
-	wait := options.Wait
-	if wait <= 0 {
-		wait = defaultJetStreamEventLogWait
-	}
-	replicas := options.Replicas
-	if replicas <= 0 {
-		replicas = 1
-	}
-	dupeWindow := options.DuplicateWindow
-	if dupeWindow <= 0 {
-		dupeWindow = defaultJetStreamEventLogDuplicateWindow
-	}
+	stream := JetStreamName(options.Stream, defaultJetStreamEventLogStream)
+	wait := jetStreamWait(options.Wait)
+	replicas := jetStreamReplicas(options.Replicas)
+	dupeWindow := jetStreamDuration(options.DuplicateWindow, defaultJetStreamEventLogDuplicateWindow)
 	js, err := conn.nc.JetStream(nats.MaxWait(wait))
 	if err != nil {
 		return nil, err
@@ -309,50 +297,33 @@ func (c *JetStreamEventLogClient) ListEventPartitions(ctx context.Context, limit
 	if err != nil {
 		return nil, err
 	}
-	type partitionSubject struct {
-		partition core.LogPartition
-		count     uint64
-	}
-	subjects := make([]partitionSubject, 0, len(info.State.Subjects))
+	offsets := make([]core.EventPartitionOffset, 0, len(info.State.Subjects))
+	seen := map[core.LogPartition]bool{}
 	for subject, count := range info.State.Subjects {
 		partition, ok := core.ParseBrokerEventSubject(subject)
 		if !ok {
 			continue
 		}
-		subjects = append(subjects, partitionSubject{partition: partition, count: count})
+		partition = partition.Normalize()
+		seen[partition] = true
+		offsets = append(offsets, core.EventPartitionOffset{
+			Partition:  partition,
+			LastOffset: int64(count),
+		}.Normalize())
 	}
 	for partition, offset := range c.seededOffsets() {
 		if offset <= 0 {
 			continue
 		}
-		found := false
-		for _, subject := range subjects {
-			if subject.partition.Normalize() == partition.Normalize() {
-				found = true
-				break
-			}
-		}
-		if !found {
-			subjects = append(subjects, partitionSubject{partition: partition.Normalize(), count: uint64(offset)})
+		partition = partition.Normalize()
+		if !seen[partition] {
+			offsets = append(offsets, core.EventPartitionOffset{
+				Partition:  partition,
+				LastOffset: offset,
+			}.Normalize())
 		}
 	}
-	sort.Slice(subjects, func(i, j int) bool {
-		if subjects[i].count == subjects[j].count {
-			if subjects[i].partition.Kind == subjects[j].partition.Kind {
-				return subjects[i].partition.Key < subjects[j].partition.Key
-			}
-			return subjects[i].partition.Kind < subjects[j].partition.Kind
-		}
-		return subjects[i].count > subjects[j].count
-	})
-	if limit > 0 && len(subjects) > limit {
-		subjects = subjects[:limit]
-	}
-	partitions := make([]core.LogPartition, 0, len(subjects))
-	for _, subject := range subjects {
-		partitions = append(partitions, subject.partition)
-	}
-	return partitions, nil
+	return core.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]core.EventPartitionOffset, error) {
@@ -376,17 +347,9 @@ func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context,
 		offsets = append(offsets, core.EventPartitionOffset{
 			Partition:  partition,
 			LastOffset: tail.logicalOffset,
-		})
+		}.Normalize())
 	}
-	sort.Slice(offsets, func(i, j int) bool {
-		if offsets[i].LastOffset == offsets[j].LastOffset {
-			if offsets[i].Partition.Kind == offsets[j].Partition.Kind {
-				return offsets[i].Partition.Key < offsets[j].Partition.Key
-			}
-			return offsets[i].Partition.Kind < offsets[j].Partition.Kind
-		}
-		return offsets[i].LastOffset > offsets[j].LastOffset
-	})
+	core.SortEventPartitionOffsetsByLastOffset(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}
@@ -394,56 +357,16 @@ func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context,
 }
 
 func (c *JetStreamEventLogClient) ensureStream(ctx context.Context) error {
-	cfg := &nats.StreamConfig{
-		Name:        c.stream,
-		Subjects:    []string{core.BrokerEventSubjectWildcard()},
-		Retention:   nats.LimitsPolicy,
-		Storage:     nats.FileStorage,
-		Replicas:    c.replicas,
-		AllowDirect: true,
-		Duplicates:  c.dupeWindow,
-	}
-	info, err := c.js.StreamInfo(c.stream, nats.Context(ctx))
-	if errors.Is(err, nats.ErrStreamNotFound) {
-		_, err = c.js.AddStream(cfg, nats.Context(ctx))
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	current := info.Config
-	changed := false
-	if !hasSubject(current.Subjects, core.BrokerEventSubjectWildcard()) {
-		current.Subjects = append(current.Subjects, core.BrokerEventSubjectWildcard())
-		changed = true
-	}
-	if !current.AllowDirect {
-		current.AllowDirect = true
-		changed = true
-	}
-	if c.dupeWindow > 0 && current.Duplicates != c.dupeWindow {
-		current.Duplicates = c.dupeWindow
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	_, err = c.js.UpdateStream(&current, nats.Context(ctx))
-	return err
+	cfg := JetStreamEventLogStreamConfig(JetStreamEventLogOptions{
+		Stream:          c.stream,
+		Replicas:        c.replicas,
+		DuplicateWindow: c.dupeWindow,
+	})
+	return ensureJetStreamStream(ctx, c.js, cfg)
 }
 
 func (c *JetStreamEventLogClient) validateStream(ctx context.Context) error {
-	info, err := c.js.StreamInfo(c.stream, nats.Context(ctx))
-	if err != nil {
-		return err
-	}
-	if !info.Config.AllowDirect {
-		return fmt.Errorf("nats event log: stream %s does not allow direct reads", c.stream)
-	}
-	if !hasSubject(info.Config.Subjects, core.BrokerEventSubjectWildcard()) {
-		return fmt.Errorf("nats event log: stream %s does not include subject %s", c.stream, core.BrokerEventSubjectWildcard())
-	}
-	return nil
+	return validateJetStreamStream(ctx, c.js, c.stream, "nats event log", []string{core.BrokerEventSubjectWildcard()})
 }
 
 func (c *JetStreamEventLogClient) findEventByID(ctx context.Context, partition core.LogPartition, subject, id string, requested core.BrokerEventRecord) (core.BrokerEventLogMessage, error) {
@@ -586,15 +509,6 @@ func sameJetStreamEventIdentity(existing, requested core.BrokerEventRecord) bool
 type jetStreamPartitionTail struct {
 	streamSeq     uint64
 	logicalOffset int64
-}
-
-func hasSubject(subjects []string, want string) bool {
-	for _, subject := range subjects {
-		if subject == want {
-			return true
-		}
-	}
-	return false
 }
 
 func isWrongLastSequence(err error) bool {

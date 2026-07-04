@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -43,7 +44,7 @@ func (h *Handler) applyAutomodActionTx(tx *sql.Tx, ruleID, matchType, action, re
 		if err != nil {
 			return nil, err
 		}
-		if err := insertAutomodAuditLog(tx, auditPayload); err != nil {
+		if err := currentRuntime().InsertAutomodAuditLog(tx, auditPayload); err != nil {
 			return nil, err
 		}
 		generated = append(generated, &proto.Event{Kind: proto.EvtBoardAutomodTriggered, Seq: auditSeq, Scopes: auditScopes, Payload: auditPayload, TS: ts})
@@ -55,7 +56,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 	switch action {
 	case "manual_review":
 		reviewID := newID("rev_")
-		if err := insertModerationReview(tx, reviewID, "automod", postID, "post", by, reason, ts); err != nil {
+		if err := currentRuntime().InsertModerationReview(tx, reviewID, "automod", postID, "post", by, reason, ts); err != nil {
 			return nil, err
 		}
 		// Moderation-only (reporter/reason must not reach board subscribers — M8).
@@ -73,13 +74,13 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 		if err != nil {
 			return nil, err
 		}
-		if err := markPostRedacted(tx, postID, seq); err != nil {
+		if err := currentRuntime().MarkPostRedacted(tx, postID, seq); err != nil {
 			return nil, err
 		}
-		if err := recordPostDeletion(tx, postID, threadID, boardID, by, automodSystemActor, reason, "recycle", ts, seq); err != nil {
+		if err := currentRuntime().RecordPostDeletion(tx, postID, threadID, boardID, by, automodSystemActor, reason, "recycle", ts, seq); err != nil {
 			return nil, err
 		}
-		if err := ftsDeletePost(tx, postID); err != nil {
+		if err := currentRuntime().FtsDeletePost(tx, postID); err != nil {
 			return nil, err
 		}
 		return []*proto.Event{{Kind: proto.EvtPostRedacted, Seq: seq, Scopes: scopes, Payload: payload, TS: ts}}, nil
@@ -90,7 +91,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 		if err != nil {
 			return nil, err
 		}
-		if err := setThreadLocked(tx, threadID, true); err != nil {
+		if err := currentRuntime().SetThreadLocked(tx, threadID, true); err != nil {
 			return nil, err
 		}
 		return []*proto.Event{{Kind: proto.EvtThreadLocked, Seq: seq, Scopes: scopes, Payload: payload, TS: ts}}, nil
@@ -114,7 +115,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 		if err != nil {
 			return nil, err
 		}
-		if err := insertSanction(tx, sanctionID, targetUserID, kind, scope, expiresAt, by, reason, seq); err != nil {
+		if err := currentRuntime().InsertSanction(tx, sanctionID, targetUserID, kind, scope, expiresAt, by, reason, seq); err != nil {
 			return nil, err
 		}
 		return []*proto.Event{{Kind: proto.EvtUserSanctioned, Seq: seq, Scopes: scopes, Payload: payload, TS: ts}}, nil
@@ -126,17 +127,17 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 // per action: global sanctions require admin, thread actions require thread
 // moderation, and the rest require post moderation on that board.
 func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePayload) Reply {
-	board := strings.TrimSpace(p.Board)
-	if board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, actions, msg := proto.NormalizeSetBoardAutomodRulePayload(p)
+	board := p.Board
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if msg := proto.ValidateAutomodRule(p); msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	matchType := strings.TrimSpace(p.MatchType)
-	actions := proto.ParseAutomodActions(p.Action)
-	action := strings.Join(actions, ",") // normalized
-	pattern := strings.TrimSpace(p.Pattern)
+	matchType := p.MatchType
+	action := p.Action
+	pattern := p.Pattern
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -144,18 +145,26 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 	}
 	defer tx.Rollback() //nolint
 
-	var boardName string
-	if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, board).Scan(&boardName); err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
-	} else if err != nil {
+	if _, found, err := projections.BoardName(tx, board); err != nil {
 		return internalErr(err)
+	} else if !found {
+		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
 
-	if reply := h.authorizeAutomodActions(tx, actor, board, actions); reply.Err != nil {
-		return reply
+	req := proto.AutomodActionPermissionRequirements(actions)
+	canModerateThreads := false
+	if req.ThreadModeration {
+		canModerateThreads = h.actorCanModerateBoardThreadsTx(tx, actor, board)
+	}
+	canModeratePosts := false
+	if req.PostModeration {
+		canModeratePosts = h.actorCanModerateBoardPostsTx(tx, actor, board)
+	}
+	if failure := proto.CheckAutomodActionPermissions(req, actor.IsAdmin(), canModerateThreads, canModeratePosts); failure != nil {
+		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 	}
 
-	ruleID := strings.TrimSpace(p.ID)
+	ruleID := p.ID
 	if ruleID == "" {
 		ruleID = newID("rule_")
 	}
@@ -168,53 +177,33 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 	payload := &proto.BoardAutomodRuleSetPayload{
 		ID: ruleID, Board: board, Enabled: enabled, Priority: p.Priority,
 		MatchType: matchType, Pattern: pattern, Threshold: p.Threshold, WindowSec: p.WindowSec,
-		Action: action, DurationSec: p.DurationSec, Reason: strings.TrimSpace(p.Reason),
-		Note: strings.TrimSpace(p.Note), By: actor.ID, TS: ts,
+		Action: action, DurationSec: p.DurationSec, Reason: p.Reason,
+		Note: p.Note, By: actor.ID, TS: ts,
 	}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardAutomodRuleSet, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := upsertBoardAutomodRule(tx, payload); err != nil {
+	if err := currentRuntime().UpsertBoardAutomodRule(tx, payload); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtBoardAutomodRuleSet, Seq: seq, Scopes: scopes, Payload: payload, TS: ts})
+	h.publishEvent(proto.EvtBoardAutomodRuleSet, seq, scopes, payload, ts)
 	return Reply{Result: &proto.AckResult{ID: ruleID, Seq: seq}}
-}
-
-// authorizeAutomodActions requires the actor to hold the permission for every
-// action a rule will take (the union of per-action requirements).
-func (h *Handler) authorizeAutomodActions(tx *sql.Tx, actor *User, board string, actions []string) Reply {
-	for _, action := range actions {
-		switch action {
-		case "global_mute":
-			if !actor.IsAdmin() {
-				return Reply{Err: errDetail(proto.ErrForbidden, "only admins can create global-sanction rules", false)}
-			}
-		case "lock_thread":
-			if !h.actorCanModerateBoardThreadsTx(tx, actor, board) {
-				return Reply{Err: errDetail(proto.ErrForbidden, "thread moderation permission required", false)}
-			}
-		default: // manual_review, redact, board_mute, board_ban
-			if !h.actorCanModerateBoardPostsTx(tx, actor, board) {
-				return Reply{Err: errDetail(proto.ErrForbidden, "post moderation permission required", false)}
-			}
-		}
-	}
-	return Reply{}
 }
 
 // deleteBoardAutomodRule removes a board automod rule. Any moderator of the
 // board (post or thread) may delete a rule.
 func (h *Handler) deleteBoardAutomodRule(actor *User, p proto.DeleteBoardAutomodRulePayload) Reply {
-	board := strings.TrimSpace(p.Board)
-	id := strings.TrimSpace(p.ID)
-	if board == "" || id == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board and id are required", false)}
+	var msg string
+	p, msg = proto.NormalizeDeleteBoardAutomodRulePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
+	board := p.Board
+	id := p.ID
 	tx, err := h.db.Begin()
 	if err != nil {
 		return internalErr(err)
@@ -230,12 +219,12 @@ func (h *Handler) deleteBoardAutomodRule(actor *User, p proto.DeleteBoardAutomod
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := deleteBoardAutomodRule(tx, board, id); err != nil {
+	if err := currentRuntime().DeleteBoardAutomodRule(tx, board, id); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtBoardAutomodRuleDeleted, Seq: seq, Scopes: scopes, Payload: payload, TS: ts})
+	h.publishEvent(proto.EvtBoardAutomodRuleDeleted, seq, scopes, payload, ts)
 	return Reply{Result: &proto.AckResult{ID: id, Seq: seq}}
 }

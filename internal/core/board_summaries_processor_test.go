@@ -2,18 +2,14 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "board-summaries-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -166,7 +162,7 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 
 func boardSummaryStatsRows(t *testing.T, c *Core) int {
 	t.Helper()
-	count, err := boardSummaryStatsRowCount(c.DB)
+	count, err := projections.BoardSummaryStatsRowCount(c.DB)
 	if err != nil {
 		t.Fatalf("count board summary stats rows: %v", err)
 	}

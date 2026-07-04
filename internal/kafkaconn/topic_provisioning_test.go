@@ -3,7 +3,6 @@ package kafkaconn
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -70,9 +69,7 @@ func TestEnsureTopicsWithRequestorRejectsUnderPartitionedExistingTopic(t *testin
 	err := ensureTopicsWithRequestor(context.Background(), requestor, []TopicProvisioningSpec{
 		{Topic: "budgie.commands.load.1", Partitions: 32, ReplicationFactor: 1},
 	}, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "has 8 partitions, requires at least 32") {
-		t.Fatalf("ensure under-partitioned topic err = %v, want partition-floor error", err)
-	}
+	requireErrorContains(t, err, "has 8 partitions, requires at least 32")
 }
 
 func TestEnsureTopicsWithRequestorRejectsCreateErrors(t *testing.T) {
@@ -85,9 +82,7 @@ func TestEnsureTopicsWithRequestorRejectsCreateErrors(t *testing.T) {
 	err := ensureTopicsWithRequestor(context.Background(), requestor, []TopicProvisioningSpec{
 		{Topic: "budgie.commands.load.1", Partitions: 32, ReplicationFactor: 1},
 	}, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "TOPIC_AUTHORIZATION_FAILED") || !strings.Contains(err.Error(), "denied") {
-		t.Fatalf("ensure unauthorized topic err = %v, want create error with broker message", err)
-	}
+	requireErrorContains(t, err, "TOPIC_AUTHORIZATION_FAILED", "denied")
 }
 
 func TestEnsureTopicsWithRequestorValidatesSpecsBeforeRequests(t *testing.T) {
@@ -96,24 +91,67 @@ func TestEnsureTopicsWithRequestorValidatesSpecsBeforeRequests(t *testing.T) {
 	err := ensureTopicsWithRequestor(context.Background(), requestor, []TopicProvisioningSpec{
 		{Topic: "", Partitions: 32},
 	}, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "topic name is required") {
-		t.Fatalf("empty topic err = %v, want topic-name validation", err)
-	}
+	requireErrorContains(t, err, "topic name is required")
 	err = ensureTopicsWithRequestor(context.Background(), requestor, []TopicProvisioningSpec{
 		{Topic: "budgie.commands.load.1", Partitions: 0},
 	}, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "positive partition count") {
-		t.Fatalf("zero partitions err = %v, want partition validation", err)
-	}
+	requireErrorContains(t, err, "positive partition count")
 	err = ensureTopicsWithRequestor(context.Background(), requestor, []TopicProvisioningSpec{
 		{Topic: "budgie.commands.load.1", Partitions: 32},
 		{Topic: "budgie.commands.load.1", Partitions: 32},
 	}, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "duplicate topic") {
-		t.Fatalf("duplicate topic err = %v, want duplicate-topic validation", err)
-	}
+	requireErrorContains(t, err, "duplicate topic")
 	if len(requestor.requests) != 0 {
 		t.Fatalf("request count = %d, want no requests after validation errors", len(requestor.requests))
+	}
+}
+
+func TestTopicReplicationFactor(t *testing.T) {
+	got, err := TopicReplicationFactor(3)
+	if err != nil {
+		t.Fatalf("TopicReplicationFactor: %v", err)
+	}
+	if got != 3 {
+		t.Fatalf("replication factor = %d, want 3", got)
+	}
+	_, err = TopicReplicationFactor(0)
+	requireErrorContains(t, err, "must be positive")
+	_, err = TopicReplicationFactor(32768)
+	requireErrorContains(t, err, "fit int16")
+}
+
+func TestCommandEventTopicProvisioningSpecs(t *testing.T) {
+	specs, err := CommandEventTopicProvisioningSpecs(
+		RuntimeConfigFromFlags("redpanda:9092", " budgie.commands.load.1 ", " budgie.events.load.1 ", "writers"),
+		32,
+		48,
+		2,
+	)
+	if err != nil {
+		t.Fatalf("command/event topic specs: %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("topic specs = %d, want command and event topics", len(specs))
+	}
+	if specs[0].Topic != "budgie.commands.load.1" || specs[0].Partitions != 32 || specs[0].ReplicationFactor != 2 {
+		t.Fatalf("command spec = %+v, want command topic partitions and replicas", specs[0])
+	}
+	if specs[1].Topic != "budgie.events.load.1" || specs[1].Partitions != 48 || specs[1].ReplicationFactor != 2 {
+		t.Fatalf("event spec = %+v, want event topic partitions and replicas", specs[1])
+	}
+}
+
+func TestCommandTopicProvisioningSpecs(t *testing.T) {
+	specs, err := CommandTopicProvisioningSpecs(
+		RuntimeConfigFromFlags("redpanda:9092", "budgie.commands.load.1", "budgie.events.load.1", "writers"),
+		32,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("command topic specs: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Topic != "budgie.commands.load.1" {
+		t.Fatalf("topic specs = %+v, want command topic only", specs)
 	}
 }
 

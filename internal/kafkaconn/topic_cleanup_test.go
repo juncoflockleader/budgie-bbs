@@ -80,18 +80,14 @@ func TestDeleteTopicsWithRequestorRejectsDeleteErrors(t *testing.T) {
 	}
 
 	err := deleteTopicsWithRequestor(context.Background(), requestor, []string{"budgie.commands.load.1"}, time.Second, false)
-	if err == nil || !strings.Contains(err.Error(), "TOPIC_AUTHORIZATION_FAILED") || !strings.Contains(err.Error(), "denied") {
-		t.Fatalf("delete unauthorized err = %v, want broker delete error", err)
-	}
+	requireErrorContains(t, err, "TOPIC_AUTHORIZATION_FAILED", "denied")
 }
 
 func TestDeleteTopicsWithRequestorValidatesNamesBeforeRequests(t *testing.T) {
 	requestor := &fakeKafkaTopicRequestor{}
 
 	err := deleteTopicsWithRequestor(context.Background(), requestor, []string{" "}, time.Second, true)
-	if err == nil || !strings.Contains(err.Error(), "topic name is required") {
-		t.Fatalf("delete empty topic err = %v, want topic-name validation", err)
-	}
+	requireErrorContains(t, err, "topic name is required")
 	if len(requestor.requests) != 0 {
 		t.Fatalf("request count = %d, want no request after validation error", len(requestor.requests))
 	}

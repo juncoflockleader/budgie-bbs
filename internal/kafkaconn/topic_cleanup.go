@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -34,21 +33,9 @@ func ListTopics(ctx context.Context, options TopicListOptions) ([]string, error)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	runtime := options.Runtime.Normalize()
-	if len(runtime.Brokers) == 0 {
-		return nil, fmt.Errorf("kafka topic listing: broker list is required")
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return nil, fmt.Errorf("kafka topic listing: client id is required")
-	}
-	opts, err := RuntimeClientOpts(runtime, clientID)
+	client, err := openTopicAdminClient("listing", options.Runtime, options.ClientID)
 	if err != nil {
 		return nil, err
-	}
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("kafka topic listing: create admin client: %w", err)
 	}
 	defer client.Close()
 	return listTopicsWithRequestor(ctx, client, options.Timeout)
@@ -59,21 +46,9 @@ func DeleteTopics(ctx context.Context, options TopicDeletionOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	runtime := options.Runtime.Normalize()
-	if len(runtime.Brokers) == 0 {
-		return fmt.Errorf("kafka topic deletion: broker list is required")
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return fmt.Errorf("kafka topic deletion: client id is required")
-	}
-	opts, err := RuntimeClientOpts(runtime, clientID)
+	client, err := openTopicAdminClient("deletion", options.Runtime, options.ClientID)
 	if err != nil {
 		return err
-	}
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return fmt.Errorf("kafka topic deletion: create admin client: %w", err)
 	}
 	defer client.Close()
 	return deleteTopicsWithRequestor(ctx, client, options.Topics, options.Timeout, options.IgnoreMissing)

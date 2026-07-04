@@ -9,15 +9,33 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
+func requireErrorContains(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want containing %q", err, want)
+	}
+}
+
+func requireCommandEventTransactionRollback(t *testing.T, ctx context.Context, commandLog *BrokerCommandLog, eventStore EventStore, partition LogPartition, label string) {
+	t.Helper()
+	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 0 {
+		t.Fatalf("%s committed offset = %d, %v; want 0, nil", label, got, err)
+	}
+	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
+	if err != nil {
+		t.Fatalf("%s replay event partition: %v", label, err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("%s events = %+v, want no events", label, events)
+	}
+}
+
 func TestMemoryBrokerCommandEventTransactionRejectsConflictingDuplicateEventIDAtomically(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	eventStore := harness.eventStore
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-conflicting-event-transaction")
 
@@ -30,16 +48,7 @@ func TestMemoryBrokerCommandEventTransactionRejectsConflictingDuplicateEventIDAt
 	}); err == nil {
 		t.Fatalf("CommitCommandEvents succeeded, want duplicate event id conflict")
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay event partition: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want transaction rollback before append", events)
-	}
+	requireCommandEventTransactionRollback(t, ctx, commandLog, eventStore, partition, "conflicting duplicate event")
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsMissingReturnedEvent(t *testing.T) {
@@ -52,9 +61,7 @@ func TestBrokerCommandEventTransactionStoreRejectsMissingReturnedEvent(t *testin
 			commandEventTransactionTestEventWithID("evt_transaction_missing_return", "Missing return"),
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "returned 0 events for 1 requested events") {
-		t.Fatalf("CommitCommandEvents err = %v, want returned event count failure", err)
-	}
+	requireErrorContains(t, err, "returned 0 events for 1 requested events")
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsMismatchedReturnedEvent(t *testing.T) {
@@ -71,9 +78,7 @@ func TestBrokerCommandEventTransactionStoreRejectsMismatchedReturnedEvent(t *tes
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
 	})
-	if err == nil || !strings.Contains(err.Error(), `returned event 0 id "evt_transaction_returned" for requested id "evt_transaction_requested"`) {
-		t.Fatalf("CommitCommandEvents err = %v, want returned event identity failure", err)
-	}
+	requireErrorContains(t, err, `returned event 0 id "evt_transaction_returned" for requested id "evt_transaction_requested"`)
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsTimestampDrift(t *testing.T) {
@@ -91,9 +96,7 @@ func TestBrokerCommandEventTransactionStoreRejectsTimestampDrift(t *testing.T) {
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
 	})
-	if err == nil || !strings.Contains(err.Error(), `returned event 0 id "evt_transaction_ts_requested" for requested id "evt_transaction_ts_requested"`) {
-		t.Fatalf("CommitCommandEvents err = %v, want returned timestamp identity failure", err)
-	}
+	requireErrorContains(t, err, `returned event 0 id "evt_transaction_ts_requested" for requested id "evt_transaction_ts_requested"`)
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsReturnedEventWithoutSequence(t *testing.T) {
@@ -109,9 +112,7 @@ func TestBrokerCommandEventTransactionStoreRejectsReturnedEventWithoutSequence(t
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
 	})
-	if err == nil || !strings.Contains(err.Error(), `returned event 0 id "evt_transaction_missing_seq" without scalar sequence evidence`) {
-		t.Fatalf("CommitCommandEvents err = %v, want missing scalar sequence failure", err)
-	}
+	requireErrorContains(t, err, `returned event 0 id "evt_transaction_missing_seq" without scalar sequence evidence`)
 }
 
 func TestBrokerCommandEventTransactionStoreAcceptsPartitionOnlyReturnedEventWithOptions(t *testing.T) {
@@ -258,9 +259,7 @@ func TestBrokerCommandEventTransactionStoreRejectsReturnedCompatibilitySequenceD
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
 	})
-	if err == nil || !strings.Contains(err.Error(), `returned event 0 id "evt_transaction_compat_seq_drift" for requested id "evt_transaction_compat_seq_drift"`) {
-		t.Fatalf("CommitCommandEvents err = %v, want returned compatibility sequence drift failure", err)
-	}
+	requireErrorContains(t, err, `returned event 0 id "evt_transaction_compat_seq_drift" for requested id "evt_transaction_compat_seq_drift"`)
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsNonIncreasingReturnedSequence(t *testing.T) {
@@ -281,9 +280,7 @@ func TestBrokerCommandEventTransactionStoreRejectsNonIncreasingReturnedSequence(
 		CommandOffset:    1,
 		Events:           []EventAppend{first, second},
 	})
-	if err == nil || !strings.Contains(err.Error(), `returned event 1 id "evt_transaction_second_seq" with non-increasing scalar sequence 9 after 10`) {
-		t.Fatalf("CommitCommandEvents err = %v, want non-increasing scalar sequence failure", err)
-	}
+	requireErrorContains(t, err, `returned event 1 id "evt_transaction_second_seq" with non-increasing scalar sequence 9 after 10`)
 }
 
 func TestBrokerCommandEventTransactionStoreAcceptsOrderedCompatibilitySequenceBatch(t *testing.T) {
@@ -332,9 +329,7 @@ func TestBrokerCommandEventTransactionStoreRejectsNonIncreasingReturnedPartition
 		CommandOffset:    1,
 		Events:           []EventAppend{first, second},
 	})
-	if err == nil || !strings.Contains(err.Error(), `returned event 1 id "evt_transaction_second_partition_offset" for partition board/general with non-increasing partition offset 9 after 10`) {
-		t.Fatalf("CommitCommandEvents err = %v, want non-increasing partition offset failure", err)
-	}
+	requireErrorContains(t, err, `returned event 1 id "evt_transaction_second_partition_offset" for partition board/general with non-increasing partition offset 9 after 10`)
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsStaleCommittedOffset(t *testing.T) {
@@ -351,9 +346,7 @@ func TestBrokerCommandEventTransactionStoreRejectsStaleCommittedOffset(t *testin
 		CommandOffset:    5,
 		Events:           []EventAppend{requested},
 	})
-	if err == nil || !strings.Contains(err.Error(), "committed offset 4 before command offset 5") {
-		t.Fatalf("CommitCommandEvents err = %v, want stale committed offset failure", err)
-	}
+	requireErrorContains(t, err, "committed offset 4 before command offset 5")
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsWrongCommittedPartition(t *testing.T) {
@@ -371,9 +364,7 @@ func TestBrokerCommandEventTransactionStoreRejectsWrongCommittedPartition(t *tes
 		CommandOffset:    5,
 		Events:           []EventAppend{requested},
 	})
-	if err == nil || !strings.Contains(err.Error(), "committed partition board/other for command partition board/general") {
-		t.Fatalf("CommitCommandEvents err = %v, want wrong committed partition failure", err)
-	}
+	requireErrorContains(t, err, "committed partition board/other for command partition board/general")
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsMissingCommittedPartition(t *testing.T) {
@@ -391,9 +382,7 @@ func TestBrokerCommandEventTransactionStoreRejectsMissingCommittedPartition(t *t
 		CommandOffset:    5,
 		Events:           []EventAppend{requested},
 	})
-	if err == nil || !strings.Contains(err.Error(), "missing committed partition") {
-		t.Fatalf("CommitCommandEvents err = %v, want missing committed partition failure", err)
-	}
+	requireErrorContains(t, err, "missing committed partition")
 }
 
 func TestBrokerCommandEventTransactionStoreRequiresEventTimestamp(t *testing.T) {
@@ -407,9 +396,7 @@ func TestBrokerCommandEventTransactionStoreRequiresEventTimestamp(t *testing.T) 
 		CommandOffset:    1,
 		Events:           []EventAppend{event},
 	})
-	if err == nil || !strings.Contains(err.Error(), "event timestamp is required") {
-		t.Fatalf("CommitCommandEvents err = %v, want timestamp required failure", err)
-	}
+	requireErrorContains(t, err, "event timestamp is required")
 	if client.calls != 0 {
 		t.Fatalf("client calls = %d, want timestamp-less batch rejected before client", client.calls)
 	}
@@ -431,19 +418,8 @@ func TestMemoryBrokerCommandEventTransactionClientRequiresEventTimestamp(t *test
 	client := NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient)
 
 	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []BrokerEventRecord{record})
-	if err == nil || !strings.Contains(err.Error(), "event timestamp is required") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want timestamp required failure", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
-	events, err := NewBrokerEventStore(eventClient).ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay event partition: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want rejected transaction to leave event log empty", events)
-	}
+	requireErrorContains(t, err, "event timestamp is required")
+	requireCommandEventTransactionRollback(t, ctx, commandLog, NewBrokerEventStore(eventClient), partition, "missing timestamp")
 }
 
 func TestMemoryBrokerCommandEventTransactionClientRejectsDuplicateEventIDInOneBatch(t *testing.T) {
@@ -462,19 +438,8 @@ func TestMemoryBrokerCommandEventTransactionClientRejectsDuplicateEventIDInOneBa
 	client := NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient)
 
 	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []BrokerEventRecord{record, record})
-	if err == nil || !strings.Contains(err.Error(), `duplicate event id "evt_memory_transaction_duplicate" in one transaction`) {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want duplicate event id failure", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay event partition: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want duplicate transaction to leave event log empty", events)
-	}
+	requireErrorContains(t, err, `duplicate event id "evt_memory_transaction_duplicate" in one transaction`)
+	requireCommandEventTransactionRollback(t, ctx, commandLog, eventStore, partition, "duplicate event batch")
 }
 
 func TestBrokerCommandEventTransactionStoreRejectsDuplicateEventIDBeforeClient(t *testing.T) {
@@ -489,9 +454,7 @@ func TestBrokerCommandEventTransactionStoreRejectsDuplicateEventIDBeforeClient(t
 			commandEventTransactionTestEventWithID("evt_transaction_duplicate", "Duplicate"),
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), `duplicate event id "evt_transaction_duplicate" in one transaction`) {
-		t.Fatalf("CommitCommandEvents err = %v, want duplicate event id failure", err)
-	}
+	requireErrorContains(t, err, `duplicate event id "evt_transaction_duplicate" in one transaction`)
 	if client.calls != 0 {
 		t.Fatalf("client calls = %d, want duplicate batch rejected before client", client.calls)
 	}
@@ -547,9 +510,7 @@ func TestBrokerCommandEventTransactionStoreRejectsUnsafeCommandSourcePositionBef
 			LogicalOffset:     13,
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "logical offset 13 does not match record offset 12") {
-		t.Fatalf("CommitCommandEvents err = %v, want logical offset source-position failure", err)
-	}
+	requireErrorContains(t, err, "logical offset 13 does not match record offset 12")
 	if client.calls != 0 {
 		t.Fatalf("client calls = %d, want invalid source position rejected before client", client.calls)
 	}
@@ -577,9 +538,7 @@ func TestCommandEventTransactionFinalizerRecordsTerminalFailureOnlyAfterCommit(t
 	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
 		Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "terminal"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "injected transaction commit failure") {
-		t.Fatalf("FinalizeCommandLogRecord err = %v, want transaction commit failure", err)
-	}
+	requireErrorContains(t, err, "injected transaction commit failure")
 	if result.CommitFailures != 1 || !strings.Contains(result.CommitFailure, "injected transaction commit failure") || result.Committed {
 		t.Fatalf("finalization result = %+v, want visible transaction commit failure without committed progress", result)
 	}
@@ -649,9 +608,7 @@ func TestCommandEventTransactionFinalizerReturnsRetryableProgressWhenReceiptFail
 	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
 		Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "try again", Retryable: true},
 	})
-	if err == nil || !strings.Contains(err.Error(), "retryable receipt write failed") {
-		t.Fatalf("FinalizeCommandLogRecord err = %v, want retryable receipt failure", err)
-	}
+	requireErrorContains(t, err, "retryable receipt write failed")
 	if result.RetryableFailure == nil || result.RetryableFailure.Message != "try again" || result.Committed {
 		t.Fatalf("finalization result = %+v, want retryable progress without committed offset", result)
 	}
@@ -680,9 +637,7 @@ func TestCommandEventTransactionFinalizerReturnsCommittedTerminalProgressWhenRec
 	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
 		Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "terminal"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "terminal receipt write failed") {
-		t.Fatalf("FinalizeCommandLogRecord err = %v, want terminal receipt failure", err)
-	}
+	requireErrorContains(t, err, "terminal receipt write failed")
 	if !result.Committed || result.TerminalFailures != 1 {
 		t.Fatalf("finalization result = %+v, want committed terminal progress despite recorder error", result)
 	}
@@ -715,9 +670,7 @@ func TestCommandEventTransactionFinalizerReturnsCommittedAppliedProgressWhenRece
 	}
 
 	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{Result: &proto.AckResult{ID: "ack_applied_recorder_fails"}})
-	if err == nil || !strings.Contains(err.Error(), "applied receipt write failed") {
-		t.Fatalf("FinalizeCommandLogRecord err = %v, want applied receipt failure", err)
-	}
+	requireErrorContains(t, err, "applied receipt write failed")
 	if !result.Committed || result.Applied != 1 {
 		t.Fatalf("finalization result = %+v, want committed applied progress despite recorder error", result)
 	}
@@ -746,9 +699,7 @@ func TestCommandEventTransactionFinalizerRejectsMissingCommittedPartition(t *tes
 	}
 
 	_, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{Result: &proto.AckResult{ID: "ack_missing_partition"}})
-	if err == nil || !strings.Contains(err.Error(), "missing committed partition") {
-		t.Fatalf("FinalizeCommandLogRecord err = %v, want missing committed partition", err)
-	}
+	requireErrorContains(t, err, "missing committed partition")
 	if len(appliedRecords) != 0 {
 		t.Fatalf("applied records = %+v, want none without committed partition evidence", appliedRecords)
 	}
@@ -779,9 +730,7 @@ func TestCommandEventTransactionFinalizerRejectsWrongCommittedPartition(t *testi
 	_, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
 		Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "terminal"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "committed partition board/other for record partition board/general") {
-		t.Fatalf("FinalizeCommandLogRecord err = %v, want wrong committed partition", err)
-	}
+	requireErrorContains(t, err, "committed partition board/other for record partition board/general")
 	if len(terminalRecords) != 0 {
 		t.Fatalf("terminal records = %+v, want none for wrong committed partition", terminalRecords)
 	}

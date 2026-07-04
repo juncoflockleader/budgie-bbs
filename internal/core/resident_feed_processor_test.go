@@ -2,18 +2,13 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestResidentFeedProcessorMaterializesAndRebuildsFeed(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "resident-feed-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)

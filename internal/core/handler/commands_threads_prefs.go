@@ -12,14 +12,14 @@ func (h *Handler) setThreadPref(actor *User, p proto.SetThreadPrefPayload) Reply
 		return Reply{Err: errDetail(proto.ErrValidationFailed, `level must be "watch", "normal", or "mute"`, false)}
 	}
 	// Verify thread exists.
-	thread, err := getThread(h.db, p.Thread)
+	thread, err := currentRuntime().GetThread(h.db, p.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	if err := setThreadPref(h.db, actor.ID, p.Thread, p.Level); err != nil {
+	if err := currentRuntime().SetThreadPref(h.db, actor.ID, p.Thread, p.Level); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Thread}}

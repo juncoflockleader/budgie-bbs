@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 
@@ -420,33 +419,11 @@ func (c *MemoryBrokerCommandLogClient) CommittedOffset(ctx context.Context, part
 }
 
 func (c *MemoryBrokerCommandLogClient) ListCommandPartitions(ctx context.Context, limit int) ([]LogPartition, error) {
-	if err := ctx.Err(); err != nil {
+	offsets, err := c.ListCommandPartitionOffsets(ctx, 0)
+	if err != nil {
 		return nil, err
 	}
-	if c == nil {
-		return nil, fmt.Errorf("memory broker command log: nil receiver")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	partitions := make([]LogPartition, 0, len(c.tails))
-	for partition := range c.tails {
-		partitions = append(partitions, partition.Normalize())
-	}
-	sort.Slice(partitions, func(i, j int) bool {
-		oi := c.tails[partitions[i]]
-		oj := c.tails[partitions[j]]
-		if oi == oj {
-			if partitions[i].Kind == partitions[j].Kind {
-				return partitions[i].Key < partitions[j].Key
-			}
-			return partitions[i].Kind < partitions[j].Kind
-		}
-		return oi > oj
-	})
-	if limit > 0 && len(partitions) > limit {
-		partitions = partitions[:limit]
-	}
-	return partitions, nil
+	return CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
@@ -467,20 +444,7 @@ func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.C
 			CommittedOffset: c.committed[partition],
 		})
 	}
-	sort.Slice(offsets, func(i, j int) bool {
-		li := offsets[i].TailOffset - offsets[i].CommittedOffset
-		lj := offsets[j].TailOffset - offsets[j].CommittedOffset
-		if li == lj {
-			if offsets[i].TailOffset == offsets[j].TailOffset {
-				if offsets[i].Partition.Kind == offsets[j].Partition.Kind {
-					return offsets[i].Partition.Key < offsets[j].Partition.Key
-				}
-				return offsets[i].Partition.Kind < offsets[j].Partition.Kind
-			}
-			return offsets[i].TailOffset > offsets[j].TailOffset
-		}
-		return li > lj
-	})
+	SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

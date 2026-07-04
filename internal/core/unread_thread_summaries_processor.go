@@ -2,88 +2,39 @@ package core
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
-type UnreadThreadSummariesProcessResult struct {
-	FromSeq    int64
-	AppliedSeq int64
-	HeadSeq    int64
-	Events     int
-	Rebuilt    bool
-	Rows       int64
-}
+type UnreadThreadSummariesProcessResult = derivedRebuildProcessResult
 
 type UnreadThreadSummariesProcessor struct {
-	Core      *Core
-	BatchSize int
-	Interval  time.Duration
+	derivedRebuildProcessor
 }
 
 func NewUnreadThreadSummariesProcessor(c *Core, interval time.Duration, batchSize int) (*UnreadThreadSummariesProcessor, error) {
-	if c == nil {
-		return nil, fmt.Errorf("unread thread summaries processor: nil core")
+	processor, err := newDerivedRebuildProcessor(c, "unread thread summaries", interval, batchSize, func(c *Core, batchSize int) (derivedRebuildProcessResult, error) {
+		return c.ProcessUnreadThreadSummariesOnce(batchSize)
+	})
+	if err != nil {
+		return nil, err
 	}
-	if interval <= 0 {
-		interval = time.Second
-	}
-	if batchSize <= 0 {
-		batchSize = 500
-	}
-	return &UnreadThreadSummariesProcessor{
-		Core:      c,
-		BatchSize: batchSize,
-		Interval:  interval,
-	}, nil
+	return &UnreadThreadSummariesProcessor{derivedRebuildProcessor: processor}, nil
 }
 
 func (p *UnreadThreadSummariesProcessor) ProcessOnce() (UnreadThreadSummariesProcessResult, error) {
-	if p == nil || p.Core == nil {
-		return UnreadThreadSummariesProcessResult{}, fmt.Errorf("unread thread summaries processor: nil core")
+	if p == nil {
+		return nilDerivedRebuildProcessResult("unread thread summaries")
 	}
-	return p.Core.ProcessUnreadThreadSummariesOnce(p.BatchSize)
+	return p.derivedRebuildProcessor.ProcessOnce()
 }
 
 func (p *UnreadThreadSummariesProcessor) Run(ctx context.Context) {
-	if p == nil || p.Core == nil {
+	if p == nil {
 		return
 	}
-	drain := func() {
-		for ctx.Err() == nil {
-			result, err := p.ProcessOnce()
-			if err != nil {
-				if ctx.Err() == nil {
-					slog.Warn("unread thread summaries processor failed", "err", err)
-				}
-				return
-			}
-			if result.Events > 0 || result.Rebuilt || result.AppliedSeq < result.HeadSeq {
-				slog.Debug("unread thread summaries processor advanced",
-					"fromSeq", result.FromSeq,
-					"appliedSeq", result.AppliedSeq,
-					"headSeq", result.HeadSeq,
-					"events", result.Events,
-					"rebuilt", result.Rebuilt,
-					"rows", result.Rows)
-			}
-			if result.Events < p.BatchSize || result.AppliedSeq >= result.HeadSeq {
-				return
-			}
-		}
-	}
-	drain()
-	ticker := time.NewTicker(p.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			drain()
-		}
-	}
+	p.derivedRebuildProcessor.Run(ctx)
 }
 
 func (c *Core) StartUnreadThreadSummariesProcessor(ctx context.Context, interval time.Duration, batchSize int) (*UnreadThreadSummariesProcessor, error) {
@@ -96,88 +47,9 @@ func (c *Core) StartUnreadThreadSummariesProcessor(ctx context.Context, interval
 }
 
 func (c *Core) ProcessUnreadThreadSummariesOnce(batchSize int) (UnreadThreadSummariesProcessResult, error) {
-	if batchSize <= 0 {
-		batchSize = 500
-	}
-	fromSeq, found, err := lookupDerivedViewAppliedSeq(c.DB, DerivedViewUnreadThreads)
-	if err != nil {
-		return UnreadThreadSummariesProcessResult{}, err
-	}
-	if !found {
-		fromSeq = 0
-	}
-	head, err := c.Head()
-	if err != nil {
-		return UnreadThreadSummariesProcessResult{}, err
-	}
-	result := UnreadThreadSummariesProcessResult{
-		FromSeq:    fromSeq,
-		AppliedSeq: fromSeq,
-		HeadSeq:    head,
-	}
-	events, err := c.Replay(fromSeq, nil, batchSize)
-	if err != nil {
-		return result, err
-	}
-	if len(events) == 0 {
-		rows, countErr := unreadThreadSummaryStatsRowCount(c.DB)
-		if countErr != nil {
-			return result, countErr
-		}
-		if rows == 0 {
-			tx, err := c.DB.Begin()
-			if err != nil {
-				return result, err
-			}
-			defer tx.Rollback() //nolint
-			rebuiltRows, err := rebuildUnreadThreadSummaryStats(tx)
-			if err != nil {
-				return result, err
-			}
-			result.Rebuilt = true
-			result.Rows = rebuiltRows
-			if err := recordDerivedViewAppliedTx(tx, DerivedViewUnreadThreads, result.AppliedSeq); err != nil {
-				return result, err
-			}
-			if err := tx.Commit(); err != nil {
-				return result, err
-			}
-			return result, nil
-		}
-		if !found {
-			if err := c.RecordDerivedViewApplied(DerivedViewUnreadThreads, fromSeq); err != nil {
-				return result, err
-			}
-		}
-		return result, nil
-	}
-
-	tx, err := c.DB.Begin()
-	if err != nil {
-		return result, err
-	}
-	defer tx.Rollback() //nolint
-
-	rows, err := rebuildUnreadThreadSummaryStats(tx)
-	if err != nil {
-		return result, err
-	}
-	result.Rebuilt = true
-	result.Rows = rows
-	for _, evt := range events {
-		if evt == nil {
-			continue
-		}
-		result.Events++
-		if evt.Seq > result.AppliedSeq {
-			result.AppliedSeq = evt.Seq
-		}
-	}
-	if err := recordDerivedViewAppliedTx(tx, DerivedViewUnreadThreads, result.AppliedSeq); err != nil {
-		return result, err
-	}
-	if err := tx.Commit(); err != nil {
-		return result, err
-	}
-	return result, nil
+	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
+		view:     DerivedViewUnreadThreads,
+		rebuild:  projections.RebuildUnreadThreadSummaryStats,
+		rowCount: projections.UnreadThreadSummaryStatsRowCount,
+	})
 }

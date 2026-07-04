@@ -4,6 +4,7 @@ import (
 	"database/sql"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/handler"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 type sqlCounterStore struct {
@@ -11,11 +12,11 @@ type sqlCounterStore struct {
 }
 
 func (s sqlCounterStore) UserReacted(postID, userID string) (bool, error) {
-	return userReacted(s.db, postID, userID)
+	return projections.UserReacted(s.db, postID, userID)
 }
 
 func (s sqlCounterStore) ReactionCount(postID string) (int, error) {
-	return reactionCount(s.db, postID)
+	return projections.ReactionCount(s.db, postID)
 }
 
 func (s sqlCounterStore) PollOptionVoteCount(pollID, optionID string) (int, error) {
@@ -105,35 +106,35 @@ func (m *sqlCounterMutation) UpsertReaction(postID, userID, emoji string, ts int
 	if m == nil || m.tx == nil {
 		return sql.ErrTxDone
 	}
-	return upsertReaction(m.tx, postID, userID, emoji, ts)
+	return projections.UpsertReaction(m.tx, postID, userID, emoji, ts)
 }
 
 func (m *sqlCounterMutation) DeleteReaction(postID, userID string) error {
 	if m == nil || m.tx == nil {
 		return sql.ErrTxDone
 	}
-	return deleteReaction(m.tx, postID, userID)
+	return projections.DeleteReaction(m.tx, postID, userID)
 }
 
 func (m *sqlCounterMutation) ReactionCount(postID string) (int, error) {
 	if m == nil || m.tx == nil {
 		return 0, sql.ErrTxDone
 	}
-	return reactionCountTx(m.tx, postID)
+	return projections.ReactionCountTx(m.tx, postID)
 }
 
 func (m *sqlCounterMutation) CastVote(pollID, optionID, userID string, ts int64) error {
 	if m == nil || m.tx == nil {
 		return sql.ErrTxDone
 	}
-	return castVote(m.tx, pollID, optionID, userID, ts)
+	return projections.CastVote(m.tx, pollID, optionID, userID, ts)
 }
 
 func (m *sqlCounterMutation) DeletePollVote(pollID, userID string) error {
 	if m == nil || m.tx == nil {
 		return sql.ErrTxDone
 	}
-	return deletePollVote(m.tx, pollID, userID)
+	return projections.DeletePollVote(m.tx, pollID, userID)
 }
 
 func (m *sqlCounterMutation) RecordReactionReceived(postAuthorID string) error {

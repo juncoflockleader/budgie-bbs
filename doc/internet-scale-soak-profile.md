@@ -91,7 +91,7 @@ self-terminate — they can't soak as-is. Proposed additions:
 1. A sustained mode: `-duration <dur>` + `-target-rate <cmd/s>` driving a steady
    arrival (token-bucket) instead of a fixed count, reusing the existing
    submit/drain path in `cmd/budgie-commandlog-loadgen` /
-   `internal/core/partition_write_load.go`.
+   `internal/loadtest/partition_write.go`.
 2. `scripts/internet-scale-soak.sh`: starts a real multi-node cluster (reuse
    `docker-compose` / `scripts/cluster-smoke.sh` plumbing), drives the mixed
    workload + churn for the chosen tier, scrapes `/metrics` + RSS on an interval

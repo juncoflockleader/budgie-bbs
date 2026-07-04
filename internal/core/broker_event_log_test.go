@@ -5,8 +5,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+func replayBrokerEventPartition(t *testing.T, ctx context.Context, store EventStore, partitionKind, partitionKey string, after int64, limit int, label string) []*proto.Event {
+	t.Helper()
+	events, err := store.ReplayPartition(ctx, partitionKind, partitionKey, after, limit)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return events
+}
 
 func TestBrokerEventSubjectRoundTripEscapesPartitionTokens(t *testing.T) {
 	partition := LogPartition{Kind: "board.topic", Key: "general/space:alpha"}
@@ -37,18 +47,9 @@ func TestBrokerEventStoreAppendAndReplayPartition(t *testing.T) {
 	client := NewMemoryBrokerEventLogClient()
 	store := NewBrokerEventStore(client)
 
-	general, err := store.Append(ctx, testEventAppendWithTitle("general", "Broker general"))
-	if err != nil {
-		t.Fatalf("append general: %v", err)
-	}
-	life, err := store.Append(ctx, testEventAppendWithTitle("life", "Broker life"))
-	if err != nil {
-		t.Fatalf("append life: %v", err)
-	}
-	nextGeneral, err := store.Append(ctx, testEventAppendWithTitle("general", "Broker general 2"))
-	if err != nil {
-		t.Fatalf("append second general: %v", err)
-	}
+	general := appendCoreTestEvent(t, ctx, store, testEventAppendWithTitle("general", "Broker general"), "append general")
+	life := appendCoreTestEvent(t, ctx, store, testEventAppendWithTitle("life", "Broker life"), "append life")
+	nextGeneral := appendCoreTestEvent(t, ctx, store, testEventAppendWithTitle("general", "Broker general 2"), "append second general")
 
 	if general.PartitionKind != partitionBoard || general.PartitionKey != "general" || general.PartitionOffset != 1 {
 		t.Fatalf("general partition = (%q,%q,%d), want board/general/1", general.PartitionKind, general.PartitionKey, general.PartitionOffset)
@@ -60,17 +61,11 @@ func TestBrokerEventStoreAppendAndReplayPartition(t *testing.T) {
 		t.Fatalf("next general offset = %d, want 2", nextGeneral.PartitionOffset)
 	}
 
-	events, err := store.ReplayPartition(ctx, partitionBoard, "general", 0, 10)
-	if err != nil {
-		t.Fatalf("replay general: %v", err)
-	}
+	events := replayBrokerEventPartition(t, ctx, store, partitionBoard, "general", 0, 10, "replay general")
 	if len(events) != 2 || events[0].PartitionOffset != 1 || events[1].PartitionOffset != 2 {
 		t.Fatalf("general events = %+v, want offsets 1 and 2", events)
 	}
-	afterOne, err := store.ReplayPartition(ctx, partitionBoard, "general", 1, 10)
-	if err != nil {
-		t.Fatalf("replay general after one: %v", err)
-	}
+	afterOne := replayBrokerEventPartition(t, ctx, store, partitionBoard, "general", 1, 10, "replay general after one")
 	if len(afterOne) != 1 || afterOne[0].PartitionOffset != 2 {
 		t.Fatalf("after-one replay = %+v, want only offset 2", afterOne)
 	}
@@ -83,24 +78,15 @@ func TestBrokerEventStoreAppendIsIdempotentByEventID(t *testing.T) {
 	appendEvent := testEventAppendWithTitle("general", "Idempotent broker append")
 	appendEvent.ID = "evt_broker_idempotent"
 
-	first, err := store.Append(ctx, appendEvent)
-	if err != nil {
-		t.Fatalf("first append: %v", err)
-	}
-	second, err := store.Append(ctx, appendEvent)
-	if err != nil {
-		t.Fatalf("second append: %v", err)
-	}
+	first := appendCoreTestEvent(t, ctx, store, appendEvent, "first append")
+	second := appendCoreTestEvent(t, ctx, store, appendEvent, "second append")
 	if second.Seq != first.Seq || second.PartitionOffset != first.PartitionOffset {
 		t.Fatalf("second event = %+v, want same seq/offset as first %+v", second, first)
 	}
 	if head, err := store.Head(ctx); err != nil || head != 1 {
 		t.Fatalf("head = %d, %v; want 1, nil", head, err)
 	}
-	events, err := store.ReplayPartition(ctx, partitionBoard, "general", 0, 10)
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
+	events := replayBrokerEventPartition(t, ctx, store, partitionBoard, "general", 0, 10, "replay")
 	if len(events) != 1 {
 		t.Fatalf("events = %+v, want one stored event after duplicate append", events)
 	}
@@ -111,18 +97,13 @@ func TestBrokerEventStoreRejectsDuplicateEventIDDifferentContent(t *testing.T) {
 	store := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
 	first := testEventAppendWithTitle("general", "Original broker append")
 	first.ID = "evt_broker_duplicate_content"
-	if _, err := store.Append(ctx, first); err != nil {
-		t.Fatalf("first append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, store, first, "first append")
 	second := testEventAppendWithTitle("general", "Different broker append")
 	second.ID = first.ID
-	if _, err := store.Append(ctx, second); err == nil || !strings.Contains(err.Error(), "different content") {
-		t.Fatalf("second append err = %v, want duplicate content error", err)
-	}
-	events, err := store.ReplayPartition(ctx, partitionBoard, "general", 0, 10)
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
+	_, err := store.Append(ctx, second)
+	requireErrorContains(t, err, "different content")
+
+	events := replayBrokerEventPartition(t, ctx, store, partitionBoard, "general", 0, 10, "replay")
 	if len(events) != 1 {
 		t.Fatalf("events = %+v, want original event only", events)
 	}
@@ -136,9 +117,7 @@ func TestBrokerEventStoreRejectsEventIDWithoutTimestamp(t *testing.T) {
 	appendEvent.TS = 0
 
 	_, err := store.Append(ctx, appendEvent)
-	if err == nil || !strings.Contains(err.Error(), "event timestamp is required") {
-		t.Fatalf("append err = %v, want timestamp required error", err)
-	}
+	requireErrorContains(t, err, "event timestamp is required")
 }
 
 func TestBrokerEventStoreRejectsDuplicateEventIDTimestampDrift(t *testing.T) {
@@ -146,18 +125,13 @@ func TestBrokerEventStoreRejectsDuplicateEventIDTimestampDrift(t *testing.T) {
 	store := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
 	first := testEventAppendWithTitle("general", "Timestamp stable")
 	first.ID = "evt_broker_duplicate_ts"
-	if _, err := store.Append(ctx, first); err != nil {
-		t.Fatalf("first append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, store, first, "first append")
 	second := first
 	second.TS = first.TS + 1000
-	if _, err := store.Append(ctx, second); err == nil || !strings.Contains(err.Error(), "different content") {
-		t.Fatalf("second append err = %v, want duplicate timestamp error", err)
-	}
-	events, err := store.ReplayPartition(ctx, partitionBoard, "general", 0, 10)
-	if err != nil {
-		t.Fatalf("replay: %v", err)
-	}
+	_, err := store.Append(ctx, second)
+	requireErrorContains(t, err, "different content")
+
+	events := replayBrokerEventPartition(t, ctx, store, partitionBoard, "general", 0, 10, "replay")
 	if len(events) != 1 || events[0].TS != first.TS {
 		t.Fatalf("events = %+v, want original timestamp %d only", events, first.TS)
 	}
@@ -172,10 +146,7 @@ func TestBrokerEventStoreSeedsLogicalPartitionOffset(t *testing.T) {
 	if err := store.SeedEventPartitionOffset(ctx, partition, 41); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	appended, err := store.Append(ctx, testEventAppendWithTitle("general", "After seed"))
-	if err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appended := appendCoreTestEvent(t, ctx, store, testEventAppendWithTitle("general", "After seed"), "append")
 	if appended.PartitionOffset != 42 {
 		t.Fatalf("partition offset = %d, want 42", appended.PartitionOffset)
 	}
@@ -195,12 +166,8 @@ func TestBrokerEventStoreParticipatesInReplayParity(t *testing.T) {
 	recorder := &EventParityRecorder{}
 
 	for _, title := range []string{"First", "Second"} {
-		if _, err := primary.Append(ctx, testEventAppendWithTitle("general", title)); err != nil {
-			t.Fatalf("primary append %q: %v", title, err)
-		}
-		if _, err := shadow.Append(ctx, testEventAppendWithTitle("general", title)); err != nil {
-			t.Fatalf("shadow append %q: %v", title, err)
-		}
+		appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", title), "primary append "+title)
+		appendCoreTestEvent(t, ctx, shadow, testEventAppendWithTitle("general", title), "shadow append "+title)
 	}
 	result, err := CheckEventReplayParity(ctx, primary, shadow, LogPartition{Kind: partitionBoard, Key: "general"}, 0, 10, recorder)
 	if err != nil {
@@ -218,7 +185,7 @@ func TestBrokerEventStoreReplayUsesCompatibilitySeqAcrossPartitions(t *testing.T
 	ctx := context.Background()
 	store := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
 
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		Kind:             proto.EvtThreadNew,
 		CompatibilitySeq: 2,
 		Scopes:           []string{"board:life"},
@@ -229,10 +196,8 @@ func TestBrokerEventStoreReplayUsesCompatibilitySeqAcrossPartitions(t *testing.T
 			Title:  "Life",
 			TS:     1002,
 		},
-	}); err != nil {
-		t.Fatalf("append seq 2: %v", err)
-	}
-	if _, err := store.Append(ctx, EventAppend{
+	}, "append seq 2")
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		Kind:             proto.EvtThreadNew,
 		CompatibilitySeq: 1,
 		Scopes:           []string{"board:general"},
@@ -243,9 +208,7 @@ func TestBrokerEventStoreReplayUsesCompatibilitySeqAcrossPartitions(t *testing.T
 			Title:  "General",
 			TS:     1001,
 		},
-	}); err != nil {
-		t.Fatalf("append seq 1: %v", err)
-	}
+	}, "append seq 1")
 
 	events, err := store.Replay(ctx, 0, nil, 10)
 	if err != nil {
@@ -261,14 +224,10 @@ func TestBrokerEventStoreReplayUsesCompatibilitySeqAcrossPartitions(t *testing.T
 
 func TestRebuildProjectionsFromBrokerEventStore(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	store := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		Kind:             proto.EvtThreadNew,
 		CompatibilitySeq: 10,
 		Scopes:           []string{"board:general", "thread:thr_broker_rebuild"},
@@ -279,14 +238,12 @@ func TestRebuildProjectionsFromBrokerEventStore(t *testing.T) {
 			Title:  "Broker rebuild",
 			TS:     1000,
 		},
-	}); err != nil {
-		t.Fatalf("append broker event: %v", err)
-	}
+	}, "append broker event")
 
 	if err := c.RebuildProjectionsFromEventStore(ctx, store, 0); err != nil {
 		t.Fatalf("rebuild from broker store: %v", err)
 	}
-	thread, err := getThread(c.DB, "thr_broker_rebuild")
+	thread, err := projections.GetThread(c.DB, "thr_broker_rebuild")
 	if err != nil {
 		t.Fatalf("get rebuilt thread: %v", err)
 	}
@@ -310,11 +267,10 @@ func TestDecodeBrokerEventMessageRejectsOffsetMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if _, err := DecodeBrokerEventMessage(BrokerEventLogMessage{
+	_, err = DecodeBrokerEventMessage(BrokerEventLogMessage{
 		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:    8,
 		Data:      data,
-	}); err == nil || !strings.Contains(err.Error(), "offset metadata mismatch") {
-		t.Fatalf("decode err = %v, want offset metadata mismatch", err)
-	}
+	})
+	requireErrorContains(t, err, "offset metadata mismatch")
 }

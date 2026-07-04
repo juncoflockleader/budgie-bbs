@@ -101,73 +101,55 @@ func TestRuntimeClientOptsRejectInvalidSecurity(t *testing.T) {
 		SASLMechanism: "plain",
 		SASLUser:      "budgie",
 	}), "secure-client")
-	if err == nil || !strings.Contains(err.Error(), "SASL password is required") {
-		t.Fatalf("RuntimeClientOpts err = %v, want SASL password error", err)
-	}
+	requireErrorContains(t, err, "SASL password is required")
 }
 
 func TestCommandLogRuntimeClientOptsRequiresClientIDAndBrokers(t *testing.T) {
 	_, err := CommandLogRuntimeClientOpts(CommandLogRuntimeClientOptions{
 		Runtime: RuntimeConfigFromFlags("redpanda:9092", "", "", ""),
 	})
-	if err == nil || !strings.Contains(err.Error(), "client id is required") {
-		t.Fatalf("CommandLogRuntimeClientOpts without client id err = %v, want client id error", err)
-	}
+	requireErrorContains(t, err, "client id is required")
 	_, err = CommandLogRuntimeClientOpts(CommandLogRuntimeClientOptions{
 		Runtime:  RuntimeConfig{},
 		ClientID: "command-log-client",
 	})
-	if err == nil || !strings.Contains(err.Error(), "broker list is required") {
-		t.Fatalf("CommandLogRuntimeClientOpts without brokers err = %v, want broker-list error", err)
-	}
+	requireErrorContains(t, err, "broker list is required")
 }
 
 func TestCommandLogProducerRuntimeClientOptsRequiresClientIDAndBrokers(t *testing.T) {
 	_, err := CommandLogProducerRuntimeClientOpts(CommandLogProducerRuntimeClientOptions{
 		Runtime: RuntimeConfigFromFlags("redpanda:9092", "", "", ""),
 	})
-	if err == nil || !strings.Contains(err.Error(), "client id is required") {
-		t.Fatalf("CommandLogProducerRuntimeClientOpts without client id err = %v, want client id error", err)
-	}
+	requireErrorContains(t, err, "client id is required")
 	_, err = CommandLogProducerRuntimeClientOpts(CommandLogProducerRuntimeClientOptions{
 		Runtime:  RuntimeConfig{},
 		ClientID: "command-log-producer",
 	})
-	if err == nil || !strings.Contains(err.Error(), "broker list is required") {
-		t.Fatalf("CommandLogProducerRuntimeClientOpts without brokers err = %v, want broker-list error", err)
-	}
+	requireErrorContains(t, err, "broker list is required")
 }
 
 func TestEventLogRuntimeClientOptsRequiresClientIDAndBrokers(t *testing.T) {
 	_, err := EventLogRuntimeClientOpts(EventLogRuntimeClientOptions{
 		Runtime: RuntimeConfigFromFlags("redpanda:9092", "", "", ""),
 	})
-	if err == nil || !strings.Contains(err.Error(), "client id is required") {
-		t.Fatalf("EventLogRuntimeClientOpts without client id err = %v, want client id error", err)
-	}
+	requireErrorContains(t, err, "client id is required")
 	_, err = EventLogRuntimeClientOpts(EventLogRuntimeClientOptions{
 		Runtime:  RuntimeConfig{},
 		ClientID: "event-log-client",
 	})
-	if err == nil || !strings.Contains(err.Error(), "broker list is required") {
-		t.Fatalf("EventLogRuntimeClientOpts without brokers err = %v, want broker-list error", err)
-	}
+	requireErrorContains(t, err, "broker list is required")
 }
 
 func TestEventLogProducerRuntimeClientOptsRequiresClientIDAndBrokers(t *testing.T) {
 	_, err := EventLogProducerRuntimeClientOpts(EventLogProducerRuntimeClientOptions{
 		Runtime: RuntimeConfigFromFlags("redpanda:9092", "", "", ""),
 	})
-	if err == nil || !strings.Contains(err.Error(), "client id is required") {
-		t.Fatalf("EventLogProducerRuntimeClientOpts without client id err = %v, want client id error", err)
-	}
+	requireErrorContains(t, err, "client id is required")
 	_, err = EventLogProducerRuntimeClientOpts(EventLogProducerRuntimeClientOptions{
 		Runtime:  RuntimeConfig{},
 		ClientID: "event-log-shadow",
 	})
-	if err == nil || !strings.Contains(err.Error(), "broker list is required") {
-		t.Fatalf("EventLogProducerRuntimeClientOpts without brokers err = %v, want broker-list error", err)
-	}
+	requireErrorContains(t, err, "broker list is required")
 }
 
 func TestCommandWriterClientOptsRequiresWriterIdentity(t *testing.T) {
@@ -175,16 +157,12 @@ func TestCommandWriterClientOptsRequiresWriterIdentity(t *testing.T) {
 		Runtime:         RuntimeConfigFromFlags("redpanda:9092", "", "", ""),
 		TransactionalID: "budgie-writer-a",
 	})
-	if err == nil || !strings.Contains(err.Error(), "client id is required") {
-		t.Fatalf("CommandWriterClientOpts without client id err = %v, want client id error", err)
-	}
+	requireErrorContains(t, err, "client id is required")
 	_, err = CommandWriterClientOpts(CommandWriterClientOptions{
 		Runtime:  RuntimeConfigFromFlags("redpanda:9092", "", "", ""),
 		ClientID: "writer-a",
 	})
-	if err == nil || !strings.Contains(err.Error(), "transactional id is required") {
-		t.Fatalf("CommandWriterClientOpts without transactional id err = %v, want transactional id error", err)
-	}
+	requireErrorContains(t, err, "transactional id is required")
 }
 
 func TestCommandWriterClientOptsRequiresPartitionCountForAssignmentCallbacks(t *testing.T) {
@@ -195,8 +173,18 @@ func TestCommandWriterClientOptsRequiresPartitionCountForAssignmentCallbacks(t *
 		Assignment:      core.NewSnapshotCommandPartitionAssigner(core.CommandPartitionAssignmentSnapshot{}),
 		Candidates:      staticCommandPartitionCandidates{},
 	})
-	if err == nil || !strings.Contains(err.Error(), "command topic partition count is required") {
-		t.Fatalf("CommandWriterClientOpts without partition count err = %v, want partition count error", err)
+	requireErrorContains(t, err, "command topic partition count is required")
+}
+
+func requireErrorContains(t *testing.T, err error, wants ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("error = nil, want containing %q", wants)
+	}
+	for _, want := range wants {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want containing %q", err, want)
+		}
 	}
 }
 

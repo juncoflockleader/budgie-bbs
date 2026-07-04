@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/runconfig"
 )
 
 type RuntimeConfig struct {
@@ -49,7 +51,7 @@ func RuntimeConfigFromOptions(brokers, commandTopic, eventTopic, consumerGroup s
 
 func RuntimeSecurityConfigFromEnv() RuntimeSecurityConfig {
 	return RuntimeSecurityConfig{
-		TLS:           boolEnv("BUDGIE_KAFKA_TLS"),
+		TLS:           runconfig.EnvBool("BUDGIE_KAFKA_TLS", false),
 		TLSCAFile:     os.Getenv("BUDGIE_KAFKA_TLS_CA_FILE"),
 		TLSServerName: os.Getenv("BUDGIE_KAFKA_TLS_SERVER_NAME"),
 		SASLMechanism: os.Getenv("BUDGIE_KAFKA_SASL_MECHANISM"),
@@ -124,6 +126,44 @@ func (c RuntimeConfig) ValidateCommandEventTransaction() error {
 	return nil
 }
 
+func ValidateCommandPartitions(partitions int32) error {
+	if partitions <= 0 {
+		return fmt.Errorf("-kafka-command-partitions for logical command-partition mapping")
+	}
+	return nil
+}
+
+func ValidateEventPartitions(partitions int32) error {
+	if partitions <= 0 {
+		return fmt.Errorf("-kafka-event-partitions for logical event-partition mapping")
+	}
+	return nil
+}
+
+func (c RuntimeConfig) ValidateCommandLogRuntime(partitions int32) error {
+	if err := c.ValidateCommandLog(); err != nil {
+		return err
+	}
+	return ValidateCommandPartitions(partitions)
+}
+
+func (c RuntimeConfig) ValidateEventLogRuntime(partitions int32) error {
+	if err := c.ValidateEventLog(); err != nil {
+		return err
+	}
+	return ValidateEventPartitions(partitions)
+}
+
+func (c RuntimeConfig) ValidateCommandEventRuntime(commandPartitions, eventPartitions int32) error {
+	if err := c.ValidateCommandEventTransaction(); err != nil {
+		return err
+	}
+	if err := ValidateCommandPartitions(commandPartitions); err != nil {
+		return err
+	}
+	return ValidateEventPartitions(eventPartitions)
+}
+
 func (c RuntimeConfig) ValidateSecurity() error {
 	c = c.Normalize()
 	if c.SASLMechanism == "" {
@@ -184,14 +224,5 @@ func normalizeKafkaSASLMechanism(raw string) string {
 		return "scram-sha-512"
 	default:
 		return strings.ToLower(strings.TrimSpace(raw))
-	}
-}
-
-func boolEnv(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
-	case "1", "true", "t", "yes", "y", "on":
-		return true
-	default:
-		return false
 	}
 }

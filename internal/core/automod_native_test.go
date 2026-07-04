@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -14,11 +13,7 @@ import (
 func TestNativeAutomodEmitsActionEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	go c.Run(ctx)
 	admin, err := c.RegisterUser("admin", "pw")
 	if err != nil {
@@ -31,7 +26,7 @@ func TestNativeAutomodEmitsActionEvents(t *testing.T) {
 
 	mustExec := func(actor *User, cmd proto.CommandName, payload any) {
 		t.Helper()
-		raw, _ := json.Marshal(payload)
+		raw := marshalCoreTestJSON(t, "marshal "+string(cmd), payload)
 		if r := c.ExecCmd(ctx, actor, cmd, raw, ""); r.Err != nil {
 			t.Fatalf("%s: %+v", cmd, r.Err)
 		}
@@ -42,7 +37,7 @@ func TestNativeAutomodEmitsActionEvents(t *testing.T) {
 	})
 
 	executor := NewCommandLogNativeDecisionExecutor(c)
-	payload, _ := json.Marshal(proto.CreateThreadPayload{Board: "garden", Title: "hi", Body: "cheap spam here"})
+	payload := marshalCoreTestJSON(t, "marshal create thread", proto.CreateThreadPayload{Board: "garden", Title: "hi", Body: "cheap spam here"})
 	rec := CommandLogRecord{
 		Partition: LogPartition{Kind: partitionBoard, Key: "garden"},
 		Offset:    1, ActorID: alice.ID, CID: "automod-native-1",

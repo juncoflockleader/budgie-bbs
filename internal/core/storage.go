@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -24,6 +25,21 @@ func (p LogPartition) Normalize() LogPartition {
 		p.Key = partitionGlobal
 	}
 	return p
+}
+
+func (p LogPartition) Less(other LogPartition) bool {
+	p = p.Normalize()
+	other = other.Normalize()
+	if p.Kind == other.Kind {
+		return p.Key < other.Key
+	}
+	return p.Kind < other.Kind
+}
+
+func SortLogPartitions(partitions []LogPartition) {
+	sort.Slice(partitions, func(i, j int) bool {
+		return partitions[i].Less(partitions[j])
+	})
 }
 
 func (p LogPartition) eventPartition() eventPartition {
@@ -86,6 +102,26 @@ type CommandPartitionOffset struct {
 	Partition       LogPartition
 	TailOffset      int64
 	CommittedOffset int64
+}
+
+func (offset CommandPartitionOffset) Normalize() CommandPartitionOffset {
+	offset.Partition = offset.Partition.Normalize()
+	if offset.TailOffset < 0 {
+		offset.TailOffset = 0
+	}
+	if offset.CommittedOffset < 0 {
+		offset.CommittedOffset = 0
+	}
+	if offset.CommittedOffset > offset.TailOffset {
+		offset.CommittedOffset = offset.TailOffset
+	}
+	return offset
+}
+
+// Lag returns normalized tail minus committed offset, never below zero.
+func (offset CommandPartitionOffset) Lag() int64 {
+	offset = offset.Normalize()
+	return offset.TailOffset - offset.CommittedOffset
 }
 
 // CommandPartitionOffsetLister exposes command-log tail and committed offsets

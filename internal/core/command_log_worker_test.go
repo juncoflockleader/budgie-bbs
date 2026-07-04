@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -12,6 +11,56 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+func requireCommandLogWorkerCommittedOffset(t *testing.T, ctx context.Context, log interface {
+	CommittedOffset(context.Context, LogPartition) (int64, error)
+}, partition LogPartition, want int64, label string) {
+	t.Helper()
+	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != want {
+		t.Fatalf("%s = %d, %v; want %d, nil", label, got, err, want)
+	}
+}
+
+func drainCommandLogWorkerOnce(t *testing.T, ctx context.Context, worker *CommandLogWorker, label string) []CommandLogWorkerResult {
+	t.Helper()
+	results, err := worker.DrainOnce(ctx)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return results
+}
+
+func replayCommandLogWorkerPartition(t *testing.T, ctx context.Context, store EventStore, partition LogPartition, after int64, limit int, label string) []*proto.Event {
+	t.Helper()
+	events, err := store.ReplayPartition(ctx, partition.Kind, partition.Key, after, limit)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return events
+}
+
+func commandLogWorkerThreadNewEventWithID(eventID, threadID, title string) EventAppend {
+	return EventAppend{
+		ID:     eventID,
+		Kind:   proto.EvtThreadNew,
+		Scopes: []string{"board:general"},
+		Payload: &proto.ThreadNewPayload{
+			ID:       threadID,
+			Board:    "general",
+			Author:   "alice",
+			AuthorID: "usr_alice",
+			Title:    title,
+			TS:       1234,
+		},
+		TS: 1234,
+	}
+}
+
+func commandLogWorkerThreadNewEvent(record CommandLogRecord, eventIDPrefix, titlePrefix string) []EventAppend {
+	return []EventAppend{
+		commandLogWorkerThreadNewEventWithID(eventIDPrefix+record.CID, "thr_"+record.CID, titlePrefix+record.CID),
+	}
+}
 
 func TestCommandLogWorkerCommitsSuccessfulRecordsInPartitionOrder(t *testing.T) {
 	ctx := context.Background()
@@ -30,10 +79,7 @@ func TestCommandLogWorkerCommitsSuccessfulRecordsInPartitionOrder(t *testing.T) 
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -47,9 +93,7 @@ func TestCommandLogWorkerCommitsSuccessfulRecordsInPartitionOrder(t *testing.T) 
 	if !reflect.DeepEqual(seen, []int64{1, 2}) {
 		t.Fatalf("seen offsets = %v, want [1 2]", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 2 {
-		t.Fatalf("committed offset = %d, %v; want 2, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 2, "committed offset")
 }
 
 func TestCommandLogWorkerDrainsPartitionsConcurrently(t *testing.T) {
@@ -127,10 +171,7 @@ func TestCommandLogWorkerPartitionConcurrencyPreservesPartitionOrder(t *testing.
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 2 {
 		t.Fatalf("results = %+v, want two partition results", results)
 	}
@@ -160,10 +201,7 @@ func TestCommandLogWorkerAllowsRebalanceAfterFetchedBatch(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 1 {
 		t.Fatalf("results = %+v, want one processed command", results)
 	}
@@ -197,9 +235,7 @@ func TestCommandLogWorkerDoesNotCommitWhenAppliedReceiptFails(t *testing.T) {
 	if len(results) != 1 || results[0].Processed != 0 || results[0].LastOffset != 0 {
 		t.Fatalf("results = %+v, want no committed progress", results)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 }
 
 type rebalanceAwareCommandLog struct {
@@ -232,10 +268,7 @@ func TestCommandLogWorkerStopsBeforeRetryableFailure(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -249,9 +282,7 @@ func TestCommandLogWorkerStopsBeforeRetryableFailure(t *testing.T) {
 	if !reflect.DeepEqual(seen, []int64{1, 2}) {
 		t.Fatalf("seen offsets = %v, want [1 2]", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 1, "committed offset")
 }
 
 func TestCommandLogWorkerCommitsTerminalFailures(t *testing.T) {
@@ -274,10 +305,7 @@ func TestCommandLogWorkerCommitsTerminalFailures(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -288,9 +316,7 @@ func TestCommandLogWorkerCommitsTerminalFailures(t *testing.T) {
 	if !reflect.DeepEqual(seen, []int64{1, 2}) {
 		t.Fatalf("seen offsets = %v, want [1 2]", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 2 {
-		t.Fatalf("committed offset = %d, %v; want 2, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 2, "committed offset")
 }
 
 func TestCommandLogWorkerRetriesCommandOffsetCommit(t *testing.T) {
@@ -310,10 +336,7 @@ func TestCommandLogWorkerRetriesCommandOffsetCommit(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -327,9 +350,7 @@ func TestCommandLogWorkerRetriesCommandOffsetCommit(t *testing.T) {
 	if log.commitAttempts != 3 {
 		t.Fatalf("commit attempts = %d, want 3", log.commitAttempts)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 1, "committed offset")
 }
 
 func TestCommandLogWorkerReportsCommandOffsetCommitFailure(t *testing.T) {
@@ -364,9 +385,7 @@ func TestCommandLogWorkerReportsCommandOffsetCommitFailure(t *testing.T) {
 	if !reflect.DeepEqual(seen, []int64{1}) {
 		t.Fatalf("seen offsets = %v, want one command execution before commit failure", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 }
 
 func TestCommandLogWorkerSupportsTransactionalFinalizer(t *testing.T) {
@@ -388,20 +407,11 @@ func TestCommandLogWorkerSupportsTransactionalFinalizer(t *testing.T) {
 			if reply.Result == nil {
 				return CommandLogFinalizationResult{}, errors.New("missing command result")
 			}
-			_, err := eventStore.Append(ctx, EventAppend{
-				ID:     "evt_transactional_finalizer",
-				Kind:   proto.EvtThreadNew,
-				Scopes: []string{"board:general"},
-				Payload: &proto.ThreadNewPayload{
-					ID:       "thr_transactional_finalizer",
-					Board:    "general",
-					Author:   "alice",
-					AuthorID: "usr_alice",
-					Title:    "Transactional finalizer",
-					TS:       1234,
-				},
-				TS: 1234,
-			})
+			_, err := eventStore.Append(ctx, commandLogWorkerThreadNewEventWithID(
+				"evt_transactional_finalizer",
+				"thr_transactional_finalizer",
+				"Transactional finalizer",
+			))
 			if err != nil {
 				return CommandLogFinalizationResult{}, err
 			}
@@ -412,23 +422,15 @@ func TestCommandLogWorkerSupportsTransactionalFinalizer(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 1 || results[0].Applied != 1 || results[0].LastOffset != 1 {
 		t.Fatalf("results = %+v, want transactional finalizer to apply and commit one record", results)
 	}
 	if !reflect.DeepEqual(finalized, []int64{1}) {
 		t.Fatalf("finalized offsets = %v, want [1]", finalized)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay event partition: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 1, "committed offset")
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 0, 10, "replay event partition")
 	if len(events) != 1 || events[0].Kind != proto.EvtThreadNew || events[0].PartitionOffset != 1 {
 		t.Fatalf("events = %+v, want one broker-appended thread event", events)
 	}
@@ -459,19 +461,14 @@ func TestCommandLogWorkerAllowsSourcePositionBackedSparseOffsets(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].StartedOffset != 1 || results[0].LastOffset != 4 || results[0].Processed != 1 {
 		t.Fatalf("results = %+v, want sparse source-backed progress through offset 4", results)
 	}
 	if !reflect.DeepEqual(seen, []int64{4}) {
 		t.Fatalf("seen offsets = %v, want [4]", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 4 {
-		t.Fatalf("committed offset = %d, %v; want 4, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 4, "committed offset")
 }
 
 func TestCommandLogWorkerRejectsSparseOffsetsWithoutSourcePosition(t *testing.T) {
@@ -490,15 +487,11 @@ func TestCommandLogWorkerRejectsSparseOffsetsWithoutSourcePosition(t *testing.T)
 	})
 
 	results, err := worker.DrainOnce(ctx)
-	if err == nil || !strings.Contains(err.Error(), "offset gap") {
-		t.Fatalf("drain once err = %v, want offset gap", err)
-	}
+	requireErrorContains(t, err, "offset gap")
 	if len(results) != 1 || results[0].LastOffset != 1 || results[0].Processed != 0 {
 		t.Fatalf("results = %+v, want no progress after sparse offset without source position", results)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 1, "committed offset")
 }
 
 func TestCommandLogWorkerRejectsInvalidSparseSourcePosition(t *testing.T) {
@@ -525,9 +518,7 @@ func TestCommandLogWorkerRejectsInvalidSparseSourcePosition(t *testing.T) {
 	})
 
 	results, err := worker.DrainOnce(ctx)
-	if err == nil || !strings.Contains(err.Error(), "invalid source position") {
-		t.Fatalf("drain once err = %v, want invalid source position", err)
-	}
+	requireErrorContains(t, err, "invalid source position")
 	if len(results) != 1 || results[0].LastOffset != 1 || results[0].Processed != 0 {
 		t.Fatalf("results = %+v, want no progress after invalid sparse source position", results)
 	}
@@ -535,13 +526,10 @@ func TestCommandLogWorkerRejectsInvalidSparseSourcePosition(t *testing.T) {
 
 func TestCommandLogWorkerSupportsCommandEventTransactionFinalizer(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	eventStore := harness.eventStore
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-command-event-transaction")
 
@@ -559,41 +547,24 @@ func TestCommandLogWorkerSupportsCommandEventTransactionFinalizer(t *testing.T) 
 				if reply.Result == nil {
 					return nil, errors.New("missing command result")
 				}
-				return []EventAppend{{
-					ID:     "evt_command_event_transaction",
-					Kind:   proto.EvtThreadNew,
-					Scopes: []string{"board:general"},
-					Payload: &proto.ThreadNewPayload{
-						ID:       "thr_command_event_transaction",
-						Board:    "general",
-						Author:   "alice",
-						AuthorID: "usr_alice",
-						Title:    "Command event transaction",
-						TS:       1234,
-					},
-					TS: 1234,
-				}}, nil
+				return []EventAppend{commandLogWorkerThreadNewEventWithID(
+					"evt_command_event_transaction",
+					"thr_command_event_transaction",
+					"Command event transaction",
+				)}, nil
 			}),
 		},
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 1 || results[0].Applied != 1 || results[0].LastOffset != 1 {
 		t.Fatalf("results = %+v, want command/event transaction finalizer to apply and commit one record", results)
 	}
 	if !reflect.DeepEqual(decided, []int64{1}) {
 		t.Fatalf("decided offsets = %v, want [1]", decided)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay event partition: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 1, "committed offset")
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 0, 10, "replay event partition")
 	if len(events) != 1 || events[0].Kind != proto.EvtThreadNew || events[0].PartitionOffset != 1 || events[0].Seq != 1 {
 		t.Fatalf("events = %+v, want one broker-appended thread event", events)
 	}
@@ -601,13 +572,10 @@ func TestCommandLogWorkerSupportsCommandEventTransactionFinalizer(t *testing.T) 
 
 func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	eventStore := harness.eventStore
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-batch-1")
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-batch-2")
@@ -630,20 +598,7 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 					return transactionStore.CommitCommandEvents(ctx, tx)
 				}),
 				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
-					return []EventAppend{{
-						ID:     "evt_batch_" + record.CID,
-						Kind:   proto.EvtThreadNew,
-						Scopes: []string{"board:general"},
-						Payload: &proto.ThreadNewPayload{
-							ID:       "thr_" + record.CID,
-							Board:    "general",
-							Author:   "alice",
-							AuthorID: "usr_alice",
-							Title:    "Batch " + record.CID,
-							TS:       1234,
-						},
-						TS: 1234,
-					}}, nil
+					return commandLogWorkerThreadNewEvent(record, "evt_batch_", "Batch "), nil
 				}),
 				Applied: commandLogAppliedRecorderFunc(func(ctx context.Context, record CommandLogRecord, result *proto.AckResult) error {
 					applied = append(applied, record.Offset)
@@ -656,10 +611,7 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 		},
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 3 || results[0].Applied != 3 || results[0].LastOffset != 3 {
 		t.Fatalf("results = %+v, want one batch committed through offset 3", results)
 	}
@@ -669,13 +621,8 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 	if !reflect.DeepEqual(applied, []int64{1, 2, 3}) {
 		t.Fatalf("applied offsets = %v, want [1 2 3]", applied)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 3 {
-		t.Fatalf("committed offset = %d, %v; want 3, nil", got, err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay event partition: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 3, "committed offset")
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 0, 10, "replay event partition")
 	if len(events) != 3 {
 		t.Fatalf("events = %+v, want 3 broker-appended events", events)
 	}
@@ -683,17 +630,10 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 
 func TestCommandLogWorkerBatchFinalizerRecordsIndexedCommit(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/indexed-batch.db")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewIndexedCommandLog(NewBrokerCommandLog(commandClient), NewSQLCommandLogPartitionIndex(c.DB))
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	c := newCoreTestCore(t)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := NewIndexedCommandLog(harness.commandLog, NewSQLCommandLogPartitionIndex(c.DB))
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-indexed-batch-1")
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-indexed-batch-2")
@@ -708,39 +648,18 @@ func TestCommandLogWorkerBatchFinalizerRecordsIndexedCommit(t *testing.T) {
 			CommandEventTransactionFinalizer: CommandEventTransactionFinalizer{
 				Transactions: transactionStore,
 				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
-					return []EventAppend{{
-						ID:     "evt_indexed_batch_" + record.CID,
-						Kind:   proto.EvtThreadNew,
-						Scopes: []string{"board:general"},
-						Payload: &proto.ThreadNewPayload{
-							ID:       "thr_" + record.CID,
-							Board:    "general",
-							Author:   "alice",
-							AuthorID: "usr_alice",
-							Title:    "Indexed Batch " + record.CID,
-							TS:       1234,
-						},
-						TS: 1234,
-					}}, nil
+					return commandLogWorkerThreadNewEvent(record, "evt_indexed_batch_", "Indexed Batch "), nil
 				}),
 			},
 		},
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("first DrainOnce: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "first DrainOnce")
 	if len(results) != 1 || results[0].Processed != 2 || results[0].LastOffset != 2 {
 		t.Fatalf("first results = %+v, want indexed batch committed through offset 2", results)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 2 {
-		t.Fatalf("indexed committed offset = %d, %v; want 2, nil", got, err)
-	}
-	second, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("second DrainOnce: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 2, "indexed committed offset")
+	second := drainCommandLogWorkerOnce(t, ctx, worker, "second DrainOnce")
 	if len(second) != 1 || second[0].Processed != 0 || second[0].StartedOffset != 2 {
 		t.Fatalf("second results = %+v, want no replay from indexed committed offset 2", second)
 	}
@@ -748,12 +667,9 @@ func TestCommandLogWorkerBatchFinalizerRecordsIndexedCommit(t *testing.T) {
 
 func TestCommandLogWorkerBatchFinalizerStopsBeforeRetryableFailure(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-batch-retry-1")
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-batch-retry-2")
@@ -778,20 +694,7 @@ func TestCommandLogWorkerBatchFinalizerStopsBeforeRetryableFailure(t *testing.T)
 					return transactionStore.CommitCommandEvents(ctx, tx)
 				}),
 				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
-					return []EventAppend{{
-						ID:     "evt_batch_retry_" + record.CID,
-						Kind:   proto.EvtThreadNew,
-						Scopes: []string{"board:general"},
-						Payload: &proto.ThreadNewPayload{
-							ID:       "thr_" + record.CID,
-							Board:    "general",
-							Author:   "alice",
-							AuthorID: "usr_alice",
-							Title:    "Batch retry " + record.CID,
-							TS:       1234,
-						},
-						TS: 1234,
-					}}, nil
+					return commandLogWorkerThreadNewEvent(record, "evt_batch_retry_", "Batch retry "), nil
 				}),
 				RetryableFailures: commandLogRetryableFailureRecorderFunc(func(ctx context.Context, record CommandLogRecord, errDetail *proto.ErrorDetail) error {
 					if record.Offset != 2 || errDetail == nil || !errDetail.Retryable {
@@ -803,10 +706,7 @@ func TestCommandLogWorkerBatchFinalizerStopsBeforeRetryableFailure(t *testing.T)
 		},
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 1 || results[0].LastOffset != 1 || results[0].RetryableFailure == nil {
 		t.Fatalf("results = %+v, want committed offset 1 and retryable stop at offset 2", results)
 	}
@@ -816,19 +716,14 @@ func TestCommandLogWorkerBatchFinalizerStopsBeforeRetryableFailure(t *testing.T)
 	if !reflect.DeepEqual(seen, []int64{1, 2}) {
 		t.Fatalf("seen offsets = %v, want [1 2]", seen)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 1, "committed offset")
 }
 
 func TestCommandLogWorkerUsesPerRecordNativeFinalizerUnlessBatchOptedIn(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-single-finalizer-1")
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-single-finalizer-2")
@@ -846,28 +741,12 @@ func TestCommandLogWorkerUsesPerRecordNativeFinalizerUnlessBatchOptedIn(t *testi
 				return transactionStore.CommitCommandEvents(ctx, tx)
 			}),
 			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
-				return []EventAppend{{
-					ID:     "evt_single_finalizer_" + record.CID,
-					Kind:   proto.EvtThreadNew,
-					Scopes: []string{"board:general"},
-					Payload: &proto.ThreadNewPayload{
-						ID:       "thr_" + record.CID,
-						Board:    "general",
-						Author:   "alice",
-						AuthorID: "usr_alice",
-						Title:    "Single finalizer " + record.CID,
-						TS:       1234,
-					},
-					TS: 1234,
-				}}, nil
+				return commandLogWorkerThreadNewEvent(record, "evt_single_finalizer_", "Single finalizer "), nil
 			}),
 		},
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 2 || results[0].LastOffset != 2 {
 		t.Fatalf("results = %+v, want two processed records", results)
 	}
@@ -878,12 +757,9 @@ func TestCommandLogWorkerUsesPerRecordNativeFinalizerUnlessBatchOptedIn(t *testi
 
 func TestCommandLogWorkerReportsCommittedProgressWhenNativeAppliedReceiptFails(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-applied-recorder-error")
 
@@ -896,20 +772,11 @@ func TestCommandLogWorkerReportsCommittedProgressWhenNativeAppliedReceiptFails(t
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: transactionStore,
 			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
-				return []EventAppend{{
-					ID:     "evt_applied_recorder_error",
-					Kind:   proto.EvtThreadNew,
-					Scopes: []string{"board:general"},
-					Payload: &proto.ThreadNewPayload{
-						ID:       "thr_applied_recorder_error",
-						Board:    "general",
-						Author:   "alice",
-						AuthorID: "usr_alice",
-						Title:    "Applied recorder error",
-						TS:       1234,
-					},
-					TS: 1234,
-				}}, nil
+				return []EventAppend{commandLogWorkerThreadNewEventWithID(
+					"evt_applied_recorder_error",
+					"thr_applied_recorder_error",
+					"Applied recorder error",
+				)}, nil
 			}),
 			Applied: commandLogAppliedRecorderFunc(func(ctx context.Context, record CommandLogRecord, result *proto.AckResult) error {
 				return errors.New("applied receipt write failed")
@@ -918,26 +785,19 @@ func TestCommandLogWorkerReportsCommittedProgressWhenNativeAppliedReceiptFails(t
 	})
 
 	results, err := worker.DrainOnce(ctx)
-	if err == nil || !strings.Contains(err.Error(), "applied receipt write failed") {
-		t.Fatalf("drain once err = %v, want applied receipt failure", err)
-	}
+	requireErrorContains(t, err, "applied receipt write failed")
 	if len(results) != 1 || results[0].Processed != 1 || results[0].Applied != 1 || results[0].LastOffset != 1 {
 		t.Fatalf("results = %+v, want committed progress reflected despite recorder error", results)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 1, "committed offset")
 }
 
 func TestCommandEventTransactionFinalizerDoesNotCommitWhenEventDecisionIsInvalid(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	eventStore := harness.eventStore
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-invalid-command-event-transaction")
 
@@ -965,13 +825,8 @@ func TestCommandEventTransactionFinalizerDoesNotCommitWhenEventDecisionIsInvalid
 	if !strings.Contains(results[0].FinalizerFailure, "native event decision failed") {
 		t.Fatalf("finalizer failure = %q, want invalid event decision detail", results[0].FinalizerFailure)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay event partition: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 0, "committed offset")
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 0, 10, "replay event partition")
 	if len(events) != 0 {
 		t.Fatalf("events = %+v, want no broker events after invalid transaction", events)
 	}
@@ -994,28 +849,17 @@ func TestCommandLogWorkerReportsNativeTransactionCommitFailure(t *testing.T) {
 				return CommandEventTransactionResult{}, errors.New("injected native transaction commit failure")
 			}),
 			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
-				return []EventAppend{{
-					ID:     "evt_native_transaction_commit_failure",
-					Kind:   proto.EvtThreadNew,
-					Scopes: []string{"board:general"},
-					Payload: &proto.ThreadNewPayload{
-						ID:       "thr_native_transaction_commit_failure",
-						Board:    "general",
-						Author:   "alice",
-						AuthorID: "usr_alice",
-						Title:    "Native transaction commit failure",
-						TS:       1234,
-					},
-					TS: 1234,
-				}}, nil
+				return []EventAppend{commandLogWorkerThreadNewEventWithID(
+					"evt_native_transaction_commit_failure",
+					"thr_native_transaction_commit_failure",
+					"Native transaction commit failure",
+				)}, nil
 			}),
 		},
 	})
 
 	results, err := worker.DrainOnce(ctx)
-	if err == nil || !strings.Contains(err.Error(), "injected native transaction commit failure") {
-		t.Fatalf("drain once err = %v, want native transaction commit failure", err)
-	}
+	requireErrorContains(t, err, "injected native transaction commit failure")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -1023,9 +867,7 @@ func TestCommandLogWorkerReportsNativeTransactionCommitFailure(t *testing.T) {
 	if result.Processed != 0 || result.LastOffset != 0 || result.CommitFailures != 1 || !strings.Contains(result.CommitFailure, "injected native transaction commit failure") {
 		t.Fatalf("result = %+v, want transaction commit failure without offset progress", result)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 0, "committed offset")
 }
 
 func TestCommandLogWorkerReportsNativeRetryableReceiptFailure(t *testing.T) {
@@ -1052,9 +894,7 @@ func TestCommandLogWorkerReportsNativeRetryableReceiptFailure(t *testing.T) {
 	})
 
 	results, err := worker.DrainOnce(ctx)
-	if err == nil || !strings.Contains(err.Error(), "retryable receipt write failed") {
-		t.Fatalf("drain once err = %v, want retryable receipt failure", err)
-	}
+	requireErrorContains(t, err, "retryable receipt write failed")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -1062,19 +902,14 @@ func TestCommandLogWorkerReportsNativeRetryableReceiptFailure(t *testing.T) {
 	if result.Processed != 0 || result.LastOffset != 0 || result.RetryableFailure == nil || result.RetryableFailure.Message != "native retry later" {
 		t.Fatalf("result = %+v, want retryable failure evidence without offset progress", result)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 0, "committed offset")
 }
 
 func TestCommandEventTransactionFinalizerRecordsTerminalFailureReceipts(t *testing.T) {
 	ctx := context.Background()
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-terminal-command-event-transaction")
 
@@ -1104,10 +939,7 @@ func TestCommandEventTransactionFinalizerRecordsTerminalFailureReceipts(t *testi
 		},
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 1 || results[0].TerminalFailures != 1 || results[0].LastOffset != 1 {
 		t.Fatalf("results = %+v, want terminal failure recorded and committed", results)
 	}
@@ -1117,18 +949,12 @@ func TestCommandEventTransactionFinalizerRecordsTerminalFailureReceipts(t *testi
 	if len(terminalRecords) != 1 || terminalRecords[0].Offset != 1 {
 		t.Fatalf("terminal records = %+v, want offset 1 recorded", terminalRecords)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 1, "committed offset")
 }
 
 func TestCommandLogWorkerClaimsPartitionBeforeDraining(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	claimer := NewSQLCommandPartitionClaimer(c.DB)
 	now := int64(1000)
 	claimer.now = func() int64 { return now }
@@ -1150,10 +976,7 @@ func TestCommandLogWorkerClaimsPartitionBeforeDraining(t *testing.T) {
 			return Reply{}
 		}),
 	})
-	firstResults, err := workerA.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("writer-a drain: %v", err)
-	}
+	firstResults := drainCommandLogWorkerOnce(t, ctx, workerA, "writer-a drain")
 	if len(firstResults) != 1 || !firstResults[0].Claimed || firstResults[0].ClaimOwnerID != "writer-a" || firstResults[0].Processed != 1 {
 		t.Fatalf("writer-a results = %+v, want one claimed processed record", firstResults)
 	}
@@ -1174,34 +997,24 @@ func TestCommandLogWorkerClaimsPartitionBeforeDraining(t *testing.T) {
 		}),
 	})
 	now = 1050
-	skippedResults, err := workerB.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("writer-b drain before lease expiry: %v", err)
-	}
+	skippedResults := drainCommandLogWorkerOnce(t, ctx, workerB, "writer-b drain before lease expiry")
 	if len(skippedResults) != 1 || skippedResults[0].Claimed || skippedResults[0].ClaimOwnerID != "writer-a" {
 		t.Fatalf("writer-b early results = %+v, want partition skipped because writer-a owns it", skippedResults)
 	}
 	if len(seenB) != 0 {
 		t.Fatalf("writer-b executed before lease expiry: %v", seenB)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset before lease expiry = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 1, "committed offset before lease expiry")
 
 	now = 1200
-	takeoverResults, err := workerB.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("writer-b drain after lease expiry: %v", err)
-	}
+	takeoverResults := drainCommandLogWorkerOnce(t, ctx, workerB, "writer-b drain after lease expiry")
 	if len(takeoverResults) != 1 || !takeoverResults[0].Claimed || takeoverResults[0].ClaimOwnerID != "writer-b" || takeoverResults[0].Processed != 1 {
 		t.Fatalf("writer-b takeover results = %+v, want claimed processed record", takeoverResults)
 	}
 	if !reflect.DeepEqual(seenB, []int64{2}) {
 		t.Fatalf("writer-b seen offsets = %v, want [2]", seenB)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 2 {
-		t.Fatalf("committed offset after takeover = %d, %v; want 2, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 2, "committed offset after takeover")
 }
 
 func TestCommandLogWorkerStopsWhenClaimLostDuringDrain(t *testing.T) {
@@ -1230,10 +1043,7 @@ func TestCommandLogWorkerStopsWhenClaimLostDuringDrain(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -1244,9 +1054,7 @@ func TestCommandLogWorkerStopsWhenClaimLostDuringDrain(t *testing.T) {
 	if !reflect.DeepEqual(seen, []int64{1}) {
 		t.Fatalf("seen offsets = %v, want [1]", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 1, "committed offset")
 	if claimer.calls != len(claimer.steps) {
 		t.Fatalf("claim calls = %d, want %d", claimer.calls, len(claimer.steps))
 	}
@@ -1275,10 +1083,7 @@ func TestCommandLogWorkerDoesNotCommitAfterClaimLostBeforeCommit(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -1289,9 +1094,7 @@ func TestCommandLogWorkerDoesNotCommitAfterClaimLostBeforeCommit(t *testing.T) {
 	if !reflect.DeepEqual(seen, []int64{1}) {
 		t.Fatalf("seen offsets = %v, want [1]", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 	if claimer.calls != len(claimer.steps) {
 		t.Fatalf("claim calls = %d, want %d", claimer.calls, len(claimer.steps))
 	}
@@ -1356,9 +1159,7 @@ func TestCommandLogWorkerRefreshesClaimDuringLongExecution(t *testing.T) {
 	if got := claimer.CallCount(); got < 4 {
 		t.Fatalf("claim calls = %d, want at least initial, pre-execute, heartbeat, and pre-commit refreshes", got)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 1, "committed offset")
 }
 
 func TestCommandLogWorkerDoesNotCommitIfHeartbeatLosesClaimDuringExecution(t *testing.T) {
@@ -1422,9 +1223,7 @@ func TestCommandLogWorkerDoesNotCommitIfHeartbeatLosesClaimDuringExecution(t *te
 	if got := claimer.CallCount(); got != 3 {
 		t.Fatalf("claim calls = %d, want initial, pre-execute, and losing heartbeat refresh", got)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 }
 
 func TestCommandLogWorkerDrainsOnlyAssignedPartitions(t *testing.T) {
@@ -1451,10 +1250,7 @@ func TestCommandLogWorkerDrainsOnlyAssignedPartitions(t *testing.T) {
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 2 {
 		t.Fatalf("results = %+v, want one result per discovered partition", results)
 	}
@@ -1470,12 +1266,8 @@ func TestCommandLogWorkerDrainsOnlyAssignedPartitions(t *testing.T) {
 	if !reflect.DeepEqual(seen, []LogPartition{owned}) {
 		t.Fatalf("seen partitions = %+v, want only %+v", seen, owned)
 	}
-	if got, err := log.CommittedOffset(ctx, owned); err != nil || got != 1 {
-		t.Fatalf("owned committed offset = %d, %v; want 1, nil", got, err)
-	}
-	if got, err := log.CommittedOffset(ctx, skipped); err != nil || got != 0 {
-		t.Fatalf("skipped committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, owned, 1, "owned committed offset")
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, skipped, 0, "skipped committed offset")
 }
 
 func TestCommandLogWorkerUsesAssignmentListerWithoutGlobalPartitionScan(t *testing.T) {
@@ -1505,10 +1297,7 @@ func TestCommandLogWorkerUsesAssignmentListerWithoutGlobalPartitionScan(t *testi
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want only assigned partition result", results)
 	}
@@ -1519,12 +1308,8 @@ func TestCommandLogWorkerUsesAssignmentListerWithoutGlobalPartitionScan(t *testi
 	if !reflect.DeepEqual(seen, []LogPartition{owned.Normalize()}) {
 		t.Fatalf("seen partitions = %+v, want only assigned %+v", seen, owned.Normalize())
 	}
-	if got, err := base.CommittedOffset(ctx, owned); err != nil || got != 1 {
-		t.Fatalf("owned committed offset = %d, %v; want 1, nil", got, err)
-	}
-	if got, err := base.CommittedOffset(ctx, unassigned); err != nil || got != 0 {
-		t.Fatalf("unassigned committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, base, owned, 1, "owned committed offset")
+	requireCommandLogWorkerCommittedOffset(t, ctx, base, unassigned, 0, "unassigned committed offset")
 }
 
 func TestCommandLogWorkerDoesNotCommitAfterSnapshotRebalanceBeforeCommit(t *testing.T) {
@@ -1557,10 +1342,7 @@ func TestCommandLogWorkerDoesNotCommitAfterSnapshotRebalanceBeforeCommit(t *test
 		}),
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -1571,9 +1353,7 @@ func TestCommandLogWorkerDoesNotCommitAfterSnapshotRebalanceBeforeCommit(t *test
 	if !reflect.DeepEqual(seen, []int64{1}) {
 		t.Fatalf("seen offsets = %v, want [1]", seen)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 }
 
 func TestCommandLogWorkerDoesNotFinalizeOutcomeAfterAssignmentLost(t *testing.T) {
@@ -1635,10 +1415,7 @@ func TestCommandLogWorkerDoesNotFinalizeOutcomeAfterAssignmentLost(t *testing.T)
 				}),
 			})
 
-			results, err := worker.DrainOnce(ctx)
-			if err != nil {
-				t.Fatalf("drain once: %v", err)
-			}
+			results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 			if len(results) != 1 {
 				t.Fatalf("results = %+v, want one partition result", results)
 			}
@@ -1652,9 +1429,7 @@ func TestCommandLogWorkerDoesNotFinalizeOutcomeAfterAssignmentLost(t *testing.T)
 			if applied != 0 || terminal != 0 || retrying != 0 {
 				t.Fatalf("recorder calls applied=%d terminal=%d retrying=%d, want none", applied, terminal, retrying)
 			}
-			if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-				t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-			}
+			requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 		})
 	}
 }
@@ -1720,9 +1495,7 @@ func TestCommandLogWorkerDoesNotCommitIfAssignmentLostDuringExecution(t *testing
 	if got := assigner.CallCount(); got != 3 {
 		t.Fatalf("assignment calls = %d, want initial, pre-execute, and losing heartbeat refresh", got)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 }
 
 func TestCommandLogWorkerCancelsFinalizerIfAssignmentLostDuringFinalization(t *testing.T) {
@@ -1789,20 +1562,14 @@ func TestCommandLogWorkerCancelsFinalizerIfAssignmentLostDuringFinalization(t *t
 	if got := assigner.CallCount(); got != 4 {
 		t.Fatalf("assignment calls = %d, want initial, pre-execute, pre-finalize, and losing finalization heartbeat", got)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset")
 }
 
 func TestCoreExecuteCommandLogRecordDoesNotReshadowCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(t.TempDir()+"/budgie.db", WithCommandLogShadow(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithCommandLogShadow(commandLog))
 	go c.Run(ctx)
 
 	partition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
@@ -1828,25 +1595,18 @@ func TestCoreAuthoritativeCommandLogEnqueuesPendingUntilWriterDrain(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Authoritative command log",
 		Body:  "visible after the writer drains",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	headBefore, err := c.Head()
 	if err != nil {
 		t.Fatalf("head before enqueue: %v", err)
@@ -1915,16 +1675,11 @@ func TestCoreAuthoritativeCommandLogEnqueuesPendingUntilWriterDrain(t *testing.T
 		Executor:  c,
 		BatchSize: 10,
 	})
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Partition != partition.Normalize() || results[0].Processed != 1 || results[0].LastOffset != 1 {
 		t.Fatalf("drain results = %+v, want one processed command through offset 1", results)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("committed offset = %d, %v; want 1, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, 1, "committed offset")
 	status, err = c.CommandStatus(ctx, alice, cid, partition, reply.Result.CommandOffset)
 	if err != nil {
 		t.Fatalf("command status after drain: %v", err)
@@ -1967,21 +1722,14 @@ func TestCoreAuthoritativeCommandLogBypassesUnorderedCommands(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.SetPresencePayload{Status: "active", Mode: "reading", Location: "Lobby"})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.SetPresencePayload{Status: "active", Mode: "reading", Location: "Lobby"})
 	reply := c.ExecCmd(ctx, alice, proto.CmdSetPresence, payload, "cid-presence-local")
 	if reply.Err != nil {
 		t.Fatalf("set presence failed: %+v", reply.Err)
@@ -2009,24 +1757,17 @@ func TestCoreAuthoritativeCommandLogBypassesReadMarkers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Read marker bypass",
 		Body:  "root",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
 	createReply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, createPayload, "cid-read-marker-bypass-create")
 	if createReply.Err != nil {
 		t.Fatalf("create thread failed: %+v", createReply.Err)
@@ -2037,10 +1778,7 @@ func TestCoreAuthoritativeCommandLogBypassesReadMarkers(t *testing.T) {
 	threadID := createReply.Result.ID
 	c.commandLogAuthoritative = commandLog
 
-	payload, err := json.Marshal(proto.MarkThreadReadPayload{Thread: threadID})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.MarkThreadReadPayload{Thread: threadID})
 	reply := c.ExecCmd(ctx, alice, proto.CmdMarkThreadRead, payload, "cid-mark-thread-read-local")
 	if reply.Err != nil {
 		t.Fatalf("mark thread read failed: %+v", reply.Err)
@@ -2063,10 +1801,7 @@ func TestCoreAuthoritativeCommandLogBypassesReadMarkers(t *testing.T) {
 		t.Fatalf("thread summaries after read marker = %+v, want local unread state cleared", summaries)
 	}
 
-	prefPayload, err := json.Marshal(proto.SetThreadPrefPayload{Thread: threadID, Level: "watch"})
-	if err != nil {
-		t.Fatalf("marshal thread pref payload: %v", err)
-	}
+	prefPayload := marshalCoreTestJSON(t, "marshal thread pref payload", proto.SetThreadPrefPayload{Thread: threadID, Level: "watch"})
 	prefReply := c.ExecCmd(ctx, alice, proto.CmdSetThreadPref, prefPayload, "cid-thread-pref-local")
 	if prefReply.Err != nil {
 		t.Fatalf("set thread pref failed: %+v", prefReply.Err)
@@ -2094,21 +1829,14 @@ func TestCoreCommandLogShadowBypassesUnorderedCommands(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(t.TempDir()+"/budgie.db", WithCommandLogShadow(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithCommandLogShadow(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.SetPresencePayload{Status: "active"})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.SetPresencePayload{Status: "active"})
 	reply := c.ExecCmd(ctx, alice, proto.CmdSetPresence, payload, "cid-presence-shadow")
 	if reply.Err != nil {
 		t.Fatalf("set presence failed: %+v", reply.Err)
@@ -2160,21 +1888,14 @@ func TestCoreAuthoritativeCommandLogBypassesClientSubscriptionCommands(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.SubscribePayload{Scopes: []string{"board:general"}})
-	if err != nil {
-		t.Fatalf("marshal subscribe payload: %v", err)
-	}
+	payload := marshalCoreTestJSON(t, "marshal subscribe payload", proto.SubscribePayload{Scopes: []string{"board:general"}})
 	reply := c.ExecCmd(ctx, alice, proto.CmdSubscribe, payload, "cid-subscribe-local")
 	if reply.Err == nil || reply.Err.Code != proto.ErrValidationFailed {
 		t.Fatalf("subscribe reply = %+v, want immediate local validation failure", reply)
@@ -2192,25 +1913,18 @@ func TestCoreAuthoritativeCommandLogStatusExplainsTerminalFailure(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "missing",
 		Title: "Terminal failure",
 		Body:  "this board does not exist",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	cid := "cid-authoritative-terminal-failure"
 	reply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, payload, cid)
 	if reply.Err != nil {
@@ -2226,10 +1940,7 @@ func TestCoreAuthoritativeCommandLogStatusExplainsTerminalFailure(t *testing.T) 
 		Executor:  c,
 		BatchSize: 10,
 	})
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Partition != partition.Normalize() || results[0].TerminalFailures != 1 || results[0].Processed != 1 || results[0].LastOffset != 1 {
 		t.Fatalf("drain results = %+v, want one committed terminal failure", results)
 	}
@@ -2247,25 +1958,18 @@ func TestCoreAuthoritativeCommandLogStatusReportsRetryableFailure(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Retryable command",
 		Body:  "writer dependency is unavailable",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	cid := "cid-authoritative-retryable-failure"
 	reply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, payload, cid)
 	if reply.Err != nil {
@@ -2285,10 +1989,7 @@ func TestCoreAuthoritativeCommandLogStatusReportsRetryableFailure(t *testing.T) 
 			return Reply{Err: retryableErr}
 		}),
 	})
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Partition != partition.Normalize() || results[0].RetryableFailure == nil || results[0].Processed != 0 || results[0].LastOffset != 0 {
 		t.Fatalf("drain results = %+v, want retryable stop before offset commit", results)
 	}
@@ -2306,25 +2007,18 @@ func TestCoreAuthoritativeCommandLogClearsRetryingReceiptAfterSuccess(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Retry clears receipt",
 		Body:  "retryable receipt should clear after success",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	cid := "cid-retrying-clears-after-success"
 	reply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, payload, cid)
 	if reply.Err != nil {
@@ -2344,8 +2038,9 @@ func TestCoreAuthoritativeCommandLogClearsRetryingReceiptAfterSuccess(t *testing
 			return Reply{Err: retryableErr}
 		}),
 	})
-	if results, err := retryingWorker.DrainOnce(ctx); err != nil || len(results) != 1 || results[0].RetryableFailure == nil {
-		t.Fatalf("retrying drain results = %+v err=%v, want retryable stop", results, err)
+	retryingResults := drainCommandLogWorkerOnce(t, ctx, retryingWorker, "retrying drain")
+	if len(retryingResults) != 1 || retryingResults[0].RetryableFailure == nil {
+		t.Fatalf("retrying drain results = %+v, want retryable stop", retryingResults)
 	}
 	if got := commandLogReceiptCount(t, c, CommandStatusRetrying); got != 1 {
 		t.Fatalf("retrying receipt count after retryable failure = %d, want 1", got)
@@ -2356,10 +2051,7 @@ func TestCoreAuthoritativeCommandLogClearsRetryingReceiptAfterSuccess(t *testing
 		Executor:  c,
 		BatchSize: 10,
 	})
-	results, err := successWorker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("successful drain: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, successWorker, "successful drain")
 	if len(results) != 1 || results[0].Partition != partition.Normalize() || results[0].Processed != 1 || results[0].LastOffset != reply.Result.CommandOffset {
 		t.Fatalf("successful drain results = %+v, want command committed through offset %d", results, reply.Result.CommandOffset)
 	}
@@ -2378,25 +2070,18 @@ func TestCoreAuthoritativeCommandLogClearsRetryingReceiptAfterSuccess(t *testing
 func TestCoreExecuteCommandLogRecordSynthesizesCIDForReplaySafety(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Command log replay",
 		Body:  "only once",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	record := CommandLogRecord{
 		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:    7,
@@ -2448,11 +2133,7 @@ func TestCoreExecuteCommandLogRecordSynthesizesCIDForReplaySafety(t *testing.T) 
 func TestCommandLogWorkerCommitFailureReplayDoesNotDuplicateSQLCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
@@ -2462,14 +2143,11 @@ func TestCommandLogWorkerCommitFailureReplayDoesNotDuplicateSQLCommand(t *testin
 	base := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
 	log := &flakyCommitCommandLog{BrokerCommandLog: base, failCommits: 1}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Commit failure replay",
 		Body:  "only once",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	record, err := log.Produce(ctx, CommandLogRecord{
 		Partition: partition,
 		ActorID:   alice.ID,
@@ -2500,17 +2178,12 @@ func TestCommandLogWorkerCommitFailureReplayDoesNotDuplicateSQLCommand(t *testin
 	if headAfterFirst == 0 {
 		t.Fatalf("head after first = 0, want SQL command to have committed before offset failure")
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset after failed commit = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset after failed commit")
 	if got := commandLogReceiptCount(t, c, CommandStatusApplied); got != 1 {
 		t.Fatalf("applied receipt count after failed offset commit = %d, want 1", got)
 	}
 
-	secondResults, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("second drain: %v", err)
-	}
+	secondResults := drainCommandLogWorkerOnce(t, ctx, worker, "second drain")
 	if len(secondResults) != 1 || secondResults[0].LastOffset != record.Offset || secondResults[0].Processed != 1 {
 		t.Fatalf("second results = %+v, want command offset committed through %d", secondResults, record.Offset)
 	}
@@ -2521,9 +2194,7 @@ func TestCommandLogWorkerCommitFailureReplayDoesNotDuplicateSQLCommand(t *testin
 	if headAfterSecond != headAfterFirst {
 		t.Fatalf("head after replay = %d, want unchanged %d", headAfterSecond, headAfterFirst)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("committed offset after replay = %d, %v; want %d, nil", got, err, record.Offset)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, record.Offset, "committed offset after replay")
 	if got := commandLogReceiptCount(t, c, CommandStatusApplied); got != 1 {
 		t.Fatalf("applied receipt count after replay = %d, want 1", got)
 	}
@@ -2545,11 +2216,7 @@ func TestCommandLogWorkerCommitFailureReplayDoesNotDuplicateSQLCommand(t *testin
 func TestCommandLogWorkerCrashBeforeMaterializationReplaysOnReplacement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
@@ -2558,14 +2225,11 @@ func TestCommandLogWorkerCrashBeforeMaterializationReplaysOnReplacement(t *testi
 
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Crash before materialization",
 		Body:  "replacement writer should materialize this once",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	record, err := log.Produce(ctx, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
@@ -2618,9 +2282,7 @@ func TestCommandLogWorkerCrashBeforeMaterializationReplaysOnReplacement(t *testi
 	if len(crashDrain.results) != 1 || crashDrain.results[0].Processed != 0 || crashDrain.results[0].LastOffset != 0 {
 		t.Fatalf("crash results = %+v, want no materialized command or offset commit", crashDrain.results)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("committed offset after crash = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "committed offset after crash")
 	headAfterCrash, err := c.Head()
 	if err != nil {
 		t.Fatalf("head after crash: %v", err)
@@ -2635,16 +2297,11 @@ func TestCommandLogWorkerCrashBeforeMaterializationReplaysOnReplacement(t *testi
 		BatchSize: 10,
 		Executor:  c,
 	})
-	replayResults, err := workerB.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("replacement drain: %v", err)
-	}
+	replayResults := drainCommandLogWorkerOnce(t, ctx, workerB, "replacement drain")
 	if len(replayResults) != 1 || replayResults[0].LastOffset != record.Offset || replayResults[0].Processed != 1 {
 		t.Fatalf("replacement results = %+v, want command offset committed through %d", replayResults, record.Offset)
 	}
-	if got, err := log.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("committed offset after replacement = %d, %v; want %d, nil", got, err, record.Offset)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, record.Offset, "committed offset after replacement")
 	headAfterReplay, err := c.Head()
 	if err != nil {
 		t.Fatalf("head after replay: %v", err)
@@ -2671,25 +2328,18 @@ func TestCoreCommandLogShadowUsesSyntheticCIDForImmediateExecution(t *testing.T)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(t.TempDir()+"/budgie.db", WithCommandLogShadow(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithCommandLogShadow(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
 	go c.Run(ctx)
 
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Shadow synthetic cid",
 		Body:  "only once",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	first := c.ExecCmd(ctx, alice, proto.CmdCreateThread, payload, "")
 	if first.Err != nil {
 		t.Fatalf("exec command: %+v", first.Err)
@@ -2733,11 +2383,7 @@ func TestCoreCommandLogShadowUsesSyntheticCIDForImmediateExecution(t *testing.T)
 
 func TestCoreExecuteCommandLogRecordRejectsEmptyCIDWithoutOffset(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	reply := c.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
 		Command:   proto.CmdCreateThread,
@@ -2750,11 +2396,7 @@ func TestCoreExecuteCommandLogRecordRejectsEmptyCIDWithoutOffset(t *testing.T) {
 
 func TestCoreExecuteCommandLogRecordRejectsMismatchedPartition(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	reply := c.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition: LogPartition{Kind: partitionBoard, Key: "life"},
 		Offset:    1,
@@ -2775,11 +2417,7 @@ func TestCoreExecuteCommandLogRecordRejectsMismatchedPartition(t *testing.T) {
 
 func TestCommandLogWorkerCommitsMismatchedPartitionAsTerminalFailure(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
 	wrongPartition := LogPartition{Kind: partitionBoard, Key: "life"}
 	record, err := log.Produce(ctx, CommandLogRecord{
@@ -2797,10 +2435,7 @@ func TestCommandLogWorkerCommitsMismatchedPartitionAsTerminalFailure(t *testing.
 		Executor:  c,
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 {
 		t.Fatalf("results = %+v, want one partition result", results)
 	}
@@ -2808,9 +2443,7 @@ func TestCommandLogWorkerCommitsMismatchedPartitionAsTerminalFailure(t *testing.
 	if result.Partition != wrongPartition.Normalize() || result.LastOffset != record.Offset || result.Processed != 1 || result.TerminalFailures != 1 || result.RetryableFailure != nil {
 		t.Fatalf("result = %+v, want terminal poison record committed through offset %d", result, record.Offset)
 	}
-	if got, err := log.CommittedOffset(ctx, wrongPartition); err != nil || got != record.Offset {
-		t.Fatalf("committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, wrongPartition, record.Offset, "committed offset")
 	head, err := c.Head()
 	if err != nil {
 		t.Fatalf("head: %v", err)

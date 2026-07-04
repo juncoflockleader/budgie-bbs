@@ -33,7 +33,7 @@ func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.Raw
 		// Record inside its own tiny tx; non-fatal if it fails.
 		tx, err := h.db.Begin()
 		if err == nil {
-			_ = recordProcessed(tx, partition.Kind, partition.Key, actorID, cid, commandHash, string(raw))
+			_ = currentRuntime().RecordProcessed(tx, partition.Kind, partition.Key, actorID, cid, commandHash, string(raw))
 			_ = tx.Commit()
 		}
 	}

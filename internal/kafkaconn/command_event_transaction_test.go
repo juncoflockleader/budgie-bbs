@@ -159,9 +159,7 @@ func TestCommandEventTransactionClientRejectsPartitionOnlyAllocationByDefault(t 
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_partition_only_default_reject", "Partition-only rejected by default"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "allocated event 0 without scalar sequence evidence") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want scalar sequence requirement", err)
-	}
+	requireErrorContains(t, err, "allocated event 0 without scalar sequence evidence")
 	if !tx.aborted || len(tx.appended) != 0 || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v appended=%d offsetCalls=%d commitCalls=%d, want abort before append/offset/commit", tx.aborted, len(tx.appended), tx.offsetCalls, tx.commitCalls)
 	}
@@ -232,9 +230,7 @@ func TestCommandEventTransactionClientAbortsWhenEventPositionAllocationFails(t *
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_position_fail", "Position failure"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "injected position allocation failure") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want position allocation failure", err)
-	}
+	requireErrorContains(t, err, "injected position allocation failure")
 	if !tx.aborted || len(tx.appended) != 0 || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v appended=%d offsetCalls=%d commitCalls=%d, want abort before append/offset/commit", tx.aborted, len(tx.appended), tx.offsetCalls, tx.commitCalls)
 	}
@@ -253,9 +249,7 @@ func TestCommandEventTransactionClientRejectsAllocatedPartitionMismatch(t *testi
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_alloc_wrong_partition", "Wrong allocated partition"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "allocated event 0 for partition board/other, want board/general") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want allocation partition mismatch", err)
-	}
+	requireErrorContains(t, err, "allocated event 0 for partition board/other, want board/general")
 	if !tx.aborted || len(tx.appended) != 0 || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v appended=%d offsetCalls=%d commitCalls=%d, want abort before append/offset/commit", tx.aborted, len(tx.appended), tx.offsetCalls, tx.commitCalls)
 	}
@@ -271,9 +265,7 @@ func TestCommandEventTransactionClientAbortsWhenEventAppendFails(t *testing.T) {
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_append_fail", "Append failure"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "injected append failure") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want append failure", err)
-	}
+	requireErrorContains(t, err, "injected append failure")
 	if !tx.aborted || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v offsetCalls=%d commitCalls=%d, want abort before offset/commit", tx.aborted, tx.offsetCalls, tx.commitCalls)
 	}
@@ -289,9 +281,7 @@ func TestCommandEventTransactionClientAbortsWhenAppendEvidenceMismatchesTopic(t 
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_wrong_topic", "Wrong topic"),
 	})
-	if err == nil || !strings.Contains(err.Error(), `returned topic "other.events" for requested topic "budgie.events"`) {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want topic evidence failure", err)
-	}
+	requireErrorContains(t, err, `returned topic "other.events" for requested topic "budgie.events"`)
 	if !tx.aborted || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v offsetCalls=%d commitCalls=%d, want abort before offset/commit", tx.aborted, tx.offsetCalls, tx.commitCalls)
 	}
@@ -307,9 +297,7 @@ func TestCommandEventTransactionClientAbortsWhenAppendEvidenceMismatchesKey(t *t
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_wrong_key", "Wrong key"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "returned key") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want key evidence failure", err)
-	}
+	requireErrorContains(t, err, "returned key")
 	if !tx.aborted || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v offsetCalls=%d commitCalls=%d, want abort before offset/commit", tx.aborted, tx.offsetCalls, tx.commitCalls)
 	}
@@ -325,9 +313,7 @@ func TestCommandEventTransactionClientAbortsWhenAppendEvidenceMismatchesAllocate
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_wrong_allocated_offset", "Wrong allocated offset"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "returned logical partition offset 2 for allocated offset 1") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want allocated offset evidence failure", err)
-	}
+	requireErrorContains(t, err, "returned logical partition offset 2 for allocated offset 1")
 	if !tx.aborted || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v offsetCalls=%d commitCalls=%d, want abort before offset/commit", tx.aborted, tx.offsetCalls, tx.commitCalls)
 	}
@@ -343,9 +329,7 @@ func TestCommandEventTransactionClientAbortsWhenAppendEvidenceMismatchesAllocate
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_wrong_allocated_seq", "Wrong allocated sequence"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "returned scalar sequence 2 for allocated scalar sequence 1") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want allocated scalar evidence failure", err)
-	}
+	requireErrorContains(t, err, "returned scalar sequence 2 for allocated scalar sequence 1")
 	if !tx.aborted || tx.offsetCalls != 0 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v offsetCalls=%d commitCalls=%d, want abort before offset/commit", tx.aborted, tx.offsetCalls, tx.commitCalls)
 	}
@@ -361,9 +345,7 @@ func TestCommandEventTransactionClientAbortsWhenCommandOffsetCommitFails(t *test
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_offset_fail", "Offset failure"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "injected offset failure") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want offset failure", err)
-	}
+	requireErrorContains(t, err, "injected offset failure")
 	if !tx.aborted || tx.offsetCalls != 1 || tx.commitCalls != 0 {
 		t.Fatalf("aborted=%v offsetCalls=%d commitCalls=%d, want abort before transaction commit", tx.aborted, tx.offsetCalls, tx.commitCalls)
 	}
@@ -379,9 +361,7 @@ func TestCommandEventTransactionClientDoesNotAbortAfterTransactionCommitAttempt(
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_commit_fail", "Commit failure"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "ambiguous transaction commit failure") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want commit failure", err)
-	}
+	requireErrorContains(t, err, "ambiguous transaction commit failure")
 	if tx.aborted || tx.commitCalls != 1 {
 		t.Fatalf("aborted=%v commitCalls=%d, want no abort after transaction commit attempt", tx.aborted, tx.commitCalls)
 	}
@@ -395,9 +375,7 @@ func TestCommandEventTransactionClientRejectsInvalidBatchBeforeBegin(t *testing.
 	record.TS = 0
 
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{record})
-	if err == nil || !strings.Contains(err.Error(), "event timestamp is required") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want timestamp validation failure", err)
-	}
+	requireErrorContains(t, err, "event timestamp is required")
 	if transactions.beginCalls != 0 {
 		t.Fatalf("begin calls = %d, want invalid batch rejected before begin", transactions.beginCalls)
 	}
@@ -414,9 +392,7 @@ func TestCommandEventTransactionClientRequiresCommandSourcePositionBeforeBegin(t
 	}, []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_kafka_transaction_missing_source", "Missing source"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "command source position is required") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want source position requirement", err)
-	}
+	requireErrorContains(t, err, "command source position is required")
 	if transactions.beginCalls != 0 {
 		t.Fatalf("begin calls = %d, want missing source rejected before begin", transactions.beginCalls)
 	}

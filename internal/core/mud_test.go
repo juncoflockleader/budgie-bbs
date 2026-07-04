@@ -2,7 +2,6 @@ package core_test
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 
 func mudCmd(t *testing.T, c *core.Core, actor *core.User, line string) {
 	t.Helper()
-	raw, _ := json.Marshal(proto.MUDCommandPayload{Line: line})
+	raw := marshalCoreTestPayload(t, proto.MUDCommandPayload{Line: line})
 	if r := c.ExecCmd(context.Background(), actor, proto.CmdMUDCommand, raw, ""); r.Err != nil {
 		t.Fatalf("mud %q: %s", line, r.Err.Message)
 	}

@@ -92,6 +92,30 @@ func TestUnorderedTrafficEventsAreNotDurable(t *testing.T) {
 	}
 }
 
+func TestSortEventsByReplayOrder(t *testing.T) {
+	events := []*Event{
+		{ID: "seq-2", Seq: 2, PartitionKind: "board", PartitionKey: "general", PartitionOffset: 1},
+		{ID: "board-life", Seq: 1, PartitionKind: "board", PartitionKey: "life", PartitionOffset: 1},
+		{ID: "board-general-2", Seq: 1, PartitionKind: "board", PartitionKey: "general", PartitionOffset: 2},
+		{ID: "chat-lobby", Seq: 1, PartitionKind: "chat", PartitionKey: "lobby", PartitionOffset: 1},
+		{ID: "board-general-1", Seq: 1, PartitionKind: "board", PartitionKey: "general", PartitionOffset: 1},
+	}
+
+	SortEventsByReplayOrder(events)
+	want := []string{
+		"board-general-1",
+		"board-general-2",
+		"board-life",
+		"chat-lobby",
+		"seq-2",
+	}
+	for i, id := range want {
+		if events[i].ID != id {
+			t.Fatalf("events[%d] = %q, want %q; full order=%+v", i, events[i].ID, id, events)
+		}
+	}
+}
+
 func TestCursorAfterSeqPreservesScalarCompatibility(t *testing.T) {
 	cursor := Cursor{Seq: 10, Partitions: []PartitionCursor{{Kind: "board", Key: "general", Offset: 20}}}
 	if got := cursor.AfterSeq(5); got != 10 {

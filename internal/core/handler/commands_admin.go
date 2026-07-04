@@ -5,58 +5,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func (h *Handler) grantRole(actor *User, p proto.GrantRolePayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
-	}
-	ts := nowMS()
-
-	tx, err := h.db.Begin()
-	if err != nil {
-		return internalErr(err)
-	}
-	defer tx.Rollback() //nolint
-
-	target, err := getUserTx(tx, p.User)
-	if err != nil {
-		return internalErr(err)
-	}
-	if target == nil {
-		return Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
-	}
-
-	scopes := []string{"account:" + target.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtRoleGranted, scopes, &proto.RoleGrantedPayload{
-		User: target.ID, Role: p.Role, By: actor.ID, TS: ts,
-	})
-	if err != nil {
-		return internalErr(err)
-	}
-	if err := setUserRole(tx, target.ID, p.Role); err != nil {
-		return internalErr(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return internalErr(err)
-	}
-
-	if err := h.ensureSyssecuritySystemPost(actor, "Role granted: "+target.Name, []string{
-		"Action: role granted",
-		"User: " + target.Name,
-		"Role: " + p.Role,
-		"Actor: " + actor.Name,
-	}, ""); err != nil {
-		return internalErr(err)
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtRoleGranted, Seq: seq, Scopes: scopes,
-		Payload: &proto.RoleGrantedPayload{User: target.Name, Role: p.Role, By: actor.Name, TS: ts}, TS: ts})
-
-	return Reply{Result: &proto.AckResult{ID: target.ID, Seq: seq}}
+	return h.changeRole(actor, p.User, p.Role, proto.EvtRoleGranted, "granted", p.Role)
 }
 
 func (h *Handler) revokeRole(actor *User, p proto.RevokeRolePayload) Reply {
+	return h.changeRole(actor, p.User, p.Role, proto.EvtRoleRevoked, "revoked", "user")
+}
+
+func (h *Handler) changeRole(actor *User, userID, role string, kind proto.EventKind, action, storedRole string) Reply {
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
@@ -68,7 +29,7 @@ func (h *Handler) revokeRole(actor *User, p proto.RevokeRolePayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	target, err := getUserTx(tx, p.User)
+	target, err := currentRuntime().GetUserTx(tx, userID)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -77,29 +38,27 @@ func (h *Handler) revokeRole(actor *User, p proto.RevokeRolePayload) Reply {
 	}
 
 	scopes := []string{"account:" + target.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtRoleRevoked, scopes, &proto.RoleRevokedPayload{
-		User: target.ID, Role: p.Role, By: actor.ID, TS: ts,
-	})
+	seq, err := appendEvent(tx, newID("evt_"), kind, scopes, proto.RoleChangePayload(kind, target.ID, role, actor.ID, ts))
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := setUserRole(tx, target.ID, "user"); err != nil {
+	if err := currentRuntime().SetUserRole(tx, target.ID, storedRole); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
 
-	if err := h.ensureSyssecuritySystemPost(actor, "Role revoked: "+target.Name, []string{
-		"Action: role revoked",
+	if err := h.ensureSyssecuritySystemPost(actor, "Role "+action+": "+target.Name, []string{
+		"Action: role " + action,
 		"User: " + target.Name,
-		"Role: " + p.Role,
+		"Role: " + role,
 		"Actor: " + actor.Name,
 	}, ""); err != nil {
 		return internalErr(err)
 	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtRoleRevoked, Seq: seq, Scopes: scopes,
-		Payload: &proto.RoleRevokedPayload{User: target.Name, Role: p.Role, By: actor.Name, TS: ts}, TS: ts})
+	h.bus.Publish(&proto.Event{Kind: kind, Seq: seq, Scopes: scopes,
+		Payload: proto.RoleChangePayload(kind, target.Name, role, actor.Name, ts), TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: target.ID, Seq: seq}}
 }
@@ -185,7 +144,7 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 	if status == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "status is required", false)}
 	}
-	if cloakedPresenceStatus(status) {
+	if proto.CloakedPresenceStatus(status) {
 		if !actor.IsMod() {
 			return Reply{Err: errDetail(proto.ErrForbidden, "cloak presence requires moderator privileges", false)}
 		}
@@ -215,7 +174,7 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 			threadID = derivedThread
 		}
 	}
-	if hiddenPresenceStatus(status) {
+	if proto.HiddenPresenceStatus(status) {
 		mode = ""
 		boardID = ""
 		threadID = ""
@@ -226,7 +185,7 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 	}
 
 	if threadID != "" {
-		thread, err := getThread(h.db, threadID)
+		thread, err := currentRuntime().GetThread(h.db, threadID)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -251,7 +210,7 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 		}
 	}
 	if boardID != "" {
-		settings, err := getBoardSettings(h.db, boardID)
+		settings, err := currentRuntime().GetBoardSettings(h.db, boardID)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -269,12 +228,12 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 	if boardID != "" {
 		scopes = append(scopes, "presence:"+boardID)
 	}
-	persistPresence := !typingPresenceStatus(status)
+	persistPresence := !proto.TypingPresenceStatus(status)
 	if persistPresence {
 		if err := setUserPresence(h.db, actor.ID, sessionID, status, mode, boardID, threadID, location, fromHost, ts); err != nil {
 			return internalErr(err)
 		}
-		if visiblePresenceStatus(status) {
+		if proto.VisiblePresenceStatus(status) {
 			if err := h.notifyLoginWatchers(actor, ts); err != nil {
 				return internalErr(err)
 			}
@@ -345,20 +304,11 @@ func validatePresenceText(status, sessionID, mode, boardID, threadID, location, 
 }
 
 func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
-	p.Reason = strings.TrimSpace(p.Reason)
-	if len(p.Reason) > 500 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "reason must be 500 characters or less", false)}
-	}
-	if p.User == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "user is required", false)}
-	}
-	if p.Kind != "mute" && p.Kind != "ban" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, `kind must be "mute" or "ban"`, false)}
+	p, msg := proto.NormalizeSanctionUserPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	scope := p.Scope
-	if scope == "" {
-		scope = "global"
-	}
 	ts := nowMS()
 	var expiresAt int64
 	if p.DurationSec > 0 {
@@ -371,7 +321,7 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	target, err := getUserTx(tx, p.User)
+	target, err := currentRuntime().GetUserTx(tx, p.User)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -392,11 +342,10 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 			return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
 		}
 	} else {
-		var boardName string
-		if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
-			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
-		} else if err != nil {
+		if _, found, err := projections.BoardName(tx, scope); err != nil {
 			return internalErr(err)
+		} else if !found {
+			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		}
 		if !h.actorCanModerateBoardPostsTx(tx, actor, scope) {
 			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
@@ -412,7 +361,7 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := insertSanction(tx, sanctionID, target.ID, p.Kind, scope, expiresAt, actor.ID, p.Reason, seq); err != nil {
+	if err := currentRuntime().InsertSanction(tx, sanctionID, target.ID, p.Kind, scope, expiresAt, actor.ID, p.Reason, seq); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -432,22 +381,14 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 }
 
 func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayload) Reply {
-	userRef := strings.TrimSpace(p.User)
-	if userRef == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "user is required", false)}
+	p, msg := proto.NormalizeClearUserSanctionPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	kind := strings.TrimSpace(p.Kind)
-	if kind != "" && kind != "mute" && kind != "ban" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, `kind must be "mute", "ban", or empty`, false)}
-	}
-	scope := strings.TrimSpace(p.Scope)
-	if scope == "" {
-		scope = "global"
-	}
-	reason := strings.TrimSpace(p.Reason)
-	if len(reason) > 500 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "reason must be 500 characters or less", false)}
-	}
+	userRef := p.User
+	kind := p.Kind
+	scope := p.Scope
+	reason := p.Reason
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -455,7 +396,7 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 	}
 	defer tx.Rollback() //nolint
 
-	target, err := findUserRefTx(tx, userRef)
+	target, err := projections.FindUserRef(tx, userRef)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -472,11 +413,10 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 			return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
 		}
 	} else {
-		var boardName string
-		if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
-			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
-		} else if err != nil {
+		if _, found, err := projections.BoardName(tx, scope); err != nil {
 			return internalErr(err)
+		} else if !found {
+			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		}
 		if !h.actorCanModerateBoardPostsTx(tx, actor, scope) {
 			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
@@ -491,7 +431,7 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 	if err != nil {
 		return internalErr(err)
 	}
-	removed, err := clearUserSanctions(tx, target.ID, kind, scope)
+	removed, err := currentRuntime().ClearUserSanctions(tx, target.ID, kind, scope)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -516,23 +456,18 @@ func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload)
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
-	filterID := strings.TrimSpace(p.ID)
+	p = proto.NormalizeContentFilterPayload(p)
+	filterID := p.ID
 	if filterID == "" {
 		filterID = newID("filter_")
-	} else if !isValidSlug(filterID) {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "filter id must be lowercase alphanumeric, hyphens, or underscores", false)}
+	} else if msg := proto.ValidateContentFilterID(filterID); msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	pattern := strings.TrimSpace(p.Pattern)
-	if pattern == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "pattern is required", false)}
+	pattern := p.Pattern
+	if msg := proto.ValidateContentFilterPattern(pattern); msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if len(pattern) > 120 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "pattern must be 120 characters or less", false)}
-	}
-	scope := strings.TrimSpace(p.Scope)
-	if scope == "" {
-		scope = "global"
-	}
+	scope := p.Scope
 	active := true
 	if p.Active != nil {
 		active = *p.Active
@@ -544,18 +479,17 @@ func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload)
 	}
 	defer tx.Rollback() //nolint
 
-	if scope != "global" {
-		var boardName string
-		if err := qQueryRow(tx, `SELECT name FROM boards WHERE id=?`, scope).Scan(&boardName); err == sql.ErrNoRows {
-			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
-		} else if err != nil {
+	if scope != proto.DefaultContentFilterScope {
+		if _, found, err := projections.BoardName(tx, scope); err != nil {
 			return internalErr(err)
+		} else if !found {
+			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
 		}
 	}
 
 	ts := nowMS()
 	scopes := []string{"moderation:global"}
-	if scope != "global" {
+	if scope != proto.DefaultContentFilterScope {
 		scopes = append(scopes, "board:"+scope)
 	}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtContentFilterSet, scopes, &proto.ContentFilterSetPayload{
@@ -564,7 +498,7 @@ func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload)
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := upsertContentFilter(tx, filterID, pattern, scope, active, actor.ID, ts); err != nil {
+	if err := currentRuntime().UpsertContentFilter(tx, filterID, pattern, scope, active, actor.ID, ts); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -576,28 +510,28 @@ func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload)
 	return Reply{Result: &proto.AckResult{ID: filterID, Seq: seq}}
 }
 
-const denyPostSystemBoardID = "denypost"
-const undenyPostSystemBoardID = "undenypost"
-
 func (h *Handler) ensureDenyPostSystemPost(actor, target *User, boardID, kind, reason string, ts int64) error {
-	return h.ensureSanctionSystemPost(denyPostSystemBoardID, "denypost", "Generated board posting deny records", actor, target, boardID, kind, reason, "Board posting denied", ts)
+	return h.ensureSanctionSystemPost(proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardDescription, actor, target, boardID, kind, reason, "Board posting denied", ts)
 }
 
 func (h *Handler) ensureUndenyPostSystemPost(actor, target *User, boardID, kind, reason string, ts int64) error {
-	return h.ensureSanctionSystemPost(undenyPostSystemBoardID, "undenypost", "Generated board posting restore records", actor, target, boardID, kind, reason, "Board posting restored", ts)
+	return h.ensureSanctionSystemPost(proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardDescription, actor, target, boardID, kind, reason, "Board posting restored", ts)
 }
 
 func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, systemBoardDescription string, actor, target *User, sourceBoardID, kind, reason, action string, ts int64) error {
-	settings, err := getBoardSettings(h.db, sourceBoardID)
+	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, sourceBoardID)
 	if err != nil {
 		return err
 	}
-	if settings != nil && settings.MemberReadMode {
+	if !emit {
 		return nil
 	}
-	var sourceBoardName string
-	if err := qQueryRow(h.db, `SELECT name FROM boards WHERE id=?`, sourceBoardID).Scan(&sourceBoardName); err != nil {
+	sourceBoardName, found, err := projections.BoardName(h.db, sourceBoardID)
+	if err != nil {
 		return err
+	}
+	if !found {
+		return sql.ErrNoRows
 	}
 	if ts == 0 {
 		ts = nowMS()
@@ -606,7 +540,7 @@ func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, syste
 	threadID := newID(systemBoardID + "_thr_")
 	postID := newID(systemBoardID + "_pst_")
 	title := fmt.Sprintf("%s: %s on %s", action, target.Name, sourceBoardID)
-	body := formatSanctionSystemBody(action, target.Name, sourceBoardName, sourceBoardID, kind, actor.Name, reason)
+	body := proto.FormatSanctionSystemBody(action, target.Name, sourceBoardName, sourceBoardID, kind, actor.Name, reason)
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -614,119 +548,33 @@ func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, syste
 	}
 	defer tx.Rollback() //nolint
 
-	boardCreated := false
-	var boardSeq int64
-	var exists int
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, systemBoardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return err
-		}
-		boardScopes := []string{"board:" + systemBoardID}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          systemBoardID,
-			Name:        systemBoardName,
-			Description: systemBoardDescription,
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return err
-		}
-		if err := insertBoard(tx, systemBoardID, systemBoardName, systemBoardDescription, "", position); err != nil {
-			return err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return err
-	}
-
-	scopes := []string{"board:" + systemBoardID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: systemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
-	})
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     systemBoardID,
+		BoardName:   systemBoardName,
+		Description: systemBoardDescription,
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
 	if err != nil {
-		return err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: systemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, systemBoardID, actor.Name, body); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + systemBoardID},
-			Payload: &proto.BoardCreatedPayload{ID: systemBoardID, Name: systemBoardName, Description: systemBoardDescription, By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: systemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	h.publishGeneratedEvents(events)
 	return nil
-}
-
-func formatSanctionSystemBody(action, targetName, sourceBoardName, sourceBoardID, kind, actorName, reason string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n", action)
-	fmt.Fprintf(&b, "- Action: %s\n", strings.ToLower(action))
-	fmt.Fprintf(&b, "- User: %s\n", targetName)
-	fmt.Fprintf(&b, "- Board: %s (%s)\n", sourceBoardName, sourceBoardID)
-	if strings.TrimSpace(kind) == "" {
-		fmt.Fprintf(&b, "- Kind: all\n")
-	} else {
-		fmt.Fprintf(&b, "- Kind: %s\n", strings.TrimSpace(kind))
-	}
-	fmt.Fprintf(&b, "- Actor: %s\n", actorName)
-	if strings.TrimSpace(reason) != "" {
-		fmt.Fprintf(&b, "- Reason: %s\n", strings.TrimSpace(reason))
-	}
-	b.WriteString("\nGenerated public board-posting sanction record. Private moderation notes and article bodies are not mirrored.\n")
-	return b.String()
 }
 
 func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
-	p.ID = strings.TrimSpace(p.ID)
-	p.Name = strings.TrimSpace(p.Name)
-	p.ParentID = strings.TrimSpace(p.ParentID)
-	if p.ID == "" || p.Name == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "id and name are required", false)}
-	}
-	if !isValidSlug(p.ID) {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "id must be lowercase alphanumeric, hyphens, or underscores (max 64 chars)", false)}
-	}
-	if p.ParentID == p.ID {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board cannot be its own parent", false)}
-	}
-	if p.Position != nil && *p.Position < 0 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "position cannot be negative", false)}
+	p, msg := proto.NormalizeCreateBoardPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	ts := nowMS()
 
@@ -737,7 +585,7 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 	defer tx.Rollback() //nolint
 
 	if p.ParentID != "" {
-		found, err := categoryExistsTx(tx, p.ParentID)
+		found, err := projections.CategoryExists(tx, p.ParentID)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -745,7 +593,7 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 			return Reply{Err: errDetail(proto.ErrNotFound, "parent category not found", false)}
 		}
 	}
-	position, err := boardCategoryPosition(tx, p.ParentID, p.Position)
+	position, err := projections.CategoryPositionForCreate(tx, p.ID, p.ParentID, p.Position)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -757,7 +605,7 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := insertBoard(tx, p.ID, p.Name, p.Description, p.ParentID, position); err != nil {
+	if err := currentRuntime().InsertBoard(tx, p.ID, p.Name, p.Description, p.ParentID, position); err != nil {
 		return Reply{Err: errDetail(proto.ErrConflict, "board already exists", false)}
 	}
 	if err := tx.Commit(); err != nil {
@@ -770,35 +618,18 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: p.ID, Seq: seq}}
 }
 
-func boardCategoryPosition(tx *sql.Tx, parentID string, requested *int) (int, error) {
-	if requested != nil {
-		return *requested, nil
-	}
-	var next int
-	err := qQueryRow(tx, `SELECT COALESCE(MAX(position) + 1, 0) FROM categories WHERE parent_id=?`, parentID).Scan(&next)
-	return next, err
-}
-
-func categoryExistsTx(tx *sql.Tx, categoryID string) (bool, error) {
-	var found int
-	err := qQueryRow(tx, `SELECT 1 FROM categories WHERE id=?`, categoryID).Scan(&found)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
-}
-
 func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
-	if p.Post == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	p, msg := proto.NormalizePurgePostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	ts := nowMS()
 
 	// Read before TX.
-	post, err := getPost(h.db, p.Post)
+	post, err := currentRuntime().GetPost(h.db, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -806,7 +637,7 @@ func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
 
-	thread, err := getThread(h.db, post.Thread)
+	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
@@ -824,11 +655,11 @@ func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := markPostPurged(tx, post.ID, seq); err != nil {
+	if err := currentRuntime().MarkPostPurged(tx, post.ID, seq); err != nil {
 		return internalErr(err)
 	}
 	// Remove from FTS permanently.
-	if err := ftsDeletePost(tx, post.ID); err != nil {
+	if err := currentRuntime().FtsDeletePost(tx, post.ID); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {

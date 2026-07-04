@@ -1,4 +1,4 @@
-package core
+package loadtest
 
 import (
 	"context"
@@ -10,7 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadutil"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+	"github.com/juncoflockleader/budgie-bbs/internal/scalebudget"
 )
 
 type PartitionWriteLoadConfig struct {
@@ -59,83 +63,86 @@ func DefaultPartitionWriteLoadConfig() PartitionWriteLoadConfig {
 	}
 }
 
-func (c *Core) RunPartitionWriteLoad(ctx context.Context, config PartitionWriteLoadConfig) (PartitionWriteLoadReport, error) {
+func RunPartitionWriteLoad(ctx context.Context, c *core.Core, config PartitionWriteLoadConfig) (PartitionWriteLoadReport, error) {
 	if c == nil {
 		return PartitionWriteLoadReport{}, fmt.Errorf("partition write load: nil core")
 	}
 	config = normalizePartitionWriteLoadConfig(config)
 	report := PartitionWriteLoadReport{
-		Config:      config,
-		StartedAt:   nowMS(),
-		TotalWrites: config.Boards * config.WritesPerBoard,
-		SamePartition: PartitionWriteLoadCase{Name: "same_partition",
-			Boards: 1,
-			Writes: config.Boards * config.WritesPerBoard,
-		},
-		SpreadPartitions: PartitionWriteLoadCase{Name: "spread_partitions",
-			Boards: config.Boards,
-			Writes: config.Boards * config.WritesPerBoard,
-		},
+		Config:           config,
+		StartedAt:        time.Now().UnixMilli(),
+		TotalWrites:      config.Boards * config.WritesPerBoard,
+		SamePartition:    newPartitionWriteLoadCase("same_partition", 1, config.Boards*config.WritesPerBoard),
+		SpreadPartitions: newPartitionWriteLoadCase("spread_partitions", config.Boards, config.Boards*config.WritesPerBoard),
 	}
 
-	actor, err := c.RegisterUser(config.UserName, newID("pw_"))
+	actor, err := c.RegisterUser(config.UserName, fmt.Sprintf("pw_%d", time.Now().UnixNano()))
 	if err != nil {
 		return report, fmt.Errorf("register load user: %w", err)
 	}
-	boardIDs, err := c.createPartitionWriteLoadBoards(ctx, actor, config)
+	boardIDs, err := createPartitionWriteLoadBoards(ctx, c, actor, config)
 	if err != nil {
 		return report, err
 	}
 
 	sameBoard := []string{boardIDs[0]}
-	report.SamePartition, err = c.runPartitionWriteLoadCase(ctx, actor, config, "same_partition", sameBoard, report.TotalWrites)
+	report.SamePartition, err = runPartitionWriteLoadCase(ctx, c, actor, config, "same_partition", sameBoard, report.TotalWrites)
 	if err != nil {
-		report.FinishedAt = nowMS()
+		report.FinishedAt = time.Now().UnixMilli()
 		return report, err
 	}
-	report.SpreadPartitions, err = c.runPartitionWriteLoadCase(ctx, actor, config, "spread_partitions", boardIDs, report.TotalWrites)
+	report.SpreadPartitions, err = runPartitionWriteLoadCase(ctx, c, actor, config, "spread_partitions", boardIDs, report.TotalWrites)
 	if err != nil {
-		report.FinishedAt = nowMS()
+		report.FinishedAt = time.Now().UnixMilli()
 		return report, err
 	}
 	if report.SamePartition.WritesPerSec > 0 {
 		report.SpreadSpeedup = report.SpreadPartitions.WritesPerSec / report.SamePartition.WritesPerSec
 		report.SpreadThroughputX = report.SpreadSpeedup
 	}
-	report.FinishedAt = nowMS()
+	report.FinishedAt = time.Now().UnixMilli()
 	return report, nil
+}
+
+func EvaluatePartitionWriteBudget(report PartitionWriteLoadReport, budget *scalebudget.PostgresWriteBudget) []scalebudget.ScaleBudgetViolation {
+	if budget == nil {
+		return nil
+	}
+	var out []scalebudget.ScaleBudgetViolation
+	out = scalebudget.AddMinViolation(out, "postgresWrites.minSpreadSpeedup", report.SpreadSpeedup, budget.MinSpreadSpeedup,
+		"spread-partition throughput speedup is below budget")
+	out = scalebudget.AddMinViolation(out, "postgresWrites.minSpreadWritesPerSec", report.SpreadPartitions.WritesPerSec, budget.MinSpreadWritesPerSec,
+		"spread-partition writes/sec is below budget")
+	out = scalebudget.AddPositiveMaxViolation(out, "postgresWrites.maxSamePartitionP95Ms", report.SamePartition.LatencyP95MS, budget.MaxSamePartitionP95MS,
+		"same-partition p95 latency is above budget")
+	out = scalebudget.AddPositiveMaxViolation(out, "postgresWrites.maxSpreadPartitionP95Ms", report.SpreadPartitions.LatencyP95MS, budget.MaxSpreadPartitionP95MS,
+		"spread-partition p95 latency is above budget")
+	failed := report.SamePartition.Failed + report.SpreadPartitions.Failed
+	out = scalebudget.AddZeroOrPositiveMaxIntViolation(out, "postgresWrites.maxFailedWrites", failed, budget.MaxFailedWrites,
+		"failed writes are above budget", "failed writes are above zero-failure budget")
+	return out
 }
 
 func normalizePartitionWriteLoadConfig(config PartitionWriteLoadConfig) PartitionWriteLoadConfig {
 	def := DefaultPartitionWriteLoadConfig()
-	if config.Boards <= 0 {
-		config.Boards = def.Boards
-	}
-	if config.WritesPerBoard <= 0 {
-		config.WritesPerBoard = def.WritesPerBoard
-	}
-	if config.Concurrency <= 0 {
-		config.Concurrency = def.Concurrency
-	}
-	if config.BodyBytes < 0 {
-		config.BodyBytes = def.BodyBytes
-	}
+	config.Boards = positiveOrDefault(config.Boards, def.Boards)
+	config.WritesPerBoard = positiveOrDefault(config.WritesPerBoard, def.WritesPerBoard)
+	config.Concurrency = positiveOrDefault(config.Concurrency, def.Concurrency)
+	config.BodyBytes = nonNegativeOrDefault(config.BodyBytes, def.BodyBytes)
 	if strings.TrimSpace(config.BoardPrefix) == "" {
 		config.BoardPrefix = def.BoardPrefix
 	}
 	if strings.TrimSpace(config.UserName) == "" {
 		config.UserName = def.UserName
 	}
-	if config.Concurrency > config.Boards*config.WritesPerBoard {
-		config.Concurrency = config.Boards * config.WritesPerBoard
-	}
+	config.Concurrency = min(config.Concurrency, config.Boards*config.WritesPerBoard)
 	return config
 }
 
-func (c *Core) createPartitionWriteLoadBoards(ctx context.Context, actor *User, config PartitionWriteLoadConfig) ([]string, error) {
+func createPartitionWriteLoadBoards(ctx context.Context, c *core.Core, actor *core.User, config PartitionWriteLoadConfig) ([]string, error) {
 	boardIDs := make([]string, 0, config.Boards)
 	for i := 0; i < config.Boards; i++ {
-		boardID := fmt.Sprintf("%s_%02d", sanitizeLoadID(config.BoardPrefix), i)
+		boardID := fmt.Sprintf("%s_%02d", loadutil.SafeID(config.BoardPrefix), i)
 		payload := proto.CreateBoardPayload{
 			ID:          boardID,
 			Name:        fmt.Sprintf("Load %02d", i),
@@ -149,12 +156,8 @@ func (c *Core) createPartitionWriteLoadBoards(ctx context.Context, actor *User, 
 	return boardIDs, nil
 }
 
-func (c *Core) runPartitionWriteLoadCase(ctx context.Context, actor *User, config PartitionWriteLoadConfig, name string, boardIDs []string, writes int) (PartitionWriteLoadCase, error) {
-	result := PartitionWriteLoadCase{
-		Name:   name,
-		Boards: len(boardIDs),
-		Writes: writes,
-	}
+func runPartitionWriteLoadCase(ctx context.Context, c *core.Core, actor *core.User, config PartitionWriteLoadConfig, name string, boardIDs []string, writes int) (PartitionWriteLoadCase, error) {
+	result := newPartitionWriteLoadCase(name, len(boardIDs), writes)
 	if writes <= 0 {
 		return result, nil
 	}
@@ -164,17 +167,11 @@ func (c *Core) runPartitionWriteLoadCase(ctx context.Context, actor *User, confi
 	}
 	jobs := make(chan int)
 	results := make(chan writeResult, writes)
-	workers := config.Concurrency
-	if workers <= 0 {
-		workers = 1
-	}
-	if workers > writes {
-		workers = writes
-	}
+	workers := min(max(config.Concurrency, 1), writes)
 
 	var wg sync.WaitGroup
 	start := time.Now()
-	body := loadBody(config.BodyBytes)
+	body := loadutil.Body(config.BodyBytes)
 	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
 		go func(workerID int) {
@@ -219,17 +216,12 @@ func (c *Core) runPartitionWriteLoadCase(ctx context.Context, actor *User, confi
 		latencies = append(latencies, float64(item.latency.Microseconds())/1000)
 		if item.errText != "" {
 			result.Failed++
-			if len(result.SampleErrorText) < 5 && !errSamples[item.errText] {
-				result.SampleErrorText = append(result.SampleErrorText, item.errText)
-				errSamples[item.errText] = true
-			}
+			loadmodel.AddLoadSample(&result.SampleErrorText, errSamples, item.errText)
 		} else {
 			result.Succeeded++
 		}
 	}
-	if result.DurationMS > 0 {
-		result.WritesPerSec = float64(result.Succeeded) / (float64(result.DurationMS) / 1000)
-	}
+	result.WritesPerSec = loadutil.PerSecond(result.Succeeded, time.Duration(result.DurationMS)*time.Millisecond)
 	sort.Float64s(latencies)
 	result.LatencyP50MS = percentile(latencies, 0.50)
 	result.LatencyP95MS = percentile(latencies, 0.95)
@@ -243,10 +235,14 @@ func (c *Core) runPartitionWriteLoadCase(ctx context.Context, actor *User, confi
 	return result, nil
 }
 
-func execLoadCommand(ctx context.Context, c *Core, actor *User, name proto.CommandName, payload any, cid string) Reply {
+func newPartitionWriteLoadCase(name string, boards, writes int) PartitionWriteLoadCase {
+	return PartitionWriteLoadCase{Name: name, Boards: boards, Writes: writes}
+}
+
+func execLoadCommand(ctx context.Context, c *core.Core, actor *core.User, name proto.CommandName, payload any, cid string) core.Reply {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: err.Error()}}
+		return core.Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: err.Error()}}
 	}
 	return c.ExecCmd(ctx, actor, name, raw, cid)
 }
@@ -271,31 +267,16 @@ func percentile(values []float64, p float64) float64 {
 	return values[lower]*(1-weight) + values[upper]*weight
 }
 
-func loadBody(size int) string {
-	if size <= 0 {
-		return "load"
+func positiveOrDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
 	}
-	const pattern = "partition-write-load "
-	var b strings.Builder
-	for b.Len() < size {
-		b.WriteString(pattern)
-	}
-	return b.String()[:size]
+	return value
 }
 
-func sanitizeLoadID(raw string) string {
-	raw = strings.ToLower(strings.TrimSpace(raw))
-	var b strings.Builder
-	for _, r := range raw {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
-			b.WriteRune(r)
-			continue
-		}
-		b.WriteByte('_')
+func nonNegativeOrDefault(value, fallback int) int {
+	if value < 0 {
+		return fallback
 	}
-	out := strings.Trim(b.String(), "_")
-	if out == "" {
-		return "load"
-	}
-	return out
+	return value
 }

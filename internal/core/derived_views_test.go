@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,11 +10,7 @@ import (
 )
 
 func TestDerivedViewWatermarkDefaultsAndMetrics(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "derived-views.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -25,18 +19,7 @@ func TestDerivedViewWatermarkDefaultsAndMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register user: %v", err)
 	}
-	raw, err := json.Marshal(proto.CreateThreadPayload{
-		Board: "general",
-		Title: "derived view test",
-		Body:  "watermarks should track durable head",
-	})
-	if err != nil {
-		t.Fatalf("marshal command: %v", err)
-	}
-	reply := c.ExecCmd(context.Background(), alice, proto.CmdCreateThread, raw, "")
-	if reply.Err != nil {
-		t.Fatalf("create thread: %s (%s)", reply.Err.Message, reply.Err.Code)
-	}
+	createDerivedViewTestThread(t, c, alice)
 	head, err := c.Head()
 	if err != nil {
 		t.Fatalf("head: %v", err)
@@ -174,11 +157,7 @@ func assertDerivedViews(t *testing.T, got, want []string) {
 }
 
 func TestBackfillDerivedViewsFromEventLogAdvancesSelectedWatermarks(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "derived-view-backfill.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -256,11 +235,7 @@ func TestBackfillDerivedViewsFromEventLogAdvancesSelectedWatermarks(t *testing.T
 }
 
 func TestSyncDerivedViewsToHeadAdvancesSelectedWatermarks(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "derived-view-sync.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -314,11 +289,7 @@ func TestSyncDerivedViewsToHeadAdvancesSelectedWatermarks(t *testing.T) {
 }
 
 func TestDerivedViewWatermarkWorkerTracksHead(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "derived-view-worker.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -351,14 +322,11 @@ func TestDerivedViewWatermarkWorkerTracksHead(t *testing.T) {
 
 func createDerivedViewTestThread(t *testing.T, c *Core, actor *User) *proto.AckResult {
 	t.Helper()
-	raw, err := json.Marshal(proto.CreateThreadPayload{
+	raw := marshalCoreTestJSON(t, "marshal command", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "derived view backfill",
 		Body:  "operational backfill should repair search and ranking watermarks",
 	})
-	if err != nil {
-		t.Fatalf("marshal command: %v", err)
-	}
 	reply := c.ExecCmd(context.Background(), actor, proto.CmdCreateThread, raw, "")
 	if reply.Err != nil {
 		t.Fatalf("create thread: %s (%s)", reply.Err.Message, reply.Err.Code)

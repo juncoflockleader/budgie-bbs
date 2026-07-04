@@ -2,7 +2,6 @@ package natsconn
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
@@ -14,9 +13,7 @@ var _ core.EventPartitionOffsetLister = (*JetStreamEventLogClient)(nil)
 func TestJetStreamEventLogClientExposesPartitionOffsetListing(t *testing.T) {
 	var client *JetStreamEventLogClient
 	_, err := client.ListEventPartitionOffsets(context.Background(), 0)
-	if err == nil || !strings.Contains(err.Error(), "nil client") {
-		t.Fatalf("ListEventPartitionOffsets nil client err = %v, want nil client", err)
-	}
+	requireErrorContains(t, err, "nil client")
 }
 
 func TestJetStreamEventLogClientRemembersKnownStreamSequence(t *testing.T) {

@@ -83,11 +83,7 @@ func (s *SQLEventStore) ListEventPartitions(ctx context.Context, limit int) ([]L
 	if err != nil {
 		return nil, err
 	}
-	partitions := make([]LogPartition, 0, len(offsets))
-	for _, offset := range offsets {
-		partitions = append(partitions, offset.Partition)
-	}
-	return partitions, nil
+	return EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (s *SQLEventStore) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
@@ -121,9 +117,13 @@ func (s *SQLEventStore) ListEventPartitionOffsets(ctx context.Context, limit int
 		offsets = append(offsets, EventPartitionOffset{
 			Partition:  LogPartition{Kind: kind, Key: key}.Normalize(),
 			LastOffset: offset,
-		})
+		}.Normalize())
 	}
-	return offsets, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	SortEventPartitionOffsetsByLastOffset(offsets)
+	return offsets, nil
 }
 
 const (
@@ -184,6 +184,98 @@ type EventLogPromotionReadinessReport struct {
 type EventPartitionOffset struct {
 	Partition  LogPartition
 	LastOffset int64
+}
+
+func (offset EventPartitionOffset) Normalize() EventPartitionOffset {
+	offset.Partition = offset.Partition.Normalize()
+	if offset.LastOffset < 0 {
+		offset.LastOffset = 0
+	}
+	return offset
+}
+
+func EventPartitionsByLastOffset(offsets []EventPartitionOffset, limit int) []LogPartition {
+	tails := map[LogPartition]int64{}
+	for _, offset := range offsets {
+		offset = offset.Normalize()
+		if _, ok := tails[offset.Partition]; !ok || offset.LastOffset > tails[offset.Partition] {
+			tails[offset.Partition] = offset.LastOffset
+		}
+	}
+	partitions := make([]LogPartition, 0, len(tails))
+	for partition := range tails {
+		partitions = append(partitions, partition)
+	}
+	sort.Slice(partitions, func(i, j int) bool {
+		if tails[partitions[i]] == tails[partitions[j]] {
+			return partitions[i].Less(partitions[j])
+		}
+		return tails[partitions[i]] > tails[partitions[j]]
+	})
+	if limit > 0 && len(partitions) > limit {
+		partitions = partitions[:limit]
+	}
+	return partitions
+}
+
+func SortEventPartitionOffsetsByLastOffset(offsets []EventPartitionOffset) {
+	sort.SliceStable(offsets, func(i, j int) bool {
+		if offsets[i].LastOffset == offsets[j].LastOffset {
+			return offsets[i].Partition.Less(offsets[j].Partition)
+		}
+		return offsets[i].LastOffset > offsets[j].LastOffset
+	})
+}
+
+func listEventPartitionOffsets(ctx context.Context, lister EventPartitionOffsetLister, limit int) ([]EventPartitionOffset, bool, error) {
+	if lister == nil {
+		return nil, false, fmt.Errorf("nil event partition offset lister")
+	}
+	queryLimit := limit
+	if limit > 0 {
+		queryLimit = limit + 1
+	}
+	offsets, err := lister.ListEventPartitionOffsets(ctx, queryLimit)
+	if err != nil {
+		return nil, false, err
+	}
+	limited := limit > 0 && len(offsets) > limit
+	if limited {
+		offsets = offsets[:limit]
+	}
+	for i := range offsets {
+		offsets[i] = offsets[i].Normalize()
+	}
+	return offsets, limited, nil
+}
+
+func listEventPartitionsWithLimit(ctx context.Context, lister EventPartitionLister, limit int) ([]LogPartition, bool, error) {
+	if lister == nil {
+		return nil, false, fmt.Errorf("nil event partition lister")
+	}
+	queryLimit := limit
+	if limit > 0 {
+		queryLimit = limit + 1
+	}
+	partitions, err := lister.ListEventPartitions(ctx, queryLimit)
+	if err != nil {
+		return nil, false, err
+	}
+	limited := limit > 0 && len(partitions) > limit
+	if limited {
+		partitions = partitions[:limit]
+	}
+	out := make([]LogPartition, 0, len(partitions))
+	seen := map[LogPartition]bool{}
+	for _, partition := range partitions {
+		partition = partition.Normalize()
+		if seen[partition] {
+			continue
+		}
+		seen[partition] = true
+		out = append(out, partition)
+	}
+	return out, limited, nil
 }
 
 type EventReplayParityRunnerConfig struct {
@@ -279,7 +371,7 @@ func (r *EventReplayParityRunner) CheckOnce(ctx context.Context) ([]EventReplayP
 	if r.partitions == nil {
 		return nil, fmt.Errorf("event replay parity runner: nil partition lister")
 	}
-	partitions, err := r.partitions.ListEventPartitions(ctx, r.partitionLimit)
+	partitions, _, err := listEventPartitionsWithLimit(ctx, r.partitions, r.partitionLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -366,23 +458,7 @@ func (s *ShadowEventStore) Append(ctx context.Context, event EventAppend) (*prot
 	if s.shadow == nil {
 		return primary, nil
 	}
-	shadowAppend := eventAppendFromEvent(primary)
-	shadow, err := s.shadow.Append(ctx, shadowAppend)
-	if err != nil {
-		recordEventParityIssue(s.reporter, EventParityIssue{
-			Kind:          EventParityAppendError,
-			Event:         primary.Kind,
-			Partition:     logPartitionFromEvent(primary),
-			PrimarySeq:    primary.Seq,
-			PrimaryOffset: primary.PartitionOffset,
-			Message:       "shadow append failed",
-			Err:           err.Error(),
-		})
-		return primary, nil
-	}
-	if issue, ok := compareEventParity(primary, shadow); ok {
-		recordEventParityIssue(s.reporter, issue)
-	}
+	appendEventLogShadow(ctx, s.shadow, s.reporter, primary)
 	return primary, nil
 }
 
@@ -405,6 +481,28 @@ func (s *ShadowEventStore) ReplayPartition(ctx context.Context, partitionKind, p
 		return nil, fmt.Errorf("shadow event store: nil primary")
 	}
 	return s.primary.ReplayPartition(ctx, partitionKind, partitionKey, afterOffset, limit)
+}
+
+func appendEventLogShadow(ctx context.Context, shadow EventStore, reporter EventParityReporter, primary *proto.Event) {
+	if shadow == nil || primary == nil {
+		return
+	}
+	shadowEvent, err := shadow.Append(ctx, eventAppendFromEvent(primary))
+	if err != nil {
+		recordEventParityIssue(reporter, EventParityIssue{
+			Kind:          EventParityAppendError,
+			Event:         primary.Kind,
+			Partition:     logPartitionFromEvent(primary),
+			PrimarySeq:    primary.Seq,
+			PrimaryOffset: primary.PartitionOffset,
+			Message:       "shadow append failed",
+			Err:           err.Error(),
+		})
+		return
+	}
+	if issue, ok := compareEventParity(primary, shadowEvent); ok {
+		recordEventParityIssue(reporter, issue)
+	}
 }
 
 func recordEventParityIssue(reporter EventParityReporter, issue EventParityIssue) {
@@ -583,11 +681,11 @@ func eventPartitionListerFor(store EventStore, override EventPartitionLister, ro
 }
 
 func promotionReadinessPartitions(ctx context.Context, primary, candidate EventPartitionLister, partitionLimit int, reporter EventParityReporter) ([]LogPartition, []EventParityIssue, error) {
-	primaryPartitions, primaryLimited, err := listPromotionReadinessPartitions(ctx, primary, partitionLimit)
+	primaryPartitions, primaryLimited, err := listEventPartitionsWithLimit(ctx, primary, partitionLimit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("event log promotion readiness: list primary partitions: %w", err)
 	}
-	candidatePartitions, candidateLimited, err := listPromotionReadinessPartitions(ctx, candidate, partitionLimit)
+	candidatePartitions, candidateLimited, err := listEventPartitionsWithLimit(ctx, candidate, partitionLimit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("event log promotion readiness: list candidate partitions: %w", err)
 	}
@@ -627,42 +725,8 @@ func promotionReadinessPartitions(ctx context.Context, primary, candidate EventP
 		seen[partition] = true
 		partitions = append(partitions, partition)
 	}
-	sort.Slice(partitions, func(i, j int) bool {
-		if partitions[i].Kind == partitions[j].Kind {
-			return partitions[i].Key < partitions[j].Key
-		}
-		return partitions[i].Kind < partitions[j].Kind
-	})
+	SortLogPartitions(partitions)
 	return partitions, issues, nil
-}
-
-func listPromotionReadinessPartitions(ctx context.Context, lister EventPartitionLister, limit int) ([]LogPartition, bool, error) {
-	if lister == nil {
-		return nil, false, fmt.Errorf("nil partition lister")
-	}
-	queryLimit := limit
-	if limit > 0 {
-		queryLimit = limit + 1
-	}
-	partitions, err := lister.ListEventPartitions(ctx, queryLimit)
-	if err != nil {
-		return nil, false, err
-	}
-	limited := limit > 0 && len(partitions) > limit
-	if limited {
-		partitions = partitions[:limit]
-	}
-	out := make([]LogPartition, 0, len(partitions))
-	seen := map[LogPartition]bool{}
-	for _, partition := range partitions {
-		partition = partition.Normalize()
-		if seen[partition] {
-			continue
-		}
-		seen[partition] = true
-		out = append(out, partition)
-	}
-	return out, limited, nil
 }
 
 // MemoryEventStore is a partition-aware in-memory EventStore for shadow-mode
@@ -814,25 +878,14 @@ func (s *MemoryEventStore) ListEventPartitions(ctx context.Context, limit int) (
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	partitions := make([]LogPartition, 0, len(s.partitionOffsets))
-	for partition := range s.partitionOffsets {
-		partitions = append(partitions, partition.Normalize())
+	offsets := make([]EventPartitionOffset, 0, len(s.partitionOffsets))
+	for partition, offset := range s.partitionOffsets {
+		offsets = append(offsets, EventPartitionOffset{
+			Partition:  partition,
+			LastOffset: offset,
+		}.Normalize())
 	}
-	sort.Slice(partitions, func(i, j int) bool {
-		oi := s.partitionOffsets[partitions[i]]
-		oj := s.partitionOffsets[partitions[j]]
-		if oi == oj {
-			if partitions[i].Kind == partitions[j].Kind {
-				return partitions[i].Key < partitions[j].Key
-			}
-			return partitions[i].Kind < partitions[j].Kind
-		}
-		return oi > oj
-	})
-	if limit > 0 && len(partitions) > limit {
-		partitions = partitions[:limit]
-	}
-	return partitions, nil
+	return EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 // MemoryCommandLog is a deterministic in-process CommandLog for tests and
@@ -944,37 +997,11 @@ func (l *MemoryCommandLog) CommittedOffset(ctx context.Context, partition LogPar
 }
 
 func (l *MemoryCommandLog) ListCommandPartitions(ctx context.Context, limit int) ([]LogPartition, error) {
-	if err := ctx.Err(); err != nil {
+	offsets, err := l.ListCommandPartitionOffsets(ctx, 0)
+	if err != nil {
 		return nil, err
 	}
-	if l == nil {
-		return nil, fmt.Errorf("memory command log: nil receiver")
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	partitions := make([]LogPartition, 0, len(l.records))
-	for partition, records := range l.records {
-		if len(records) == 0 {
-			continue
-		}
-		partitions = append(partitions, partition.Normalize())
-	}
-	sort.Slice(partitions, func(i, j int) bool {
-		oi := int64(len(l.records[partitions[i]]))
-		oj := int64(len(l.records[partitions[j]]))
-		if oi == oj {
-			if partitions[i].Kind == partitions[j].Kind {
-				return partitions[i].Key < partitions[j].Key
-			}
-			return partitions[i].Kind < partitions[j].Kind
-		}
-		return oi > oj
-	})
-	if limit > 0 && len(partitions) > limit {
-		partitions = partitions[:limit]
-	}
-	return partitions, nil
+	return CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (l *MemoryCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
@@ -999,20 +1026,7 @@ func (l *MemoryCommandLog) ListCommandPartitionOffsets(ctx context.Context, limi
 			CommittedOffset: l.committed[partition],
 		})
 	}
-	sort.Slice(offsets, func(i, j int) bool {
-		li := offsets[i].TailOffset - offsets[i].CommittedOffset
-		lj := offsets[j].TailOffset - offsets[j].CommittedOffset
-		if li == lj {
-			if offsets[i].TailOffset == offsets[j].TailOffset {
-				if offsets[i].Partition.Kind == offsets[j].Partition.Kind {
-					return offsets[i].Partition.Key < offsets[j].Partition.Key
-				}
-				return offsets[i].Partition.Kind < offsets[j].Partition.Kind
-			}
-			return offsets[i].TailOffset > offsets[j].TailOffset
-		}
-		return li > lj
-	})
+	SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

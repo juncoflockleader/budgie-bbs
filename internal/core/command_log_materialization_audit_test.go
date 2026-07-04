@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -15,36 +15,26 @@ func TestCommandLogMaterializationAuditReportsAppliedAndTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-audit.db"), WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	go c.Run(ctx)
 
-	goodPayload, err := json.Marshal(proto.CreateThreadPayload{
+	goodPayload := marshalCoreTestJSON(t, "marshal good payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Audit applied",
 		Body:  "this should materialize",
 	})
-	if err != nil {
-		t.Fatalf("marshal good payload: %v", err)
-	}
 	if reply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, goodPayload, "audit-applied"); reply.Err != nil {
 		t.Fatalf("enqueue good command: %+v", reply.Err)
 	}
-	badPayload, err := json.Marshal(proto.CreateThreadPayload{
+	badPayload := marshalCoreTestJSON(t, "marshal bad payload", proto.CreateThreadPayload{
 		Board: "missing",
 		Title: "Audit terminal",
 		Body:  "this should terminally fail",
 	})
-	if err != nil {
-		t.Fatalf("marshal bad payload: %v", err)
-	}
 	if reply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, badPayload, "audit-terminal"); reply.Err != nil {
 		t.Fatalf("enqueue bad command: %+v", reply.Err)
 	}
@@ -54,11 +44,9 @@ func TestCommandLogMaterializationAuditReportsAppliedAndTerminal(t *testing.T) {
 		Executor:  c,
 		BatchSize: 10,
 	})
-	if results, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("DrainOnce: %v results=%+v", err, results)
-	}
+	drainCommandLogWorkerOnce(t, ctx, worker, "DrainOnce")
 
-	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, CommandLogMaterializationAuditConfig{BatchSize: 1})
+	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, loadmodel.CommandLogMaterializationAuditConfig{BatchSize: 1})
 	if err != nil {
 		t.Fatalf("AuditCommandLogMaterialization: %v", err)
 	}
@@ -77,41 +65,31 @@ func TestCommandLogMaterializationAuditReportsAppliedAndTerminal(t *testing.T) {
 func TestCommandLogMaterializationAuditDetectsCommittedMissingMaterialization(t *testing.T) {
 	ctx := context.Background()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-audit-missing.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Committed without materialization",
 		Body:  "this command is intentionally not executed",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record := produceBrokerCommandLogTestRecord(t, ctx, commandLog, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "audit-missing",
 		Command:    proto.CmdCreateThread,
 		Payload:    payload,
 		EnqueuedAt: nowMS(),
-	})
-	if err != nil {
-		t.Fatalf("Produce: %v", err)
-	}
+	}, "Produce")
 	if err := commandLog.CommitPartition(ctx, partition, record.Offset); err != nil {
 		t.Fatalf("CommitPartition: %v", err)
 	}
 
-	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, CommandLogMaterializationAuditConfig{BatchSize: 1})
+	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, loadmodel.CommandLogMaterializationAuditConfig{BatchSize: 1})
 	if err != nil {
 		t.Fatalf("AuditCommandLogMaterialization: %v", err)
 	}
@@ -143,11 +121,7 @@ func TestCommandLogMaterializationAuditAllowsSourceBackedSparseOffsets(t *testin
 		committed: record.Offset,
 		records:   []CommandLogRecord{record},
 	}
-	c, err := New(filepath.Join(t.TempDir(), "command-log-audit-sparse.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	if err := c.RecordCommandLogApplied(ctx, record, &proto.AckResult{
 		Status:               proto.AckStatusPending,
 		CommandPartitionKind: partition.Kind,
@@ -158,7 +132,7 @@ func TestCommandLogMaterializationAuditAllowsSourceBackedSparseOffsets(t *testin
 		t.Fatalf("RecordCommandLogApplied: %v", err)
 	}
 
-	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, CommandLogMaterializationAuditConfig{BatchSize: 1})
+	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, loadmodel.CommandLogMaterializationAuditConfig{BatchSize: 1})
 	if err != nil {
 		t.Fatalf("AuditCommandLogMaterialization: %v", err)
 	}
@@ -170,26 +144,20 @@ func TestCommandLogMaterializationAuditAllowsSourceBackedSparseOffsets(t *testin
 func TestCommandLogMaterializationAuditFailsWhenPartitionLimitTruncatesCoverage(t *testing.T) {
 	ctx := context.Background()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-audit-limit.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	for _, boardID := range []string{"general", "meta"} {
-		if _, err := commandLog.Produce(ctx, CommandLogRecord{
+		produceBrokerCommandLogTestRecord(t, ctx, commandLog, CommandLogRecord{
 			Partition:  LogPartition{Kind: partitionBoard, Key: boardID},
 			ActorID:    "usr_audit_limit",
 			CID:        "audit-limit-" + boardID,
 			Command:    proto.CmdCreateThread,
 			Payload:    json.RawMessage(`{}`),
 			EnqueuedAt: nowMS(),
-		}); err != nil {
-			t.Fatalf("Produce(%s): %v", boardID, err)
-		}
+		}, "Produce "+boardID)
 	}
 
-	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, CommandLogMaterializationAuditConfig{PartitionLimit: 1})
+	report, err := c.AuditCommandLogMaterialization(ctx, commandLog, loadmodel.CommandLogMaterializationAuditConfig{PartitionLimit: 1})
 	if err != nil {
 		t.Fatalf("AuditCommandLogMaterialization: %v", err)
 	}

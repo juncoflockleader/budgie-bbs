@@ -11,19 +11,15 @@ import (
 
 func TestSQLCommandLogPartitionIndexTracksProducedAndCommittedOffsets(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/partition-index.db")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	index := NewSQLCommandLogPartitionIndex(c.DB)
 	log := NewIndexedCommandLog(NewMemoryCommandLog(), index)
 	board := LogPartition{Kind: "board", Key: "general"}.Normalize()
 	thread := LogPartition{Kind: "thread", Key: "thr_1"}.Normalize()
 
-	produceIndexedPartitionRecord(t, ctx, log, board, "cid-board-1")
-	produceIndexedPartitionRecord(t, ctx, log, board, "cid-board-2")
-	produceIndexedPartitionRecord(t, ctx, log, thread, "cid-thread-1")
+	produceCommandLogWorkerRecord(t, ctx, log, board, "cid-board-1")
+	produceCommandLogWorkerRecord(t, ctx, log, board, "cid-board-2")
+	produceCommandLogWorkerRecord(t, ctx, log, thread, "cid-thread-1")
 	if err := log.CommitPartition(ctx, board, 1); err != nil {
 		t.Fatalf("CommitPartition: %v", err)
 	}
@@ -48,17 +44,113 @@ func TestSQLCommandLogPartitionIndexTracksProducedAndCommittedOffsets(t *testing
 	}
 }
 
+func TestCommandPartitionOffsetOrderingHelpers(t *testing.T) {
+	board := LogPartition{Kind: "board", Key: "general"}.Normalize()
+	meta := LogPartition{Kind: "board", Key: "meta"}.Normalize()
+	thread := LogPartition{Kind: "thread", Key: "thr_1"}.Normalize()
+	normalized := (CommandPartitionOffset{
+		Partition:       LogPartition{},
+		TailOffset:      -1,
+		CommittedOffset: 3,
+	}).Normalize()
+	if want := (CommandPartitionOffset{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}}); normalized != want {
+		t.Fatalf("CommandPartitionOffset.Normalize = %+v, want %+v", normalized, want)
+	}
+	if got := (CommandPartitionOffset{
+		Partition:       board,
+		TailOffset:      2,
+		CommittedOffset: 5,
+	}).Lag(); got != 0 {
+		t.Fatalf("CommandPartitionOffset.Lag over-committed = %d, want 0", got)
+	}
+	offsets := []CommandPartitionOffset{
+		{Partition: meta, TailOffset: 7, CommittedOffset: 7},
+		{Partition: thread, TailOffset: 3, CommittedOffset: 0},
+		{Partition: board, TailOffset: 5, CommittedOffset: 4},
+	}
+
+	partitions := CommandPartitionsByTailOffset(offsets, 2)
+	if want := []LogPartition{meta, board}; !reflect.DeepEqual(partitions, want) {
+		t.Fatalf("CommandPartitionsByTailOffset = %+v, want %+v", partitions, want)
+	}
+
+	SortCommandPartitionOffsetsByLag(offsets)
+	want := []CommandPartitionOffset{
+		{Partition: thread, TailOffset: 3, CommittedOffset: 0},
+		{Partition: board, TailOffset: 5, CommittedOffset: 4},
+		{Partition: meta, TailOffset: 7, CommittedOffset: 7},
+	}
+	if !reflect.DeepEqual(offsets, want) {
+		t.Fatalf("SortCommandPartitionOffsetsByLag = %+v, want %+v", offsets, want)
+	}
+}
+
+func TestListCommandPartitionOffsetsWithLimitReportsOverflowAndNormalizes(t *testing.T) {
+	ctx := context.Background()
+	board := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
+	thread := LogPartition{Kind: partitionThread, Key: "thr_1"}.Normalize()
+	offsets := commandPartitionOffsetSliceLister{
+		{Partition: board, TailOffset: 2, CommittedOffset: 5},
+		{Partition: LogPartition{}, TailOffset: -1, CommittedOffset: -3},
+		{Partition: thread, TailOffset: 4, CommittedOffset: 1},
+	}
+
+	got, limited, err := listCommandPartitionOffsetsWithLimit(ctx, offsets, 2)
+	if err != nil {
+		t.Fatalf("listCommandPartitionOffsetsWithLimit: %v", err)
+	}
+	if !limited {
+		t.Fatal("limited = false, want true")
+	}
+	want := []CommandPartitionOffset{
+		{Partition: board, TailOffset: 2, CommittedOffset: 2},
+		{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("offsets = %+v, want %+v", got, want)
+	}
+
+	got, limited, err = listCommandPartitionOffsetsWithLimit(ctx, offsets, 0)
+	if err != nil {
+		t.Fatalf("listCommandPartitionOffsetsWithLimit unlimited: %v", err)
+	}
+	if limited {
+		t.Fatal("unlimited limited = true, want false")
+	}
+	want = append(want, CommandPartitionOffset{Partition: thread, TailOffset: 4, CommittedOffset: 1})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unlimited offsets = %+v, want %+v", got, want)
+	}
+}
+
+func TestListCommandLogPartitionOffsetsWithLimitRequiresOffsetLister(t *testing.T) {
+	commandLog := struct{ CommandLog }{CommandLog: NewMemoryCommandLog()}
+	_, _, err := listCommandLogPartitionOffsetsWithLimit(context.Background(), commandLog, 10, "partition offsets required")
+	if err == nil || err.Error() != "partition offsets required" {
+		t.Fatalf("error = %v, want partition offsets required", err)
+	}
+}
+
+type commandPartitionOffsetSliceLister []CommandPartitionOffset
+
+func (l commandPartitionOffsetSliceLister) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := append([]CommandPartitionOffset(nil), l...)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func TestIndexedCommandLogRegistersPartitionBeforeProducing(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/partition-index-candidate.db")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	index := NewSQLCommandLogPartitionIndex(c.DB)
 	partition := LogPartition{Kind: "board", Key: "general"}.Normalize()
 
-	_, err = NewIndexedCommandLog(failingProduceCommandLog{err: errors.New("synthetic produce failure")}, index).Produce(ctx, CommandLogRecord{
+	_, err := NewIndexedCommandLog(failingProduceCommandLog{err: errors.New("synthetic produce failure")}, index).Produce(ctx, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    "usr_alice",
 		CID:        "cid-fails-after-candidate",
@@ -88,16 +180,12 @@ func TestIndexedCommandLogRegistersPartitionBeforeProducing(t *testing.T) {
 
 func TestSQLCommandLogPartitionIndexTracksFetchedExternalTailsAndClampsCommit(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/partition-index-fetch.db")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	base := NewMemoryCommandLog()
 	index := NewSQLCommandLogPartitionIndex(c.DB)
 	partition := LogPartition{Kind: "board", Key: "general"}.Normalize()
-	produceIndexedPartitionRecord(t, ctx, base, partition, "cid-external-1")
-	produceIndexedPartitionRecord(t, ctx, base, partition, "cid-external-2")
+	produceCommandLogWorkerRecord(t, ctx, base, partition, "cid-external-1")
+	produceCommandLogWorkerRecord(t, ctx, base, partition, "cid-external-2")
 	log := NewIndexedCommandLog(base, index)
 
 	if err := log.CommitPartition(ctx, partition, 10); err != nil {
@@ -122,16 +210,12 @@ func TestSQLCommandLogPartitionIndexTracksFetchedExternalTailsAndClampsCommit(t 
 
 func TestIndexedCommandLogCommittedOffsetUsesPartitionIndex(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/partition-index-committed.db")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	base := NewMemoryCommandLog()
 	index := NewSQLCommandLogPartitionIndex(c.DB)
 	partition := LogPartition{Kind: "board", Key: "general"}.Normalize()
-	produceIndexedPartitionRecord(t, ctx, base, partition, "cid-external-1")
-	produceIndexedPartitionRecord(t, ctx, base, partition, "cid-external-2")
+	produceCommandLogWorkerRecord(t, ctx, base, partition, "cid-external-1")
+	produceCommandLogWorkerRecord(t, ctx, base, partition, "cid-external-2")
 	log := NewIndexedCommandLog(base, index)
 
 	if _, err := log.FetchPartition(ctx, partition, 0, 10); err != nil {
@@ -140,37 +224,9 @@ func TestIndexedCommandLogCommittedOffsetUsesPartitionIndex(t *testing.T) {
 	if err := base.CommitPartition(ctx, partition, 10); err != nil {
 		t.Fatalf("inner commit: %v", err)
 	}
-	offset, err := log.CommittedOffset(ctx, partition)
-	if err != nil {
-		t.Fatalf("CommittedOffset: %v", err)
-	}
-	if offset != 0 {
-		t.Fatalf("committed offset = %d, want partition index offset 0 despite inner commit", offset)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 0, "partition index offset after inner commit")
 	if err := log.CommitPartition(ctx, partition, 1); err != nil {
 		t.Fatalf("indexed commit: %v", err)
 	}
-	offset, err = log.CommittedOffset(ctx, partition)
-	if err != nil {
-		t.Fatalf("CommittedOffset after indexed commit: %v", err)
-	}
-	if offset != 1 {
-		t.Fatalf("committed offset after indexed commit = %d, want 1", offset)
-	}
-}
-
-func produceIndexedPartitionRecord(t *testing.T, ctx context.Context, log CommandLog, partition LogPartition, cid string) CommandLogRecord {
-	t.Helper()
-	record, err := log.Produce(ctx, CommandLogRecord{
-		Partition:  partition,
-		ActorID:    "usr_alice",
-		CID:        cid,
-		Command:    proto.CmdCreateThread,
-		Payload:    []byte(`{"board":"general","title":"General"}`),
-		EnqueuedAt: 1000,
-	})
-	if err != nil {
-		t.Fatalf("Produce %s: %v", cid, err)
-	}
-	return record
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, partition, 1, "partition index offset after indexed commit")
 }

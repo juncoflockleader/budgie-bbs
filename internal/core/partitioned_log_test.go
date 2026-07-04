@@ -4,11 +4,53 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+func appendCoreTestEvent(t *testing.T, ctx context.Context, store EventStore, event EventAppend, label string) *proto.Event {
+	t.Helper()
+	appended, err := store.Append(ctx, event)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return appended
+}
+
+func newCoreTestCore(t *testing.T, options ...Option) *Core {
+	t.Helper()
+	c, err := New(t.TempDir()+"/budgie.db", options...)
+	if err != nil {
+		t.Fatalf("new core: %v", err)
+	}
+	t.Cleanup(func() {
+		c.DB.Close()
+	})
+	return c
+}
+
+type brokerCommandEventTestHarness struct {
+	commandClient    *MemoryBrokerCommandLogClient
+	eventClient      *MemoryBrokerEventLogClient
+	commandLog       *BrokerCommandLog
+	eventStore       *BrokerEventStore
+	transactionStore *BrokerCommandEventTransactionStore
+}
+
+func newBrokerCommandEventTestHarness() brokerCommandEventTestHarness {
+	commandClient := NewMemoryBrokerCommandLogClient()
+	eventClient := NewMemoryBrokerEventLogClient()
+	return brokerCommandEventTestHarness{
+		commandClient:    commandClient,
+		eventClient:      eventClient,
+		commandLog:       NewBrokerCommandLog(commandClient),
+		eventStore:       NewBrokerEventStore(eventClient),
+		transactionStore: NewBrokerCommandEventTransactionStore(NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient)),
+	}
+}
 
 func TestMemoryCommandLogPartitionsAreIndependent(t *testing.T) {
 	ctx := context.Background()
@@ -74,12 +116,8 @@ func TestMemoryCommandLogPartitionsAreIndependent(t *testing.T) {
 	if err := log.CommitPartition(ctx, general, second.Offset); err != nil {
 		t.Fatalf("commit general: %v", err)
 	}
-	if got, err := log.CommittedOffset(ctx, general); err != nil || got != second.Offset {
-		t.Fatalf("committed general = %d, %v; want %d, nil", got, err, second.Offset)
-	}
-	if got, err := log.CommittedOffset(ctx, life); err != nil || got != 0 {
-		t.Fatalf("committed life = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, general, second.Offset, "committed general")
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, life, 0, "committed life")
 	partitions, err := log.ListCommandPartitions(ctx, 1)
 	if err != nil {
 		t.Fatalf("list partitions: %v", err)
@@ -131,14 +169,13 @@ func TestMemoryCommandLogProduceIsIdempotentByCID(t *testing.T) {
 	}
 	drift := record
 	drift.EnqueuedAt = 2000
-	if _, err := log.Produce(ctx, drift); err == nil || !strings.Contains(err.Error(), "different content") {
-		t.Fatalf("timestamp drift produce err = %v, want different content error", err)
-	}
+	_, err = log.Produce(ctx, drift)
+	requireErrorContains(t, err, "different content")
+
 	conflict := record
 	conflict.Payload = json.RawMessage(`{"board":"general","title":"Changed"}`)
-	if _, err := log.Produce(ctx, conflict); err == nil || !strings.Contains(err.Error(), "different content") {
-		t.Fatalf("conflict produce err = %v, want different content error", err)
-	}
+	_, err = log.Produce(ctx, conflict)
+	requireErrorContains(t, err, "different content")
 }
 
 func TestMemoryCommandLogRequiresEnqueuedAtForExplicitReceipt(t *testing.T) {
@@ -151,21 +188,15 @@ func TestMemoryCommandLogRequiresEnqueuedAtForExplicitReceipt(t *testing.T) {
 		Command:   proto.CmdCreateThread,
 		Payload:   json.RawMessage(`{"board":"general","title":"Missing enqueue"}`),
 	})
-	if err == nil || !strings.Contains(err.Error(), "enqueue time is required") {
-		t.Fatalf("produce err = %v, want enqueue time required error", err)
-	}
+	requireErrorContains(t, err, "enqueue time is required")
 }
 
 func TestSQLEventStoreAppendAndReplayPartition(t *testing.T) {
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	store := NewSQLEventStore(c.DB)
 	ctx := context.Background()
-	general, err := store.Append(ctx, EventAppend{
+	general := appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_sql_store_general",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -176,11 +207,8 @@ func TestSQLEventStoreAppendAndReplayPartition(t *testing.T) {
 			Title:  "SQL store general",
 			TS:     1000,
 		},
-	})
-	if err != nil {
-		t.Fatalf("append general: %v", err)
-	}
-	life, err := store.Append(ctx, EventAppend{
+	}, "append general")
+	life := appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_sql_store_life",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:life"},
@@ -191,10 +219,7 @@ func TestSQLEventStoreAppendAndReplayPartition(t *testing.T) {
 			Title:  "SQL store life",
 			TS:     1001,
 		},
-	})
-	if err != nil {
-		t.Fatalf("append life: %v", err)
-	}
+	}, "append life")
 	if general.PartitionKind != partitionBoard || general.PartitionKey != "general" || general.PartitionOffset != 1 {
 		t.Fatalf("general partition = (%q,%q,%d), want (%q,general,1)", general.PartitionKind, general.PartitionKey, general.PartitionOffset, partitionBoard)
 	}
@@ -232,10 +257,7 @@ func TestShadowEventStoreMirrorsCleanAppend(t *testing.T) {
 	recorder := &EventParityRecorder{}
 	store := NewShadowEventStore(primary, shadow, recorder)
 
-	appended, err := store.Append(ctx, testEventAppend("general"))
-	if err != nil {
-		t.Fatalf("shadow append: %v", err)
-	}
+	appended := appendCoreTestEvent(t, ctx, store, testEventAppend("general"), "shadow append")
 	if appended.PartitionKind != partitionBoard || appended.PartitionKey != "general" || appended.PartitionOffset != 1 {
 		t.Fatalf("primary appended partition = (%q,%q,%d)", appended.PartitionKind, appended.PartitionKey, appended.PartitionOffset)
 	}
@@ -264,10 +286,7 @@ func TestShadowEventStoreReportsAppendFailureWithoutFailingPrimary(t *testing.T)
 		err:              errors.New("mirror unavailable"),
 	}, recorder)
 
-	appended, err := store.Append(ctx, testEventAppend("general"))
-	if err != nil {
-		t.Fatalf("primary append should still succeed: %v", err)
-	}
+	appended := appendCoreTestEvent(t, ctx, store, testEventAppend("general"), "primary append should still succeed")
 	if appended.Seq != 1 {
 		t.Fatalf("primary seq = %d, want 1", appended.Seq)
 	}
@@ -293,10 +312,7 @@ func TestShadowEventStoreReportsLogicalMismatchWithoutFailingPrimary(t *testing.
 	recorder := &EventParityRecorder{}
 	store := NewShadowEventStore(primary, offsetMutatingEventStore{MemoryEventStore: NewMemoryEventStore()}, recorder)
 
-	appended, err := store.Append(ctx, testEventAppend("general"))
-	if err != nil {
-		t.Fatalf("primary append should still succeed: %v", err)
-	}
+	appended := appendCoreTestEvent(t, ctx, store, testEventAppend("general"), "primary append should still succeed")
 	if appended.PartitionOffset != 1 {
 		t.Fatalf("primary offset = %d, want 1", appended.PartitionOffset)
 	}
@@ -316,12 +332,8 @@ func TestCheckEventReplayParityCleanPartition(t *testing.T) {
 	recorder := &EventParityRecorder{}
 
 	for _, title := range []string{"First", "Second"} {
-		if _, err := primary.Append(ctx, testEventAppendWithTitle("general", title)); err != nil {
-			t.Fatalf("primary append %q: %v", title, err)
-		}
-		if _, err := shadow.Append(ctx, testEventAppendWithTitle("general", title)); err != nil {
-			t.Fatalf("shadow append %q: %v", title, err)
-		}
+		appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", title), "primary append "+title)
+		appendCoreTestEvent(t, ctx, shadow, testEventAppendWithTitle("general", title), "shadow append "+title)
 	}
 	result, err := CheckEventReplayParity(ctx, primary, shadow, LogPartition{Kind: partitionBoard, Key: "general"}, 0, 10, recorder)
 	if err != nil {
@@ -341,9 +353,7 @@ func TestCheckEventReplayParityReportsMissingShadowEvent(t *testing.T) {
 	shadow := NewMemoryEventStore()
 	recorder := &EventParityRecorder{}
 
-	if _, err := primary.Append(ctx, testEventAppend("general")); err != nil {
-		t.Fatalf("primary append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, primary, testEventAppend("general"), "primary append")
 	result, err := CheckEventReplayParity(ctx, primary, shadow, LogPartition{Kind: partitionBoard, Key: "general"}, 0, 10, recorder)
 	if err != nil {
 		t.Fatalf("check parity: %v", err)
@@ -362,12 +372,8 @@ func TestCheckEventReplayParityReportsPayloadMismatch(t *testing.T) {
 	shadow := NewMemoryEventStore()
 	recorder := &EventParityRecorder{}
 
-	if _, err := primary.Append(ctx, testEventAppendWithTitle("general", "Primary title")); err != nil {
-		t.Fatalf("primary append: %v", err)
-	}
-	if _, err := shadow.Append(ctx, testEventAppendWithTitle("general", "Shadow title")); err != nil {
-		t.Fatalf("shadow append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", "Primary title"), "primary append")
+	appendCoreTestEvent(t, ctx, shadow, testEventAppendWithTitle("general", "Shadow title"), "shadow append")
 	result, err := CheckEventReplayParity(ctx, primary, shadow, LogPartition{Kind: partitionBoard, Key: "general"}, 0, 10, recorder)
 	if err != nil {
 		t.Fatalf("check parity: %v", err)
@@ -383,14 +389,10 @@ func TestCheckEventReplayParityReportsCompatibilitySeqMismatch(t *testing.T) {
 	shadow := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
 	recorder := &EventParityRecorder{}
 
-	if _, err := primary.Append(ctx, testEventAppendWithTitle("general", "Seq guarded")); err != nil {
-		t.Fatalf("primary append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", "Seq guarded"), "primary append")
 	appendEvent := testEventAppendWithTitle("general", "Seq guarded")
 	appendEvent.CompatibilitySeq = 41
-	if _, err := shadow.Append(ctx, appendEvent); err != nil {
-		t.Fatalf("shadow append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, shadow, appendEvent, "shadow append")
 	result, err := CheckEventReplayParity(ctx, primary, shadow, LogPartition{Kind: partitionBoard, Key: "general"}, 0, 10, recorder)
 	if err != nil {
 		t.Fatalf("check parity: %v", err)
@@ -410,12 +412,8 @@ func TestCheckEventLogPromotionReadinessCleanCoverage(t *testing.T) {
 		testEventAppendWithTitle("life", "Life 1"),
 		testEventAppendWithTitle("general", "General 2"),
 	} {
-		if _, err := primary.Append(ctx, appendEvent); err != nil {
-			t.Fatalf("primary append: %v", err)
-		}
-		if _, err := candidate.Append(ctx, appendEvent); err != nil {
-			t.Fatalf("candidate append: %v", err)
-		}
+		appendCoreTestEvent(t, ctx, primary, appendEvent, "primary append")
+		appendCoreTestEvent(t, ctx, candidate, appendEvent, "candidate append")
 	}
 
 	report, err := CheckEventLogPromotionReadiness(ctx, EventLogPromotionReadinessConfig{
@@ -439,12 +437,8 @@ func TestCheckEventLogPromotionReadinessReportsMissingAndExtraEvents(t *testing.
 	primary := NewMemoryEventStore()
 	candidate := NewMemoryEventStore()
 
-	if _, err := primary.Append(ctx, testEventAppendWithTitle("general", "Only primary")); err != nil {
-		t.Fatalf("primary append: %v", err)
-	}
-	if _, err := candidate.Append(ctx, testEventAppendWithTitle("life", "Only candidate")); err != nil {
-		t.Fatalf("candidate append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", "Only primary"), "primary append")
+	appendCoreTestEvent(t, ctx, candidate, testEventAppendWithTitle("life", "Only candidate"), "candidate append")
 
 	report, err := CheckEventLogPromotionReadiness(ctx, EventLogPromotionReadinessConfig{
 		Primary:     primary,
@@ -475,12 +469,8 @@ func TestCheckEventLogPromotionReadinessFailsWhenPartitionLimitTruncates(t *test
 		testEventAppendWithTitle("general", "General"),
 		testEventAppendWithTitle("life", "Life"),
 	} {
-		if _, err := primary.Append(ctx, appendEvent); err != nil {
-			t.Fatalf("primary append: %v", err)
-		}
-		if _, err := candidate.Append(ctx, appendEvent); err != nil {
-			t.Fatalf("candidate append: %v", err)
-		}
+		appendCoreTestEvent(t, ctx, primary, appendEvent, "primary append")
+		appendCoreTestEvent(t, ctx, candidate, appendEvent, "candidate append")
 	}
 
 	report, err := CheckEventLogPromotionReadiness(ctx, EventLogPromotionReadinessConfig{
@@ -504,9 +494,7 @@ func TestEventStorePartitionListersOrderHotPartitions(t *testing.T) {
 	ctx := context.Background()
 	memory := NewMemoryEventStore()
 	for _, board := range []string{"general", "life", "general"} {
-		if _, err := memory.Append(ctx, testEventAppend(board)); err != nil {
-			t.Fatalf("append memory %s: %v", board, err)
-		}
+		appendCoreTestEvent(t, ctx, memory, testEventAppend(board), "append memory "+board)
 	}
 	partitions, err := memory.ListEventPartitions(ctx, 10)
 	if err != nil {
@@ -519,16 +507,10 @@ func TestEventStorePartitionListersOrderHotPartitions(t *testing.T) {
 		t.Fatalf("hottest memory partition = %+v, want board/general", partitions[0])
 	}
 
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	sqlStore := NewSQLEventStore(c.DB)
 	for _, board := range []string{"general", "life", "general"} {
-		if _, err := sqlStore.Append(ctx, testEventAppend(board)); err != nil {
-			t.Fatalf("append sql %s: %v", board, err)
-		}
+		appendCoreTestEvent(t, ctx, sqlStore, testEventAppend(board), "append sql "+board)
 	}
 	sqlPartitions, err := sqlStore.ListEventPartitions(ctx, 1)
 	if err != nil {
@@ -537,6 +519,150 @@ func TestEventStorePartitionListersOrderHotPartitions(t *testing.T) {
 	if len(sqlPartitions) != 1 || sqlPartitions[0] != (LogPartition{Kind: partitionBoard, Key: "general"}) {
 		t.Fatalf("sql partitions = %+v, want only board/general", sqlPartitions)
 	}
+}
+
+func TestEventPartitionOffsetOrderingHelpers(t *testing.T) {
+	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
+	life := LogPartition{Kind: partitionBoard, Key: "life"}.Normalize()
+	user := LogPartition{Kind: partitionUser, Key: "usr_1"}.Normalize()
+	normalized := (EventPartitionOffset{
+		Partition:  LogPartition{},
+		LastOffset: -2,
+	}).Normalize()
+	if want := (EventPartitionOffset{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}}); normalized != want {
+		t.Fatalf("EventPartitionOffset.Normalize = %+v, want %+v", normalized, want)
+	}
+
+	offsets := []EventPartitionOffset{
+		{Partition: life, LastOffset: 2},
+		{Partition: user, LastOffset: 7},
+		{Partition: general, LastOffset: 7},
+	}
+	partitions := EventPartitionsByLastOffset(offsets, 2)
+	if want := []LogPartition{general, user}; !reflect.DeepEqual(partitions, want) {
+		t.Fatalf("EventPartitionsByLastOffset = %+v, want %+v", partitions, want)
+	}
+
+	SortEventPartitionOffsetsByLastOffset(offsets)
+	want := []EventPartitionOffset{
+		{Partition: general, LastOffset: 7},
+		{Partition: user, LastOffset: 7},
+		{Partition: life, LastOffset: 2},
+	}
+	if !reflect.DeepEqual(offsets, want) {
+		t.Fatalf("SortEventPartitionOffsetsByLastOffset = %+v, want %+v", offsets, want)
+	}
+}
+
+func TestListEventPartitionOffsetsReportsLimitAndNormalizes(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryBrokerEventLogClient()
+	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
+	life := LogPartition{Kind: partitionBoard, Key: "life"}.Normalize()
+	user := LogPartition{Kind: partitionUser, Key: "usr_1"}.Normalize()
+	for partition, offset := range map[LogPartition]int64{
+		general: 5,
+		life:    3,
+		user:    7,
+	} {
+		if err := store.SeedEventPartitionOffset(ctx, partition, offset); err != nil {
+			t.Fatalf("SeedEventPartitionOffset(%s/%s): %v", partition.Kind, partition.Key, err)
+		}
+	}
+
+	offsets, limited, err := listEventPartitionOffsets(ctx, store, 2)
+	if err != nil {
+		t.Fatalf("listEventPartitionOffsets: %v", err)
+	}
+	if !limited {
+		t.Fatal("limited = false, want true")
+	}
+	want := []EventPartitionOffset{
+		{Partition: user, LastOffset: 7},
+		{Partition: general, LastOffset: 5},
+	}
+	if !reflect.DeepEqual(offsets, want) {
+		t.Fatalf("offsets = %+v, want %+v", offsets, want)
+	}
+
+	offsets, limited, err = listEventPartitionOffsets(ctx, eventPartitionOffsetSliceLister{
+		offsets: []EventPartitionOffset{{Partition: LogPartition{}, LastOffset: -4}},
+	}, 0)
+	if err != nil {
+		t.Fatalf("listEventPartitionOffsets custom lister: %v", err)
+	}
+	if limited {
+		t.Fatal("limited = true, want false")
+	}
+	want = []EventPartitionOffset{{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}}}
+	if !reflect.DeepEqual(offsets, want) {
+		t.Fatalf("normalized offsets = %+v, want %+v", offsets, want)
+	}
+}
+
+func TestListEventPartitionsWithLimitReportsOverflowAndDedupes(t *testing.T) {
+	ctx := context.Background()
+	partitions := eventPartitionSliceLister{
+		LogPartition{Kind: partitionBoard, Key: "general"},
+		LogPartition{Kind: partitionBoard, Key: "general"},
+		LogPartition{},
+		LogPartition{Kind: partitionUser, Key: "usr_1"},
+	}
+
+	got, limited, err := listEventPartitionsWithLimit(ctx, partitions, 3)
+	if err != nil {
+		t.Fatalf("listEventPartitionsWithLimit: %v", err)
+	}
+	if !limited {
+		t.Fatal("limited = false, want true")
+	}
+	want := []LogPartition{
+		{Kind: partitionBoard, Key: "general"},
+		{Kind: partitionGlobal, Key: partitionGlobal},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("partitions = %+v, want %+v", got, want)
+	}
+
+	got, limited, err = listEventPartitionsWithLimit(ctx, partitions, 0)
+	if err != nil {
+		t.Fatalf("listEventPartitionsWithLimit unlimited: %v", err)
+	}
+	if limited {
+		t.Fatal("unlimited limited = true, want false")
+	}
+	want = append(want, LogPartition{Kind: partitionUser, Key: "usr_1"})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unlimited partitions = %+v, want %+v", got, want)
+	}
+}
+
+type eventPartitionSliceLister []LogPartition
+
+func (l eventPartitionSliceLister) ListEventPartitions(ctx context.Context, limit int) ([]LogPartition, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := append([]LogPartition(nil), l...)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+type eventPartitionOffsetSliceLister struct {
+	offsets []EventPartitionOffset
+}
+
+func (l eventPartitionOffsetSliceLister) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out := append([]EventPartitionOffset(nil), l.offsets...)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func TestEventReplayParityRunnerAdvancesCleanPartitions(t *testing.T) {
@@ -552,12 +678,8 @@ func TestEventReplayParityRunnerAdvancesCleanPartitions(t *testing.T) {
 	})
 
 	for _, title := range []string{"First", "Second"} {
-		if _, err := primary.Append(ctx, testEventAppendWithTitle("general", title)); err != nil {
-			t.Fatalf("primary append %q: %v", title, err)
-		}
-		if _, err := shadow.Append(ctx, testEventAppendWithTitle("general", title)); err != nil {
-			t.Fatalf("shadow append %q: %v", title, err)
-		}
+		appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", title), "primary append "+title)
+		appendCoreTestEvent(t, ctx, shadow, testEventAppendWithTitle("general", title), "shadow append "+title)
 	}
 	results, err := runner.CheckOnce(ctx)
 	if err != nil {
@@ -576,6 +698,32 @@ func TestEventReplayParityRunnerAdvancesCleanPartitions(t *testing.T) {
 	}
 }
 
+func TestEventReplayParityRunnerDedupesListedPartitions(t *testing.T) {
+	ctx := context.Background()
+	primary := NewMemoryEventStore()
+	shadow := NewMemoryEventStore()
+	runner := NewEventReplayParityRunner(EventReplayParityRunnerConfig{
+		Primary: primary,
+		Shadow:  shadow,
+		Partitions: eventPartitionSliceLister{
+			LogPartition{Kind: partitionBoard, Key: "general"},
+			LogPartition{Kind: partitionBoard, Key: "general"},
+		},
+		ReplayLimit: 10,
+	})
+
+	appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", "First"), "primary append")
+	appendCoreTestEvent(t, ctx, shadow, testEventAppendWithTitle("general", "First"), "shadow append")
+
+	results, err := runner.CheckOnce(ctx)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if len(results) != 1 || results[0].AfterOffset != 0 || results[0].LastPrimaryOffset != 1 {
+		t.Fatalf("results = %+v, want one clean check for deduped partition", results)
+	}
+}
+
 func TestEventReplayParityRunnerDoesNotAdvanceOnIssue(t *testing.T) {
 	ctx := context.Background()
 	primary := NewMemoryEventStore()
@@ -587,9 +735,7 @@ func TestEventReplayParityRunnerDoesNotAdvanceOnIssue(t *testing.T) {
 		Reporter:    recorder,
 		ReplayLimit: 10,
 	})
-	if _, err := primary.Append(ctx, testEventAppend("general")); err != nil {
-		t.Fatalf("primary append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, primary, testEventAppend("general"), "primary append")
 
 	results, err := runner.CheckOnce(ctx)
 	if err != nil {
@@ -606,9 +752,7 @@ func TestEventReplayParityRunnerDoesNotAdvanceOnIssue(t *testing.T) {
 		t.Fatalf("second results = %+v, want no checkpoint advance after issue", results)
 	}
 
-	if _, err := shadow.Append(ctx, testEventAppend("general")); err != nil {
-		t.Fatalf("shadow repair append: %v", err)
-	}
+	appendCoreTestEvent(t, ctx, shadow, testEventAppend("general"), "shadow repair append")
 	results, err = runner.CheckOnce(ctx)
 	if err != nil {
 		t.Fatalf("repair check: %v", err)
@@ -634,12 +778,8 @@ func TestEventReplayParityRunnerSurvivesBrokerPartitionOutage(t *testing.T) {
 		ReplayLimit: 10,
 	})
 	for _, board := range []string{"general", "life"} {
-		if _, err := primary.Append(ctx, testEventAppendWithTitle(board, "primary "+board)); err != nil {
-			t.Fatalf("primary append %s: %v", board, err)
-		}
-		if _, err := shadowBase.Append(ctx, testEventAppendWithTitle(board, "primary "+board)); err != nil {
-			t.Fatalf("shadow append %s: %v", board, err)
-		}
+		appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle(board, "primary "+board), "primary append "+board)
+		appendCoreTestEvent(t, ctx, shadowBase, testEventAppendWithTitle(board, "primary "+board), "shadow append "+board)
 	}
 
 	results, err := runner.CheckOnce(ctx)
@@ -687,22 +827,15 @@ func TestCoreEventLogShadowSeedsAndMirrorsCommittedEvents(t *testing.T) {
 
 	shadow := NewMemoryEventStore()
 	recorder := &EventParityRecorder{}
-	c, err := New(t.TempDir()+"/budgie.db", WithEventLogShadow(EventLogShadowOptions{
+	c := newCoreTestCore(t, WithEventLogShadow(EventLogShadowOptions{
 		Shadow:      shadow,
 		Reporter:    recorder,
 		StartAtHead: true,
 		ReplayLimit: 10,
 	}))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
 
 	primary := NewSQLEventStore(c.DB)
-	existing, err := primary.Append(ctx, testEventAppendWithTitle("general", "Existing"))
-	if err != nil {
-		t.Fatalf("append existing primary: %v", err)
-	}
+	existing := appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", "Existing"), "append existing primary")
 	if existing.PartitionOffset != 1 {
 		t.Fatalf("existing offset = %d, want 1", existing.PartitionOffset)
 	}
@@ -713,10 +846,7 @@ func TestCoreEventLogShadowSeedsAndMirrorsCommittedEvents(t *testing.T) {
 		t.Fatal("shadow parity runner was not created")
 	}
 	stopRunner()
-	next, err := primary.Append(ctx, testEventAppendWithTitle("general", "Next"))
-	if err != nil {
-		t.Fatalf("append next primary: %v", err)
-	}
+	next := appendCoreTestEvent(t, ctx, primary, testEventAppendWithTitle("general", "Next"), "append next primary")
 	c.Bus.Publish(&proto.Event{Kind: next.Kind, Seq: next.Seq, Scopes: next.Scopes, Payload: next.Payload, TS: next.TS})
 
 	shadowEvents, err := shadow.ReplayPartition(ctx, partitionBoard, "general", 1, 10)

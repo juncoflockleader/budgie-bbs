@@ -80,11 +80,8 @@ func (a *SnapshotCommandPartitionAssigner) AssignCommandPartition(ctx context.Co
 	assignedOwner := a.assignments[partition]
 	generation := a.generation
 	a.mu.RUnlock()
-	return CommandPartitionAssignment{
-		Partition:  partition,
-		OwnerID:    assignedOwner,
-		Generation: generation,
-	}, assignedOwner != "" && assignedOwner == ownerID, nil
+	assignment := commandPartitionAssignmentForOwner(partition, assignedOwner, generation)
+	return assignment, assignment.OwnerID != "" && assignment.OwnerID == ownerID, nil
 }
 
 func (a *SnapshotCommandPartitionAssigner) ListAssignedCommandPartitions(ctx context.Context, ownerID string, limit int) ([]CommandPartitionAssignment, error) {
@@ -105,24 +102,41 @@ func (a *SnapshotCommandPartitionAssigner) ListAssignedCommandPartitions(ctx con
 			partitions = append(partitions, partition.Normalize())
 		}
 	}
-	sort.Slice(partitions, func(i, j int) bool {
-		if partitions[i].Kind == partitions[j].Kind {
-			return partitions[i].Key < partitions[j].Key
-		}
-		return partitions[i].Kind < partitions[j].Kind
-	})
+	SortLogPartitions(partitions)
 	if limit > 0 && len(partitions) > limit {
 		partitions = partitions[:limit]
 	}
-	out := make([]CommandPartitionAssignment, 0, len(partitions))
-	for _, partition := range partitions {
-		out = append(out, CommandPartitionAssignment{
-			Partition:  partition,
-			OwnerID:    ownerID,
-			Generation: generation,
-		})
+	return commandPartitionAssignmentsForOwner(partitions, ownerID, generation), nil
+}
+
+func commandPartitionAssignmentPartitions(assignments []CommandPartitionAssignment) []LogPartition {
+	partitions := make([]LogPartition, 0, len(assignments))
+	seen := map[LogPartition]bool{}
+	for _, assignment := range assignments {
+		partition := assignment.Partition.Normalize()
+		if seen[partition] {
+			continue
+		}
+		seen[partition] = true
+		partitions = append(partitions, partition)
 	}
-	return out, nil
+	return partitions
+}
+
+func commandPartitionAssignmentsForOwner(partitions []LogPartition, ownerID string, generation int64) []CommandPartitionAssignment {
+	assignments := make([]CommandPartitionAssignment, 0, len(partitions))
+	for _, partition := range partitions {
+		assignments = append(assignments, commandPartitionAssignmentForOwner(partition, ownerID, generation))
+	}
+	return assignments
+}
+
+func commandPartitionAssignmentForOwner(partition LogPartition, ownerID string, generation int64) CommandPartitionAssignment {
+	return CommandPartitionAssignment{
+		Partition:  partition.Normalize(),
+		OwnerID:    strings.TrimSpace(ownerID),
+		Generation: generation,
+	}
 }
 
 func (a *SnapshotCommandPartitionAssigner) Generation() int64 {
@@ -165,7 +179,7 @@ func (a *HashCommandPartitionAssigner) AssignCommandPartition(ctx context.Contex
 	partition = partition.Normalize()
 	ownerID = strings.TrimSpace(ownerID)
 	if a == nil {
-		return CommandPartitionAssignment{Partition: partition, OwnerID: ownerID, Generation: 1}, true, nil
+		return commandPartitionAssignmentForOwner(partition, ownerID, 1), true, nil
 	}
 	a.mu.RLock()
 	members := append([]string(nil), a.members...)
@@ -173,17 +187,14 @@ func (a *HashCommandPartitionAssigner) AssignCommandPartition(ctx context.Contex
 	generation := a.generation
 	a.mu.RUnlock()
 	if len(members) == 0 {
-		return CommandPartitionAssignment{Partition: partition, OwnerID: ownerID, Generation: generation}, true, nil
+		return commandPartitionAssignmentForOwner(partition, ownerID, generation), true, nil
 	}
 	assignedOwner := overrides[partition]
 	if assignedOwner == "" {
 		assignedOwner = members[commandPartitionAssignmentIndex(partition, len(members))]
 	}
-	return CommandPartitionAssignment{
-		Partition:  partition,
-		OwnerID:    assignedOwner,
-		Generation: generation,
-	}, assignedOwner == ownerID, nil
+	assignment := commandPartitionAssignmentForOwner(partition, assignedOwner, generation)
+	return assignment, assignment.OwnerID == ownerID, nil
 }
 
 func (a *HashCommandPartitionAssigner) SetMembers(members []string) int64 {

@@ -658,7 +658,7 @@ func (c *Core) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRec
 	}
 	var actor *User
 	if record.ActorID != "" {
-		u, err := getUserByID(c.DB, record.ActorID)
+		u, err := projections.GetUserByID(c.DB, record.ActorID)
 		if err != nil {
 			return Reply{Err: &proto.ErrorDetail{Code: "internal_error", Message: err.Error(), Retryable: true}}
 		}
@@ -813,18 +813,17 @@ func (c *Core) HotThreadSplitBlockingLag(ctx context.Context, threadID string, n
 	if threadID == "" {
 		return nil, nil
 	}
-	offsets, err := lister.ListCommandPartitionOffsets(ctx, 0)
+	offsets, _, err := listCommandPartitionOffsetsWithLimit(ctx, lister, 0)
 	if err != nil {
 		return nil, err
 	}
 	affected := hotThreadSplitPartitionSet(threadID, c.hotThreadSplitShards(threadID), nextShards)
 	blocking := make([]CommandPartitionOffset, 0)
 	for _, offset := range offsets {
-		offset.Partition = offset.Partition.Normalize()
 		if _, ok := affected[offset.Partition]; !ok {
 			continue
 		}
-		if offset.TailOffset > offset.CommittedOffset {
+		if offset.Lag() > 0 {
 			blocking = append(blocking, offset)
 		}
 	}
@@ -1010,15 +1009,12 @@ func (c *Core) HeadCursor() (proto.Cursor, error) {
 		return proto.Cursor{}, err
 	}
 	cursor := proto.CursorFromHead(head)
-	offsets, err := NewSQLEventStore(c.DB).ListEventPartitionOffsets(context.Background(), 0)
+	offsets, _, err := listEventPartitionOffsets(context.Background(), NewSQLEventStore(c.DB), 0)
 	if err != nil {
 		return proto.Cursor{}, err
 	}
 	sort.Slice(offsets, func(i, j int) bool {
-		if offsets[i].Partition.Kind == offsets[j].Partition.Kind {
-			return offsets[i].Partition.Key < offsets[j].Partition.Key
-		}
-		return offsets[i].Partition.Kind < offsets[j].Partition.Kind
+		return offsets[i].Partition.Less(offsets[j].Partition)
 	})
 	for _, offset := range offsets {
 		if offset.LastOffset <= 0 {
@@ -1056,7 +1052,7 @@ func (c *Core) ReplayCursor(cursor proto.Cursor, scopes []string, limit int) ([]
 			afterByPartition[partition] = part.Offset
 		}
 	}
-	offsets, err := NewSQLEventStore(c.DB).ListEventPartitionOffsets(context.Background(), 0)
+	offsets, _, err := listEventPartitionOffsets(context.Background(), NewSQLEventStore(c.DB), 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1077,12 +1073,7 @@ func (c *Core) ReplayCursor(cursor proto.Cursor, scopes []string, limit int) ([]
 		seen[partition] = true
 		partitions = append(partitions, partition)
 	}
-	sort.Slice(partitions, func(i, j int) bool {
-		if partitions[i].Kind == partitions[j].Kind {
-			return partitions[i].Key < partitions[j].Key
-		}
-		return partitions[i].Kind < partitions[j].Kind
-	})
+	SortLogPartitions(partitions)
 
 	events := make([]*proto.Event, 0, limit)
 	for _, partition := range partitions {
@@ -1092,18 +1083,7 @@ func (c *Core) ReplayCursor(cursor proto.Cursor, scopes []string, limit int) ([]
 		}
 		events = append(events, batch...)
 	}
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Seq == events[j].Seq {
-			if events[i].PartitionKind == events[j].PartitionKind {
-				if events[i].PartitionKey == events[j].PartitionKey {
-					return events[i].PartitionOffset < events[j].PartitionOffset
-				}
-				return events[i].PartitionKey < events[j].PartitionKey
-			}
-			return events[i].PartitionKind < events[j].PartitionKind
-		}
-		return events[i].Seq < events[j].Seq
-	})
+	proto.SortEventsByReplayOrder(events)
 	if len(events) > limit {
 		events = events[:limit]
 	}
@@ -1261,20 +1241,22 @@ func (c *Core) appendNewcomerSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*
 	const boardID = "newcomers"
 	threadID := "newcomer_thr_" + user.ID
 	postID := "newcomer_pst_" + user.ID
-	var exists int
-	err := qQueryRow(tx, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
-	if err == nil {
-		return nil, nil
-	}
-	if err != sql.ErrNoRows {
+	exists, err := projections.ThreadExists(tx, threadID)
+	if err != nil {
 		return nil, err
+	}
+	if exists {
+		return nil, nil
 	}
 
 	out := []*proto.Event{}
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		var position int
-		if err := qQueryRow(tx, `SELECT COALESCE(MAX(position) + 1, 0) FROM categories WHERE parent_id=''`).Scan(&position); err != nil {
+	exists, err = projections.BoardExists(tx, boardID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		position, err := projections.NextCategoryPosition(tx, "")
+		if err != nil {
 			return nil, err
 		}
 		boardScopes := []string{"board:" + boardID}
@@ -1289,13 +1271,11 @@ func (c *Core) appendNewcomerSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*
 		if err != nil {
 			return nil, err
 		}
-		if err := insertBoard(tx, boardID, "newcomers", "Generated new-user registration records", "", position); err != nil {
+		if err := projections.InsertBoard(tx, boardID, "newcomers", "Generated new-user registration records", "", position); err != nil {
 			return nil, err
 		}
 		out = append(out, &proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: boardScopes,
 			Payload: &proto.BoardCreatedPayload{ID: boardID, Name: "newcomers", Description: "Generated new-user registration records", By: user.Name, TS: ts}, TS: ts})
-	} else if err != nil {
-		return nil, err
 	}
 
 	title := "New user: " + user.Name
@@ -1315,19 +1295,19 @@ func (c *Core) appendNewcomerSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*
 	if err != nil {
 		return nil, err
 	}
-	if err := insertThread(tx, &Thread{
+	if err := projections.InsertThread(tx, &Thread{
 		ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
-	if err := insertPost(tx, &Post{
+	if err := projections.InsertPost(tx, &Post{
 		ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID,
 		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
+	if err := projections.BumpThread(tx, threadID, pseq); err != nil {
 		return nil, err
 	}
 	if err := commandFtsInsertPost(tx, postID, threadID, boardID, user.Name, body); err != nil {
@@ -1371,7 +1351,7 @@ var dummyBcryptHash, _ = bcrypt.GenerateFromPassword([]byte("constant-time-place
 
 // AuthenticateUser verifies credentials and returns the user on success.
 func (c *Core) AuthenticateUser(name, password string) (*User, error) {
-	u, err := getUserByName(c.DB, name)
+	u, err := projections.GetUserByName(c.DB, name)
 	if err != nil || u == nil {
 		// Run a dummy comparison so a missing account isn't distinguishable from
 		// a wrong password by timing.
@@ -1463,7 +1443,7 @@ func (c *Core) ChangePassword(userID, currentPassword, newPassword string) error
 	if currentPassword == "" || newPassword == "" {
 		return fmt.Errorf("current and new password required")
 	}
-	u, err := getUserByID(c.DB, userID)
+	u, err := projections.GetUserByID(c.DB, userID)
 	if err != nil || u == nil {
 		return ErrInvalidCredentials
 	}
@@ -1501,7 +1481,7 @@ func (c *Core) DeactivateAccount(userID, password, reason string) error {
 	if strings.TrimSpace(password) == "" {
 		return ErrDeactivationIncomplete
 	}
-	u, err := getUserByID(c.DB, userID)
+	u, err := projections.GetUserByID(c.DB, userID)
 	if err != nil || u == nil {
 		return ErrInvalidCredentials
 	}
@@ -1706,7 +1686,7 @@ func isSQLCounterStore(store CounterStore) bool {
 
 func cleanupUserCounterIdentityTx(tx *sql.Tx, userID string, identity CounterUserIdentity, reactionAuthors map[string]string) error {
 	for _, reaction := range identity.Reactions {
-		if err := deleteReaction(tx, reaction.PostID, userID); err != nil {
+		if err := projections.DeleteReaction(tx, reaction.PostID, userID); err != nil {
 			return err
 		}
 		if authorID := reactionAuthors[reaction.PostID]; authorID != "" {
@@ -1716,7 +1696,7 @@ func cleanupUserCounterIdentityTx(tx *sql.Tx, userID string, identity CounterUse
 		}
 	}
 	for _, vote := range identity.PollVotes {
-		if err := deletePollVote(tx, vote.PollID, userID); err != nil {
+		if err := projections.DeletePollVote(tx, vote.PollID, userID); err != nil {
 			return err
 		}
 	}
@@ -1893,20 +1873,22 @@ func (c *Core) appendGoodbyeSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*p
 	const boardID = "Goodbye"
 	threadID := "goodbye_thr_" + user.ID
 	postID := "goodbye_pst_" + user.ID
-	var exists int
-	err := qQueryRow(tx, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
-	if err == nil {
-		return nil, nil
-	}
-	if err != sql.ErrNoRows {
+	exists, err := projections.ThreadExists(tx, threadID)
+	if err != nil {
 		return nil, err
+	}
+	if exists {
+		return nil, nil
 	}
 
 	out := []*proto.Event{}
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		var position int
-		if err := qQueryRow(tx, `SELECT COALESCE(MAX(position) + 1, 0) FROM categories WHERE parent_id=''`).Scan(&position); err != nil {
+	exists, err = projections.BoardExists(tx, boardID)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		position, err := projections.NextCategoryPosition(tx, "")
+		if err != nil {
 			return nil, err
 		}
 		boardScopes := []string{"board:" + boardID}
@@ -1921,13 +1903,11 @@ func (c *Core) appendGoodbyeSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*p
 		if err != nil {
 			return nil, err
 		}
-		if err := insertBoard(tx, boardID, "Goodbye", "Generated account deactivation notices", "", position); err != nil {
+		if err := projections.InsertBoard(tx, boardID, "Goodbye", "Generated account deactivation notices", "", position); err != nil {
 			return nil, err
 		}
 		out = append(out, &proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: boardScopes,
 			Payload: &proto.BoardCreatedPayload{ID: boardID, Name: "Goodbye", Description: "Generated account deactivation notices", By: user.Name, TS: ts}, TS: ts})
-	} else if err != nil {
-		return nil, err
 	}
 
 	title := "Goodbye: " + user.Name
@@ -1947,19 +1927,19 @@ func (c *Core) appendGoodbyeSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*p
 	if err != nil {
 		return nil, err
 	}
-	if err := insertThread(tx, &Thread{
+	if err := projections.InsertThread(tx, &Thread{
 		ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
-	if err := insertPost(tx, &Post{
+	if err := projections.InsertPost(tx, &Post{
 		ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID,
 		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
+	if err := projections.BumpThread(tx, threadID, pseq); err != nil {
 		return nil, err
 	}
 	if err := commandFtsInsertPost(tx, postID, threadID, boardID, user.Name, body); err != nil {
@@ -1975,7 +1955,7 @@ func (c *Core) appendGoodbyeSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*p
 }
 
 func (c *Core) RecordLogin(userID string) error {
-	return recordLogin(c.DB, userID)
+	return projections.RecordLogin(c.DB, userID)
 }
 
 func (c *Core) RecordLogout() error {
@@ -1993,24 +1973,24 @@ func (c *Core) AddPubkey(userID, pubkey string) error {
 
 // UserByPubkey looks up a user by their SSH public key fingerprint.
 func (c *Core) UserByPubkey(pubkey string) (*User, error) {
-	return getUserByPubkey(c.DB, pubkey)
+	return projections.GetUserByPubkey(c.DB, pubkey)
 }
 
 // UserByID returns the user for the given ID.
 func (c *Core) UserByID(id string) (*User, error) {
-	return getUserByID(c.DB, id)
+	return projections.GetUserByID(c.DB, id)
 }
 
 // UserByName returns the user for the given username.
 func (c *Core) UserByName(name string) (*User, error) {
-	return getUserByName(c.DB, name)
+	return projections.GetUserByName(c.DB, name)
 }
 
 // --- Projection readers (safe for concurrent access) ---
 
-func (c *Core) ListBoards() ([]Board, error)        { return listBoards(c.DB) }
-func (c *Core) ListCategories() ([]Category, error) { return listCategories(c.DB) }
-func (c *Core) GetBoard(id string) (*Board, error)  { return getBoard(c.DB, id) }
+func (c *Core) ListBoards() ([]Board, error)        { return projections.ListBoards(c.DB) }
+func (c *Core) ListCategories() ([]Category, error) { return projections.ListCategories(c.DB) }
+func (c *Core) GetBoard(id string) (*Board, error)  { return projections.GetBoard(c.DB, id) }
 
 type CategoryUpdate struct {
 	Name        *string
@@ -2101,7 +2081,7 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) 
 		}
 		position = *patch.Position
 	} else if parentChanged {
-		position, err = nextCategoryPositionTx(tx, parentID)
+		position, err = projections.NextCategoryPosition(tx, parentID)
 		if err != nil {
 			return nil, err
 		}
@@ -2153,12 +2133,6 @@ func getCategoryTx(tx *sql.Tx, categoryID string) (*Category, error) {
 	return &category, err
 }
 
-func nextCategoryPositionTx(tx *sql.Tx, parentID string) (int, error) {
-	var next int
-	err := qQueryRow(tx, `SELECT COALESCE(MAX(position) + 1, 0) FROM categories WHERE parent_id=?`, parentID).Scan(&next)
-	return next, err
-}
-
 func validateCategoryParentTx(tx *sql.Tx, categoryID, parentID string) error {
 	seen := map[string]bool{categoryID: true}
 	for parentID != "" {
@@ -2180,15 +2154,15 @@ func validateCategoryParentTx(tx *sql.Tx, categoryID, parentID string) error {
 }
 
 func (c *Core) GetCommunityStats() (*CommunityStats, error) {
-	rows, err := communityStatsSnapshotRowCount(c.DB)
+	rows, err := projections.CommunityStatsSnapshotRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	var stats *CommunityStats
 	if rows > 0 {
-		stats, err = getCommunityStatsSnapshot(c.DB)
+		stats, err = projections.GetCommunityStatsSnapshot(c.DB)
 	} else {
-		stats, err = getCommunityStats(c.DB)
+		stats, err = projections.GetCommunityStats(c.DB)
 	}
 	if err != nil {
 		return nil, err
@@ -2224,7 +2198,7 @@ func (c *Core) applyPresenceStoreStats(stats *CommunityStats) error {
 }
 
 func (c *Core) ListCommunityStatHistory(limit, offset int) ([]CommunityStatHistory, error) {
-	return listCommunityStatHistory(c.DB, limit, offset)
+	return projections.ListCommunityStatHistory(c.DB, limit, offset)
 }
 
 func (c *Core) SetGuestPresence(sessionID, status, locationLabel, fromHost string, at time.Time) error {
@@ -2259,107 +2233,107 @@ func (c *Core) PublishDailyStatsSnapshot(ctx context.Context, at time.Time) (*pr
 }
 
 func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]BoardRanking, error) {
-	rows, err := boardRankingStatsRowCount(c.DB)
+	rows, err := projections.BoardRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listBoardRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), limit, offset)
+		return projections.ListBoardRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), limit, offset)
 	}
-	return listBoardRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
+	return projections.ListBoardRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
 }
 func (c *Core) ListRecommendedBoards(limit, offset int) ([]RecommendedBoard, error) {
 	return projections.ListRecommendedBoards(c.DB, limit, offset)
 }
 func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int) ([]ThreadRanking, error) {
-	rows, err := threadRankingStatsRowCount(c.DB)
+	rows, err := projections.ThreadRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listThreadRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
+		return projections.ListThreadRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
 	}
-	return listThreadRankings(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
+	return projections.ListThreadRankings(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
 }
 func (c *Core) ListReplyRankings(actor *User, limit, offset int) ([]ReplyRanking, error) {
-	rows, err := replyRankingPostsRowCount(c.DB)
+	rows, err := projections.ReplyRankingPostsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listReplyRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), limit, offset)
+		return projections.ListReplyRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), limit, offset)
 	}
-	return listReplyRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
+	return projections.ListReplyRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
 }
 func (c *Core) ListUserRankings(limit, offset int) ([]UserRanking, error) {
-	rows, err := userRankingStatsRowCount(c.DB)
+	rows, err := projections.UserRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listUserRankingsMaterialized(c.DB, limit, offset)
+		return projections.ListUserRankingsMaterialized(c.DB, limit, offset)
 	}
-	return listUserRankings(c.DB, limit, offset)
+	return projections.ListUserRankings(c.DB, limit, offset)
 }
 func (c *Core) ListBlessingRankings(limit, offset int) ([]BlessingRanking, error) {
-	rows, err := blessingRankingStatsRowCount(c.DB)
+	rows, err := projections.BlessingRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listBlessingRankingsMaterialized(c.DB, limit, offset)
+		return projections.ListBlessingRankingsMaterialized(c.DB, limit, offset)
 	}
-	return listBlessingRankings(c.DB, limit, offset)
+	return projections.ListBlessingRankings(c.DB, limit, offset)
 }
 func (c *Core) ListBlessings(limit, offset int) ([]Blessing, error) {
-	return listBlessings(c.DB, limit, offset)
+	return projections.ListBlessings(c.DB, limit, offset)
 }
 func (c *Core) ListBoardModeratorTerms(boardID string, limit, offset int) ([]BoardModeratorTerm, error) {
-	return listBoardModeratorTerms(c.DB, boardID, limit, offset)
+	return projections.ListBoardModeratorTerms(c.DB, boardID, limit, offset)
 }
 func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) ([]ArchiveRanking, error) {
-	rows, err := archiveRankingStatsRowCount(c.DB)
+	rows, err := projections.ArchiveRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listArchiveRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), kind, limit, offset)
+		return projections.ListArchiveRankingsMaterialized(c.DB, actor.ID, actor.IsMod(), kind, limit, offset)
 	}
-	return listArchiveRankings(c.DB, actor.ID, actor.IsMod(), kind, limit, offset)
+	return projections.ListArchiveRankings(c.DB, actor.ID, actor.IsMod(), kind, limit, offset)
 }
 func (c *Core) ListBoardSummaries(userID string, unreadOnly bool, opts ...BoardSummaryOptions) ([]BoardSummary, error) {
-	rows, err := boardSummaryStatsRowCount(c.DB)
+	rows, err := projections.BoardSummaryStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listBoardSummariesMaterialized(c.DB, userID, unreadOnly, opts...)
+		return projections.ListBoardSummariesMaterialized(c.DB, userID, unreadOnly, opts...)
 	}
-	return listBoardSummaries(c.DB, userID, unreadOnly, opts...)
+	return projections.ListBoardSummaries(c.DB, userID, unreadOnly, opts...)
 }
 func (c *Core) GetBoardInfo(boardID string) (*BoardInfo, error) {
-	return getBoardInfo(c.DB, boardID)
+	return projections.GetBoardInfo(c.DB, boardID)
 }
 func (c *Core) GetBoardMemberRequirements(boardID string) (*BoardMemberRequirements, error) {
-	return getBoardMemberRequirements(c.DB, boardID)
+	return projections.GetBoardMemberRequirements(c.DB, boardID)
 }
 func (c *Core) ListBoardMembers(boardID string) ([]BoardMember, error) {
-	return listBoardMembers(c.DB, boardID)
+	return projections.ListBoardMembers(c.DB, boardID)
 }
 func (c *Core) UserIsBoardMember(boardID, userID string) (bool, error) {
-	return userIsBoardMember(c.DB, boardID, userID)
+	return projections.BoardMemberExists(c.DB, boardID, userID)
 }
 func (c *Core) GetBoardMemberApplication(applicationID string) (*BoardMemberApplication, error) {
-	return getBoardMemberApplication(c.DB, applicationID)
+	return projections.GetBoardMemberApplication(c.DB, applicationID)
 }
 func (c *Core) ListBoardMemberApplications(boardID, status, userID string, limit, offset int) ([]BoardMemberApplication, error) {
-	return listBoardMemberApplications(c.DB, boardID, status, userID, limit, offset)
+	return projections.ListBoardMemberApplications(c.DB, boardID, status, userID, limit, offset)
 }
 func (c *Core) ListDigestEntries(boardID, kind, path string, limit, offset int) ([]DigestEntry, error) {
-	return listDigestEntries(c.DB, boardID, kind, path, limit, offset)
+	return projections.ListDigestEntries(c.DB, boardID, kind, path, limit, offset)
 }
 func (c *Core) ListDigestPathTree(boardID, kind string) ([]DigestPathNode, error) {
-	return listDigestPathTree(c.DB, boardID, kind)
+	return projections.ListDigestPathTree(c.DB, boardID, kind)
 }
 func (c *Core) ListSiteDigestEntries(actor *User, kind, path string, limit, offset int) ([]DigestEntry, error) {
 	viewerID := ""
@@ -2368,7 +2342,7 @@ func (c *Core) ListSiteDigestEntries(actor *User, kind, path string, limit, offs
 		viewerID = actor.ID
 		includePrivate = actor.IsMod()
 	}
-	return listSiteDigestEntries(c.DB, viewerID, includePrivate, kind, path, limit, offset)
+	return projections.ListSiteDigestEntries(c.DB, viewerID, includePrivate, kind, path, limit, offset)
 }
 func (c *Core) SearchDigestEntries(actor *User, boardID, kind, path, query string, limit, offset int) ([]DigestEntry, error) {
 	viewerID := ""
@@ -2377,41 +2351,41 @@ func (c *Core) SearchDigestEntries(actor *User, boardID, kind, path, query strin
 		viewerID = actor.ID
 		includePrivate = actor.IsMod()
 	}
-	return searchDigestEntries(c.DB, viewerID, includePrivate, boardID, kind, path, query, limit, offset)
+	return projections.SearchDigestEntries(c.DB, viewerID, includePrivate, boardID, kind, path, query, limit, offset)
 }
 func (c *Core) GetDigestExport(entryID string) (*DigestExport, error) {
-	return getDigestExport(c.DB, entryID)
+	return projections.GetDigestExport(c.DB, entryID)
 }
 func FormatDigestExportText(export *DigestExport) string {
 	return projections.FormatDigestExportText(export)
 }
 func (c *Core) ListMail(userID, mailbox string, limit, offset int, unreadOnly bool) ([]MailItem, error) {
-	return listMail(c.DB, userID, mailbox, limit, offset, unreadOnly)
+	return projections.ListMail(c.DB, userID, mailbox, limit, offset, unreadOnly)
 }
 func (c *Core) ListMailThread(userID, messageID string, limit, offset int) ([]MailItem, error) {
-	return listMailThread(c.DB, userID, messageID, limit, offset)
+	return projections.ListMailThread(c.DB, userID, messageID, limit, offset)
 }
 func (c *Core) ListMailByAuthor(userID, messageID string, limit, offset int) ([]MailItem, error) {
-	return listMailByAuthor(c.DB, userID, messageID, limit, offset)
+	return projections.ListMailByAuthor(c.DB, userID, messageID, limit, offset)
 }
 func (c *Core) GetMail(userID, messageID string) (*MailItem, error) {
-	return getMail(c.DB, userID, messageID)
+	return projections.GetMail(c.DB, userID, messageID)
 }
 func (c *Core) CountUnreadMail(userID string) (int, error) {
-	return countUnreadMail(c.DB, userID)
+	return projections.CountUnreadMail(c.DB, userID)
 }
 func (c *Core) GetMailUsage(userID string) (*MailUsage, error) {
-	return getMailUsage(c.DB, userID)
+	return projections.GetMailUsage(c.DB, userID)
 }
 func (c *Core) ListRelayDeliveries(status string, limit, offset int) ([]RelayDelivery, error) {
-	return listRelayDeliveries(c.DB, status, limit, offset)
+	return projections.ListRelayDeliveries(c.DB, status, limit, offset)
 }
 func (c *Core) ListMailGroups(userID string) ([]MailGroup, error) {
-	groups, err := listMailGroups(c.DB, userID)
+	groups, err := projections.ListMailGroups(c.DB, userID)
 	if err != nil {
 		return nil, err
 	}
-	friends, err := listSocialUsers(c.DB, userID, "friends", false)
+	friends, err := projections.ListSocialUsers(c.DB, userID, "friends", false)
 	if err != nil {
 		return nil, err
 	}
@@ -2426,26 +2400,26 @@ func (c *Core) ListMailGroups(userID string) ([]MailGroup, error) {
 	return append([]MailGroup{friendGroup}, groups...), nil
 }
 func (c *Core) GetDirectMessageSettings(userID string) (*DirectMessageSettings, error) {
-	return getDirectMessageSettings(c.DB, userID)
+	return projections.GetDirectMessageSettings(c.DB, userID)
 }
 func (c *Core) ListDirectMessageConversations(userID string, limit, offset int) ([]DirectMessageConversation, error) {
-	return listDirectMessageConversations(c.DB, userID, limit, offset)
+	return projections.ListDirectMessageConversations(c.DB, userID, limit, offset)
 }
 func (c *Core) ListDirectMessages(userID, otherUserID string, limit, offset int) ([]DirectMessage, error) {
-	return listDirectMessages(c.DB, userID, otherUserID, limit, offset)
+	return projections.ListDirectMessages(c.DB, userID, otherUserID, limit, offset)
 }
 func (c *Core) CountUnreadDirectMessages(userID string) (int, error) {
-	return countUnreadDirectMessages(c.DB, userID)
+	return projections.CountUnreadDirectMessages(c.DB, userID)
 }
 func (c *Core) ListSocialUsers(userID, list string, onlineOnly bool) ([]SocialUser, error) {
-	return listSocialUsers(c.DB, userID, list, onlineOnly)
+	return projections.ListSocialUsers(c.DB, userID, list, onlineOnly)
 }
 
 func (c *Core) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
 	if c != nil && c.presenceStore != nil {
 		return c.presenceStore.ListOnlineUsers(viewerID, boardID, limit, offset)
 	}
-	return listOnlineUsers(c.DB, viewerID, boardID, limit, offset)
+	return projections.ListOnlineUsers(c.DB, viewerID, boardID, limit, offset)
 }
 func (c *Core) ListChatRooms() ([]ChatRoom, error) {
 	var rooms []ChatRoom
@@ -2453,7 +2427,7 @@ func (c *Core) ListChatRooms() ([]ChatRoom, error) {
 	if c != nil && c.chatStore != nil {
 		rooms, err = c.chatStore.ListChatRooms()
 	} else {
-		rooms, err = listChatRooms(c.DB)
+		rooms, err = projections.ListChatRooms(c.DB)
 	}
 	if err != nil {
 		return nil, err
@@ -2473,19 +2447,19 @@ func (c *Core) ListChatLines(roomID string, limit int) ([]ChatLine, error) {
 	if c != nil && c.chatStore != nil {
 		return c.chatStore.ListChatLines(roomID, limit)
 	}
-	return listChatLines(c.DB, roomID, limit)
+	return projections.ListChatLines(c.DB, roomID, limit)
 }
 func (c *Core) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
 	if c != nil && c.presenceStore != nil {
 		return c.presenceStore.ListChatOnlineUsers(viewerID, roomID, limit, offset)
 	}
-	return listChatOnlineUsers(c.DB, viewerID, roomID, limit, offset)
+	return projections.ListChatOnlineUsers(c.DB, viewerID, roomID, limit, offset)
 }
 func (c *Core) ListFavoriteBoards(userID string) ([]Board, error) {
-	return listFavoriteBoards(c.DB, userID)
+	return projections.ListFavoriteBoards(c.DB, userID)
 }
 func (c *Core) ListFavoriteTree(userID string) (*FavoriteTree, error) {
-	return listFavoriteTree(c.DB, userID)
+	return projections.ListFavoriteTree(c.DB, userID)
 }
 func (c *Core) ImportFavoriteTree(userID string, tree *FavoriteTree, replace bool) (*FavoriteTree, error) {
 	if err := importFavoriteTree(c.DB, userID, tree, replace); err != nil {
@@ -2494,27 +2468,27 @@ func (c *Core) ImportFavoriteTree(userID string, tree *FavoriteTree, replace boo
 	return c.ListFavoriteTree(userID)
 }
 func (c *Core) ListThreads(board string, limit, offset int) ([]Thread, error) {
-	return listThreads(c.DB, board, limit, offset)
+	return projections.ListThreads(c.DB, board, limit, offset)
 }
 func (c *Core) ListThreadSummaries(userID, board string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
-	return listThreadSummaries(c.DB, userID, board, limit, offset, unreadOnly)
+	return projections.ListThreadSummariesFiltered(c.DB, userID, board, "", "", limit, offset, unreadOnly)
 }
 func (c *Core) ListThreadSummariesFiltered(userID, board, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
-	return listThreadSummariesFiltered(c.DB, userID, board, titleQuery, authorQuery, limit, offset, unreadOnly)
+	return projections.ListThreadSummariesFiltered(c.DB, userID, board, titleQuery, authorQuery, limit, offset, unreadOnly)
 }
 func (c *Core) ListUnreadThreadSummaries(actor *User, favoritesOnly bool, folderID string, limit, offset int) ([]ThreadSummary, error) {
-	rows, err := unreadThreadSummaryStatsRowCount(c.DB)
+	rows, err := projections.UnreadThreadSummaryStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
 	if rows > 0 {
-		return listUnreadThreadSummariesMaterialized(c.DB, actor.ID, actor.IsMod(), favoritesOnly, folderID, limit, offset)
+		return projections.ListUnreadThreadSummariesMaterialized(c.DB, actor.ID, actor.IsMod(), favoritesOnly, folderID, limit, offset)
 	}
-	return listUnreadThreadSummaries(c.DB, actor.ID, actor.IsMod(), favoritesOnly, folderID, limit, offset)
+	return projections.ListUnreadThreadSummaries(c.DB, actor.ID, actor.IsMod(), favoritesOnly, folderID, limit, offset)
 }
-func (c *Core) GetThread(id string) (*Thread, error) { return getThread(c.DB, id) }
+func (c *Core) GetThread(id string) (*Thread, error) { return projections.GetThread(c.DB, id) }
 func (c *Core) ListPosts(thread string, limit, offset int) ([]Post, error) {
-	posts, err := listPosts(c.DB, thread, limit, offset)
+	posts, err := projections.ListPosts(c.DB, thread, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -2524,7 +2498,7 @@ func (c *Core) ListPosts(thread string, limit, offset int) ([]Post, error) {
 	return posts, nil
 }
 func (c *Core) ListReplyTreePosts(rootPostID string, limit, offset int) ([]Post, error) {
-	posts, err := listReplyTreePosts(c.DB, rootPostID, limit, offset)
+	posts, err := projections.ListReplyTreePosts(c.DB, rootPostID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -2534,10 +2508,10 @@ func (c *Core) ListReplyTreePosts(rootPostID string, limit, offset int) ([]Post,
 	return posts, nil
 }
 func (c *Core) GetPostAttachment(attachmentID string) (*PostAttachment, error) {
-	return getPostAttachment(c.DB, attachmentID)
+	return projections.GetPostAttachment(c.DB, attachmentID)
 }
 func (c *Core) GetAttachmentBlob(attachmentID string) ([]byte, string, error) {
-	return getAttachmentBlob(c.DB, attachmentID)
+	return projections.GetAttachmentBlob(c.DB, attachmentID)
 }
 func (c *Core) StagePostAttachmentBlob(attachmentID, actorID string, data []byte, contentType string) error {
 	return projections.StageAttachmentBlob(c.DB, projections.StagedBlobPostAttachment, attachmentID, actorID, data, contentType, nowMS()+int64(time.Hour.Milliseconds()))
@@ -2549,13 +2523,13 @@ func (c *Core) DiscardStagedPostAttachmentBlob(attachmentID string) error {
 	return projections.DiscardStagedAttachmentBlob(c.DB, projections.StagedBlobPostAttachment, attachmentID)
 }
 func (c *Core) StoreAttachmentBlob(attachmentID string, data []byte, contentType string) error {
-	return storeAttachmentBlob(c.DB, attachmentID, data, contentType)
+	return projections.StoreAttachmentBlob(c.DB, attachmentID, data, contentType)
 }
 func (c *Core) GetMailAttachment(attachmentID string) (*MailAttachment, error) {
-	return getMailAttachment(c.DB, attachmentID)
+	return projections.GetMailAttachment(c.DB, attachmentID)
 }
 func (c *Core) GetMailAttachmentBlob(attachmentID string) ([]byte, string, error) {
-	return getMailAttachmentBlob(c.DB, attachmentID)
+	return projections.GetMailAttachmentBlob(c.DB, attachmentID)
 }
 func (c *Core) StageMailAttachmentBlob(attachmentID, actorID string, data []byte, contentType string) error {
 	return projections.StageAttachmentBlob(c.DB, projections.StagedBlobMailAttachment, attachmentID, actorID, data, contentType, nowMS()+int64(time.Hour.Milliseconds()))
@@ -2564,13 +2538,13 @@ func (c *Core) DiscardStagedMailAttachmentBlob(attachmentID string) error {
 	return projections.DiscardStagedAttachmentBlob(c.DB, projections.StagedBlobMailAttachment, attachmentID)
 }
 func (c *Core) StoreMailAttachmentBlob(attachmentID string, data []byte, contentType string) error {
-	return storeMailAttachmentBlob(c.DB, attachmentID, data, contentType)
+	return projections.StoreMailAttachmentBlob(c.DB, attachmentID, data, contentType)
 }
 func (c *Core) PruneExpiredAttachmentBlobStaging(limit int) (int64, error) {
 	return projections.PruneExpiredStagedAttachmentBlobs(c.DB, nowMS(), limit)
 }
 func (c *Core) GetPost(id string) (*Post, error) {
-	post, err := getPost(c.DB, id)
+	post, err := projections.GetPost(c.DB, id)
 	if err != nil || post == nil {
 		return post, err
 	}
@@ -2594,7 +2568,7 @@ func (c *Core) SearchPosts(query, boardID string, limit int) ([]Post, error) {
 		}
 		return posts, nil
 	}
-	posts, err := searchPosts(c.DB, query, boardID, limit)
+	posts, err := projections.SearchPosts(c.DB, query, boardID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -2624,9 +2598,9 @@ func (c *Core) SearchReadablePosts(actor *User, query, boardID string, limit int
 		err   error
 	)
 	if actor == nil {
-		posts, err = searchReadablePosts(c.DB, "", false, query, boardID, limit)
+		posts, err = projections.SearchReadablePosts(c.DB, "", false, query, boardID, limit)
 	} else {
-		posts, err = searchReadablePosts(c.DB, actor.ID, actor.IsMod(), query, boardID, limit)
+		posts, err = projections.SearchReadablePosts(c.DB, actor.ID, actor.IsMod(), query, boardID, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -2638,7 +2612,7 @@ func (c *Core) SearchReadablePosts(actor *User, query, boardID string, limit int
 }
 
 func (c *Core) ListPostsByAuthor(name string, limit, offset int) ([]Post, error) {
-	posts, err := listPostsByAuthor(c.DB, name, limit, offset)
+	posts, err := projections.ListPostsByAuthor(c.DB, name, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -2649,7 +2623,7 @@ func (c *Core) ListPostsByAuthor(name string, limit, offset int) ([]Post, error)
 }
 
 func (c *Core) ListReadablePostsByAuthor(actor *User, name string, limit, offset int) ([]Post, error) {
-	posts, err := listReadablePostsByAuthor(c.DB, actor.ID, actor.IsMod(), name, limit, offset)
+	posts, err := projections.ListReadablePostsByAuthor(c.DB, actor.ID, actor.IsMod(), name, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -2664,10 +2638,10 @@ func (c *Core) ListResidentBoardPosts(userID string, limit, offset int) ([]Post,
 		posts []Post
 		err   error
 	)
-	if rows, err := residentFeedMaterializedRowCount(c.DB); err == nil && rows > 0 {
-		posts, err = listResidentBoardPostsMaterialized(c.DB, userID, limit, offset)
+	if rows, err := projections.ResidentFeedMaterializedRowCount(c.DB); err == nil && rows > 0 {
+		posts, err = projections.ListResidentBoardPostsMaterialized(c.DB, userID, limit, offset)
 	} else {
-		posts, err = listResidentBoardPosts(c.DB, userID, limit, offset)
+		posts, err = projections.ListResidentBoardPosts(c.DB, userID, limit, offset)
 	}
 	if err != nil {
 		return nil, err
@@ -2699,10 +2673,10 @@ func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]Post, erro
 		posts []Post
 		err   error
 	)
-	if rows, err := latestFeedMaterializedRowCount(c.DB); err == nil && rows > 0 {
-		posts, err = listLatestFeedPostsMaterialized(c.DB, viewerID, includePrivate, limit, offset)
+	if rows, err := projections.LatestFeedMaterializedRowCount(c.DB); err == nil && rows > 0 {
+		posts, err = projections.ListLatestFeedPostsMaterialized(c.DB, viewerID, includePrivate, limit, offset)
 	} else {
-		posts, err = listLatestFeedPosts(c.DB, viewerID, includePrivate, limit, offset)
+		posts, err = projections.ListLatestFeedPosts(c.DB, viewerID, includePrivate, limit, offset)
 	}
 	if err != nil {
 		return nil, err
@@ -2732,7 +2706,7 @@ func (c *Core) latestFeedCacheKey(viewerID string, includePrivate bool, limit, o
 }
 
 func (c *Core) ListBoardDeletedPosts(boardID, kind string, limit, offset int) ([]PostDeletion, error) {
-	return listBoardDeletedPosts(c.DB, boardID, kind, limit, offset)
+	return projections.ListBoardDeletedPosts(c.DB, boardID, kind, limit, offset)
 }
 
 // AuditLog returns recent durable events (mod/admin use).
@@ -2746,19 +2720,19 @@ func (c *Core) ReactionCount(postID string) (int, error) {
 	if c.useCounterStoreOverride() {
 		return c.counterStore.ReactionCount(postID)
 	}
-	return reactionCount(c.DB, postID)
+	return projections.ReactionCount(c.DB, postID)
 }
 func (c *Core) UserReacted(postID, userID string) (bool, error) {
 	if c.useCounterStoreOverride() {
 		return c.counterStore.UserReacted(postID, userID)
 	}
-	return userReacted(c.DB, postID, userID)
+	return projections.UserReacted(c.DB, postID, userID)
 }
 
 // ── M11: Polls ──────────────────────────────────────────────────────────────
 
 func (c *Core) GetPoll(pollID, viewerUserID string) (*Poll, error) {
-	poll, err := getPollWithVotes(c.DB, pollID, viewerUserID)
+	poll, err := projections.GetPollWithVotes(c.DB, pollID, viewerUserID)
 	if err != nil || poll == nil {
 		return poll, err
 	}
@@ -2768,10 +2742,10 @@ func (c *Core) GetPoll(pollID, viewerUserID string) (*Poll, error) {
 	return poll, nil
 }
 func (c *Core) GetPollByPostID(postID string) (*Poll, error) {
-	return getPollByPostID(c.DB, postID)
+	return projections.GetPollByPostID(c.DB, postID)
 }
 func (c *Core) PollsForPosts(postIDs []string, viewerUserID string) (map[string]*Poll, error) {
-	polls, err := pollsForPosts(c.DB, postIDs, viewerUserID)
+	polls, err := projections.PollsForPosts(c.DB, postIDs, viewerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -2840,69 +2814,69 @@ func (c *Core) applyCounterStorePoll(poll *Poll, viewerUserID string) error {
 // ── M8: Notifications ───────────────────────────────────────────────────────
 
 func (c *Core) ListNotifications(userID string, limit, offset int, unreadOnly bool) ([]Notification, error) {
-	return listNotifications(c.DB, userID, limit, offset, unreadOnly)
+	return projections.ListNotifications(c.DB, userID, limit, offset, unreadOnly)
 }
 func (c *Core) CountUnreadNotifications(userID string) (int, error) {
-	return countUnreadNotifications(c.DB, userID)
+	return projections.CountUnreadNotifications(c.DB, userID)
 }
 func (c *Core) MarkNotificationRead(id, userID string) error {
-	return markNotificationRead(c.DB, id, userID)
+	return projections.MarkNotificationRead(c.DB, id, userID)
 }
 func (c *Core) MarkAllNotificationsRead(userID string) error {
-	return markAllNotificationsRead(c.DB, userID)
+	return projections.MarkAllNotificationsRead(c.DB, userID)
 }
 func (c *Core) DeleteNotification(id, userID string) error {
-	return deleteNotification(c.DB, id, userID)
+	return projections.DeleteNotification(c.DB, id, userID)
 }
 func (c *Core) DeleteReadNotifications(userID string) error {
-	return deleteReadNotifications(c.DB, userID)
+	return projections.DeleteReadNotifications(c.DB, userID)
 }
 func (c *Core) DeleteAllNotifications(userID string) error {
-	return deleteAllNotifications(c.DB, userID)
+	return projections.DeleteAllNotifications(c.DB, userID)
 }
 
 // ── M9: Trust levels ────────────────────────────────────────────────────────
 
 func (c *Core) TrustInfo(userID string) (*TrustLevelInfo, error) {
-	return trustInfo(c.DB, userID)
+	return projections.TrustInfo(c.DB, userID)
 }
 
 // ── Modern forum projections ───────────────────────────────────────────────
 
 func (c *Core) UserProfileByName(name string) (*UserProfile, error) {
-	return getUserProfileByName(c.DB, name)
+	return projections.GetUserProfileByName(c.DB, name)
 }
 
 func (c *Core) ListUserPubkeyTitles(name string) ([]string, error) {
-	return listPubkeyTitlesByUserName(c.DB, name)
+	return projections.ListPubkeyTitlesByUserName(c.DB, name)
 }
 
 func (c *Core) UpdateUserProfile(userID, displayName, title, bio, avatar, signature, plan, homepage string) error {
-	return updateUserProfile(c.DB, userID, displayName, title, bio, avatar, signature, plan, homepage)
+	return projections.UpdateUserProfile(c.DB, userID, displayName, title, bio, avatar, signature, plan, homepage)
 }
 
 func (c *Core) UserPrivateProfile(userID string) (*UserPrivateProfile, error) {
-	return getUserPrivateProfile(c.DB, userID)
+	return projections.GetUserPrivateProfile(c.DB, userID)
 }
 
 func (c *Core) UpdateUserPrivateProfile(profile *UserPrivateProfile) error {
-	return updateUserPrivateProfile(c.DB, profile)
+	return projections.UpdateUserPrivateProfile(c.DB, profile)
 }
 
 func (c *Core) AccountRegistrationSettings() (*AccountRegistrationSettings, error) {
-	return getAccountRegistrationSettings(c.DB)
+	return projections.GetAccountRegistrationSettings(c.DB)
 }
 
 func (c *Core) SetAccountRegistrationSettings(requireApproval bool) (*AccountRegistrationSettings, error) {
-	return setAccountRegistrationSettings(c.DB, requireApproval)
+	return projections.SetAccountRegistrationSettings(c.DB, requireApproval)
 }
 
 func (c *Core) ListAccountRegistrations(status string, limit, offset int) ([]AccountRegistration, error) {
-	return listAccountRegistrations(c.DB, status, limit, offset)
+	return projections.ListAccountRegistrations(c.DB, status, limit, offset)
 }
 
 func (c *Core) ReviewAccountRegistration(userID, reviewerID, decision, reason string) (*AccountRegistration, error) {
-	review, err := reviewAccountRegistration(c.DB, userID, reviewerID, decision, reason)
+	review, err := projections.ReviewAccountRegistration(c.DB, userID, reviewerID, decision, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -2937,11 +2911,11 @@ func (c *Core) RequestPasswordRecovery(name, submittedName, submittedEmail, note
 	if err != nil || u == nil {
 		return nil, err
 	}
-	return createPasswordRecoveryRequest(c.DB, newID("pwdrec_"), u.ID, submittedName, submittedEmail, note)
+	return projections.CreatePasswordRecoveryRequest(c.DB, newID("pwdrec_"), u.ID, submittedName, submittedEmail, note)
 }
 
 func (c *Core) ListPasswordRecoveryRequests(status string, limit, offset int) ([]PasswordRecoveryRequest, error) {
-	return listPasswordRecoveryRequests(c.DB, status, limit, offset)
+	return projections.ListPasswordRecoveryRequests(c.DB, status, limit, offset)
 }
 
 func (c *Core) ReviewPasswordRecoveryRequest(requestID, reviewerID, decision, newPassword, note string) (*PasswordRecoveryRequest, error) {
@@ -2956,27 +2930,27 @@ func (c *Core) ReviewPasswordRecoveryRequest(requestID, reviewerID, decision, ne
 		}
 		passwordHash = string(hash)
 	}
-	return reviewPasswordRecoveryRequest(c.DB, requestID, reviewerID, decision, passwordHash, note)
+	return projections.ReviewPasswordRecoveryRequest(c.DB, requestID, reviewerID, decision, passwordHash, note)
 }
 
 func (c *Core) TransferUserID(userID, newName string) (*User, error) {
-	return transferUserID(c.DB, userID, newName)
+	return projections.TransferUserID(c.DB, userID, newName)
 }
 
 func (c *Core) ListUserPersonalFiles(userID string, includePrivate bool) ([]UserPersonalFile, error) {
-	return listUserPersonalFiles(c.DB, userID, includePrivate)
+	return projections.ListUserPersonalFiles(c.DB, userID, includePrivate)
 }
 
 func (c *Core) GetUserPersonalFile(userID, name string, includePrivate bool) (*UserPersonalFile, error) {
-	return getUserPersonalFile(c.DB, userID, name, includePrivate)
+	return projections.GetUserPersonalFile(c.DB, userID, name, includePrivate)
 }
 
 func (c *Core) SaveUserPersonalFile(userID, name, body string, public bool) (*UserPersonalFile, error) {
-	return saveUserPersonalFile(c.DB, userID, name, body, public)
+	return projections.SaveUserPersonalFile(c.DB, userID, name, body, public)
 }
 
 func (c *Core) DeleteUserPersonalFile(userID, name string) error {
-	return deleteUserPersonalFile(c.DB, userID, name)
+	return projections.DeleteUserPersonalFile(c.DB, userID, name)
 }
 
 func (c *Core) ListUserSignatures(userID string) (*UserSignatureBundle, error) {
@@ -2999,7 +2973,7 @@ func (c *Core) SetUserSignatureSettings(userID, selectedSignatureID string, rand
 }
 
 func (c *Core) RecountUserSignatures(userID string) (*UserSignatureRecount, error) {
-	return recountUserSignatures(c.DB, userID)
+	return projections.RecountUserSignatures(c.DB, userID)
 }
 
 func (c *Core) ListUserLoginACL(userID, host string) (*UserLoginACLBundle, error) {
@@ -3022,62 +2996,30 @@ func (c *Core) SetUserLoginACLSettings(userID string, enabled bool) error {
 }
 
 func (c *Core) ListModerationReviews(status string, limit, offset int) ([]ModerationReview, error) {
-	return listModerationReviews(c.DB, status, limit, offset)
+	return projections.ListModerationReviews(c.DB, status, limit, offset)
 }
 
 func (c *Core) ListContentFilters(scope string, includeInactive bool, limit, offset int) ([]ContentFilter, error) {
-	return listContentFilters(c.DB, scope, includeInactive, limit, offset)
+	return projections.ListContentFilters(c.DB, scope, includeInactive, limit, offset)
 }
 
 func (c *Core) ListBoardAutomodRules(boardID string) ([]BoardAutomodRule, error) {
-	return listBoardAutomodRules(c.DB, boardID)
+	return projections.ListBoardAutomodRules(c.DB, boardID)
 }
 
 func (c *Core) ListBoardAutomodActivity(boardID string, limit, offset int) ([]BoardAutomodActivity, error) {
-	return listBoardAutomodActivity(c.DB, boardID, limit, offset)
+	return projections.ListBoardAutomodActivity(c.DB, boardID, limit, offset)
 }
 
 // UserCanModerateBoard reports whether a user may moderate a board at all: site
 // moderators/admins always can, as can a board's moderators or members with a
 // post or thread moderation capability.
 func (c *Core) UserCanModerateBoard(userID, role, boardID string) (bool, error) {
-	if ok, err := c.userCanModerateBoardCap(userID, role, boardID, "can_moderate_posts"); err != nil || ok {
-		return ok, err
-	}
-	return c.userCanModerateBoardCap(userID, role, boardID, "can_moderate_threads")
-}
-
-// userCanModerateBoardCap reports whether a user holds a specific board
-// moderation capability ("can_moderate_posts" or "can_moderate_threads"). Site
-// moderators/admins and board moderators always qualify.
-func (c *Core) userCanModerateBoardCap(userID, role, boardID, column string) (bool, error) {
-	if role == "admin" || role == "moderator" {
-		return true, nil
-	}
-	if column != "can_moderate_posts" && column != "can_moderate_threads" {
-		return false, nil
-	}
-	var x int
-	err := qQueryRow(c.DB, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&x)
-	if err == nil {
-		return true, nil
-	}
-	if err != sql.ErrNoRows {
-		return false, err
-	}
-	var v int
-	err = qQueryRow(c.DB, `SELECT `+column+` FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&v)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return v != 0, nil
+	return projections.ActorCanModerateBoardContent(c.DB, &User{ID: userID, Role: role}, boardID)
 }
 
 func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]UserSanction, error) {
-	return listUserSanctions(c.DB, userID, limit, offset)
+	return projections.ListUserSanctions(c.DB, userID, limit, offset)
 }
 
 // RebuildProjectionsFromEventLog truncates projection tables and replays all durable

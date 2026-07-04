@@ -32,10 +32,6 @@ func TestSwitchableCommandLogProducesToSubmitLogAndDrainsFromSwitchedLog(t *test
 	if err := log.CommitPartition(ctx, partition, records[0].Offset); err != nil {
 		t.Fatalf("commit switched drain log: %v", err)
 	}
-	if got, err := drain.CommittedOffset(ctx, partition); err != nil || got != 1 {
-		t.Fatalf("drain committed offset = %d, %v; want 1, nil", got, err)
-	}
-	if got, err := producer.CommittedOffset(ctx, partition); err != nil || got != 0 {
-		t.Fatalf("producer committed offset = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, drain, partition, 1, "drain committed offset")
+	requireCommandLogWorkerCommittedOffset(t, ctx, producer, partition, 0, "producer committed offset")
 }

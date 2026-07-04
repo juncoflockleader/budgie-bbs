@@ -1,15 +1,13 @@
 package main
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/runreport"
+	"github.com/juncoflockleader/budgie-bbs/internal/scalebudget"
 )
 
 // readStrictJSONReport reads a JSON report from path (or stdin when path is
@@ -21,51 +19,81 @@ func readStrictJSONReport[T any](path string, stdin io.Reader) (T, error) {
 	if path == "" {
 		return report, fmt.Errorf("-report-file is required")
 	}
-	var (
-		data []byte
-		err  error
-	)
+	var err error
 	if path == "-" {
-		data, err = io.ReadAll(stdin)
+		report, err = runreport.DecodeJSON[T](stdin, true)
 	} else {
-		data, err = os.ReadFile(path)
+		report, err = runreport.ReadJSONFile[T](path, true)
 	}
 	if err != nil {
 		return report, err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&report); err != nil {
-		return report, err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return report, fmt.Errorf("unexpected trailing JSON")
 	}
 	return report, nil
 }
 
-// budgetHashEvidence checks that the budget hash a load report recorded as
-// evidence matches the budget file this check is running against. An empty
-// recorded hash is not a violation here; whether evidence is required is the
-// caller's budget policy.
-func budgetHashEvidence(reportSHA, budgetFile, violationPath, message string) ([]core.ScaleBudgetViolation, error) {
-	got := strings.ToLower(strings.TrimSpace(reportSHA))
-	if got == "" {
-		return nil, nil
+func newReportCheckFlagSet(commandName string, stderr io.Writer) *flag.FlagSet {
+	flags := flag.NewFlagSet("budgie-report-check "+commandName, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	return flags
+}
+
+type budgetReportCheckConfig[R any, B any] struct {
+	commandName       string
+	reportFlagHelp    string
+	budgetSectionName string
+	successMessage    string
+	budgetSection     func(scalebudget.ScaleBudgets) *B
+	evaluate          func(R, *B) []scalebudget.ScaleBudgetViolation
+	requireBudgetHash func(*B) bool
+	reportBudgetHash  func(R) string
+	budgetHashPath    string
+	budgetHashMessage string
+}
+
+func runBudgetReportCheck[R any, B any](args []string, stdin io.Reader, stdout, stderr io.Writer, config budgetReportCheckConfig[R, B]) int {
+	flags := newReportCheckFlagSet(config.commandName, stderr)
+	reportFile := flags.String("report-file", "", config.reportFlagHelp)
+	budgetFile := flags.String("budget-file", "", "Path to JSON internet-scale budget file with a "+config.budgetSectionName+" section")
+	if err := flags.Parse(args); err != nil {
+		return 2
 	}
-	data, err := os.ReadFile(budgetFile)
+	if strings.TrimSpace(*budgetFile) == "" {
+		fmt.Fprintln(stderr, "-budget-file is required")
+		return 2
+	}
+	budgets, err := scalebudget.LoadScaleBudgets(*budgetFile)
 	if err != nil {
-		return nil, err
+		fmt.Fprintf(stderr, "load budget file: %v\n", err)
+		return 2
 	}
-	sum := sha256.Sum256(data)
-	want := fmt.Sprintf("%x", sum)
-	if got == want {
-		return nil, nil
+	budget := config.budgetSection(budgets)
+	if budget == nil {
+		fmt.Fprintf(stderr, "budget file is missing %s\n", config.budgetSectionName)
+		return 2
 	}
-	return []core.ScaleBudgetViolation{{
-		Path:    violationPath,
-		Value:   reportSHA,
-		Limit:   want,
-		Message: message,
-	}}, nil
+	report, err := readStrictJSONReport[R](*reportFile, stdin)
+	if err != nil {
+		fmt.Fprintf(stderr, "read %s report: %v\n", config.commandName, err)
+		return 2
+	}
+	violations := config.evaluate(report, budget)
+	if config.requireBudgetHash(budget) {
+		hashViolations, err := scalebudget.EvaluateReportBudgetHashEvidence(
+			config.reportBudgetHash(report),
+			*budgetFile,
+			config.budgetHashPath,
+			config.budgetHashMessage,
+		)
+		if err != nil {
+			fmt.Fprintf(stderr, "check budget hash evidence: %v\n", err)
+			return 2
+		}
+		violations = append(violations, hashViolations...)
+	}
+	if len(violations) > 0 {
+		fmt.Fprintf(stderr, "scale budget violations: %s\n", scalebudget.FormatScaleBudgetViolations(violations))
+		return 3
+	}
+	fmt.Fprintln(stdout, config.successMessage)
+	return 0
 }

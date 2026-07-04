@@ -2,18 +2,14 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestUnreadThreadSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "unread-thread-summaries-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -148,7 +144,7 @@ func unreadThreadSummariesBoolPtr(v bool) *bool {
 
 func unreadThreadSummaryStatsRows(t *testing.T, c *Core) int {
 	t.Helper()
-	count, err := unreadThreadSummaryStatsRowCount(c.DB)
+	count, err := projections.UnreadThreadSummaryStatsRowCount(c.DB)
 	if err != nil {
 		t.Fatalf("count unread thread summary stats rows: %v", err)
 	}

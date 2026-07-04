@@ -145,11 +145,7 @@ func (a *SQLEventPositionAllocator) ListEventPartitions(ctx context.Context, lim
 	if err != nil {
 		return nil, err
 	}
-	partitions := make([]core.LogPartition, 0, len(offsets))
-	for _, offset := range offsets {
-		partitions = append(partitions, offset.Partition)
-	}
-	return partitions, nil
+	return core.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (a *SQLEventPositionAllocator) ListEventPartitionOffsets(ctx context.Context, limit int) ([]core.EventPartitionOffset, error) {
@@ -184,9 +180,13 @@ func (a *SQLEventPositionAllocator) ListEventPartitionOffsets(ctx context.Contex
 		offsets = append(offsets, core.EventPartitionOffset{
 			Partition:  core.LogPartition{Kind: kind, Key: key}.Normalize(),
 			LastOffset: offset,
-		})
+		}.Normalize())
 	}
-	return offsets, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	core.SortEventPartitionOffsetsByLastOffset(offsets)
+	return offsets, nil
 }
 
 func (a *SQLEventPositionAllocator) reserveScalarOffsets(ctx context.Context, tx *sql.Tx, count int) (int64, error) {

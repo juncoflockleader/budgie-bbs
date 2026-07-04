@@ -108,6 +108,7 @@ var commandPartitionSpecs = map[proto.CommandName]commandPartitionSpec{
 	proto.CmdPublishSystemNotice:        fieldPartition(partitionBoard, "board").withFallback(partitionGlobal),
 	proto.CmdSendChatLine:               fieldPartition(partitionChat, "room").withFallback("lobby"),
 	proto.CmdSetPresence:                actorPartition(partitionUser),
+	proto.CmdMUDCommand:                 actorPartition(partitionUser),
 	proto.CmdCreateBoard:                fieldPartition(partitionBoard, "id"),
 	proto.CmdSetBoardSettings:           fieldPartition(partitionBoard, "board"),
 	proto.CmdSetBoardModerator:          fieldPartition(partitionBoard, "board"),

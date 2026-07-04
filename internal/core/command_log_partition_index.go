@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -111,27 +112,97 @@ func (l *IndexedCommandLog) CommittedOffset(ctx context.Context, partition LogPa
 	if l.index == nil {
 		return 0, fmt.Errorf("indexed command log: nil partition index")
 	}
-	return indexedCommandLogCommittedOffset(ctx, l.index, partition)
-}
-
-func indexedCommandLogCommittedOffset(ctx context.Context, index CommandPartitionOffsetLister, partition LogPartition) (int64, error) {
-	if index == nil {
-		return 0, fmt.Errorf("indexed command log: nil partition index")
-	}
 	partition = partition.Normalize()
-	offsets, err := index.ListCommandPartitionOffsets(ctx, 0)
+	offsets, _, err := listCommandPartitionOffsetsWithLimit(ctx, l.index, 0)
 	if err != nil {
 		return 0, err
 	}
 	for _, offset := range offsets {
-		if offset.Partition.Normalize() == partition {
-			if offset.CommittedOffset < 0 {
-				return 0, nil
-			}
+		if offset.Partition == partition {
 			return offset.CommittedOffset, nil
 		}
 	}
 	return 0, nil
+}
+
+// CommandPartitionsByTailOffset returns the unique partitions in offsets
+// ordered by descending tail offset, then partition kind and key.
+func CommandPartitionsByTailOffset(offsets []CommandPartitionOffset, limit int) []LogPartition {
+	tails := map[LogPartition]int64{}
+	for _, offset := range offsets {
+		partition := offset.Partition.Normalize()
+		if _, ok := tails[partition]; !ok || offset.TailOffset > tails[partition] {
+			tails[partition] = offset.TailOffset
+		}
+	}
+	partitions := make([]LogPartition, 0, len(tails))
+	for partition := range tails {
+		partitions = append(partitions, partition)
+	}
+	sort.Slice(partitions, func(a, b int) bool {
+		if tails[partitions[a]] == tails[partitions[b]] {
+			return partitions[a].Less(partitions[b])
+		}
+		return tails[partitions[a]] > tails[partitions[b]]
+	})
+	if limit > 0 && len(partitions) > limit {
+		partitions = partitions[:limit]
+	}
+	return partitions
+}
+
+// SortCommandPartitionOffsetsByLag orders offsets by descending uncommitted
+// lag, descending tail offset, then partition kind and key.
+func SortCommandPartitionOffsetsByLag(offsets []CommandPartitionOffset) {
+	sort.SliceStable(offsets, func(a, b int) bool {
+		la := offsets[a].Lag()
+		lb := offsets[b].Lag()
+		if la == lb {
+			if offsets[a].TailOffset == offsets[b].TailOffset {
+				return offsets[a].Partition.Less(offsets[b].Partition)
+			}
+			return offsets[a].TailOffset > offsets[b].TailOffset
+		}
+		return la > lb
+	})
+}
+
+func listCommandPartitionOffsetsWithLimit(ctx context.Context, lister CommandPartitionOffsetLister, limit int) ([]CommandPartitionOffset, bool, error) {
+	if lister == nil {
+		return nil, false, fmt.Errorf("nil command partition offset lister")
+	}
+	queryLimit := limit
+	if limit > 0 {
+		queryLimit = limit + 1
+	}
+	offsets, err := lister.ListCommandPartitionOffsets(ctx, queryLimit)
+	if err != nil {
+		return nil, false, err
+	}
+	limited := limit > 0 && len(offsets) > limit
+	if limited {
+		offsets = offsets[:limit]
+	}
+	for i := range offsets {
+		offsets[i] = offsets[i].Normalize()
+	}
+	return offsets, limited, nil
+}
+
+func requireCommandPartitionOffsetLister(commandLog CommandLog, errMessage string) (CommandPartitionOffsetLister, error) {
+	lister, ok := commandLog.(CommandPartitionOffsetLister)
+	if !ok {
+		return nil, errors.New(errMessage)
+	}
+	return lister, nil
+}
+
+func listCommandLogPartitionOffsetsWithLimit(ctx context.Context, commandLog CommandLog, limit int, errMessage string) ([]CommandPartitionOffset, bool, error) {
+	lister, err := requireCommandPartitionOffsetLister(commandLog, errMessage)
+	if err != nil {
+		return nil, false, err
+	}
+	return listCommandPartitionOffsetsWithLimit(ctx, lister, limit)
 }
 
 func (l *IndexedCommandLog) AllowCommandLogRebalance() {
@@ -323,26 +394,12 @@ SELECT partition_kind,
 		if err := rows.Scan(&offset.Partition.Kind, &offset.Partition.Key, &offset.TailOffset, &offset.CommittedOffset); err != nil {
 			return nil, err
 		}
-		offset.Partition = offset.Partition.Normalize()
-		offsets = append(offsets, offset)
+		offsets = append(offsets, offset.Normalize())
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sort.SliceStable(offsets, func(a, b int) bool {
-		la := offsets[a].TailOffset - offsets[a].CommittedOffset
-		lb := offsets[b].TailOffset - offsets[b].CommittedOffset
-		if la == lb {
-			if offsets[a].TailOffset == offsets[b].TailOffset {
-				if offsets[a].Partition.Kind == offsets[b].Partition.Kind {
-					return offsets[a].Partition.Key < offsets[b].Partition.Key
-				}
-				return offsets[a].Partition.Kind < offsets[b].Partition.Kind
-			}
-			return offsets[a].TailOffset > offsets[b].TailOffset
-		}
-		return la > lb
-	})
+	SortCommandPartitionOffsetsByLag(offsets)
 	return offsets, nil
 }
 

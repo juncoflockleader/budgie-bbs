@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +14,8 @@ import (
 )
 
 const (
-	defaultJetStreamCommandLogStream          = "BUDGIE_COMMAND_LOG"
+	DefaultJetStreamCommandLogStream          = "BUDGIE_COMMAND_LOG"
+	defaultJetStreamCommandLogStream          = DefaultJetStreamCommandLogStream
 	defaultJetStreamCommandLogDuplicateWindow = 24 * time.Hour
 	jetStreamCommandLogAppendRetries          = 64
 )
@@ -50,22 +50,10 @@ func NewJetStreamCommandLogClient(ctx context.Context, conn *Conn, options JetSt
 	if conn == nil || conn.nc == nil {
 		return nil, fmt.Errorf("nats command log: nil connection")
 	}
-	stream := strings.TrimSpace(options.Stream)
-	if stream == "" {
-		stream = defaultJetStreamCommandLogStream
-	}
-	wait := options.Wait
-	if wait <= 0 {
-		wait = defaultJetStreamEventLogWait
-	}
-	replicas := options.Replicas
-	if replicas <= 0 {
-		replicas = 1
-	}
-	dupeWindow := options.DuplicateWindow
-	if dupeWindow <= 0 {
-		dupeWindow = defaultJetStreamCommandLogDuplicateWindow
-	}
+	stream := JetStreamName(options.Stream, defaultJetStreamCommandLogStream)
+	wait := jetStreamWait(options.Wait)
+	replicas := jetStreamReplicas(options.Replicas)
+	dupeWindow := jetStreamDuration(options.DuplicateWindow, defaultJetStreamCommandLogDuplicateWindow)
 	js, err := conn.nc.JetStream(nats.MaxWait(wait))
 	if err != nil {
 		return nil, err
@@ -291,35 +279,18 @@ func (c *JetStreamCommandLogClient) ListCommandPartitions(ctx context.Context, l
 	if err != nil {
 		return nil, err
 	}
-	type partitionSubject struct {
-		partition core.LogPartition
-		count     uint64
-	}
-	subjects := make([]partitionSubject, 0, len(info.State.Subjects))
+	offsets := make([]core.CommandPartitionOffset, 0, len(info.State.Subjects))
 	for subject, count := range info.State.Subjects {
 		partition, ok := core.ParseBrokerCommandSubject(subject)
 		if !ok {
 			continue
 		}
-		subjects = append(subjects, partitionSubject{partition: partition, count: count})
+		offsets = append(offsets, core.CommandPartitionOffset{
+			Partition:  partition,
+			TailOffset: int64(count),
+		})
 	}
-	sort.Slice(subjects, func(i, j int) bool {
-		if subjects[i].count == subjects[j].count {
-			if subjects[i].partition.Kind == subjects[j].partition.Kind {
-				return subjects[i].partition.Key < subjects[j].partition.Key
-			}
-			return subjects[i].partition.Kind < subjects[j].partition.Kind
-		}
-		return subjects[i].count > subjects[j].count
-	})
-	if limit > 0 && len(subjects) > limit {
-		subjects = subjects[:limit]
-	}
-	partitions := make([]core.LogPartition, 0, len(subjects))
-	for _, subject := range subjects {
-		partitions = append(partitions, subject.partition)
-	}
-	return partitions, nil
+	return core.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]core.CommandPartitionOffset, error) {
@@ -366,13 +337,9 @@ func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Cont
 			}
 			committedOffset = commitTail.logicalOffset
 		}
-		tailOffset := int64(count)
-		if tailOffset < 0 {
-			tailOffset = 0
-		}
 		offsets = append(offsets, core.CommandPartitionOffset{
 			Partition:       partition,
-			TailOffset:      tailOffset,
+			TailOffset:      int64(count),
 			CommittedOffset: committedOffset,
 		})
 	}
@@ -390,20 +357,7 @@ func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Cont
 			CommittedOffset: commitTail.logicalOffset,
 		})
 	}
-	sort.Slice(offsets, func(i, j int) bool {
-		li := offsets[i].TailOffset - offsets[i].CommittedOffset
-		lj := offsets[j].TailOffset - offsets[j].CommittedOffset
-		if li == lj {
-			if offsets[i].TailOffset == offsets[j].TailOffset {
-				if offsets[i].Partition.Kind == offsets[j].Partition.Kind {
-					return offsets[i].Partition.Key < offsets[j].Partition.Key
-				}
-				return offsets[i].Partition.Kind < offsets[j].Partition.Kind
-			}
-			return offsets[i].TailOffset > offsets[j].TailOffset
-		}
-		return li > lj
-	})
+	core.SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}
@@ -411,60 +365,19 @@ func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Cont
 }
 
 func (c *JetStreamCommandLogClient) ensureStream(ctx context.Context) error {
-	cfg := &nats.StreamConfig{
-		Name:        c.stream,
-		Subjects:    []string{core.BrokerCommandSubjectWildcard(), core.BrokerCommandCommitSubjectWildcard()},
-		Retention:   nats.LimitsPolicy,
-		Storage:     nats.FileStorage,
-		Replicas:    c.replicas,
-		AllowDirect: true,
-		Duplicates:  c.dupeWindow,
-	}
-	info, err := c.js.StreamInfo(c.stream, nats.Context(ctx))
-	if errors.Is(err, nats.ErrStreamNotFound) {
-		_, err = c.js.AddStream(cfg, nats.Context(ctx))
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	current := info.Config
-	changed := false
-	for _, subject := range cfg.Subjects {
-		if !hasSubject(current.Subjects, subject) {
-			current.Subjects = append(current.Subjects, subject)
-			changed = true
-		}
-	}
-	if !current.AllowDirect {
-		current.AllowDirect = true
-		changed = true
-	}
-	if c.dupeWindow > 0 && current.Duplicates != c.dupeWindow {
-		current.Duplicates = c.dupeWindow
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	_, err = c.js.UpdateStream(&current, nats.Context(ctx))
-	return err
+	cfg := JetStreamCommandLogStreamConfig(JetStreamCommandLogOptions{
+		Stream:          c.stream,
+		Replicas:        c.replicas,
+		DuplicateWindow: c.dupeWindow,
+	})
+	return ensureJetStreamStream(ctx, c.js, cfg)
 }
 
 func (c *JetStreamCommandLogClient) validateStream(ctx context.Context) error {
-	info, err := c.js.StreamInfo(c.stream, nats.Context(ctx))
-	if err != nil {
-		return err
-	}
-	if !info.Config.AllowDirect {
-		return fmt.Errorf("nats command log: stream %s does not allow direct reads", c.stream)
-	}
-	for _, subject := range []string{core.BrokerCommandSubjectWildcard(), core.BrokerCommandCommitSubjectWildcard()} {
-		if !hasSubject(info.Config.Subjects, subject) {
-			return fmt.Errorf("nats command log: stream %s does not include subject %s", c.stream, subject)
-		}
-	}
-	return nil
+	return validateJetStreamStream(ctx, c.js, c.stream, "nats command log", []string{
+		core.BrokerCommandSubjectWildcard(),
+		core.BrokerCommandCommitSubjectWildcard(),
+	})
 }
 
 func (c *JetStreamCommandLogClient) findCommandByReceipt(ctx context.Context, partition core.LogPartition, subject string, requested core.BrokerCommandRecord) (core.BrokerCommandLogMessage, error) {

@@ -7,10 +7,37 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 const DefaultMailQuotaBytes int64 = 10 << 20
 const generatedSystemBoardSQLList = "'0announce','0moderation','BBSLists','Blessing','Filter','Goodbye','GiveupNotice','Recommend','Registry','bbsnet','denypost','newcomers','notepad','reject_registry','sysmail','syssecurity','undenypost','vote'"
+
+var generatedSystemBoardIDs = map[string]bool{
+	"0announce":                      true,
+	proto.ModerationSystemBoardID:    true,
+	"BBSLists":                       true,
+	proto.BlessingSystemBoardID:      true,
+	proto.ContentFilterSystemBoardID: true,
+	"Goodbye":                        true,
+	"GiveupNotice":                   true,
+	"Recommend":                      true,
+	"Registry":                       true,
+	"bbsnet":                         true,
+	"denypost":                       true,
+	"newcomers":                      true,
+	"notepad":                        true,
+	"reject_registry":                true,
+	"sysmail":                        true,
+	"syssecurity":                    true,
+	"undenypost":                     true,
+	proto.VoteSystemBoardID:          true,
+}
+
+func IsGeneratedSystemBoardID(boardID string) bool {
+	return generatedSystemBoardIDs[boardID]
+}
 
 // --- Readers ---
 
@@ -37,6 +64,85 @@ func GetBoard(db *sql.DB, id string) (*Board, error) {
 	}
 	applyBoardPolicyFlags(b, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded, zapAllowed)
 	return b, nil
+}
+
+func BoardExists(queryable sqlLike, boardID string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func CategoryExists(queryable sqlLike, categoryID string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable, `SELECT 1 FROM categories WHERE id=?`, categoryID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func CategoryPosition(queryable sqlLike, categoryID string) (int, bool, error) {
+	var position int
+	err := QQueryRow(queryable, `SELECT position FROM categories WHERE id=?`, categoryID).Scan(&position)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	return position, err == nil, err
+}
+
+func NextCategoryPosition(queryable sqlLike, parentID string) (int, error) {
+	var next int
+	err := QQueryRow(queryable, `SELECT COALESCE(MAX(position) + 1, 0) FROM categories WHERE parent_id=?`, parentID).Scan(&next)
+	return next, err
+}
+
+func CategoryUpsertPosition(queryable sqlLike, categoryID, parentID string) (int, error) {
+	position, found, err := CategoryPosition(queryable, categoryID)
+	if err != nil {
+		return 0, err
+	}
+	if found {
+		return position, nil
+	}
+	return NextCategoryPosition(queryable, parentID)
+}
+
+func CategoryPositionForCreate(queryable sqlLike, categoryID, parentID string, requested *int) (int, error) {
+	if requested != nil {
+		return *requested, nil
+	}
+	return CategoryUpsertPosition(queryable, categoryID, parentID)
+}
+
+func BoardName(queryable sqlLike, boardID string) (string, bool, error) {
+	var name string
+	err := QQueryRow(queryable, `SELECT name FROM boards WHERE id=?`, boardID).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return name, true, nil
+}
+
+func CreatedBoardMatches(queryable sqlLike, id, name, description, parentID string, position int) (bool, error) {
+	var gotName, gotDescription, gotParentID string
+	var gotPosition int
+	err := QQueryRow(queryable,
+		`SELECT b.name, b.description, c.parent_id, c.position FROM boards b JOIN categories c ON c.id=b.id WHERE b.id=?`,
+		id,
+	).Scan(&gotName, &gotDescription, &gotParentID, &gotPosition)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return gotName == name && gotDescription == description && gotParentID == parentID && gotPosition == position, nil
 }
 
 func ListBoards(db *sql.DB) ([]Board, error) {
@@ -1373,15 +1479,27 @@ func GetBoardSettings(db *sql.DB, boardID string) (*BoardSettings, error) {
 	return settings, nil
 }
 
+func BoardAllowsPublicSystemPost(db *sql.DB, boardID string) (bool, error) {
+	if strings.TrimSpace(boardID) == "" {
+		return true, nil
+	}
+	settings, err := GetBoardSettings(db, boardID)
+	if err != nil {
+		return false, err
+	}
+	return settings == nil || !settings.MemberReadMode, nil
+}
+
 func GetBoardMemberRequirements(db *sql.DB, boardID string) (*BoardMemberRequirements, error) {
-	var exists int
-	if err := QQueryRow(db, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists); err == sql.ErrNoRows {
-		return nil, nil
-	} else if err != nil {
+	exists, err := BoardExists(db, boardID)
+	if err != nil {
 		return nil, err
 	}
+	if !exists {
+		return nil, nil
+	}
 	req := &BoardMemberRequirements{BoardID: boardID, ApprovalMode: "manual"}
-	err := QQueryRow(db,
+	err = QQueryRow(db,
 		`SELECT COALESCE(min_login_count, 0), COALESCE(min_post_count, 0),
 		        COALESCE(min_trust_level, 0), COALESCE(min_score, 0),
 		        COALESCE(min_board_post_count, 0), COALESCE(min_board_original_post_count, 0),
@@ -1583,13 +1701,517 @@ func ListBoardMembers(db *sql.DB, boardID string) ([]BoardMember, error) {
 	return out, rows.Err()
 }
 
-func UserIsBoardMember(db *sql.DB, boardID, userID string) (bool, error) {
+func BoardMemberExists(queryable sqlLike, boardID, userID string) (bool, error) {
 	var found int
-	err := QQueryRow(db, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&found)
+	err := QQueryRow(queryable, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&found)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+func BoardModeratorExists(queryable sqlLike, boardID, userID string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func BoardModeratorPosition(queryable sqlLike, boardID, userID string) (int, bool, error) {
+	var position int
+	err := QQueryRow(queryable, `SELECT position FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&position)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return position, true, nil
+}
+
+func NextBoardModeratorPosition(queryable sqlLike, boardID string) (int, error) {
+	var position int
+	err := QQueryRow(queryable, `SELECT COALESCE(MAX(position) + 1, 0) FROM board_moderators WHERE board_id=?`, boardID).Scan(&position)
+	return position, err
+}
+
+func BoardModeratorEventPosition(queryable sqlLike, boardID, userID, actorID string, moderator bool, requested *int, ts int64) (int, error) {
+	if moderator {
+		if requested != nil {
+			if *requested < 0 {
+				return 0, nil
+			}
+			return *requested, nil
+		}
+		if position, ok, err := BoardModeratorPosition(queryable, boardID, userID); err != nil || ok {
+			return position, err
+		}
+		return NextBoardModeratorPosition(queryable, boardID)
+	}
+	if position, ok, err := BoardModeratorPosition(queryable, boardID, userID); err != nil || ok {
+		return position, err
+	}
+	var position int
+	err := QQueryRow(queryable,
+		`SELECT position FROM board_moderator_terms WHERE board_id=? AND user_id=? AND ended_at=? AND removed_by=? ORDER BY started_at DESC LIMIT 1`,
+		boardID, userID, ts, actorID,
+	).Scan(&position)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return position, err
+}
+
+func RecommendedBoardPosition(queryable sqlLike, boardID string) (int, bool, error) {
+	var position int
+	err := QQueryRow(queryable, `SELECT position FROM recommended_boards WHERE board_id=?`, boardID).Scan(&position)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return position, true, nil
+}
+
+func NextRecommendedBoardPosition(queryable sqlLike) (int, error) {
+	var position int
+	err := QQueryRow(queryable, `SELECT COALESCE(MAX(position), -10) + 10 FROM recommended_boards`).Scan(&position)
+	return position, err
+}
+
+func RecommendedBoardTargetPosition(queryable sqlLike, boardID string, requested *int) (int, error) {
+	if requested != nil {
+		return *requested, nil
+	}
+	position, found, err := RecommendedBoardPosition(queryable, boardID)
+	if err != nil || found {
+		return position, err
+	}
+	return NextRecommendedBoardPosition(queryable)
+}
+
+func BoardCanBePubliclyRecommended(queryable sqlLike, boardID string) (bool, string, error) {
+	if IsGeneratedSystemBoardID(boardID) {
+		return false, "generated system boards cannot be recommended", nil
+	}
+	var visibility string
+	var memberReadMode, statsExcluded int
+	err := QQueryRow(queryable,
+		`SELECT COALESCE(c.visibility, 'public'),
+		        COALESCE(s.member_read_mode, 0),
+		        COALESCE(s.stats_excluded, 0)
+		   FROM boards b
+		   LEFT JOIN categories c ON c.id=b.id
+		   LEFT JOIN board_settings s ON s.board_id=b.id
+		  WHERE b.id=?`,
+		boardID,
+	).Scan(&visibility, &memberReadMode, &statsExcluded)
+	if err != nil {
+		return false, "", err
+	}
+	if strings.ToLower(strings.TrimSpace(visibility)) != "public" {
+		return false, "only public directory boards can be recommended", nil
+	}
+	if memberReadMode != 0 {
+		return false, "member-read boards cannot be publicly recommended", nil
+	}
+	if statsExcluded != 0 {
+		return false, "stats-excluded boards cannot be publicly recommended", nil
+	}
+	return true, "", nil
+}
+
+func BoardMemberPermission(queryable sqlLike, boardID, userID, column string) (bool, error) {
+	if !validBoardMemberPermissionColumn(column) {
+		return false, nil
+	}
+	var allowed int
+	err := QQueryRow(queryable, `SELECT `+column+` FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&allowed)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return allowed != 0, nil
+}
+
+func BoardMemberHasDelegatedPermissions(queryable sqlLike, boardID, userID string) (bool, error) {
+	var canManageMembers, canCurate, canModeratePosts, canModerateThreads, canAnnounce, canManagePolls, canSetBoardSettings int
+	err := QQueryRow(queryable,
+		`SELECT can_manage_members, can_curate, can_moderate_posts, can_moderate_threads, can_announce, can_manage_polls, can_set_board_settings
+		   FROM board_members WHERE board_id=? AND user_id=?`,
+		boardID, userID,
+	).Scan(&canManageMembers, &canCurate, &canModeratePosts, &canModerateThreads, &canAnnounce, &canManagePolls, &canSetBoardSettings)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return canManageMembers != 0 ||
+		canCurate != 0 ||
+		canModeratePosts != 0 ||
+		canModerateThreads != 0 ||
+		canAnnounce != 0 ||
+		canManagePolls != 0 ||
+		canSetBoardSettings != 0, nil
+}
+
+func BoardThreadModerationPermissions(queryable sqlLike, boardID, userID string) (bool, bool, error) {
+	var moderator, canModerateThreads int
+	err := QQueryRow(queryable,
+		`SELECT
+		   CASE WHEN EXISTS (
+		     SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?
+		   ) THEN 1 ELSE 0 END,
+		   COALESCE((
+		     SELECT can_moderate_threads FROM board_members WHERE board_id=? AND user_id=?
+		   ), 0)`,
+		boardID, userID, boardID, userID,
+	).Scan(&moderator, &canModerateThreads)
+	if err != nil {
+		return false, false, err
+	}
+	canModerateBoard := moderator != 0
+	return canModerateBoard, canModerateBoard || canModerateThreads != 0, nil
+}
+
+func ActorCanModerateBoard(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	if actor == nil {
+		return false, nil
+	}
+	if actor.IsMod() {
+		return true, nil
+	}
+	return BoardModeratorExists(queryable, boardID, actor.ID)
+}
+
+func ActorCanUseMemberBoard(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	canModerateBoard, err := ActorCanModerateBoard(queryable, actor, boardID)
+	if err != nil || canModerateBoard {
+		return canModerateBoard, err
+	}
+	if actor == nil {
+		return false, nil
+	}
+	return BoardMemberExists(queryable, boardID, actor.ID)
+}
+
+func ActorHasBoardMemberPermission(queryable sqlLike, actor *User, boardID, column string) (bool, error) {
+	if actor == nil {
+		return false, nil
+	}
+	return BoardMemberPermission(queryable, boardID, actor.ID, column)
+}
+
+func ActorHasBoardCapability(queryable sqlLike, actor *User, boardID, column string) (bool, error) {
+	canModerateBoard, err := ActorCanModerateBoard(queryable, actor, boardID)
+	if err != nil || canModerateBoard {
+		return canModerateBoard, err
+	}
+	return ActorHasBoardMemberPermission(queryable, actor, boardID, column)
+}
+
+func ActorCanManageBoardMembers(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	return ActorHasBoardCapability(queryable, actor, boardID, "can_manage_members")
+}
+
+func ActorCanSetBoardSettings(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	return ActorHasBoardCapability(queryable, actor, boardID, "can_set_board_settings")
+}
+
+func ActorCanCurateBoard(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	return ActorHasBoardCapability(queryable, actor, boardID, "can_curate")
+}
+
+func ActorCanAnnounceBoard(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	return ActorHasBoardCapability(queryable, actor, boardID, "can_announce")
+}
+
+func ActorCanModerateBoardPosts(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	return ActorHasBoardCapability(queryable, actor, boardID, "can_moderate_posts")
+}
+
+func ActorCanModerateBoardThreads(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	return ActorHasBoardCapability(queryable, actor, boardID, "can_moderate_threads")
+}
+
+func ActorCanModerateBoardContent(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	if ok, err := ActorCanModerateBoardPosts(queryable, actor, boardID); err != nil || ok {
+		return ok, err
+	}
+	return ActorCanModerateBoardThreads(queryable, actor, boardID)
+}
+
+func ActorCanManageBoardPolls(queryable sqlLike, actor *User, boardID string) (bool, error) {
+	return ActorHasBoardCapability(queryable, actor, boardID, "can_manage_polls")
+}
+
+func ActorCanCurateBoardKind(queryable sqlLike, actor *User, boardID, kind string) (bool, error) {
+	canCurate, err := ActorCanCurateBoard(queryable, actor, boardID)
+	if err != nil || canCurate || kind != "announcement" {
+		return canCurate, err
+	}
+	return ActorCanAnnounceBoard(queryable, actor, boardID)
+}
+
+type BoardMembershipAdmissionStats struct {
+	IsMember               bool
+	MemberCount            int
+	LoginCount             int
+	PostCount              int
+	ReactionScore          int
+	BoardPostCount         int
+	BoardOriginalPostCount int
+	BoardDigestCount       int
+	BoardMarkCount         int
+	TrustLevel             int
+}
+
+type BoardMembershipAdmissionFailure struct {
+	Code    string
+	Message string
+}
+
+func BoardMembershipAdmissionStatsForUser(queryable sqlLike, boardID, userID string, requirements *BoardMemberRequirements) (BoardMembershipAdmissionStats, error) {
+	var stats BoardMembershipAdmissionStats
+	if requirements == nil {
+		return stats, nil
+	}
+	if requirements.MaxMembers > 0 {
+		isMember, err := BoardMemberExists(queryable, boardID, userID)
+		if err != nil {
+			return stats, err
+		}
+		stats.IsMember = isMember
+		if !isMember {
+			memberCount, err := BoardMemberCount(queryable, boardID)
+			if err != nil {
+				return stats, err
+			}
+			stats.MemberCount = memberCount
+		}
+	}
+	if requirements.MinLoginCount > 0 {
+		loginCount, err := UserLoginCount(queryable, userID)
+		if err != nil {
+			return stats, err
+		}
+		stats.LoginCount = loginCount
+	}
+	if requirements.MinPostCount > 0 {
+		postCount, err := UserPostsCreated(queryable, userID)
+		if err != nil {
+			return stats, err
+		}
+		stats.PostCount = postCount
+	}
+	if requirements.MinBoardPostCount > 0 {
+		boardPostCount, err := UserBoardPostCount(queryable, boardID, userID)
+		if err != nil {
+			return stats, err
+		}
+		stats.BoardPostCount = boardPostCount
+	}
+	if requirements.MinBoardOriginalPostCount > 0 {
+		boardOriginalPostCount, err := UserBoardOriginalPostCount(queryable, boardID, userID)
+		if err != nil {
+			return stats, err
+		}
+		stats.BoardOriginalPostCount = boardOriginalPostCount
+	}
+	if requirements.MinBoardDigestCount > 0 {
+		boardDigestCount, err := UserBoardDigestCount(queryable, boardID, userID)
+		if err != nil {
+			return stats, err
+		}
+		stats.BoardDigestCount = boardDigestCount
+	}
+	if requirements.MinTrustLevel > 0 {
+		trustLevel, err := UserTrustLevel(queryable, userID)
+		if err != nil {
+			return stats, err
+		}
+		stats.TrustLevel = trustLevel
+	}
+	return stats, nil
+}
+
+func CheckBoardMembershipAdmission(requirements *BoardMemberRequirements, stats BoardMembershipAdmissionStats) *BoardMembershipAdmissionFailure {
+	if requirements == nil {
+		return nil
+	}
+	if requirements.MaxMembers > 0 && !stats.IsMember && stats.MemberCount >= requirements.MaxMembers {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrConflict, Message: "board membership is full"}
+	}
+	if requirements.MinLoginCount > 0 && stats.LoginCount < requirements.MinLoginCount {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum login count is %d", requirements.MinLoginCount)}
+	}
+	if requirements.MinPostCount > 0 && stats.PostCount < requirements.MinPostCount {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum post count is %d", requirements.MinPostCount)}
+	}
+	if requirements.MinScore > 0 && stats.ReactionScore < requirements.MinScore {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum score is %d", requirements.MinScore)}
+	}
+	if requirements.MinBoardPostCount > 0 && stats.BoardPostCount < requirements.MinBoardPostCount {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum board post count is %d", requirements.MinBoardPostCount)}
+	}
+	if requirements.MinBoardOriginalPostCount > 0 && stats.BoardOriginalPostCount < requirements.MinBoardOriginalPostCount {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum board original post count is %d", requirements.MinBoardOriginalPostCount)}
+	}
+	if requirements.MinBoardDigestCount > 0 && stats.BoardDigestCount < requirements.MinBoardDigestCount {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum board digest count is %d", requirements.MinBoardDigestCount)}
+	}
+	if requirements.MinBoardMarkCount > 0 && stats.BoardMarkCount < requirements.MinBoardMarkCount {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum board mark count is %d", requirements.MinBoardMarkCount)}
+	}
+	if requirements.MinTrustLevel > 0 && stats.TrustLevel < requirements.MinTrustLevel {
+		return &BoardMembershipAdmissionFailure{Code: proto.ErrForbidden, Message: fmt.Sprintf("minimum trust level is %d", requirements.MinTrustLevel)}
+	}
+	return nil
+}
+
+func BoardMemberCount(queryable sqlLike, boardID string) (int, error) {
+	var count int
+	err := QQueryRow(queryable, `SELECT COUNT(*) FROM board_members WHERE board_id=?`, boardID).Scan(&count)
+	return count, err
+}
+
+func UserLoginCount(queryable sqlLike, userID string) (int, error) {
+	var loginCount int
+	err := QQueryRow(queryable, `SELECT login_count FROM user_activity WHERE user_id=?`, userID).Scan(&loginCount)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return loginCount, err
+}
+
+func UserPostsCreated(queryable sqlLike, userID string) (int, error) {
+	var postsCreated int
+	err := QQueryRow(queryable, `SELECT COUNT(*) FROM posts WHERE author_id=? AND redacted=0`, userID).Scan(&postsCreated)
+	return postsCreated, err
+}
+
+func UserBoardPostCount(queryable sqlLike, boardID, userID string) (int, error) {
+	var count int
+	err := QQueryRow(queryable,
+		`SELECT COUNT(*)
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		  WHERE t.board=? AND p.author_id=? AND p.redacted=0`,
+		boardID, userID,
+	).Scan(&count)
+	return count, err
+}
+
+func UserBoardOriginalPostCount(queryable sqlLike, boardID, userID string) (int, error) {
+	var count int
+	err := QQueryRow(queryable, `SELECT COUNT(*) FROM threads WHERE board=? AND author_id=?`, boardID, userID).Scan(&count)
+	return count, err
+}
+
+func UserBoardDigestCount(queryable sqlLike, boardID, userID string) (int, error) {
+	var count int
+	err := QQueryRow(queryable,
+		`SELECT COUNT(*)
+		   FROM digest_entries d
+		   LEFT JOIN posts p ON d.target_kind='post' AND p.id=d.target_id
+		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id=d.target_id
+		  WHERE d.board_id=?
+		    AND (
+		      (d.target_kind='post' AND p.author_id=?)
+		      OR (d.target_kind='thread' AND tt.author_id=?)
+		    )`,
+		boardID, userID, userID,
+	).Scan(&count)
+	return count, err
+}
+
+type PostReactionCounter interface {
+	ReactionCount(postID string) (int, error)
+}
+
+func UserReactionScore(queryable sqlLike, counter PostReactionCounter, userID string) (int, error) {
+	postIDs, err := UserPostIDs(queryable, userID)
+	if err != nil {
+		return 0, err
+	}
+	return SumPostReactionCounts(counter, postIDs)
+}
+
+func UserBoardMarkCount(queryable sqlLike, counter PostReactionCounter, boardID, userID string) (int, error) {
+	postIDs, err := UserBoardPostIDs(queryable, boardID, userID)
+	if err != nil {
+		return 0, err
+	}
+	return SumPostReactionCounts(counter, postIDs)
+}
+
+func UserPostIDs(queryable sqlLike, userID string) ([]string, error) {
+	rows, err := QQuery(queryable, `SELECT id FROM posts WHERE author_id=? AND redacted=0`, userID)
+	if err != nil {
+		return nil, err
+	}
+	return scanStringRows(rows)
+}
+
+func UserBoardPostIDs(queryable sqlLike, boardID, userID string) ([]string, error) {
+	rows, err := QQuery(queryable,
+		`SELECT p.id
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		  WHERE t.board=? AND p.author_id=? AND p.redacted=0`,
+		boardID, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanStringRows(rows)
+}
+
+func SumPostReactionCounts(counter PostReactionCounter, postIDs []string) (int, error) {
+	total := 0
+	for _, postID := range postIDs {
+		count, err := counter.ReactionCount(postID)
+		if err != nil {
+			return 0, err
+		}
+		total += count
+	}
+	return total, nil
+}
+
+func scanStringRows(rows *sql.Rows) ([]string, error) {
+	out := []string{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func validBoardMemberPermissionColumn(column string) bool {
+	switch column {
+	case "can_manage_members", "can_curate", "can_moderate_posts", "can_moderate_threads", "can_announce", "can_manage_polls", "can_set_board_settings":
+		return true
+	default:
+		return false
+	}
 }
 
 func LatestBoardMemberApplicationStatus(db *sql.DB, boardID, userID string) (string, error) {
@@ -1697,6 +2319,105 @@ func ListDigestEntries(db *sql.DB, boardID, kind, path string, limit, offset int
 		return nil, err
 	}
 	return scanDigestEntryRows(rows)
+}
+
+func DigestEntryID(queryable sqlLike, boardID, targetKind, targetID, kind, path string) (string, error) {
+	var id string
+	err := QQueryRow(queryable,
+		`SELECT id FROM digest_entries WHERE board_id=? AND target_kind=? AND target_id=? AND kind=? AND path=?`,
+		boardID, targetKind, targetID, kind, path,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func DigestPathEntryByID(queryable sqlLike, entryID string) (DigestPathEntryRow, bool, error) {
+	var entry DigestPathEntryRow
+	err := QQueryRow(queryable,
+		`SELECT id, board_id, target_kind, target_id, kind, title, path, note,
+		        body, body_edited, created_by, created_at, updated_at
+		   FROM digest_entries
+		  WHERE id=?`,
+		entryID,
+	).Scan(&entry.ID, &entry.BoardID, &entry.TargetKind, &entry.TargetID, &entry.Kind, &entry.Title, &entry.Path, &entry.Note, &entry.Body, &entry.BodyEdited, &entry.CreatedBy, &entry.CreatedAt, &entry.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return DigestPathEntryRow{}, false, nil
+	}
+	if err != nil {
+		return DigestPathEntryRow{}, false, err
+	}
+	return entry, true, nil
+}
+
+func DigestEntryRemovalByID(queryable sqlLike, entryID string) (DigestEntryRemoval, bool, error) {
+	var removal DigestEntryRemoval
+	err := QQueryRow(queryable,
+		`SELECT id, board_id, kind, removed_by FROM digest_entry_removals WHERE id=?`,
+		entryID,
+	).Scan(&removal.ID, &removal.BoardID, &removal.Kind, &removal.RemovedBy)
+	if err == sql.ErrNoRows {
+		return DigestEntryRemoval{}, false, nil
+	}
+	if err != nil {
+		return DigestEntryRemoval{}, false, err
+	}
+	return removal, true, nil
+}
+
+func DigestDirectoryID(queryable sqlLike, boardID, kind, path string) (string, error) {
+	var id string
+	err := QQueryRow(queryable,
+		`SELECT id FROM digest_directories WHERE board_id=? AND kind=? AND path=?`,
+		boardID, kind, path,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func DigestPathMutationCount(queryable sqlLike, eventID, action string) (int, bool, error) {
+	var count int
+	err := QQueryRow(queryable, `SELECT count FROM digest_path_mutations WHERE event_id=? AND action=?`, eventID, action).Scan(&count)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return count, true, nil
+}
+
+func DigestPathEntryConflictID(queryable sqlLike, boardID, targetKind, targetID, kind, path string) (string, bool, error) {
+	var id string
+	err := QQueryRow(queryable,
+		`SELECT id FROM digest_entries WHERE board_id=? AND target_kind=? AND target_id=? AND kind=? AND path=? LIMIT 1`,
+		boardID, targetKind, targetID, kind, path,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+func DigestPathDirectoryConflictID(queryable sqlLike, boardID, kind, path string) (string, bool, error) {
+	var id string
+	err := QQueryRow(queryable,
+		`SELECT id FROM digest_directories WHERE board_id=? AND kind=? AND path=? LIMIT 1`,
+		boardID, kind, path,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
 }
 
 func ListDigestPathTree(db *sql.DB, boardID, kind string) ([]DigestPathNode, error) {
@@ -2047,6 +2768,66 @@ func GetDigestExport(db *sql.DB, entryID string) (*DigestExport, error) {
 	return &DigestExport{Entry: e, Body: body}, nil
 }
 
+func DigestExportForUpsertedEntry(db *sql.DB, entry *proto.DigestEntryUpsertedPayload, thread *Thread, post *Post) (*DigestExport, error) {
+	if entry == nil || thread == nil {
+		return nil, nil
+	}
+	boardName := ""
+	board, err := GetBoard(db, entry.Board)
+	if err != nil {
+		return nil, err
+	}
+	if board != nil {
+		boardName = board.Name
+	}
+	author := thread.Author
+	threadID := thread.ID
+	postID := ""
+	body := ""
+	if entry.TargetKind == "post" {
+		if post == nil {
+			return nil, nil
+		}
+		author = post.Author
+		postID = post.ID
+		body = post.Body
+	} else {
+		threadBody, err := digestThreadTranscript(db, thread.ID)
+		if err != nil {
+			return nil, err
+		}
+		body = threadBody
+	}
+	bodyEdited := false
+	stored, found, err := DigestPathEntryByID(db, entry.ID)
+	if err != nil {
+		return nil, err
+	}
+	if found && stored.BodyEdited != 0 {
+		bodyEdited = true
+		body = stored.Body
+	}
+	return &DigestExport{
+		Entry: DigestEntry{
+			ID:         entry.ID,
+			BoardID:    entry.Board,
+			BoardName:  boardName,
+			TargetKind: entry.TargetKind,
+			TargetID:   entry.TargetID,
+			Kind:       entry.Kind,
+			Title:      entry.Title,
+			Path:       entry.Path,
+			Note:       entry.Note,
+			CreatedBy:  entry.CreatedBy,
+			ThreadID:   threadID,
+			PostID:     postID,
+			Author:     author,
+			BodyEdited: bodyEdited,
+		},
+		Body: body,
+	}, nil
+}
+
 func digestThreadTranscript(db *sql.DB, threadID string) (string, error) {
 	rows, err := QQuery(db,
 		`SELECT author, body
@@ -2318,6 +3099,129 @@ func GetMail(db *sql.DB, userID, messageID string) (*MailItem, error) {
 	return item, nil
 }
 
+func UserHasMailCopy(queryable sqlLike, userID, messageID string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable,
+		`SELECT 1 FROM mail_copies WHERE user_id=? AND message_id=? LIMIT 1`,
+		userID, messageID,
+	).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+type MailCopyUpdateTarget struct {
+	FromUserID    string
+	TrashedCopies int
+}
+
+func GetMailCopyUpdateTarget(queryable sqlLike, userID, mailID string) (MailCopyUpdateTarget, bool, error) {
+	var target MailCopyUpdateTarget
+	var trashedCopies sql.NullInt64
+	err := QQueryRow(queryable,
+		`SELECT m.from_user_id,
+		        SUM(CASE WHEN c.mailbox='trash' THEN 1 ELSE 0 END)
+		   FROM mail_messages m
+		   JOIN mail_copies c ON c.message_id=m.id
+		  WHERE c.user_id=? AND c.message_id=?
+		  GROUP BY m.from_user_id`,
+		userID, mailID,
+	).Scan(&target.FromUserID, &trashedCopies)
+	if err == sql.ErrNoRows {
+		return target, false, nil
+	}
+	if err != nil {
+		return target, false, err
+	}
+	target.TrashedCopies = int(trashedCopies.Int64)
+	return target, true, nil
+}
+
+func MailSenderID(queryable sqlLike, mailID string) (string, bool, error) {
+	var senderID string
+	err := QQueryRow(queryable, `SELECT from_user_id FROM mail_messages WHERE id=?`, mailID).Scan(&senderID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return senderID, err == nil, err
+}
+
+func MailStoredSize(queryable sqlLike, mailID string) (int64, error) {
+	var size sql.NullInt64
+	err := QQueryRow(queryable,
+		`SELECT LENGTH(subject) + LENGTH(body) +
+		        COALESCE((SELECT SUM(size_bytes) FROM mail_attachments a WHERE a.message_id=mail_messages.id), 0)
+		   FROM mail_messages
+		  WHERE id=?`,
+		mailID,
+	).Scan(&size)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return size.Int64, nil
+}
+
+func TrashedMailCopyCount(queryable sqlLike, userID, mailID string) (int, error) {
+	var count int
+	err := QQueryRow(queryable,
+		`SELECT COUNT(*) FROM mail_copies WHERE user_id=? AND message_id=? AND mailbox='trash'`,
+		userID, mailID,
+	).Scan(&count)
+	return count, err
+}
+
+func ActiveMailCopyCounts(queryable sqlLike, mailID string) (map[string]int, error) {
+	rows, err := QQuery(queryable,
+		`SELECT user_id, COUNT(*) FROM mail_copies WHERE message_id=? AND mailbox <> 'trash' GROUP BY user_id`,
+		mailID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var userID string
+		var copies int
+		if err := rows.Scan(&userID, &copies); err != nil {
+			return nil, err
+		}
+		out[userID] = copies
+	}
+	return out, rows.Err()
+}
+
+func MailAccountScopes(queryable sqlLike, mailID, actorID string) ([]string, error) {
+	rows, err := QQuery(queryable, `SELECT DISTINCT user_id FROM mail_copies WHERE message_id=?`, mailID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	scopes := []string{}
+	add := func(userID string) {
+		userID = strings.TrimSpace(userID)
+		if userID == "" || seen[userID] {
+			return
+		}
+		seen[userID] = true
+		scopes = append(scopes, "account:"+userID)
+	}
+	add(actorID)
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		add(userID)
+	}
+	return scopes, rows.Err()
+}
+
 func CountUnreadMail(db *sql.DB, userID string) (int, error) {
 	var n int
 	err := QQueryRow(db,
@@ -2335,9 +3239,9 @@ func GetMailUsage(db *sql.DB, userID string) (*MailUsage, error) {
 	return mailUsageFromUsed(userID, used), nil
 }
 
-func MailUsedBytes(db *sql.DB, userID string) (int64, error) {
+func MailUsedBytes(queryable sqlLike, userID string) (int64, error) {
 	var used sql.NullInt64
-	err := QQueryRow(db,
+	err := QQueryRow(queryable,
 		`SELECT COALESCE(SUM(LENGTH(m.subject) + LENGTH(m.body) +
 		        COALESCE((SELECT SUM(size_bytes) FROM mail_attachments a WHERE a.message_id=m.id), 0)), 0)
 		   FROM mail_copies c
@@ -2349,6 +3253,17 @@ func MailUsedBytes(db *sql.DB, userID string) (int64, error) {
 		return 0, err
 	}
 	return used.Int64, nil
+}
+
+func MailQuotaAllows(queryable sqlLike, userID string, addedBytes int64) (bool, error) {
+	if addedBytes <= 0 || strings.TrimSpace(userID) == "" {
+		return true, nil
+	}
+	used, err := MailUsedBytes(queryable, userID)
+	if err != nil {
+		return false, err
+	}
+	return used+addedBytes <= DefaultMailQuotaBytes, nil
 }
 
 func mailUsageFromUsed(userID string, used int64) *MailUsage {
@@ -2436,6 +3351,12 @@ func ListMailAttachments(db *sql.DB, mailID string) ([]MailAttachment, error) {
 		out = append(out, att)
 	}
 	return out, rows.Err()
+}
+
+func MailAttachmentCount(queryable sqlLike, mailID string) (int, error) {
+	var count int
+	err := QQueryRow(queryable, `SELECT COUNT(*) FROM mail_attachments WHERE message_id=?`, mailID).Scan(&count)
+	return count, err
 }
 
 func GetMailAttachment(db *sql.DB, attachmentID string) (*MailAttachment, error) {
@@ -2535,9 +3456,9 @@ func ListMailGroupMembers(db *sql.DB, ownerID, groupRef string) ([]MailGroupMemb
 	return members, rows.Err()
 }
 
-func GetMailGroupID(db *sql.DB, ownerID, groupRef string) (string, error) {
+func GetMailGroupID(queryable sqlLike, ownerID, groupRef string) (string, error) {
 	var id string
-	err := QQueryRow(db,
+	err := QQueryRow(queryable,
 		`SELECT id FROM mail_groups WHERE user_id=? AND (id=? OR name=?) LIMIT 1`,
 		ownerID, groupRef, groupRef,
 	).Scan(&id)
@@ -2545,6 +3466,52 @@ func GetMailGroupID(db *sql.DB, ownerID, groupRef string) (string, error) {
 		return "", nil
 	}
 	return id, err
+}
+
+func MailGroupIDByName(queryable sqlLike, ownerID, name string) (string, error) {
+	var groupID string
+	err := QQueryRow(queryable,
+		`SELECT id FROM mail_groups WHERE user_id=? AND name=? LIMIT 1`,
+		ownerID, strings.TrimSpace(name),
+	).Scan(&groupID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return groupID, err
+}
+
+func MailGroupDeletion(queryable sqlLike, eventID string) (string, bool, error) {
+	var groupID string
+	err := QQueryRow(queryable, `SELECT group_id FROM mail_group_deletions WHERE event_id=?`, eventID).Scan(&groupID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return groupID, true, nil
+}
+
+func ResolveMailGroupMemberIDs(queryable sqlLike, refs []string, ownerID string) (ids []string, missingRef string, includesOwner bool, err error) {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		target, err := FindUserRef(queryable, ref)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if target == nil {
+			return nil, strings.TrimSpace(ref), false, nil
+		}
+		if target.ID == ownerID {
+			return nil, "", true, nil
+		}
+		if !seen[target.ID] {
+			seen[target.ID] = true
+			out = append(out, target.ID)
+		}
+	}
+	return out, "", false, nil
 }
 
 func ListFriendUserIDs(db *sql.DB, ownerID string) ([]string, error) {
@@ -2565,6 +3532,188 @@ func ListFriendUserIDs(db *sql.DB, ownerID string) ([]string, error) {
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+func ListMailAllRecipientIDs(queryable sqlLike, actorID string) ([]string, error) {
+	rows, err := QQuery(queryable, `SELECT id FROM users WHERE id<>? ORDER BY name`, actorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		out = append(out, userID)
+	}
+	return out, rows.Err()
+}
+
+func UserRelationshipExists(queryable sqlLike, userID, targetUserID, kind string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable,
+		`SELECT 1 FROM user_relationships WHERE user_id=? AND target_user_id=? AND kind=? LIMIT 1`,
+		userID, targetUserID, kind,
+	).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func BlessingExists(queryable sqlLike, fromID, toID string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable,
+		`SELECT 1 FROM blessings WHERE from_user_id=? AND to_user_id=? LIMIT 1`,
+		fromID, toID,
+	).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func UserRecentlyOnline(queryable sqlLike, userID string) (bool, error) {
+	var lastSeen int64
+	var status string
+	err := QQueryRow(queryable,
+		`SELECT last_seen, status
+		   FROM user_presence_sessions
+		  WHERE user_id=?
+		    AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')
+		  ORDER BY last_seen DESC, updated_at DESC
+		  LIMIT 1`,
+		userID,
+	).Scan(&lastSeen, &status)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return lastSeen >= NowMS()-5*60*1000 && proto.VisiblePresenceStatus(status), nil
+}
+
+func CurrentPostSignature(queryable sqlLike, authorID string, randomOffset func(activeCount int) int) (string, error) {
+	authorID = strings.TrimSpace(authorID)
+	if authorID == "" {
+		return "", nil
+	}
+	var randomEnabled, activeCount int
+	var selectedSignature, bankSignature, profileSignature string
+	err := QQueryRow(queryable,
+		`SELECT
+		   COALESCE(s.random_enabled, 0),
+		   COALESCE((
+		     SELECT COUNT(*)
+		       FROM user_signatures us
+		      WHERE us.user_id=u.user_id
+		        AND us.active=1
+		        AND TRIM(COALESCE(us.body,'')) <> ''
+		   ), 0),
+		   COALESCE((
+		     SELECT body
+		       FROM user_signatures us
+		      WHERE us.user_id=u.user_id
+		        AND us.id=COALESCE(s.selected_signature_id, '')
+		        AND us.active=1
+		      LIMIT 1
+		   ), ''),
+		   COALESCE((
+		     SELECT body
+		       FROM user_signatures us
+		      WHERE us.user_id=u.user_id
+		        AND us.active=1
+		        AND TRIM(COALESCE(us.body,'')) <> ''
+		      ORDER BY us.position, us.updated_at, us.id
+		      LIMIT 1
+		   ), ''),
+		   COALESCE(p.signature, '')
+		  FROM (SELECT ? AS user_id) u
+		  LEFT JOIN user_signature_settings s ON s.user_id=u.user_id
+		  LEFT JOIN user_profiles p ON p.user_id=u.user_id`,
+		authorID,
+	).Scan(&randomEnabled, &activeCount, &selectedSignature, &bankSignature, &profileSignature)
+	if err != nil {
+		return "", err
+	}
+	if randomEnabled != 0 && activeCount > 0 {
+		offset := 0
+		if randomOffset != nil {
+			offset = randomOffset(activeCount) % activeCount
+			if offset < 0 {
+				offset += activeCount
+			}
+		}
+		var signature string
+		if err := QQueryRow(queryable,
+			`SELECT COALESCE(body,'') FROM user_signatures
+			  WHERE user_id=? AND active=1 AND TRIM(COALESCE(body,'')) <> ''
+			  ORDER BY position, updated_at, id LIMIT 1 OFFSET ?`,
+			authorID, offset,
+		).Scan(&signature); err != nil {
+			return "", err
+		}
+		return proto.NormalizePostSignature(signature), nil
+	}
+	if signature := proto.NormalizePostSignature(selectedSignature); signature != "" {
+		return signature, nil
+	}
+	if signature := proto.NormalizePostSignature(bankSignature); signature != "" {
+		return signature, nil
+	}
+	return proto.NormalizePostSignature(profileSignature), nil
+}
+
+func DirectMessageAllowed(queryable sqlLike, recipientID, senderID string) (bool, error) {
+	var policy string
+	err := QQueryRow(queryable, `SELECT policy FROM direct_message_settings WHERE user_id=?`, recipientID).Scan(&policy)
+	if err == sql.ErrNoRows {
+		policy = "all"
+	} else if err != nil {
+		return false, err
+	}
+	switch strings.TrimSpace(policy) {
+	case "", "all":
+		return true, nil
+	case "none":
+		return false, nil
+	case "friends":
+		return UserRelationshipExists(queryable, recipientID, senderID, "friend")
+	default:
+		return true, nil
+	}
+}
+
+type DirectMessageState struct {
+	FromUserID       string
+	ToUserID         string
+	ReadAt           int64
+	SenderDeleted    bool
+	RecipientDeleted bool
+}
+
+func DirectMessageTarget(queryable sqlLike, messageID string) (DirectMessageState, bool, error) {
+	var state DirectMessageState
+	var senderDeleted int
+	var recipientDeleted int
+	err := QQueryRow(queryable,
+		`SELECT from_user_id, to_user_id, read_at, sender_deleted, recipient_deleted
+		   FROM direct_messages
+		  WHERE id=?`,
+		messageID,
+	).Scan(&state.FromUserID, &state.ToUserID, &state.ReadAt, &senderDeleted, &recipientDeleted)
+	if err == sql.ErrNoRows {
+		return state, false, nil
+	}
+	if err != nil {
+		return state, false, err
+	}
+	state.SenderDeleted = senderDeleted != 0
+	state.RecipientDeleted = recipientDeleted != 0
+	return state, true, nil
 }
 
 func ListDirectMessageConversations(db *sql.DB, userID string, limit, offset int) ([]DirectMessageConversation, error) {
@@ -2801,11 +3950,11 @@ func ListSocialUsers(db *sql.DB, userID, list string, onlineOnly bool) ([]Social
 		}
 		u.Mutual = mutual != 0
 		u.Ignored = ignored != 0
-		u.Online = u.LastSeen >= cutoff && visibleOnlineStatus(u.Status)
+		u.Online = u.LastSeen >= cutoff && proto.VisiblePresenceStatus(u.Status)
 		if u.Online && u.LastSeen > 0 {
 			u.IdleSeconds = (NowMS() - u.LastSeen) / 1000
 		}
-		if !u.Online && hiddenOnlineStatus(u.Status) {
+		if !u.Online && (proto.HiddenPresenceStatus(u.Status) || proto.CloakedPresenceStatus(u.Status)) {
 			u.Status = ""
 			u.Mode = ""
 			u.BoardID = ""
@@ -3040,28 +4189,6 @@ func ListChatOnlineUsers(db *sql.DB, viewerID, roomID string, limit, offset int)
 		out = append(out, u)
 	}
 	return out, rows.Err()
-}
-
-func visibleOnlineStatus(status string) bool {
-	status = strings.ToLower(strings.TrimSpace(status))
-	return status != "" && !hiddenOnlineStatus(status)
-}
-
-func hiddenOnlineStatus(status string) bool {
-	status = strings.ToLower(strings.TrimSpace(status))
-	return status == "offline" || status == "invisible" || status == "cloak" || status == "cloaked"
-}
-
-func UserIgnores(db *sql.DB, userID, targetUserID string) (bool, error) {
-	var found int
-	err := QQueryRow(db,
-		`SELECT 1 FROM user_relationships WHERE user_id=? AND target_user_id=? AND kind='ignore' LIMIT 1`,
-		userID, targetUserID,
-	).Scan(&found)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 func hydrateMailRecipients(db *sql.DB, item *MailItem) error {
@@ -3471,10 +4598,6 @@ func ListThreads(db *sql.DB, boardID string, limit, offset int) ([]Thread, error
 	return threads, rows.Err()
 }
 
-func ListThreadSummaries(db *sql.DB, userID, boardID string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
-	return ListThreadSummariesFiltered(db, userID, boardID, "", "", limit, offset, unreadOnly)
-}
-
 func ListThreadSummariesFiltered(db *sql.DB, userID, boardID, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -3759,6 +4882,70 @@ func GetThread(db *sql.DB, id string) (*Thread, error) {
 	return t, nil
 }
 
+func ThreadExists(queryable sqlLike, threadID string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func ThreadLastSeq(queryable sqlLike, threadID string) (int64, bool, error) {
+	var lastSeq int64
+	err := QQueryRow(queryable, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&lastSeq)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return lastSeq, true, nil
+}
+
+type ThreadRootReplyGuards struct {
+	NoReply  bool
+	MailBack bool
+}
+
+func ThreadRootReplyGuardsForThread(queryable sqlLike, threadID string) (ThreadRootReplyGuards, error) {
+	var noReply, mailBack int
+	err := QQueryRow(queryable,
+		`SELECT no_reply, mail_back FROM posts WHERE thread=? ORDER BY created_seq LIMIT 1`,
+		threadID,
+	).Scan(&noReply, &mailBack)
+	if err == sql.ErrNoRows {
+		return ThreadRootReplyGuards{}, nil
+	}
+	return ThreadRootReplyGuards{NoReply: noReply != 0, MailBack: mailBack != 0}, err
+}
+
+func ThreadRootPostID(queryable sqlLike, threadID string) (string, bool, error) {
+	var postID string
+	err := QQueryRow(queryable,
+		`SELECT id FROM posts WHERE thread=? ORDER BY created_seq LIMIT 1`,
+		threadID,
+	).Scan(&postID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return postID, true, nil
+}
+
+func ThreadRootPost(db *sql.DB, threadID string) (*Post, error) {
+	postID, found, err := ThreadRootPostID(db, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return GetPost(db, postID)
+}
+
 func ListPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 	rows, err := QQuery(db,
 		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version, redacted,
@@ -3946,6 +5133,12 @@ func ListPostAttachments(db *sql.DB, postID string) ([]PostAttachment, error) {
 	return out, rows.Err()
 }
 
+func PostAttachmentCount(queryable sqlLike, postID string) (int, error) {
+	var count int
+	err := QQueryRow(queryable, `SELECT COUNT(*) FROM post_attachments WHERE post_id=?`, postID).Scan(&count)
+	return count, err
+}
+
 func GetPostAttachment(db *sql.DB, attachmentID string) (*PostAttachment, error) {
 	att := &PostAttachment{}
 	var stored int
@@ -3974,6 +5167,59 @@ func GetAttachmentBlob(db *sql.DB, attachmentID string) ([]byte, string, error) 
 		return nil, "", nil
 	}
 	return data, contentType, err
+}
+
+type StagedAttachmentBlobInfo struct {
+	Kind      string
+	SizeBytes int64
+}
+
+func GetStagedAttachmentBlobInfo(queryable sqlLike, stagedBlobID string) (StagedAttachmentBlobInfo, bool, error) {
+	var info StagedAttachmentBlobInfo
+	err := QQueryRow(queryable,
+		`SELECT kind, size_bytes FROM attachment_blob_staging WHERE id=?`,
+		strings.TrimSpace(stagedBlobID),
+	).Scan(&info.Kind, &info.SizeBytes)
+	if err == sql.ErrNoRows {
+		return StagedAttachmentBlobInfo{}, false, nil
+	}
+	if err != nil {
+		return StagedAttachmentBlobInfo{}, false, err
+	}
+	return info, true, nil
+}
+
+func PromotedAttachmentBlobMatches(queryable sqlLike, kind, attachmentID string, expectedSize int64, contentType string) (bool, error) {
+	table := ""
+	switch kind {
+	case StagedBlobPostAttachment:
+		table = "attachment_blobs"
+	case StagedBlobMailAttachment:
+		table = "mail_attachment_blobs"
+	default:
+		return false, fmt.Errorf("unknown staged attachment blob kind %q", kind)
+	}
+	var storedContentType string
+	var storedSize int64
+	err := QQueryRow(queryable,
+		`SELECT content_type, size_bytes FROM `+table+` WHERE attachment_id=?`,
+		attachmentID,
+	).Scan(&storedContentType, &storedSize)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return AttachmentBlobMetadataMatches(storedContentType, storedSize, expectedSize, contentType), nil
+}
+
+func AttachmentBlobMetadataMatches(storedContentType string, storedSize int64, expectedSize int64, contentType string) bool {
+	if expectedSize >= 0 && storedSize != expectedSize {
+		return false
+	}
+	contentType = strings.TrimSpace(contentType)
+	return contentType == "" || storedContentType == contentType
 }
 
 func attachPostAttachments(db *sql.DB, posts []Post) ([]Post, error) {
@@ -4431,6 +5677,117 @@ func ListBoardDeletedPosts(db *sql.DB, boardID, kind string, limit, offset int) 
 	return out, nil
 }
 
+func BoardJunkPostIDs(queryable sqlLike, boardID string, requested []string) ([]string, string, error) {
+	if len(requested) > 0 {
+		ids, msg := proto.NormalizePostRangeIDs(requested)
+		if msg != "" {
+			return nil, msg, nil
+		}
+		return ids, "", nil
+	}
+	rows, err := QQuery(queryable,
+		`SELECT post_id FROM post_deletions WHERE board_id=? AND kind='junk' ORDER BY deleted_at DESC, seq DESC`,
+		boardID,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var postID string
+		if err := rows.Scan(&postID); err != nil {
+			return nil, "", err
+		}
+		out = append(out, postID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	return out, "", nil
+}
+
+func BoardJunkPostThreadID(queryable sqlLike, postID, boardID string) (string, bool, error) {
+	var threadID string
+	err := QQueryRow(queryable,
+		`SELECT thread_id FROM post_deletions WHERE post_id=? AND board_id=? AND kind='junk'`,
+		postID, boardID,
+	).Scan(&threadID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return threadID, true, nil
+}
+
+type FavoriteFolderState struct {
+	ParentID string
+	Name     string
+	Position int
+}
+
+func FavoriteFolderExists(queryable sqlLike, userID, folderID string) (bool, error) {
+	if strings.TrimSpace(folderID) == "" {
+		return true, nil
+	}
+	var exists int
+	err := QQueryRow(queryable, `SELECT 1 FROM favorite_folders WHERE user_id=? AND id=?`, userID, folderID).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func FavoriteFolderStateForUser(queryable sqlLike, userID, folderID string) (FavoriteFolderState, bool, error) {
+	var state FavoriteFolderState
+	err := QQueryRow(queryable,
+		`SELECT parent_id, name, position FROM favorite_folders WHERE user_id=? AND id=?`,
+		userID, folderID,
+	).Scan(&state.ParentID, &state.Name, &state.Position)
+	if err == sql.ErrNoRows {
+		return FavoriteFolderState{}, false, nil
+	}
+	if err != nil {
+		return FavoriteFolderState{}, false, err
+	}
+	return state, true, nil
+}
+
+func FavoriteFolderContains(queryable sqlLike, userID, ancestorID, folderID string) (bool, error) {
+	for folderID != "" {
+		if folderID == ancestorID {
+			return true, nil
+		}
+		var parentID string
+		err := QQueryRow(queryable, `SELECT parent_id FROM favorite_folders WHERE user_id=? AND id=?`, userID, folderID).Scan(&parentID)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		folderID = parentID
+	}
+	return false, nil
+}
+
+func FavoriteFolderTargetPosition(queryable sqlLike, userID, parentID string, position *int) (int, error) {
+	if position != nil {
+		if *position < 0 {
+			return 0, nil
+		}
+		return *position, nil
+	}
+	var next int
+	err := QQueryRow(queryable,
+		`SELECT COALESCE(MAX(position) + 1, 0) FROM favorite_folders WHERE user_id=? AND parent_id=?`,
+		userID, parentID,
+	).Scan(&next)
+	return next, err
+}
+
 func applyBoardPolicyFlags(b *Board, anonymousAllowed, readOnly, noReply, attachmentsAllowed, mailInAllowed, relayEnabled, memberReadMode, memberPostMode, statsExcluded, zapAllowed int) {
 	b.AnonymousAllowed = anonymousAllowed != 0
 	b.ReadOnly = readOnly != 0
@@ -4505,6 +5862,15 @@ func GetPost(db *sql.DB, id string) (*Post, error) {
 	return p, nil
 }
 
+func PostExists(queryable sqlLike, postID string) (bool, error) {
+	var found int
+	err := QQueryRow(queryable, `SELECT 1 FROM posts WHERE id=?`, postID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func GetUserByID(db *sql.DB, id string) (*User, error) {
 	u := &User{}
 	err := QQueryRow(db, `SELECT id, name, role, password, created,
@@ -4531,6 +5897,28 @@ func GetUserByName(db *sql.DB, name string) (*User, error) {
 		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created,
 			&u.RegistrationStatus, &u.ReviewedAt, &u.ReviewedBy, &u.ReviewReason,
 			&u.DeactivatedAt, &u.DeactivatedBy, &u.DeactivatedReason)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return u, err
+}
+
+func UserName(queryable sqlLike, userID string) (string, error) {
+	var name string
+	err := QQueryRow(queryable, `SELECT name FROM users WHERE id=?`, userID).Scan(&name)
+	return name, err
+}
+
+func FindUserRef(queryable sqlLike, ref string) (*User, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, nil
+	}
+	u := &User{}
+	err := QQueryRow(queryable,
+		`SELECT id, name, role, password, created FROM users WHERE id=? OR name=? ORDER BY CASE WHEN id=? THEN 0 ELSE 1 END LIMIT 1`,
+		ref, ref, ref,
+	).Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -5060,6 +6448,40 @@ func ListModerationReviews(db *sql.DB, status string, limit, offset int) ([]Mode
 	return out, rows.Err()
 }
 
+func GetModerationReviewLogTarget(queryable sqlLike, reviewID string) (ModerationReviewLogTarget, bool, error) {
+	var target ModerationReviewLogTarget
+	var targetKind string
+	var public int
+	err := QQueryRow(queryable,
+		`SELECT r.target_id,
+		        r.target_kind,
+		        r.status,
+		        COALESCE(p.thread, ''),
+		        COALESCE(t.board, ''),
+		        CASE
+		          WHEN r.target_kind='post'
+		           AND p.id IS NOT NULL
+		           AND t.id IS NOT NULL
+		           AND COALESCE(s.member_read_mode, 0)=0 THEN 1
+		          ELSE 0
+		        END
+		   FROM moderation_reviews r
+		   LEFT JOIN posts p ON r.target_kind='post' AND p.id=r.target_id
+		   LEFT JOIN threads t ON t.id=p.thread
+		   LEFT JOIN board_settings s ON s.board_id=t.board
+		  WHERE r.id=?`,
+		reviewID,
+	).Scan(&target.PostID, &targetKind, &target.Status, &target.ThreadID, &target.BoardID, &public)
+	if err == sql.ErrNoRows {
+		return target, false, nil
+	}
+	if err != nil {
+		return target, false, err
+	}
+	target.Public = public != 0
+	return target, true, nil
+}
+
 func ListContentFilters(db *sql.DB, scope string, includeInactive bool, limit, offset int) ([]ContentFilter, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
@@ -5354,6 +6776,32 @@ func GetPollByPostID(db *sql.DB, postID string) (*Poll, error) {
 	return p, nil
 }
 
+func PollIDForPost(queryable sqlLike, postID string) (string, bool, error) {
+	var pollID string
+	err := QQueryRow(queryable, `SELECT id FROM polls WHERE post_id=?`, postID).Scan(&pollID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return pollID, true, nil
+}
+
+func PollResultOptions(poll *Poll) []proto.PollResultOption {
+	if poll == nil || len(poll.Options) == 0 {
+		return nil
+	}
+	options := make([]proto.PollResultOption, 0, len(poll.Options))
+	for _, option := range poll.Options {
+		options = append(options, proto.PollResultOption{
+			Text:  option.Text,
+			Votes: option.VoteCount,
+		})
+	}
+	return options
+}
+
 func GetPollWithVotes(db *sql.DB, pollID, viewerUserID string) (*Poll, error) {
 	p := &Poll{}
 	err := QQueryRow(db,
@@ -5446,11 +6894,21 @@ func PollsForPosts(db *sql.DB, postIDs []string, viewerUserID string) (map[strin
 }
 
 func ActiveSanction(db *sql.DB, userID, scope string) (string, bool) {
-	now := NowMS()
+	kind, found, err := ActiveSanctionKind(db, userID, scope, NowMS())
+	if err != nil {
+		return "", false
+	}
+	return kind, found
+}
+
+func ActiveSanctionKind(queryable sqlLike, userID, scope string, now int64) (string, bool, error) {
+	if now <= 0 {
+		now = NowMS()
+	}
 	var kind string
 	var err error
 	if scope != "" {
-		err = QQueryRow(db,
+		err = QQueryRow(queryable,
 			`SELECT kind FROM user_sanctions
 			 WHERE user_id=? AND (scope=? OR scope='global')
 			   AND (expires_at=0 OR expires_at>?)
@@ -5458,7 +6916,7 @@ func ActiveSanction(db *sql.DB, userID, scope string) (string, bool) {
 			userID, scope, now,
 		).Scan(&kind)
 	} else {
-		err = QQueryRow(db,
+		err = QQueryRow(queryable,
 			`SELECT kind FROM user_sanctions
 			 WHERE user_id=? AND scope='global'
 			   AND (expires_at=0 OR expires_at>?)
@@ -5467,12 +6925,12 @@ func ActiveSanction(db *sql.DB, userID, scope string) (string, bool) {
 		).Scan(&kind)
 	}
 	if err == sql.ErrNoRows {
-		return "", false
+		return "", false, nil
 	}
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
-	return kind, true
+	return kind, true, nil
 }
 
 func ListLoginWatchers(db *sql.DB, targetUserID string) ([]string, error) {
@@ -5583,9 +7041,9 @@ func TrustInfo(db *sql.DB, userID string) (*TrustLevelInfo, error) {
 	return t, err
 }
 
-func UserTrustLevel(db *sql.DB, userID string) (int, error) {
+func UserTrustLevel(queryable sqlLike, userID string) (int, error) {
 	var level int
-	err := QQueryRow(db, `SELECT trust_level FROM user_activity WHERE user_id=?`, userID).Scan(&level)
+	err := QQueryRow(queryable, `SELECT trust_level FROM user_activity WHERE user_id=?`, userID).Scan(&level)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}

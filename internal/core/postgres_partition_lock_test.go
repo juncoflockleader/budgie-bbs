@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strconv"
 	"testing"
 	"time"
 
@@ -102,7 +101,7 @@ func TestPostgresPartitionLockAllowsOtherBoardWriteEndToEnd(t *testing.T) {
 	assertPostgresPartitionTestThreadVisible(t, c, "life", other.ID)
 
 	blockedCtx, cancelBlocked := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	blocked := execPostgresPartitionTestCmdReply(c, blockedCtx, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
+	blocked := execPostgresPartitionTestCmdReply(t, c, blockedCtx, admin, proto.CmdCreateThread, proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Blocked partition",
 		Body:  "must wait for general",
@@ -133,70 +132,21 @@ func TestPostgresPartitionLockAllowsOtherBoardWriteEndToEnd(t *testing.T) {
 	assertPostgresPartitionTestThreadVisible(t, c, "general", released.ID)
 }
 
-func TestPostgresPartitionWriteLoadReportsSpreadThroughput(t *testing.T) {
-	baseDSN := os.Getenv("BUDGIE_TEST_POSTGRES_DSN")
-	if baseDSN == "" {
-		t.Skip("set BUDGIE_TEST_POSTGRES_DSN to run the Postgres partition write load test")
-	}
-	if os.Getenv("BUDGIE_TEST_POSTGRES_LOAD") == "" {
-		t.Skip("set BUDGIE_TEST_POSTGRES_LOAD=1 to run the Postgres partition write load test")
-	}
-
-	c, err := NewPostgres(withSchema(t, baseDSN, "budgie_partition_load_test"))
-	if err != nil {
-		t.Fatalf("new postgres core: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	t.Cleanup(func() {
-		cancel()
-		_ = c.DB.Close()
-	})
-	go c.Run(ctx)
-
-	report, err := c.RunPartitionWriteLoad(ctx, PartitionWriteLoadConfig{
-		Boards:         intEnv("BUDGIE_TEST_POSTGRES_LOAD_BOARDS", 8),
-		WritesPerBoard: intEnv("BUDGIE_TEST_POSTGRES_LOAD_WRITES_PER_BOARD", 25),
-		Concurrency:    intEnv("BUDGIE_TEST_POSTGRES_LOAD_CONCURRENCY", 32),
-		BodyBytes:      intEnv("BUDGIE_TEST_POSTGRES_LOAD_BODY_BYTES", 256),
-		BoardPrefix:    "pgload",
-		UserName:       "pg_load_admin",
-	})
-	data, marshalErr := json.MarshalIndent(report, "", "  ")
-	if marshalErr != nil {
-		t.Fatalf("marshal load report: %v", marshalErr)
-	}
-	t.Logf("postgres partition write load report:\n%s", data)
-	if err != nil {
-		t.Fatalf("RunPartitionWriteLoad: %v", err)
-	}
-	if report.SamePartition.Succeeded != report.TotalWrites || report.SpreadPartitions.Succeeded != report.TotalWrites {
-		t.Fatalf("report = %+v, want all writes successful", report)
-	}
-	if report.SpreadSpeedup <= 0 {
-		t.Fatalf("spread speedup = %.2f, want positive", report.SpreadSpeedup)
-	}
-	if minRaw := os.Getenv("BUDGIE_TEST_POSTGRES_MIN_SPREAD_SPEEDUP"); minRaw != "" {
-		min, err := strconv.ParseFloat(minRaw, 64)
-		if err != nil {
-			t.Fatalf("invalid BUDGIE_TEST_POSTGRES_MIN_SPREAD_SPEEDUP=%q: %v", minRaw, err)
-		}
-		if report.SpreadSpeedup < min {
-			t.Fatalf("spread speedup %.2fx below threshold %.2fx", report.SpreadSpeedup, min)
-		}
-	}
-}
-
 func execPostgresPartitionTestCmd(t *testing.T, c *Core, ctx context.Context, actor *User, cmd proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
-	reply := execPostgresPartitionTestCmdReply(c, ctx, actor, cmd, payload)
+	reply := execPostgresPartitionTestCmdReply(t, c, ctx, actor, cmd, payload)
 	if reply.Err != nil {
 		t.Fatalf("command %s failed: %s (%s)", cmd, reply.Err.Message, reply.Err.Code)
 	}
 	return reply.Result
 }
 
-func execPostgresPartitionTestCmdReply(c *Core, ctx context.Context, actor *User, cmd proto.CommandName, payload any) Reply {
-	raw, _ := json.Marshal(payload)
+func execPostgresPartitionTestCmdReply(t *testing.T, c *Core, ctx context.Context, actor *User, cmd proto.CommandName, payload any) Reply {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal %s: %v", cmd, err)
+	}
 	return c.ExecCmd(ctx, actor, cmd, raw, "")
 }
 
@@ -212,16 +162,4 @@ func assertPostgresPartitionTestThreadVisible(t *testing.T, c *Core, boardID, th
 		}
 	}
 	t.Fatalf("thread %s not visible in board %s after write", threadID, boardID)
-}
-
-func intEnv(key string, fallback int) int {
-	raw := os.Getenv(key)
-	if raw == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	return n
 }

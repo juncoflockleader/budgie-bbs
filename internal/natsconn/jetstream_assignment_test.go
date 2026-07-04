@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,12 +123,10 @@ func TestJetStreamCommandPartitionAssignerRejectsInvalidPartitionOverrides(t *te
 	}
 	partition := core.LogPartition{Kind: "board", Key: "general"}
 
-	if _, err := assigner.SetOverrides(ctx, map[core.LogPartition]string{partition: "writer-b"}); err == nil || !strings.Contains(err.Error(), `override owner "writer-b" is not a member`) {
-		t.Fatalf("set unknown-owner override err = %v, want owner membership error", err)
-	}
-	if _, err := assigner.SetOverrides(ctx, map[core.LogPartition]string{partition: ""}); err == nil || !strings.Contains(err.Error(), "missing override owner for board/general") {
-		t.Fatalf("set empty-owner override err = %v, want missing owner error", err)
-	}
+	_, err := assigner.SetOverrides(ctx, map[core.LogPartition]string{partition: "writer-b"})
+	requireErrorContains(t, err, `override owner "writer-b" is not a member`)
+	_, err = assigner.SetOverrides(ctx, map[core.LogPartition]string{partition: ""})
+	requireErrorContains(t, err, "missing override owner for board/general")
 	if _, generation, err := assigner.Members(ctx); err != nil || generation != 1 {
 		t.Fatalf("members generation after rejected overrides = %d, %v; want 1, nil", generation, err)
 	}
@@ -291,9 +288,8 @@ func TestCommandAssignmentRecordCodecNormalizesAndValidates(t *testing.T) {
 	if record.Version != jetStreamCommandAssignmentRecordVersion || record.Group != "writers" || record.Generation != 3 || !reflect.DeepEqual(record.Members, []string{"writer-a", "writer-b"}) {
 		t.Fatalf("record = %+v, want normalized assignment record", record)
 	}
-	if _, err := encodeCommandAssignmentRecord(commandAssignmentRecord{Group: "writers", Generation: 1}); err == nil || !strings.Contains(err.Error(), "missing members") {
-		t.Fatalf("missing members err = %v, want missing members error", err)
-	}
+	_, err = encodeCommandAssignmentRecord(commandAssignmentRecord{Group: "writers", Generation: 1})
+	requireErrorContains(t, err, "missing members")
 }
 
 func TestCommandAssignmentRecordDecodeRejectsMalformedOverrides(t *testing.T) {
@@ -321,9 +317,7 @@ func TestCommandAssignmentRecordDecodeRejectsMalformedOverrides(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := decodeCommandAssignmentRecord([]byte(tt.raw))
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("decodeCommandAssignmentRecord err = %v, want %q", err, tt.wantErr)
-			}
+			requireErrorContains(t, err, tt.wantErr)
 		})
 	}
 }

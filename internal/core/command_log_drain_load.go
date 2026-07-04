@@ -8,153 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadutil"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
-
-type CommandLogDrainLoadConfig struct {
-	Boards               int    `json:"boards"`
-	CommandsPerBoard     int    `json:"commandsPerBoard"`
-	RepliesPerThread     int    `json:"repliesPerThread"`
-	DirectedReplies      bool   `json:"directedReplies"`
-	SubmitConcurrency    int    `json:"submitConcurrency"`
-	Writers              int    `json:"writers"`
-	BatchSize            int    `json:"batchSize"`
-	PartitionConcurrency int    `json:"partitionConcurrency"`
-	BodyBytes            int    `json:"bodyBytes"`
-	BoardPrefix          string `json:"boardPrefix"`
-	UserName             string `json:"userName"`
-	AssignmentMode       string `json:"assignmentMode"`
-	ExecutorMode         string `json:"executorMode"`
-	AuthoritativeSubmit  bool   `json:"authoritativeSubmit"`
-}
-
-const (
-	CommandLogDrainAssignmentHash     = "hash-assignment"
-	CommandLogDrainAssignmentSnapshot = "snapshot-assignment"
-	CommandLogDrainExecutorSQL        = "sql"
-	CommandLogDrainExecutorNative     = "native"
-
-	CommandLogDrainScalarAllocatorBrokerStreamSequence = "broker-stream-sequence"
-	CommandLogDrainScalarAllocatorMemoryStreamSequence = "memory-stream-sequence"
-	CommandLogDrainScalarAllocatorPostgresEventSeq     = "postgres-event-seq"
-	CommandLogDrainScalarAllocatorSQLEventPartitions   = "sql-event-partition-offsets"
-	CommandLogDrainScalarAllocatorSQLEventOffsets      = "sql-event-scalar-offsets"
-)
-
-type CommandLogDrainLoadReport struct {
-	Config                     CommandLogDrainLoadConfig            `json:"config"`
-	Runtime                    CommandLogDrainLoadRuntime           `json:"runtime"`
-	Evidence                   CommandLogDrainLoadEvidence          `json:"evidence"`
-	StartedAt                  int64                                `json:"startedAt"`
-	FinishedAt                 int64                                `json:"finishedAt"`
-	TotalCommands              int                                  `json:"totalCommands"`
-	Partitions                 int                                  `json:"partitions"`
-	Submit                     CommandLogLoadStage                  `json:"submit"`
-	Drain                      CommandLogDrainStage                 `json:"drain"`
-	EventProjection            EventStoreProjectionLoadStage        `json:"eventProjection"`
-	MaxPartitionLagBeforeDrain int64                                `json:"maxPartitionLagBeforeDrain"`
-	MaxPartitionLagAfterDrain  int64                                `json:"maxPartitionLagAfterDrain"`
-	PromotionReadiness         CommandLogPromotionReadinessReport   `json:"promotionReadiness"`
-	MaterializationAudit       CommandLogMaterializationAuditReport `json:"materializationAudit"`
-	ScalarCompatibilityAudit   CommandLogScalarCompatibilityAudit   `json:"scalarCompatibilityAudit"`
-}
-
-type CommandLogDrainLoadEvidence struct {
-	Tool         string `json:"tool,omitempty"`
-	BudgetFile   string `json:"budgetFile,omitempty"`
-	BudgetSHA256 string `json:"budgetSha256,omitempty"`
-	GitRevision  string `json:"gitRevision,omitempty"`
-	GitModified  bool   `json:"gitModified"`
-}
-
-type CommandLogDrainLoadRuntime struct {
-	CommandLogBackend            string   `json:"commandLogBackend,omitempty"`
-	EventLogBackend              string   `json:"eventLogBackend,omitempty"`
-	MaterializationStore         string   `json:"materializationStore,omitempty"`
-	ScalarCompatibilityAllocator string   `json:"scalarCompatibilityAllocator,omitempty"`
-	NATSEndpoint                 string   `json:"natsEndpoint,omitempty"`
-	PostgresEndpoint             string   `json:"postgresEndpoint,omitempty"`
-	RequirePostgres              bool     `json:"requirePostgres"`
-	DurableStaging               bool     `json:"durableStaging"`
-	PostgresSchema               string   `json:"postgresSchema,omitempty"`
-	KeepPostgresSchema           bool     `json:"keepPostgresSchema"`
-	CommandLogIndexBackend       string   `json:"commandLogIndexBackend,omitempty"`
-	CommandLogIndexPrefix        string   `json:"commandLogIndexPrefix,omitempty"`
-	RedisEndpoint                string   `json:"redisEndpoint,omitempty"`
-	CommandNATSStream            string   `json:"commandNatsStream,omitempty"`
-	CommandNATSReplicas          int      `json:"commandNatsReplicas,omitempty"`
-	EventNATSStream              string   `json:"eventNatsStream,omitempty"`
-	EventNATSReplicas            int      `json:"eventNatsReplicas,omitempty"`
-	KafkaBrokers                 []string `json:"kafkaBrokers,omitempty"`
-	KafkaTLS                     bool     `json:"kafkaTls,omitempty"`
-	KafkaSASLMechanism           string   `json:"kafkaSaslMechanism,omitempty"`
-	KafkaCommandTopic            string   `json:"kafkaCommandTopic,omitempty"`
-	KafkaEventTopic              string   `json:"kafkaEventTopic,omitempty"`
-	KafkaConsumerGroup           string   `json:"kafkaConsumerGroup,omitempty"`
-	KafkaCommandPartitions       int      `json:"kafkaCommandPartitions,omitempty"`
-	KafkaEventPartitions         int      `json:"kafkaEventPartitions,omitempty"`
-}
-
-type CommandLogScalarCompatibilityAudit struct {
-	Enabled                    bool   `json:"enabled"`
-	Store                      string `json:"store,omitempty"`
-	OffsetID                   string `json:"offsetId,omitempty"`
-	LegacySQLScalarOffsetAfter int64  `json:"legacySqlScalarOffsetAfter"`
-}
-
-type CommandLogLoadStage struct {
-	Commands        int      `json:"commands"`
-	Succeeded       int      `json:"succeeded"`
-	Failed          int      `json:"failed"`
-	DurationMS      int64    `json:"durationMs"`
-	CommandsPerSec  float64  `json:"commandsPerSec"`
-	SampleErrorText []string `json:"sampleErrorText,omitempty"`
-}
-
-type CommandLogDrainStage struct {
-	Commands          int      `json:"commands"`
-	Processed         int      `json:"processed"`
-	Applied           int      `json:"applied"`
-	TerminalFailures  int      `json:"terminalFailures"`
-	RetryableFailures int      `json:"retryableFailures"`
-	CommitFailures    int      `json:"commitFailures"`
-	AssignmentLosses  int      `json:"assignmentLosses"`
-	ClaimLosses       int      `json:"claimLosses"`
-	Rounds            int      `json:"rounds"`
-	DurationMS        int64    `json:"durationMs"`
-	CommandsPerSec    float64  `json:"commandsPerSec"`
-	SampleErrorText   []string `json:"sampleErrorText,omitempty"`
-}
-
-type EventStoreProjectionLoadStage struct {
-	Enabled                bool     `json:"enabled"`
-	Partitions             int      `json:"partitions"`
-	PartitionLimit         int      `json:"partitionLimit,omitempty"`
-	PartitionLimitExceeded bool     `json:"partitionLimitExceeded"`
-	ExpectedEvents         int      `json:"expectedEvents,omitempty"`
-	AppliedEvents          int      `json:"appliedEvents"`
-	Rounds                 int      `json:"rounds"`
-	DurationMS             int64    `json:"durationMs"`
-	EventsPerSec           float64  `json:"eventsPerSec"`
-	SampleErrorText        []string `json:"sampleErrorText,omitempty"`
-}
-
-func DefaultCommandLogDrainLoadConfig() CommandLogDrainLoadConfig {
-	return CommandLogDrainLoadConfig{
-		Boards:               8,
-		CommandsPerBoard:     50,
-		RepliesPerThread:     0,
-		SubmitConcurrency:    32,
-		Writers:              4,
-		BatchSize:            25,
-		PartitionConcurrency: 1,
-		BodyBytes:            256,
-		BoardPrefix:          "cmdlogload",
-		UserName:             "command_log_load_admin",
-		AssignmentMode:       CommandLogDrainAssignmentHash,
-		ExecutorMode:         CommandLogDrainExecutorSQL,
-	}
-}
 
 type commandLogDrainLoadNativeStores struct {
 	transactions CommandEventTransactionStore
@@ -172,23 +29,23 @@ type commandLogDrainLoadPostProjection struct {
 	replyTo string
 }
 
-func (c *Core) RunCommandLogDrainLoad(ctx context.Context, config CommandLogDrainLoadConfig) (CommandLogDrainLoadReport, error) {
+func (c *Core) RunCommandLogDrainLoad(ctx context.Context, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogDrainLoadReport, error) {
 	return c.runCommandLogDrainLoad(ctx, config, NewBrokerCommandLog(NewMemoryBrokerCommandLogClient()), commandLogDrainLoadNativeStores{})
 }
 
-func (c *Core) RunCommandLogDrainLoadWithCommandLog(ctx context.Context, config CommandLogDrainLoadConfig, commandLog CommandLog) (CommandLogDrainLoadReport, error) {
+func (c *Core) RunCommandLogDrainLoadWithCommandLog(ctx context.Context, config loadmodel.CommandLogDrainLoadConfig, commandLog CommandLog) (loadmodel.CommandLogDrainLoadReport, error) {
 	return c.runCommandLogDrainLoad(ctx, config, commandLog, commandLogDrainLoadNativeStores{})
 }
 
-func (c *Core) RunAuthoritativeCommandLogDrainLoad(ctx context.Context, config CommandLogDrainLoadConfig) (CommandLogDrainLoadReport, error) {
+func (c *Core) RunAuthoritativeCommandLogDrainLoad(ctx context.Context, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogDrainLoadReport, error) {
 	config.AuthoritativeSubmit = true
 	if c == nil {
-		return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: nil core")
+		return loadmodel.CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: nil core")
 	}
 	return c.runCommandLogDrainLoad(ctx, config, c.commandLogAuthoritative, commandLogDrainLoadNativeStores{})
 }
 
-func (c *Core) RunNativeCommandEventProjectionLoad(ctx context.Context, config CommandLogDrainLoadConfig) (CommandLogDrainLoadReport, error) {
+func (c *Core) RunNativeCommandEventProjectionLoad(ctx context.Context, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogDrainLoadReport, error) {
 	commandClient := NewMemoryBrokerCommandLogClient()
 	eventClient := NewMemoryBrokerEventLogClient()
 	return c.RunNativeCommandEventProjectionLoadWithStores(
@@ -200,67 +57,48 @@ func (c *Core) RunNativeCommandEventProjectionLoad(ctx context.Context, config C
 	)
 }
 
-func (c *Core) RunNativeCommandEventProjectionLoadWithStores(ctx context.Context, config CommandLogDrainLoadConfig, commandLog CommandLog, transactions CommandEventTransactionStore, events EventStore) (CommandLogDrainLoadReport, error) {
-	config.ExecutorMode = CommandLogDrainExecutorNative
+func (c *Core) RunNativeCommandEventProjectionLoadWithStores(ctx context.Context, config loadmodel.CommandLogDrainLoadConfig, commandLog CommandLog, transactions CommandEventTransactionStore, events EventStore) (loadmodel.CommandLogDrainLoadReport, error) {
+	config.ExecutorMode = loadmodel.CommandLogDrainExecutorNative
 	return c.runCommandLogDrainLoad(ctx, config, commandLog, commandLogDrainLoadNativeStores{
 		transactions: transactions,
 		events:       events,
 	})
 }
 
-func (c *Core) runCommandLogDrainLoad(ctx context.Context, config CommandLogDrainLoadConfig, commandLog CommandLog, nativeStores commandLogDrainLoadNativeStores) (CommandLogDrainLoadReport, error) {
+func (c *Core) runCommandLogDrainLoad(ctx context.Context, config loadmodel.CommandLogDrainLoadConfig, commandLog CommandLog, nativeStores commandLogDrainLoadNativeStores) (loadmodel.CommandLogDrainLoadReport, error) {
 	if c == nil {
-		return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: nil core")
+		return loadmodel.CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: nil core")
 	}
 	if config.AuthoritativeSubmit {
 		if c.commandLogAuthoritative == nil {
-			return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: authoritative submit mode requires an authoritative command log")
+			return loadmodel.CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: authoritative submit mode requires an authoritative command log")
 		}
 		commandLog = c.commandLogAuthoritative
 	} else if c.commandLogAuthoritative != nil {
-		return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: core must not already be in authoritative command-log mode")
+		return loadmodel.CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: core must not already be in authoritative command-log mode")
 	}
 	if commandLog == nil {
-		return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: nil command log")
+		return loadmodel.CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: nil command log")
 	}
-	config = normalizeCommandLogDrainLoadConfig(config)
-	if !isSupportedCommandLogDrainAssignmentMode(config.AssignmentMode) {
-		return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: unsupported assignment mode %q", config.AssignmentMode)
+	config = loadmodel.NormalizeCommandLogDrainLoadConfig(config)
+	if err := loadmodel.ValidateCommandLogDrainLoadConfig(config); err != nil {
+		return loadmodel.CommandLogDrainLoadReport{}, err
 	}
-	if !isSupportedCommandLogDrainExecutorMode(config.ExecutorMode) {
-		return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: unsupported executor mode %q", config.ExecutorMode)
-	}
-	if config.ExecutorMode == CommandLogDrainExecutorNative {
+	if config.ExecutorMode == loadmodel.CommandLogDrainExecutorNative {
 		if nativeStores.transactions == nil {
-			return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: native executor requires command/event transactions")
+			return loadmodel.CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: native executor requires command/event transactions")
 		}
 		if nativeStores.events == nil {
-			return CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: native executor requires an event store")
+			return loadmodel.CommandLogDrainLoadReport{}, fmt.Errorf("command log drain load: native executor requires an event store")
 		}
 	}
-	report := CommandLogDrainLoadReport{
-		Config:        config,
-		StartedAt:     nowMS(),
-		TotalCommands: commandLogDrainLoadTotalCommands(config),
-		Partitions:    config.Boards,
-	}
-	if config.ExecutorMode == CommandLogDrainExecutorNative {
-		report.EventProjection.ExpectedEvents = commandLogDrainLoadExpectedEventProjectionEvents(config)
-	}
+	report := loadmodel.NewCommandLogDrainLoadReport(config, nowMS())
 
 	actor, err := c.RegisterUser(config.UserName, newID("cl_"))
 	if err != nil {
 		return report, fmt.Errorf("register command-log load user: %w", err)
 	}
-	var boardIDs []string
-	if config.AuthoritativeSubmit {
-		boardIDs, err = c.createCommandLogDrainLoadBoards(ctx, actor, config)
-	} else {
-		boardIDs, err = c.createPartitionWriteLoadBoards(ctx, actor, PartitionWriteLoadConfig{
-			Boards:      config.Boards,
-			BoardPrefix: config.BoardPrefix,
-		})
-	}
+	boardIDs, err := c.createCommandLogDrainLoadBoards(ctx, actor, config)
 	if err != nil {
 		return report, err
 	}
@@ -268,208 +106,101 @@ func (c *Core) runCommandLogDrainLoad(ctx context.Context, config CommandLogDrai
 	if err != nil {
 		return report, err
 	}
-	if config.ExecutorMode == CommandLogDrainExecutorNative && eventStoreProjectionWatermarksRequireSeed(nativeStores.events) {
-		if _, err := c.seedEventStoreProjectionWatermarksFromEventPartitionOffsets(ctx, commandLogDrainLoadEventProjectionSource(config)); err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
+	if config.ExecutorMode == loadmodel.CommandLogDrainExecutorNative {
+		if seeder, ok := nativeStores.events.(interface {
+			RequiresEventStoreProjectionWatermarkSeed() bool
+		}); ok && seeder.RequiresEventStoreProjectionWatermarkSeed() {
+			if _, err := c.seedEventStoreProjectionWatermarksFromEventPartitionOffsets(ctx, loadmodel.CommandLogDrainLoadEventProjectionSource(config)); err != nil {
+				return commandLogDrainLoadReportError(report, err)
+			}
 		}
 	}
 
 	createConfig := config
 	createConfig.RepliesPerThread = 0
-	createCommands := commandLogDrainLoadCreateThreadCommands(config)
-	createPartitionLimit := config.Boards
-	finalCommandPartitionLimit := commandLogDrainLoadCommandPartitionLimit(config)
+	createCommands := loadmodel.CommandLogDrainLoadCreateThreadCommands(config)
+	finalCommandPartitionLimit := loadmodel.CommandLogDrainLoadCommandPartitionLimit(config)
 
-	createSubmit, err := c.produceCommandLogDrainLoad(ctx, commandLog, actorsByBoard, boardIDs, createConfig)
-	report.Submit = mergeCommandLogLoadStage(report.Submit, createSubmit)
-	if err != nil {
-		report.FinishedAt = nowMS()
-		return report, err
-	}
-	lagBeforeDrain, err := maxCommandLogPartitionLag(ctx, commandLog)
-	if err != nil {
-		report.FinishedAt = nowMS()
-		return report, err
-	}
-	report.MaxPartitionLagBeforeDrain = maxInt64(report.MaxPartitionLagBeforeDrain, lagBeforeDrain)
-	createDrain, err := c.drainCommandLogLoad(ctx, commandLog, createConfig, nativeStores, createCommands, createPartitionLimit)
-	report.Drain = mergeCommandLogDrainStage(report.Drain, createDrain)
-	if err != nil {
-		report.FinishedAt = nowMS()
-		return report, err
-	}
-	report.MaxPartitionLagAfterDrain, err = maxCommandLogPartitionLag(ctx, commandLog)
-	if err != nil {
-		report.FinishedAt = nowMS()
-		return report, err
-	}
-	if config.ExecutorMode == CommandLogDrainExecutorNative {
-		eventProjection, err := c.projectCommandLogDrainLoadEvents(ctx, nativeStores.events, config)
-		report.EventProjection = mergeEventStoreProjectionLoadStage(report.EventProjection, eventProjection)
-		if err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
-		}
+	if err := c.runCommandLogDrainLoadPhase(ctx, &report, commandLog, createConfig, nativeStores, createCommands, createConfig.Boards, func() (loadmodel.CommandLogLoadStage, error) {
+		return c.produceCommandLogDrainLoad(ctx, commandLog, actorsByBoard, boardIDs, createConfig)
+	}); err != nil {
+		return commandLogDrainLoadReportError(report, err)
 	}
 
 	if config.RepliesPerThread > 0 {
 		targets, err := c.commandLogDrainLoadThreadTargets(boardIDs, config)
 		if err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
+			return commandLogDrainLoadReportError(report, err)
 		}
-		replySubmit, err := c.produceCommandLogAppendPostLoad(ctx, commandLog, actorsByBoard, targets, config)
-		report.Submit = mergeCommandLogLoadStage(report.Submit, replySubmit)
-		if err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
-		}
-		lagBeforeReplies, err := maxCommandLogPartitionLag(ctx, commandLog)
-		if err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
-		}
-		report.MaxPartitionLagBeforeDrain = maxInt64(report.MaxPartitionLagBeforeDrain, lagBeforeReplies)
-		replyCommands := commandLogDrainLoadAppendPostCommands(config)
-		replyDrain, err := c.drainCommandLogLoad(ctx, commandLog, config, nativeStores, replyCommands, finalCommandPartitionLimit)
-		report.Drain = mergeCommandLogDrainStage(report.Drain, replyDrain)
-		if err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
-		}
-		report.MaxPartitionLagAfterDrain, err = maxCommandLogPartitionLag(ctx, commandLog)
-		if err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
-		}
-		if config.ExecutorMode == CommandLogDrainExecutorNative {
-			eventProjection, err := c.projectCommandLogDrainLoadEvents(ctx, nativeStores.events, config)
-			report.EventProjection = mergeEventStoreProjectionLoadStage(report.EventProjection, eventProjection)
-			if err != nil {
-				report.FinishedAt = nowMS()
-				return report, err
-			}
+		replyCommands := loadmodel.CommandLogDrainLoadAppendPostCommands(config)
+		if err := c.runCommandLogDrainLoadPhase(ctx, &report, commandLog, config, nativeStores, replyCommands, finalCommandPartitionLimit, func() (loadmodel.CommandLogLoadStage, error) {
+			return c.produceCommandLogAppendPostLoad(ctx, commandLog, actorsByBoard, targets, config)
+		}); err != nil {
+			return commandLogDrainLoadReportError(report, err)
 		}
 	}
 
-	if config.ExecutorMode == CommandLogDrainExecutorNative {
+	if config.ExecutorMode == loadmodel.CommandLogDrainExecutorNative {
 		if err := c.validateCommandLogDrainLoadProjections(boardIDs, config); err != nil {
-			report.FinishedAt = nowMS()
-			return report, err
+			return commandLogDrainLoadReportError(report, err)
 		}
 	}
-	report.PromotionReadiness, err = c.CheckCommandLogPromotionReadiness(ctx, commandLog, CommandLogPromotionReadinessConfig{
+	readiness, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, loadmodel.CommandLogPromotionReadinessConfig{
 		PartitionLimit: finalCommandPartitionLimit,
 		BatchSize:      config.BatchSize,
 	})
 	if err != nil {
-		report.FinishedAt = nowMS()
-		return report, err
+		return commandLogDrainLoadReportError(report, err)
 	}
-	report.MaterializationAudit = report.PromotionReadiness.MaterializationAudit
-	report.FinishedAt = nowMS()
-	if report.Submit.Failed > 0 {
-		return report, fmt.Errorf("command log drain load: command production failed %d/%d", report.Submit.Failed, report.Submit.Commands)
-	}
-	if report.Drain.Applied != report.TotalCommands || report.MaxPartitionLagAfterDrain != 0 {
-		return report, fmt.Errorf("command log drain load: applied %d/%d with max lag %d",
-			report.Drain.Applied, report.TotalCommands, report.MaxPartitionLagAfterDrain)
-	}
-	if report.Drain.TerminalFailures+report.Drain.RetryableFailures+report.Drain.CommitFailures > 0 {
-		return report, fmt.Errorf("command log drain load: drain failures terminal=%d retryable=%d commit=%d",
-			report.Drain.TerminalFailures, report.Drain.RetryableFailures, report.Drain.CommitFailures)
-	}
-	if config.ExecutorMode == CommandLogDrainExecutorNative && report.EventProjection.AppliedEvents != report.EventProjection.ExpectedEvents {
-		return report, fmt.Errorf("command log drain load: projected %d broker events, want %d for %d native commands",
-			report.EventProjection.AppliedEvents, report.EventProjection.ExpectedEvents, report.TotalCommands)
-	}
-	if !report.PromotionReadiness.Ready {
-		return report, fmt.Errorf("command log drain load: promotion readiness failed lagging=%d totalLag=%d missing=%d retrying=%d missingRecords=%d",
-			report.PromotionReadiness.LaggingPartitions,
-			report.PromotionReadiness.TotalLag,
-			report.MaterializationAudit.MissingMaterialization,
-			report.MaterializationAudit.RetryingCommitted,
-			report.MaterializationAudit.MissingRecords)
-	}
-	if !report.MaterializationAudit.Complete {
-		return report, fmt.Errorf("command log drain load: materialization audit incomplete missing=%d retrying=%d missingRecords=%d",
-			report.MaterializationAudit.MissingMaterialization,
-			report.MaterializationAudit.RetryingCommitted,
-			report.MaterializationAudit.MissingRecords)
-	}
-	return report, nil
+	loadmodel.FinalizeCommandLogDrainLoadReport(&report, readiness, nowMS())
+	return report, loadmodel.ValidateCommandLogDrainLoadReport(report)
 }
 
-func normalizeCommandLogDrainLoadConfig(config CommandLogDrainLoadConfig) CommandLogDrainLoadConfig {
-	def := DefaultCommandLogDrainLoadConfig()
-	if config.Boards <= 0 {
-		config.Boards = def.Boards
-	}
-	if config.CommandsPerBoard <= 0 {
-		config.CommandsPerBoard = def.CommandsPerBoard
-	}
-	if config.RepliesPerThread < 0 {
-		config.RepliesPerThread = 0
-	}
-	if config.SubmitConcurrency <= 0 {
-		config.SubmitConcurrency = def.SubmitConcurrency
-	}
-	if config.Writers <= 0 {
-		config.Writers = def.Writers
-	}
-	if config.BatchSize <= 0 {
-		config.BatchSize = def.BatchSize
-	}
-	if config.PartitionConcurrency <= 0 {
-		config.PartitionConcurrency = def.PartitionConcurrency
-	}
-	if config.BodyBytes < 0 {
-		config.BodyBytes = def.BodyBytes
-	}
-	if config.BoardPrefix == "" {
-		config.BoardPrefix = def.BoardPrefix
-	}
-	if config.UserName == "" {
-		config.UserName = def.UserName
-	}
-	config.AssignmentMode = normalizeCommandLogDrainAssignmentMode(config.AssignmentMode)
-	config.ExecutorMode = normalizeCommandLogDrainExecutorMode(config.ExecutorMode)
-	total := commandLogDrainLoadTotalCommands(config)
-	if config.SubmitConcurrency > total {
-		config.SubmitConcurrency = total
-	}
-	if config.SubmitConcurrency <= 0 {
-		config.SubmitConcurrency = 1
-	}
-	partitionLimit := commandLogDrainLoadCommandPartitionLimit(config)
-	if config.Writers > partitionLimit {
-		config.Writers = partitionLimit
-	}
-	if config.Writers <= 0 {
-		config.Writers = 1
-	}
-	return config
+func commandLogDrainLoadReportError(report loadmodel.CommandLogDrainLoadReport, err error) (loadmodel.CommandLogDrainLoadReport, error) {
+	loadmodel.FinishCommandLogDrainLoadReport(&report, nowMS())
+	return report, err
 }
 
-func commandLogDrainLoadCreateThreadCommands(config CommandLogDrainLoadConfig) int {
-	return config.Boards * config.CommandsPerBoard
+func (c *Core) runCommandLogDrainLoadPhase(ctx context.Context, report *loadmodel.CommandLogDrainLoadReport, commandLog CommandLog, config loadmodel.CommandLogDrainLoadConfig, nativeStores commandLogDrainLoadNativeStores, expectedCommands, partitionLimit int, produce func() (loadmodel.CommandLogLoadStage, error)) error {
+	if report == nil {
+		return fmt.Errorf("command log drain load: nil report")
+	}
+	submit, err := produce()
+	loadmodel.RecordCommandLogDrainLoadSubmit(report, submit)
+	if err != nil {
+		return err
+	}
+	lagBeforeDrain, err := maxCommandLogPartitionLag(ctx, commandLog)
+	if err != nil {
+		return err
+	}
+	loadmodel.RecordCommandLogDrainLoadBeforeDrainLag(report, lagBeforeDrain)
+	drain, err := c.drainCommandLogLoad(ctx, commandLog, config, nativeStores, expectedCommands, partitionLimit)
+	loadmodel.RecordCommandLogDrainLoadDrain(report, drain)
+	if err != nil {
+		return err
+	}
+	lagAfterDrain, err := maxCommandLogPartitionLag(ctx, commandLog)
+	if err != nil {
+		return err
+	}
+	loadmodel.RecordCommandLogDrainLoadAfterDrainLag(report, lagAfterDrain)
+	if config.ExecutorMode == loadmodel.CommandLogDrainExecutorNative {
+		eventProjection, err := c.projectCommandLogDrainLoadEvents(ctx, nativeStores.events, config)
+		loadmodel.RecordCommandLogDrainLoadEventProjection(report, eventProjection)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func commandLogDrainLoadAppendPostCommands(config CommandLogDrainLoadConfig) int {
-	return commandLogDrainLoadCreateThreadCommands(config) * config.RepliesPerThread
-}
-
-func commandLogDrainLoadTotalCommands(config CommandLogDrainLoadConfig) int {
-	return commandLogDrainLoadCreateThreadCommands(config) + commandLogDrainLoadAppendPostCommands(config)
-}
-
-func (c *Core) commandLogDrainLoadActorsByBoard(actor *User, boardIDs []string, config CommandLogDrainLoadConfig) (map[string]*User, error) {
+func (c *Core) commandLogDrainLoadActorsByBoard(actor *User, boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) (map[string]*User, error) {
 	actorsByBoard := make(map[string]*User, len(boardIDs))
 	for _, boardID := range boardIDs {
 		actorsByBoard[boardID] = actor
 	}
-	if actor == nil || len(boardIDs) <= 1 || config.ExecutorMode != CommandLogDrainExecutorNative || currentSQLFlavor != postgresFlavor {
+	if actor == nil || len(boardIDs) <= 1 || config.ExecutorMode != loadmodel.CommandLogDrainExecutorNative || currentSQLFlavor != postgresFlavor {
 		return actorsByBoard, nil
 	}
 	for i, boardID := range boardIDs {
@@ -490,55 +221,10 @@ func commandLogDrainLoadActorForBoard(actorsByBoard map[string]*User, boardID st
 	return actor, nil
 }
 
-func commandLogDrainLoadExpectedEventProjectionEvents(config CommandLogDrainLoadConfig) int {
-	return commandLogDrainLoadCreateThreadCommands(config)*2 + commandLogDrainLoadAppendPostCommands(config)
-}
-
-func commandLogDrainLoadCommandPartitionLimit(config CommandLogDrainLoadConfig) int {
-	partitions := config.Boards
-	if config.RepliesPerThread > 0 {
-		partitions += commandLogDrainLoadCreateThreadCommands(config)
-	}
-	if partitions <= 0 {
-		return 1
-	}
-	return partitions
-}
-
-func normalizeCommandLogDrainAssignmentMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", "hash", "hash-assignment":
-		return CommandLogDrainAssignmentHash
-	case "snapshot", "snapshot-assignment", "broker-snapshot", "consumer-group":
-		return CommandLogDrainAssignmentSnapshot
-	default:
-		return strings.ToLower(strings.TrimSpace(mode))
-	}
-}
-
-func isSupportedCommandLogDrainAssignmentMode(mode string) bool {
-	return mode == CommandLogDrainAssignmentHash || mode == CommandLogDrainAssignmentSnapshot
-}
-
-func normalizeCommandLogDrainExecutorMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", "sql", "postgres", "postgresql":
-		return CommandLogDrainExecutorSQL
-	case "native", "broker-native", "event-transaction":
-		return CommandLogDrainExecutorNative
-	default:
-		return strings.ToLower(strings.TrimSpace(mode))
-	}
-}
-
-func isSupportedCommandLogDrainExecutorMode(mode string) bool {
-	return mode == CommandLogDrainExecutorSQL || mode == CommandLogDrainExecutorNative
-}
-
-func (c *Core) createCommandLogDrainLoadBoards(ctx context.Context, actor *User, config CommandLogDrainLoadConfig) ([]string, error) {
+func (c *Core) createCommandLogDrainLoadBoards(ctx context.Context, actor *User, config loadmodel.CommandLogDrainLoadConfig) ([]string, error) {
 	boardIDs := make([]string, 0, config.Boards)
 	for i := 0; i < config.Boards; i++ {
-		boardID := fmt.Sprintf("%s_%02d", sanitizeLoadID(config.BoardPrefix), i)
+		boardID := fmt.Sprintf("%s_%02d", loadutil.SafeID(config.BoardPrefix), i)
 		payload, err := json.Marshal(proto.CreateBoardPayload{
 			ID:          boardID,
 			Name:        fmt.Sprintf("Load %02d", i),
@@ -559,218 +245,81 @@ func (c *Core) createCommandLogDrainLoadBoards(ctx context.Context, actor *User,
 	return boardIDs, nil
 }
 
-func (c *Core) produceCommandLogDrainLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*User, boardIDs []string, config CommandLogDrainLoadConfig) (CommandLogLoadStage, error) {
-	stage := CommandLogLoadStage{
-		Commands: commandLogDrainLoadCreateThreadCommands(config),
-	}
-	if stage.Commands <= 0 {
-		return stage, nil
-	}
-	type submitResult struct {
-		errText string
-	}
-	jobs := make(chan int)
-	results := make(chan submitResult, stage.Commands)
-	workers := config.SubmitConcurrency
-	var wg sync.WaitGroup
-	body := loadBody(config.BodyBytes)
-	start := time.Now()
-	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			for i := range jobs {
-				boardID := boardIDs[i%len(boardIDs)]
-				actor, err := commandLogDrainLoadActorForBoard(actorsByBoard, boardID)
-				if err != nil {
-					results <- submitResult{errText: err.Error()}
-					continue
-				}
-				payload, err := json.Marshal(proto.CreateThreadPayload{
-					Board: boardID,
-					Title: fmt.Sprintf("command-log load %06d", i),
-					Body:  body,
-				})
-				if err != nil {
-					results <- submitResult{errText: err.Error()}
-					continue
-				}
-				cid := fmt.Sprintf("command-log-load-%d-%d", workerID, i)
-				if config.AuthoritativeSubmit {
-					reply := c.ExecCmd(ctx, actor, proto.CmdCreateThread, payload, cid)
-					if reply.Err != nil {
-						results <- submitResult{errText: reply.Err.Message}
-						continue
-					}
-					if reply.Result == nil || reply.Result.Status != proto.AckStatusPending || reply.Result.CommandOffset <= 0 {
-						results <- submitResult{errText: "authoritative submit did not return a pending command-log receipt"}
-						continue
-					}
-				} else {
-					_, err = commandLog.Produce(ctx, CommandLogRecord{
-						Partition:  LogPartition{Kind: partitionBoard, Key: boardID},
-						ActorID:    actor.ID,
-						CID:        cid,
-						Command:    proto.CmdCreateThread,
-						Payload:    payload,
-						EnqueuedAt: nowMS(),
-					})
-					if err != nil {
-						results <- submitResult{errText: err.Error()}
-						continue
-					}
-				}
-				results <- submitResult{}
-			}
-		}(worker)
-	}
-	for i := 0; i < stage.Commands; i++ {
-		select {
-		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			close(results)
-			stage.DurationMS = time.Since(start).Milliseconds()
-			return stage, ctx.Err()
-		case jobs <- i:
+func (c *Core) produceCommandLogDrainLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*User, boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogLoadStage, error) {
+	stage := loadmodel.CommandLogLoadStage{Commands: loadmodel.CommandLogDrainLoadCreateThreadCommands(config)}
+	body := loadutil.Body(config.BodyBytes)
+	return loadutil.RunCommandLogLoadSubmitStage(ctx, stage, config.SubmitConcurrency, "produce command-log load", func(workerID, i int) string {
+		boardID := boardIDs[i%len(boardIDs)]
+		actor, err := commandLogDrainLoadActorForBoard(actorsByBoard, boardID)
+		if err != nil {
+			return err.Error()
 		}
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
-	elapsed := time.Since(start)
-	stage.DurationMS = elapsed.Milliseconds()
-	errSamples := map[string]bool{}
-	for result := range results {
-		if result.errText != "" {
-			stage.Failed++
-			if len(stage.SampleErrorText) < 5 && !errSamples[result.errText] {
-				stage.SampleErrorText = append(stage.SampleErrorText, result.errText)
-				errSamples[result.errText] = true
-			}
-		} else {
-			stage.Succeeded++
+		payload, err := json.Marshal(proto.CreateThreadPayload{
+			Board: boardID,
+			Title: fmt.Sprintf("command-log load %06d", i),
+			Body:  body,
+		})
+		if err != nil {
+			return err.Error()
 		}
-	}
-	if elapsed > 0 {
-		stage.CommandsPerSec = float64(stage.Succeeded) / elapsed.Seconds()
-	}
-	if stage.Failed > 0 {
-		return stage, fmt.Errorf("produce command-log load failed %d/%d commands", stage.Failed, stage.Commands)
-	}
-	return stage, nil
+		cid := fmt.Sprintf("command-log-load-%d-%d", workerID, i)
+		return c.submitCommandLogDrainLoadCommand(ctx, commandLog, actor, config, LogPartition{Kind: partitionBoard, Key: boardID}, proto.CmdCreateThread, payload, cid)
+	})
 }
 
-func (c *Core) produceCommandLogAppendPostLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*User, targets []commandLogDrainLoadThreadTarget, config CommandLogDrainLoadConfig) (CommandLogLoadStage, error) {
-	stage := CommandLogLoadStage{
-		Commands: len(targets) * config.RepliesPerThread,
-	}
-	if stage.Commands <= 0 {
-		return stage, nil
-	}
-	type submitResult struct {
-		errText string
-	}
-	jobs := make(chan int)
-	results := make(chan submitResult, stage.Commands)
-	workers := config.SubmitConcurrency
-	var wg sync.WaitGroup
-	body := loadBody(config.BodyBytes)
-	start := time.Now()
-	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			for i := range jobs {
-				target := targets[i/config.RepliesPerThread]
-				actor, err := commandLogDrainLoadActorForBoard(actorsByBoard, target.boardID)
-				if err != nil {
-					results <- submitResult{errText: err.Error()}
-					continue
-				}
-				replyIndex := i % config.RepliesPerThread
-				payload := proto.AppendPostPayload{
-					Thread: target.threadID,
-					Body:   fmt.Sprintf("command-log reply %06d\n%s", i, body),
-				}
-				if config.DirectedReplies {
-					payload.ReplyTo = target.rootPostID
-				}
-				raw, err := json.Marshal(payload)
-				if err != nil {
-					results <- submitResult{errText: err.Error()}
-					continue
-				}
-				cid := fmt.Sprintf("command-log-reply-load-%d-%d-%d", workerID, i, replyIndex)
-				if config.AuthoritativeSubmit {
-					reply := c.ExecCmd(ctx, actor, proto.CmdAppendPost, raw, cid)
-					if reply.Err != nil {
-						results <- submitResult{errText: reply.Err.Message}
-						continue
-					}
-					if reply.Result == nil || reply.Result.Status != proto.AckStatusPending || reply.Result.CommandOffset <= 0 {
-						results <- submitResult{errText: "authoritative submit did not return a pending command-log receipt"}
-						continue
-					}
-				} else {
-					_, err = commandLog.Produce(ctx, CommandLogRecord{
-						Partition:  LogPartition{Kind: partitionThread, Key: target.threadID},
-						ActorID:    actor.ID,
-						CID:        cid,
-						Command:    proto.CmdAppendPost,
-						Payload:    raw,
-						EnqueuedAt: nowMS(),
-					})
-					if err != nil {
-						results <- submitResult{errText: err.Error()}
-						continue
-					}
-				}
-				results <- submitResult{}
-			}
-		}(worker)
-	}
-	for i := 0; i < stage.Commands; i++ {
-		select {
-		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			close(results)
-			stage.DurationMS = time.Since(start).Milliseconds()
-			return stage, ctx.Err()
-		case jobs <- i:
+func (c *Core) produceCommandLogAppendPostLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*User, targets []commandLogDrainLoadThreadTarget, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogLoadStage, error) {
+	stage := loadmodel.CommandLogLoadStage{Commands: len(targets) * config.RepliesPerThread}
+	body := loadutil.Body(config.BodyBytes)
+	return loadutil.RunCommandLogLoadSubmitStage(ctx, stage, config.SubmitConcurrency, "produce command-log appendPost load", func(workerID, i int) string {
+		target := targets[i/config.RepliesPerThread]
+		actor, err := commandLogDrainLoadActorForBoard(actorsByBoard, target.boardID)
+		if err != nil {
+			return err.Error()
 		}
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
-	elapsed := time.Since(start)
-	stage.DurationMS = elapsed.Milliseconds()
-	errSamples := map[string]bool{}
-	for result := range results {
-		if result.errText != "" {
-			stage.Failed++
-			if len(stage.SampleErrorText) < 5 && !errSamples[result.errText] {
-				stage.SampleErrorText = append(stage.SampleErrorText, result.errText)
-				errSamples[result.errText] = true
-			}
-		} else {
-			stage.Succeeded++
+		replyIndex := i % config.RepliesPerThread
+		payload := proto.AppendPostPayload{
+			Thread: target.threadID,
+			Body:   fmt.Sprintf("command-log reply %06d\n%s", i, body),
 		}
-	}
-	if elapsed > 0 {
-		stage.CommandsPerSec = float64(stage.Succeeded) / elapsed.Seconds()
-	}
-	if stage.Failed > 0 {
-		return stage, fmt.Errorf("produce command-log appendPost load failed %d/%d commands", stage.Failed, stage.Commands)
-	}
-	return stage, nil
+		if config.DirectedReplies {
+			payload.ReplyTo = target.rootPostID
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return err.Error()
+		}
+		cid := fmt.Sprintf("command-log-reply-load-%d-%d-%d", workerID, i, replyIndex)
+		return c.submitCommandLogDrainLoadCommand(ctx, commandLog, actor, config, LogPartition{Kind: partitionThread, Key: target.threadID}, proto.CmdAppendPost, raw, cid)
+	})
 }
 
-func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, config CommandLogDrainLoadConfig, nativeStores commandLogDrainLoadNativeStores, expectedCommands, partitionLimit int) (CommandLogDrainStage, error) {
-	stage := CommandLogDrainStage{
-		Commands: expectedCommands,
+func (c *Core) submitCommandLogDrainLoadCommand(ctx context.Context, commandLog CommandLog, actor *User, config loadmodel.CommandLogDrainLoadConfig, partition LogPartition, command proto.CommandName, payload json.RawMessage, cid string) string {
+	if config.AuthoritativeSubmit {
+		reply := c.ExecCmd(ctx, actor, command, payload, cid)
+		if reply.Err != nil {
+			return reply.Err.Message
+		}
+		if reply.Result == nil || reply.Result.Status != proto.AckStatusPending || reply.Result.CommandOffset <= 0 {
+			return "authoritative submit did not return a pending command-log receipt"
+		}
+		return ""
 	}
+	_, err := commandLog.Produce(ctx, CommandLogRecord{
+		Partition:  partition,
+		ActorID:    actor.ID,
+		CID:        cid,
+		Command:    command,
+		Payload:    payload,
+		EnqueuedAt: nowMS(),
+	})
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, config loadmodel.CommandLogDrainLoadConfig, nativeStores commandLogDrainLoadNativeStores, expectedCommands, partitionLimit int) (loadmodel.CommandLogDrainStage, error) {
+	stage := loadmodel.CommandLogDrainStage{Commands: expectedCommands}
 	if stage.Commands <= 0 {
 		return stage, nil
 	}
@@ -802,7 +351,7 @@ func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, c
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if config.ExecutorMode == CommandLogDrainExecutorNative {
+				if config.ExecutorMode == loadmodel.CommandLogDrainExecutorNative {
 					if batchStore, ok := nativeStores.transactions.(CommandEventTransactionBatchStore); ok {
 						nativeExecutor := NewCommandLogNativeDecisionExecutor(c)
 						drainResults, err := c.drainCommandLogLoadNativeBatchMember(ctx, commandLog, assigner, member, config, batchStore, nativeExecutor, partitionLimit)
@@ -812,7 +361,7 @@ func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, c
 				}
 				executor := CommandLogExecutor(c)
 				var finalizer CommandLogFinalizer
-				if config.ExecutorMode == CommandLogDrainExecutorNative {
+				if config.ExecutorMode == loadmodel.CommandLogDrainExecutorNative {
 					nativeExecutor := NewCommandLogNativeDecisionExecutor(c)
 					executor = nativeExecutor
 					finalizer = CommandEventTransactionBatchFinalizer{
@@ -844,7 +393,7 @@ func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, c
 		for workerResult := range results {
 			accumulateCommandLogDrainWorkerResults(&stage, errSamples, workerResult.results)
 			if workerResult.err != nil {
-				addCommandLogDrainSample(&stage, errSamples, workerResult.err.Error())
+				loadmodel.AddCommandLogDrainSample(&stage, errSamples, workerResult.err.Error())
 				return stage, workerResult.err
 			}
 		}
@@ -852,7 +401,7 @@ func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, c
 			noProgressRounds++
 			if noProgressRounds >= 3 {
 				err := fmt.Errorf("command log drain load: no worker progress after %d rounds with lag %d", noProgressRounds, lag)
-				addCommandLogDrainSample(&stage, errSamples, err.Error())
+				loadmodel.AddCommandLogDrainSample(&stage, errSamples, err.Error())
 				return stage, err
 			}
 		} else {
@@ -861,9 +410,7 @@ func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, c
 	}
 	elapsed := time.Since(start)
 	stage.DurationMS = elapsed.Milliseconds()
-	if elapsed > 0 {
-		stage.CommandsPerSec = float64(stage.Applied) / elapsed.Seconds()
-	}
+	stage.CommandsPerSec = loadutil.PerSecond(stage.Applied, elapsed)
 	return stage, nil
 }
 
@@ -880,12 +427,34 @@ type commandLogDrainLoadNativePendingPartition struct {
 	events  []EventAppend
 }
 
+func (p *commandLogDrainLoadNativePendingPartition) appendRecord(ctx context.Context, executor *CommandLogNativeDecisionExecutor, record CommandLogRecord, reply Reply) error {
+	if p == nil {
+		return fmt.Errorf("command log drain load: nil pending partition")
+	}
+	eventStart := len(p.events)
+	if reply.Err == nil {
+		events, err := executor.DecideCommandLogEvents(ctx, record, reply)
+		if err != nil {
+			return err
+		}
+		p.events = append(p.events, events...)
+	}
+	eventEnd := len(p.events)
+	p.records = append(p.records, commandLogDrainLoadNativePendingRecord{
+		record:     record,
+		reply:      reply,
+		eventStart: eventStart,
+		eventEnd:   eventEnd,
+	})
+	return nil
+}
+
 type commandLogDrainLoadMemberPartitionCursor struct {
 	partition       LogPartition
 	committedOffset int64
 }
 
-func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, commandLog CommandLog, assigner CommandPartitionAssigner, ownerID string, config CommandLogDrainLoadConfig, transactions CommandEventTransactionBatchStore, executor *CommandLogNativeDecisionExecutor, partitionLimit int) ([]CommandLogWorkerResult, error) {
+func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, commandLog CommandLog, assigner CommandPartitionAssigner, ownerID string, config loadmodel.CommandLogDrainLoadConfig, transactions CommandEventTransactionBatchStore, executor *CommandLogNativeDecisionExecutor, partitionLimit int) ([]CommandLogWorkerResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -907,113 +476,6 @@ func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, command
 	}
 	results := make([]CommandLogWorkerResult, 0, len(cursors))
 	pending := make([]commandLogDrainLoadNativePendingPartition, 0, len(cursors))
-	markPendingCommitFailure := func(err error) {
-		if err == nil {
-			return
-		}
-		for i := range pending {
-			pending[i].result.CommitFailures++
-			pending[i].result.CommitFailure = err.Error()
-		}
-	}
-	markPendingAppliedFailure := func(err error) {
-		if err == nil {
-			return
-		}
-		for i := range pending {
-			for _, pendingRecord := range pending[i].records {
-				if pendingRecord.reply.Err == nil && pendingRecord.reply.Result != nil {
-					pending[i].result.FinalizerFailure = err.Error()
-					break
-				}
-			}
-		}
-	}
-	flushPending := func() error {
-		if len(pending) == 0 {
-			return nil
-		}
-		txs := make([]CommandEventTransaction, 0, len(pending))
-		for _, partition := range pending {
-			if len(partition.records) == 0 {
-				continue
-			}
-			last := partition.records[len(partition.records)-1].record
-			txs = append(txs, CommandEventTransaction{
-				CommandPartition:      last.Partition,
-				CommandOffset:         last.Offset,
-				CommandSourcePosition: last.SourcePosition,
-				Events:                partition.events,
-			})
-		}
-		committed, err := transactions.CommitCommandEventBatch(ctx, txs)
-		if err != nil {
-			markPendingCommitFailure(err)
-			return err
-		}
-		if len(committed) != len(pending) {
-			err := fmt.Errorf("command log drain load: batch committed %d partitions for %d pending partitions", len(committed), len(pending))
-			markPendingCommitFailure(err)
-			return err
-		}
-		appliedRecords := []CommandLogRecord{}
-		appliedResults := []*proto.AckResult{}
-		for i := range pending {
-			partition := &pending[i]
-			result := &partition.result
-			committedResult := committed[i]
-			if committedResult.CommittedPartition.Normalize() != result.Partition.Normalize() {
-				err := fmt.Errorf("command log drain load: committed partition %s/%s for pending partition %s/%s",
-					committedResult.CommittedPartition.Normalize().Kind, committedResult.CommittedPartition.Normalize().Key,
-					result.Partition.Kind, result.Partition.Key)
-				result.CommitFailures++
-				result.CommitFailure = err.Error()
-				return err
-			}
-			for _, pendingRecord := range partition.records {
-				if pendingRecord.reply.Err != nil {
-					result.TerminalFailures++
-					result.TerminalFailure = pendingRecord.reply.Err
-					if err := c.RecordCommandLogTerminalFailure(ctx, pendingRecord.record, pendingRecord.reply.Err); err != nil {
-						result.FinalizerFailure = err.Error()
-						return err
-					}
-					continue
-				}
-				result.Applied++
-				if pendingRecord.reply.Result != nil {
-					if pendingRecord.reply.Result.Seq <= 0 {
-						for _, evt := range committedResult.Events[pendingRecord.eventStart:pendingRecord.eventEnd] {
-							if evt != nil && evt.Seq > pendingRecord.reply.Result.Seq {
-								pendingRecord.reply.Result.Seq = evt.Seq
-							}
-						}
-					}
-					appliedRecords = append(appliedRecords, pendingRecord.record)
-					appliedResults = append(appliedResults, pendingRecord.reply.Result)
-				}
-			}
-			last := partition.records[len(partition.records)-1].record
-			if committedResult.CommittedOffset < last.Offset {
-				err := fmt.Errorf("command log drain load: committed offset %d before pending offset %d for %s/%s",
-					committedResult.CommittedOffset, last.Offset, result.Partition.Kind, result.Partition.Key)
-				result.CommitFailures++
-				result.CommitFailure = err.Error()
-				return err
-			}
-			if err := recordCommandLogDrainLoadCommit(ctx, commandLog, result.Partition, last.Offset, result); err != nil {
-				return err
-			}
-			advanceCommandLogWorkerResult(result, last.Offset, len(partition.records))
-		}
-		if len(appliedRecords) > 0 {
-			if err := c.RecordCommandLogAppliedBatch(ctx, appliedRecords, appliedResults); err != nil {
-				markPendingAppliedFailure(err)
-				return err
-			}
-		}
-		return nil
-	}
 
 	for _, cursor := range cursors {
 		partition := cursor.partition.Normalize()
@@ -1022,25 +484,11 @@ func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, command
 			return results, err
 		}
 		if !assigned {
-			results = append(results, CommandLogWorkerResult{
-				Partition:            partition,
-				Assigned:             false,
-				AssignmentOwnerID:    assignment.OwnerID,
-				AssignmentGeneration: assignment.Generation,
-			})
+			results = append(results, commandLogWorkerAssignmentResult(partition, assignment, false))
 			continue
 		}
 		committed := cursor.committedOffset
-		result := CommandLogWorkerResult{
-			Partition:            partition,
-			Assigned:             true,
-			AssignmentOwnerID:    assignment.OwnerID,
-			AssignmentGeneration: assignment.Generation,
-			Claimed:              true,
-			ClaimOwnerID:         ownerID,
-			StartedOffset:        committed,
-			LastOffset:           committed,
-		}
+		result := commandLogWorkerClaimedAssignmentResult(partition, assignment, ownerID, committed)
 		records, err := commandLog.FetchPartition(ctx, partition, committed, config.BatchSize)
 		allowCommandLogRebalance(commandLog)
 		if err != nil {
@@ -1063,32 +511,16 @@ func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, command
 			}
 			reply := executor.ExecuteCommandLogRecord(ctx, record)
 			if reply.Err != nil && reply.Err.Retryable {
-				if len(pendingPartition.records) > 0 {
-					pending = append(pending, pendingPartition)
-				} else {
-					results = append(results, pendingPartition.result)
-				}
-				if err := flushPending(); err != nil {
-					for _, partition := range pending {
-						results = append(results, partition.result)
-					}
+				results, pending = commandLogDrainLoadQueuePendingPartition(results, pending, pendingPartition)
+				if err := c.flushCommandLogDrainLoadNativePending(ctx, commandLog, transactions, pending); err != nil {
+					results = commandLogDrainLoadAppendPendingResults(results, pending)
 					return results, err
 				}
-				for _, partition := range pending {
-					results = append(results, partition.result)
-				}
+				results = commandLogDrainLoadAppendPendingResults(results, pending)
 				pending = nil
-				retryResult := CommandLogWorkerResult{
-					Partition:            partition,
-					Assigned:             true,
-					AssignmentOwnerID:    assignment.OwnerID,
-					AssignmentGeneration: assignment.Generation,
-					Claimed:              true,
-					ClaimOwnerID:         ownerID,
-					StartedOffset:        committed,
-					LastOffset:           pendingLastOffset,
-					RetryableFailure:     reply.Err,
-				}
+				retryResult := commandLogWorkerClaimedAssignmentResult(partition, assignment, ownerID, committed)
+				retryResult.LastOffset = pendingLastOffset
+				retryResult.RetryableFailure = reply.Err
 				if err := c.RecordCommandLogRetryableFailure(ctx, record, reply.Err); err != nil {
 					retryResult.FinalizerFailure = err.Error()
 					results = append(results, retryResult)
@@ -1097,40 +529,139 @@ func (c *Core) drainCommandLogLoadNativeBatchMember(ctx context.Context, command
 				results = append(results, retryResult)
 				return results, nil
 			}
-			eventStart := len(pendingPartition.events)
-			if reply.Err == nil {
-				events, err := executor.DecideCommandLogEvents(ctx, record, reply)
-				if err != nil {
-					results = append(results, pendingPartition.result)
-					return results, err
-				}
-				pendingPartition.events = append(pendingPartition.events, events...)
+			if err := pendingPartition.appendRecord(ctx, executor, record, reply); err != nil {
+				results = append(results, pendingPartition.result)
+				return results, err
 			}
-			eventEnd := len(pendingPartition.events)
-			pendingPartition.records = append(pendingPartition.records, commandLogDrainLoadNativePendingRecord{
-				record:     record,
-				reply:      reply,
-				eventStart: eventStart,
-				eventEnd:   eventEnd,
-			})
 			pendingLastOffset = record.Offset
 		}
-		if len(pendingPartition.records) > 0 {
-			pending = append(pending, pendingPartition)
-		} else {
-			results = append(results, result)
-		}
+		results, pending = commandLogDrainLoadQueuePendingPartition(results, pending, pendingPartition)
 	}
-	if err := flushPending(); err != nil {
-		for _, partition := range pending {
-			results = append(results, partition.result)
-		}
+	if err := c.flushCommandLogDrainLoadNativePending(ctx, commandLog, transactions, pending); err != nil {
+		results = commandLogDrainLoadAppendPendingResults(results, pending)
 		return results, err
 	}
+	results = commandLogDrainLoadAppendPendingResults(results, pending)
+	return results, nil
+}
+
+func (c *Core) flushCommandLogDrainLoadNativePending(ctx context.Context, commandLog CommandLog, transactions CommandEventTransactionBatchStore, pending []commandLogDrainLoadNativePendingPartition) error {
+	if len(pending) == 0 {
+		return nil
+	}
+	txs := make([]CommandEventTransaction, 0, len(pending))
+	for _, partition := range pending {
+		if len(partition.records) == 0 {
+			continue
+		}
+		last := partition.records[len(partition.records)-1].record
+		txs = append(txs, CommandEventTransaction{
+			CommandPartition:      last.Partition,
+			CommandOffset:         last.Offset,
+			CommandSourcePosition: last.SourcePosition,
+			Events:                partition.events,
+		})
+	}
+	committed, err := transactions.CommitCommandEventBatch(ctx, txs)
+	if err != nil {
+		commandLogDrainLoadMarkPendingCommitFailure(pending, err)
+		return err
+	}
+	if len(committed) != len(pending) {
+		err := fmt.Errorf("command log drain load: batch committed %d partitions for %d pending partitions", len(committed), len(pending))
+		commandLogDrainLoadMarkPendingCommitFailure(pending, err)
+		return err
+	}
+	appliedRecords := []CommandLogRecord{}
+	appliedResults := []*proto.AckResult{}
+	for i := range pending {
+		partition := &pending[i]
+		result := &partition.result
+		committedResult := committed[i]
+		committedPartition := committedResult.CommittedPartition.Normalize()
+		resultPartition := result.Partition.Normalize()
+		if committedPartition != resultPartition {
+			err := fmt.Errorf("command log drain load: committed partition %s/%s for pending partition %s/%s",
+				committedPartition.Kind, committedPartition.Key,
+				resultPartition.Kind, resultPartition.Key)
+			result.CommitFailures++
+			result.CommitFailure = err.Error()
+			return err
+		}
+		for _, pendingRecord := range partition.records {
+			if pendingRecord.reply.Err != nil {
+				result.TerminalFailures++
+				result.TerminalFailure = pendingRecord.reply.Err
+				if err := c.RecordCommandLogTerminalFailure(ctx, pendingRecord.record, pendingRecord.reply.Err); err != nil {
+					result.FinalizerFailure = err.Error()
+					return err
+				}
+				continue
+			}
+			result.Applied++
+			if pendingRecord.reply.Result != nil {
+				if pendingRecord.reply.Result.Seq <= 0 {
+					for _, evt := range committedResult.Events[pendingRecord.eventStart:pendingRecord.eventEnd] {
+						if evt != nil && evt.Seq > pendingRecord.reply.Result.Seq {
+							pendingRecord.reply.Result.Seq = evt.Seq
+						}
+					}
+				}
+				appliedRecords = append(appliedRecords, pendingRecord.record)
+				appliedResults = append(appliedResults, pendingRecord.reply.Result)
+			}
+		}
+		last := partition.records[len(partition.records)-1].record
+		if committedResult.CommittedOffset < last.Offset {
+			err := fmt.Errorf("command log drain load: committed offset %d before pending offset %d for %s/%s",
+				committedResult.CommittedOffset, last.Offset, result.Partition.Kind, result.Partition.Key)
+			result.CommitFailures++
+			result.CommitFailure = err.Error()
+			return err
+		}
+		if err := recordCommandLogDrainLoadCommit(ctx, commandLog, result.Partition, last.Offset, result); err != nil {
+			return err
+		}
+		advanceCommandLogWorkerResult(result, last.Offset, len(partition.records))
+	}
+	if len(appliedRecords) > 0 {
+		if err := c.RecordCommandLogAppliedBatch(ctx, appliedRecords, appliedResults); err != nil {
+			for i := range pending {
+				for _, pendingRecord := range pending[i].records {
+					if pendingRecord.reply.Err == nil && pendingRecord.reply.Result != nil {
+						pending[i].result.FinalizerFailure = err.Error()
+						break
+					}
+				}
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func commandLogDrainLoadQueuePendingPartition(results []CommandLogWorkerResult, pending []commandLogDrainLoadNativePendingPartition, partition commandLogDrainLoadNativePendingPartition) ([]CommandLogWorkerResult, []commandLogDrainLoadNativePendingPartition) {
+	if len(partition.records) > 0 {
+		return results, append(pending, partition)
+	}
+	return append(results, partition.result), pending
+}
+
+func commandLogDrainLoadMarkPendingCommitFailure(pending []commandLogDrainLoadNativePendingPartition, err error) {
+	if err == nil {
+		return
+	}
+	for i := range pending {
+		pending[i].result.CommitFailures++
+		pending[i].result.CommitFailure = err.Error()
+	}
+}
+
+func commandLogDrainLoadAppendPendingResults(results []CommandLogWorkerResult, pending []commandLogDrainLoadNativePendingPartition) []CommandLogWorkerResult {
 	for _, partition := range pending {
 		results = append(results, partition.result)
 	}
-	return results, nil
+	return results
 }
 
 func commandLogDrainLoadMemberPartitionCursors(ctx context.Context, commandLog CommandLog, assigner CommandPartitionAssigner, ownerID string, partitionLimit int) ([]commandLogDrainLoadMemberPartitionCursor, error) {
@@ -1138,34 +669,18 @@ func commandLogDrainLoadMemberPartitionCursors(ctx context.Context, commandLog C
 		return nil, err
 	}
 	if offsetLister, ok := commandLog.(CommandPartitionOffsetLister); ok {
-		offsets, err := offsetLister.ListCommandPartitionOffsets(ctx, partitionLimit)
+		offsets, _, err := listCommandPartitionOffsetsWithLimit(ctx, offsetLister, partitionLimit)
 		if err != nil {
 			return nil, err
 		}
-		ownerID = strings.TrimSpace(ownerID)
-		cursors := make([]commandLogDrainLoadMemberPartitionCursor, 0, len(offsets))
-		seen := map[LogPartition]bool{}
-		for _, offset := range offsets {
-			if offset.TailOffset <= offset.CommittedOffset {
-				continue
-			}
-			partition := offset.Partition.Normalize()
-			if seen[partition] {
-				continue
-			}
-			assignment, assigned, err := assigner.AssignCommandPartition(ctx, ownerID, partition)
-			if err != nil {
-				return nil, err
-			}
-			if !assigned || assignment.OwnerID != ownerID {
-				continue
-			}
-			seen[partition] = true
-			if offset.CommittedOffset < 0 {
-				offset.CommittedOffset = 0
-			}
+		assignedOffsets, err := commandLogDrainLoadAssignedLaggingPartitionOffsets(ctx, offsets, assigner, ownerID)
+		if err != nil {
+			return nil, err
+		}
+		cursors := make([]commandLogDrainLoadMemberPartitionCursor, 0, len(assignedOffsets))
+		for _, offset := range assignedOffsets {
 			cursors = append(cursors, commandLogDrainLoadMemberPartitionCursor{
-				partition:       partition,
+				partition:       offset.Partition,
 				committedOffset: offset.CommittedOffset,
 			})
 		}
@@ -1190,6 +705,39 @@ func commandLogDrainLoadMemberPartitionCursors(ctx context.Context, commandLog C
 	return cursors, nil
 }
 
+func commandLogDrainLoadLaggingPartitionOffsets(offsets []CommandPartitionOffset) []CommandPartitionOffset {
+	lagging := make([]CommandPartitionOffset, 0, len(offsets))
+	seen := map[LogPartition]bool{}
+	for _, offset := range offsets {
+		offset = offset.Normalize()
+		if offset.Lag() <= 0 {
+			continue
+		}
+		if seen[offset.Partition] {
+			continue
+		}
+		seen[offset.Partition] = true
+		lagging = append(lagging, offset)
+	}
+	return lagging
+}
+
+func commandLogDrainLoadAssignedLaggingPartitionOffsets(ctx context.Context, offsets []CommandPartitionOffset, assigner CommandPartitionAssigner, ownerID string) ([]CommandPartitionOffset, error) {
+	ownerID = strings.TrimSpace(ownerID)
+	assignedOffsets := make([]CommandPartitionOffset, 0, len(offsets))
+	for _, offset := range commandLogDrainLoadLaggingPartitionOffsets(offsets) {
+		assignment, assigned, err := assigner.AssignCommandPartition(ctx, ownerID, offset.Partition)
+		if err != nil {
+			return nil, err
+		}
+		if !assigned || assignment.OwnerID != ownerID {
+			continue
+		}
+		assignedOffsets = append(assignedOffsets, offset)
+	}
+	return assignedOffsets, nil
+}
+
 func commandLogDrainLoadMemberPartitions(ctx context.Context, commandLog CommandLog, assigner CommandPartitionAssigner, ownerID string, partitionLimit int) ([]LogPartition, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1199,17 +747,7 @@ func commandLogDrainLoadMemberPartitions(ctx context.Context, commandLog Command
 		if err != nil {
 			return nil, err
 		}
-		partitions := make([]LogPartition, 0, len(assignments))
-		seen := map[LogPartition]bool{}
-		for _, assignment := range assignments {
-			partition := assignment.Partition.Normalize()
-			if seen[partition] {
-				continue
-			}
-			seen[partition] = true
-			partitions = append(partitions, partition)
-		}
-		return partitions, nil
+		return commandPartitionAssignmentPartitions(assignments), nil
 	}
 	lister, ok := commandLog.(CommandPartitionLister)
 	if !ok {
@@ -1250,30 +788,45 @@ func recordCommandLogDrainLoadCommit(ctx context.Context, commandLog CommandLog,
 	return nil
 }
 
-func newCommandLogDrainLoadAssigner(ctx context.Context, commandLog CommandLog, members []string, config CommandLogDrainLoadConfig, partitionLimit int) (CommandPartitionAssigner, error) {
+func newCommandLogDrainLoadAssigner(ctx context.Context, commandLog CommandLog, members []string, config loadmodel.CommandLogDrainLoadConfig, partitionLimit int) (CommandPartitionAssigner, error) {
 	if len(members) == 0 {
 		return nil, fmt.Errorf("command log drain load: assignment requires at least one writer")
 	}
-	switch normalizeCommandLogDrainAssignmentMode(config.AssignmentMode) {
-	case CommandLogDrainAssignmentHash:
+	switch loadmodel.NormalizeCommandLogDrainAssignmentMode(config.AssignmentMode) {
+	case loadmodel.CommandLogDrainAssignmentHash:
 		return NewHashCommandPartitionAssigner(members, 1), nil
-	case CommandLogDrainAssignmentSnapshot:
-		lister, ok := commandLog.(CommandPartitionOffsetLister)
-		if !ok {
-			return nil, fmt.Errorf("command log drain load: snapshot assignment requires command partition offsets")
+	case loadmodel.CommandLogDrainAssignmentSnapshot:
+		lister, err := requireCommandPartitionOffsetLister(commandLog, "command log drain load: snapshot assignment requires command partition offsets")
+		if err != nil {
+			return nil, err
 		}
 		snapshot, err := snapshotCommandLogDrainLoadPartitionOffsets(ctx, lister, partitionLimit)
 		if err != nil {
 			return nil, err
 		}
 		return commandLogDrainLoadSnapshotAssigner{
-			members:        append([]string(nil), members...),
-			offsets:        snapshot,
-			partitionLimit: partitionLimit,
-			generation:     1,
+			SnapshotCommandPartitionAssigner: NewSnapshotCommandPartitionAssigner(commandLogDrainLoadAssignmentSnapshot(snapshot, members)),
+			offsets:                          snapshot,
+			partitionLimit:                   partitionLimit,
 		}, nil
 	default:
 		return nil, fmt.Errorf("command log drain load: unsupported assignment mode %q", config.AssignmentMode)
+	}
+}
+
+func commandLogDrainLoadAssignmentSnapshot(offsets []CommandPartitionOffset, members []string) CommandPartitionAssignmentSnapshot {
+	members = normalizeCommandPartitionAssignmentMembers(members)
+	owners := map[LogPartition]string{}
+	for _, offset := range commandLogDrainLoadLaggingPartitionOffsets(offsets) {
+		if len(members) == 0 {
+			break
+		}
+		partition := offset.Partition.Normalize()
+		owners[partition] = members[commandPartitionAssignmentIndex(partition, len(members))]
+	}
+	return CommandPartitionAssignmentSnapshot{
+		Generation: 1,
+		Owners:     owners,
 	}
 }
 
@@ -1283,7 +836,7 @@ func snapshotCommandLogDrainLoadPartitionOffsets(ctx context.Context, lister Com
 	if lister == nil {
 		return nil, fmt.Errorf("command log drain load: nil partition offsets")
 	}
-	offsets, err := lister.ListCommandPartitionOffsets(ctx, limit)
+	offsets, _, err := listCommandPartitionOffsetsWithLimit(ctx, lister, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1303,63 +856,19 @@ func (s commandLogDrainLoadPartitionOffsetSnapshot) clone(limit int) commandLogD
 	}
 	out := make(commandLogDrainLoadPartitionOffsetSnapshot, 0, len(s))
 	for _, offset := range s {
-		offset.Partition = offset.Partition.Normalize()
-		if offset.TailOffset < 0 {
-			offset.TailOffset = 0
-		}
-		if offset.CommittedOffset < 0 {
-			offset.CommittedOffset = 0
-		}
-		if offset.CommittedOffset > offset.TailOffset {
-			offset.CommittedOffset = offset.TailOffset
-		}
-		out = append(out, offset)
+		out = append(out, offset.Normalize())
 	}
 	return out
 }
 
 type commandLogDrainLoadSnapshotAssigner struct {
-	members        []string
+	*SnapshotCommandPartitionAssigner
 	offsets        CommandPartitionOffsetLister
 	partitionLimit int
-	generation     int64
 }
 
 func (a commandLogDrainLoadSnapshotAssigner) StableCommandPartitionAssignment() bool {
 	return true
-}
-
-func (a commandLogDrainLoadSnapshotAssigner) AssignCommandPartition(ctx context.Context, ownerID string, partition LogPartition) (CommandPartitionAssignment, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return CommandPartitionAssignment{}, false, err
-	}
-	owner := a.owner(partition)
-	assignment := CommandPartitionAssignment{
-		Partition:  partition.Normalize(),
-		OwnerID:    owner,
-		Generation: a.generation,
-	}
-	return assignment, owner != "" && owner == strings.TrimSpace(ownerID), nil
-}
-
-func (a commandLogDrainLoadSnapshotAssigner) ListAssignedCommandPartitions(ctx context.Context, ownerID string, limit int) ([]CommandPartitionAssignment, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	offsets, err := a.ListAssignedCommandPartitionOffsets(ctx, ownerID, limit)
-	if err != nil {
-		return nil, err
-	}
-	ownerID = strings.TrimSpace(ownerID)
-	assignments := make([]CommandPartitionAssignment, 0, len(offsets))
-	for _, offset := range offsets {
-		assignments = append(assignments, CommandPartitionAssignment{
-			Partition:  offset.Partition.Normalize(),
-			OwnerID:    ownerID,
-			Generation: a.generation,
-		})
-	}
-	return assignments, nil
 }
 
 func (a commandLogDrainLoadSnapshotAssigner) ListAssignedCommandPartitionOffsets(ctx context.Context, ownerID string, limit int) ([]CommandPartitionOffset, error) {
@@ -1373,80 +882,53 @@ func (a commandLogDrainLoadSnapshotAssigner) ListAssignedCommandPartitionOffsets
 	if limit > 0 && (queryLimit <= 0 || limit < queryLimit) {
 		queryLimit = limit
 	}
-	offsets, err := a.offsets.ListCommandPartitionOffsets(ctx, queryLimit)
+	offsets, _, err := listCommandPartitionOffsetsWithLimit(ctx, a.offsets, queryLimit)
 	if err != nil {
 		return nil, err
 	}
-	ownerID = strings.TrimSpace(ownerID)
-	assignedOffsets := make([]CommandPartitionOffset, 0, len(offsets))
-	for _, offset := range offsets {
-		if offset.TailOffset <= offset.CommittedOffset {
-			continue
-		}
-		partition := offset.Partition.Normalize()
-		owner := a.owner(partition)
-		if owner == "" || owner != ownerID {
-			continue
-		}
-		offset.Partition = partition
-		assignedOffsets = append(assignedOffsets, offset)
-	}
-	return assignedOffsets, nil
+	return commandLogDrainLoadAssignedLaggingPartitionOffsets(ctx, offsets, a, ownerID)
 }
 
-func (a commandLogDrainLoadSnapshotAssigner) owner(partition LogPartition) string {
-	if len(a.members) == 0 {
-		return ""
+func (c *Core) projectCommandLogDrainLoadEvents(ctx context.Context, eventStore EventStore, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.EventStoreProjectionLoadStage, error) {
+	partitionLimit := loadmodel.CommandLogDrainLoadCommandPartitionLimit(config)
+	stage := loadmodel.EventStoreProjectionLoadStage{
+		Enabled:        true,
+		PartitionLimit: partitionLimit,
 	}
-	partition = partition.Normalize()
-	return a.members[commandPartitionAssignmentIndex(partition, len(a.members))]
-}
-
-func (c *Core) projectCommandLogDrainLoadEvents(ctx context.Context, eventStore EventStore, config CommandLogDrainLoadConfig) (EventStoreProjectionLoadStage, error) {
-	partitionLimit := commandLogDrainLoadCommandPartitionLimit(config)
-	stage := EventStoreProjectionLoadStage{Enabled: true, PartitionLimit: partitionLimit}
 	lister, ok := eventStore.(EventPartitionLister)
 	if !ok {
 		err := fmt.Errorf("command log drain load: event store does not expose partitions")
-		addEventProjectionLoadSample(&stage, err.Error())
-		return stage, err
+		return commandLogDrainLoadProjectionError(stage, time.Time{}, err)
 	}
-	partitions, limited, err := listEventStoreProjectionPartitions(ctx, lister, partitionLimit)
+	partitions, limited, err := listEventPartitionsWithLimit(ctx, lister, partitionLimit)
 	if err != nil {
-		addEventProjectionLoadSample(&stage, err.Error())
-		return stage, err
+		return commandLogDrainLoadProjectionError(stage, time.Time{}, err)
 	}
 	stage.Partitions = len(partitions)
 	stage.PartitionLimitExceeded = limited
 	if limited {
 		err := fmt.Errorf("command log drain load: event projection partition limit %d did not cover every broker event partition", partitionLimit)
-		addEventProjectionLoadSample(&stage, err.Error())
-		return stage, err
+		return commandLogDrainLoadProjectionError(stage, time.Time{}, err)
 	}
 	targetOffsets, hasTargetOffsets, err := eventStoreProjectionTargetOffsets(ctx, eventStore, partitions, partitionLimit)
 	if err != nil {
-		addEventProjectionLoadSample(&stage, err.Error())
-		return stage, err
+		return commandLogDrainLoadProjectionError(stage, time.Time{}, err)
 	}
 	start := time.Now()
 	seenPartitions := map[LogPartition]bool{}
-	projectionSource := commandLogDrainLoadEventProjectionSource(config)
+	projectionSource := loadmodel.CommandLogDrainLoadEventProjectionSource(config)
 	projectionConcurrency := 1
 	if currentSQLFlavor == postgresFlavor {
 		projectionConcurrency = config.Writers
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			stage.DurationMS = time.Since(start).Milliseconds()
-			addEventProjectionLoadSample(&stage, err.Error())
-			return stage, err
+			return commandLogDrainLoadProjectionError(stage, start, err)
 		}
 		stage.Rounds++
 		results, err := c.materializeCommandLogDrainLoadEventPartitions(ctx, eventStore, partitions, projectionSource, config.BatchSize, projectionConcurrency)
 		if err != nil {
-			stage.DurationMS = time.Since(start).Milliseconds()
-			addEventProjectionLoadSample(&stage, err.Error())
-			return stage, err
+			return commandLogDrainLoadProjectionError(stage, start, err)
 		}
 		for _, result := range results {
 			seenPartitions[result.Partition.Normalize()] = true
@@ -1464,10 +946,18 @@ func (c *Core) projectCommandLogDrainLoadEvents(ctx context.Context, eventStore 
 	}
 	stage.DurationMS = time.Since(start).Milliseconds()
 	stage.Partitions = len(seenPartitions)
-	if stage.DurationMS > 0 {
-		stage.EventsPerSec = float64(stage.AppliedEvents) / (float64(stage.DurationMS) / 1000)
-	}
+	stage.EventsPerSec = loadutil.PerSecond(stage.AppliedEvents, time.Duration(stage.DurationMS)*time.Millisecond)
 	return stage, nil
+}
+
+func commandLogDrainLoadProjectionError(stage loadmodel.EventStoreProjectionLoadStage, start time.Time, err error) (loadmodel.EventStoreProjectionLoadStage, error) {
+	if !start.IsZero() {
+		stage.DurationMS = time.Since(start).Milliseconds()
+	}
+	if err != nil {
+		loadmodel.AddLoadSample(&stage.SampleErrorText, nil, err.Error())
+	}
+	return stage, err
 }
 
 func (c *Core) materializeCommandLogDrainLoadEventPartitions(ctx context.Context, eventStore EventStore, partitions []LogPartition, source string, batchSize, concurrency int) ([]EventStorePartitionMaterializationResult, error) {
@@ -1555,15 +1045,11 @@ func eventStoreProjectionTargetOffsets(ctx context.Context, eventStore EventStor
 	if !ok {
 		return nil, false, nil
 	}
-	queryLimit := limit
-	if limit > 0 {
-		queryLimit = limit + 1
-	}
-	offsets, err := lister.ListEventPartitionOffsets(ctx, queryLimit)
+	offsets, limited, err := listEventPartitionOffsets(ctx, lister, limit)
 	if err != nil {
 		return nil, false, err
 	}
-	if limit > 0 && len(offsets) > limit {
+	if limited {
 		return nil, false, fmt.Errorf("event projection partition offset limit %d did not cover every broker event partition", limit)
 	}
 	partitionsByKey := make(map[LogPartition]bool, len(partitions))
@@ -1589,75 +1075,7 @@ func eventStoreProjectionTargetOffsets(ctx context.Context, eventStore EventStor
 	return targets, true, nil
 }
 
-func (c *Core) eventStoreProjectionTargetsReached(ctx context.Context, source string, targets map[LogPartition]int64) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if c == nil || c.DB == nil {
-		return false, fmt.Errorf("event projection target check: core is not initialized")
-	}
-	for partition, targetOffset := range targets {
-		if targetOffset <= 0 {
-			continue
-		}
-		watermark := eventStoreProjectionWatermarkName(source, partition)
-		applied, found, err := lookupDerivedViewAppliedSeq(c.DB, watermark)
-		if err != nil {
-			return false, err
-		}
-		if !found || applied < targetOffset {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func listEventStoreProjectionPartitions(ctx context.Context, lister EventPartitionLister, limit int) ([]LogPartition, bool, error) {
-	if lister == nil {
-		return nil, false, fmt.Errorf("nil event partition lister")
-	}
-	queryLimit := limit
-	if limit > 0 {
-		queryLimit = limit + 1
-	}
-	partitions, err := lister.ListEventPartitions(ctx, queryLimit)
-	if err != nil {
-		return nil, false, err
-	}
-	limited := limit > 0 && len(partitions) > limit
-	if limited {
-		partitions = partitions[:limit]
-	}
-	out := make([]LogPartition, 0, len(partitions))
-	seen := map[LogPartition]bool{}
-	for _, partition := range partitions {
-		partition = partition.Normalize()
-		if seen[partition] {
-			continue
-		}
-		seen[partition] = true
-		out = append(out, partition)
-	}
-	return out, limited, nil
-}
-
-type staticEventPartitionLister []LogPartition
-
-func (l staticEventPartitionLister) ListEventPartitions(ctx context.Context, limit int) ([]LogPartition, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	partitions := make([]LogPartition, 0, len(l))
-	for _, partition := range l {
-		partitions = append(partitions, partition.Normalize())
-	}
-	if limit > 0 && len(partitions) > limit {
-		partitions = partitions[:limit]
-	}
-	return partitions, nil
-}
-
-func (c *Core) commandLogDrainLoadThreadTargets(boardIDs []string, config CommandLogDrainLoadConfig) ([]commandLogDrainLoadThreadTarget, error) {
+func (c *Core) commandLogDrainLoadThreadTargets(boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) ([]commandLogDrainLoadThreadTarget, error) {
 	if len(boardIDs) == 0 {
 		return nil, nil
 	}
@@ -1671,16 +1089,16 @@ func (c *Core) commandLogDrainLoadThreadTargets(boardIDs []string, config Comman
 		           LIMIT 1
 		        ), '') AS root_post_id
 		   FROM threads t
-		  WHERE t.board IN (`+commandLogDrainLoadPlaceholders(len(boardIDs))+`)
+		  WHERE t.board IN (`+queryPlaceholders(len(boardIDs))+`)
 		  ORDER BY t.board, t.last_seq DESC, t.id`,
-		commandLogDrainLoadArgs(boardIDs)...,
+		stringQueryArgs(boardIDs)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("command log drain load: list projected reply targets: %w", err)
 	}
 	defer rows.Close()
 
-	targets := make([]commandLogDrainLoadThreadTarget, 0, commandLogDrainLoadCreateThreadCommands(config))
+	targets := make([]commandLogDrainLoadThreadTarget, 0, loadmodel.CommandLogDrainLoadCreateThreadCommands(config))
 	counts := make(map[string]int, len(boardIDs))
 	for rows.Next() {
 		var boardID, threadID, rootPostID string
@@ -1720,9 +1138,9 @@ func (c *Core) commandLogDrainLoadPostsByThread(threadIDs []string) (map[string]
 		rows, err := qQuery(c.DB,
 			`SELECT thread, id, COALESCE(reply_to, '')
 			   FROM posts
-			  WHERE thread IN (`+commandLogDrainLoadPlaceholders(len(chunk))+`)
+			  WHERE thread IN (`+queryPlaceholders(len(chunk))+`)
 			  ORDER BY thread, created_seq, id`,
-			commandLogDrainLoadArgs(chunk)...,
+			stringQueryArgs(chunk)...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("command log drain load: list projected posts: %w", err)
@@ -1747,40 +1165,7 @@ func (c *Core) commandLogDrainLoadPostsByThread(threadIDs []string) (map[string]
 	return postsByThread, nil
 }
 
-func commandLogDrainLoadPlaceholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i := 0; i < n; i++ {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteByte('?')
-	}
-	return b.String()
-}
-
-func commandLogDrainLoadArgs(values []string) []any {
-	args := make([]any, len(values))
-	for i, value := range values {
-		args[i] = value
-	}
-	return args
-}
-
-func commandLogDrainLoadEventProjectionSource(config CommandLogDrainLoadConfig) string {
-	return "command-log-drain-load:" + normalizeCommandLogDrainExecutorMode(config.ExecutorMode)
-}
-
-func eventStoreProjectionWatermarksRequireSeed(store EventStore) bool {
-	seeder, ok := store.(interface {
-		RequiresEventStoreProjectionWatermarkSeed() bool
-	})
-	return ok && seeder.RequiresEventStoreProjectionWatermarkSeed()
-}
-
-func (c *Core) validateCommandLogDrainLoadProjections(boardIDs []string, config CommandLogDrainLoadConfig) error {
+func (c *Core) validateCommandLogDrainLoadProjections(boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) error {
 	targets, err := c.commandLogDrainLoadThreadTargets(boardIDs, config)
 	if err != nil {
 		return err
@@ -1817,7 +1202,7 @@ type commandLogLoadDrainResult struct {
 	err     error
 }
 
-func accumulateCommandLogDrainWorkerResults(stage *CommandLogDrainStage, errSamples map[string]bool, results []CommandLogWorkerResult) {
+func accumulateCommandLogDrainWorkerResults(stage *loadmodel.CommandLogDrainStage, errSamples map[string]bool, results []CommandLogWorkerResult) {
 	if stage == nil {
 		return
 	}
@@ -1827,30 +1212,25 @@ func accumulateCommandLogDrainWorkerResults(stage *CommandLogDrainStage, errSamp
 		stage.TerminalFailures += result.TerminalFailures
 		stage.CommitFailures += result.CommitFailures
 		if result.TerminalFailure != nil {
-			addCommandLogDrainSample(stage, errSamples, fmt.Sprintf("%s/%s terminal: %s",
-				result.Partition.Kind, result.Partition.Key, commandLogDrainFailureMessage(result.TerminalFailure)))
+			loadmodel.AddCommandLogDrainPartitionSample(stage, errSamples, result.Partition.Kind, result.Partition.Key, "terminal", commandLogDrainFailureMessage(result.TerminalFailure))
 		}
 		if result.RetryableFailure != nil {
 			stage.RetryableFailures++
-			addCommandLogDrainSample(stage, errSamples, fmt.Sprintf("%s/%s retryable: %s",
-				result.Partition.Kind, result.Partition.Key, commandLogDrainFailureMessage(result.RetryableFailure)))
+			loadmodel.AddCommandLogDrainPartitionSample(stage, errSamples, result.Partition.Kind, result.Partition.Key, "retryable", commandLogDrainFailureMessage(result.RetryableFailure))
 		}
 		if result.AssignmentLost {
 			stage.AssignmentLosses++
-			addCommandLogDrainSample(stage, errSamples, fmt.Sprintf("%s/%s assignment lost",
-				result.Partition.Kind, result.Partition.Key))
+			loadmodel.AddCommandLogDrainPartitionSample(stage, errSamples, result.Partition.Kind, result.Partition.Key, "assignment lost", "")
 		}
 		if result.ClaimLost {
 			stage.ClaimLosses++
-			addCommandLogDrainSample(stage, errSamples, fmt.Sprintf("%s/%s claim lost",
-				result.Partition.Kind, result.Partition.Key))
+			loadmodel.AddCommandLogDrainPartitionSample(stage, errSamples, result.Partition.Kind, result.Partition.Key, "claim lost", "")
 		}
 		if result.CommitFailure != "" {
-			addCommandLogDrainSample(stage, errSamples, result.CommitFailure)
+			loadmodel.AddCommandLogDrainSample(stage, errSamples, result.CommitFailure)
 		}
 		if result.FinalizerFailure != "" {
-			addCommandLogDrainSample(stage, errSamples, fmt.Sprintf("%s/%s finalizer: %s",
-				result.Partition.Kind, result.Partition.Key, result.FinalizerFailure))
+			loadmodel.AddCommandLogDrainPartitionSample(stage, errSamples, result.Partition.Kind, result.Partition.Key, "finalizer", result.FinalizerFailure)
 		}
 	}
 }
@@ -1866,123 +1246,16 @@ func commandLogDrainFailureMessage(errDetail *proto.ErrorDetail) string {
 }
 
 func maxCommandLogPartitionLag(ctx context.Context, commandLog CommandLog) (int64, error) {
-	lister, ok := commandLog.(CommandPartitionOffsetLister)
-	if !ok {
-		return 0, fmt.Errorf("command log drain load: command log does not expose partition offsets")
-	}
-	offsets, err := lister.ListCommandPartitionOffsets(ctx, 0)
+	offsets, _, err := listCommandLogPartitionOffsetsWithLimit(ctx, commandLog, 0, "command log drain load: command log does not expose partition offsets")
 	if err != nil {
 		return 0, err
 	}
 	var maxLag int64
 	for _, offset := range offsets {
-		lag := offset.TailOffset - offset.CommittedOffset
+		lag := offset.Lag()
 		if lag > maxLag {
 			maxLag = lag
 		}
 	}
 	return maxLag, nil
-}
-
-func mergeCommandLogLoadStage(dst, src CommandLogLoadStage) CommandLogLoadStage {
-	dst.Commands += src.Commands
-	dst.Succeeded += src.Succeeded
-	dst.Failed += src.Failed
-	dst.DurationMS += src.DurationMS
-	dst.SampleErrorText = mergeLoadSamples(dst.SampleErrorText, src.SampleErrorText)
-	if dst.DurationMS > 0 {
-		dst.CommandsPerSec = float64(dst.Succeeded) / (float64(dst.DurationMS) / 1000)
-	} else if src.CommandsPerSec > dst.CommandsPerSec {
-		dst.CommandsPerSec = src.CommandsPerSec
-	}
-	return dst
-}
-
-func mergeCommandLogDrainStage(dst, src CommandLogDrainStage) CommandLogDrainStage {
-	dst.Commands += src.Commands
-	dst.Processed += src.Processed
-	dst.Applied += src.Applied
-	dst.TerminalFailures += src.TerminalFailures
-	dst.RetryableFailures += src.RetryableFailures
-	dst.CommitFailures += src.CommitFailures
-	dst.AssignmentLosses += src.AssignmentLosses
-	dst.ClaimLosses += src.ClaimLosses
-	dst.Rounds += src.Rounds
-	dst.DurationMS += src.DurationMS
-	dst.SampleErrorText = mergeLoadSamples(dst.SampleErrorText, src.SampleErrorText)
-	if dst.DurationMS > 0 {
-		dst.CommandsPerSec = float64(dst.Applied) / (float64(dst.DurationMS) / 1000)
-	} else if src.CommandsPerSec > dst.CommandsPerSec {
-		dst.CommandsPerSec = src.CommandsPerSec
-	}
-	return dst
-}
-
-func mergeEventStoreProjectionLoadStage(dst, src EventStoreProjectionLoadStage) EventStoreProjectionLoadStage {
-	dst.Enabled = dst.Enabled || src.Enabled
-	if src.Partitions > dst.Partitions {
-		dst.Partitions = src.Partitions
-	}
-	if src.PartitionLimit > dst.PartitionLimit {
-		dst.PartitionLimit = src.PartitionLimit
-	}
-	dst.PartitionLimitExceeded = dst.PartitionLimitExceeded || src.PartitionLimitExceeded
-	dst.AppliedEvents += src.AppliedEvents
-	dst.Rounds += src.Rounds
-	dst.DurationMS += src.DurationMS
-	dst.SampleErrorText = mergeLoadSamples(dst.SampleErrorText, src.SampleErrorText)
-	if dst.DurationMS > 0 {
-		dst.EventsPerSec = float64(dst.AppliedEvents) / (float64(dst.DurationMS) / 1000)
-	} else if src.EventsPerSec > dst.EventsPerSec {
-		dst.EventsPerSec = src.EventsPerSec
-	}
-	return dst
-}
-
-func mergeLoadSamples(dst, src []string) []string {
-	if len(src) == 0 || len(dst) >= 5 {
-		return dst
-	}
-	seen := map[string]bool{}
-	for _, text := range dst {
-		seen[text] = true
-	}
-	for _, text := range src {
-		if text == "" || seen[text] {
-			continue
-		}
-		dst = append(dst, text)
-		seen[text] = true
-		if len(dst) >= 5 {
-			break
-		}
-	}
-	return dst
-}
-
-func maxInt64(a, b int64) int64 {
-	if b > a {
-		return b
-	}
-	return a
-}
-
-func addCommandLogDrainSample(stage *CommandLogDrainStage, seen map[string]bool, text string) {
-	if stage == nil || text == "" || seen[text] || len(stage.SampleErrorText) >= 5 {
-		return
-	}
-	stage.SampleErrorText = append(stage.SampleErrorText, text)
-	seen[text] = true
-}
-
-func addEventProjectionLoadSample(stage *EventStoreProjectionLoadStage, text string) {
-	if stage == nil || text == "" || len(stage.SampleErrorText) >= 5 {
-		return
-	}
-	for _, existing := range stage.SampleErrorText {
-		if existing == text {
-			return
-		}
-	}
-	stage.SampleErrorText = append(stage.SampleErrorText, text)
 }

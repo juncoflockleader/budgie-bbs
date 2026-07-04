@@ -81,9 +81,7 @@ func TestKafkaCommandRecordRejectsMismatchedKey(t *testing.T) {
 	}
 	produce.Key = []byte(LogicalPartitionKey(core.LogPartition{Kind: "board", Key: "other"}))
 	_, _, err = DecodeKafkaCommandRecord(produce)
-	if err == nil || !strings.Contains(err.Error(), "does not match partition board/general") {
-		t.Fatalf("DecodeKafkaCommandRecord err = %v, want key mismatch", err)
-	}
+	requireErrorContains(t, err, "does not match partition board/general")
 }
 
 func TestKafkaCommandRecordRejectsInvalidProduceRecord(t *testing.T) {
@@ -93,16 +91,12 @@ func TestKafkaCommandRecordRejectsInvalidProduceRecord(t *testing.T) {
 		PartitionKind: "board",
 		PartitionKey:  "general",
 	})
-	if err == nil || !strings.Contains(err.Error(), "invalid payload") {
-		t.Fatalf("NewKafkaCommandRecord err = %v, want invalid payload", err)
-	}
+	requireErrorContains(t, err, "invalid payload")
 	_, _, err = DecodeKafkaCommandRecord(&kgo.Record{
 		Topic:     DefaultCommandTopic,
 		Partition: 1,
 		Offset:    -1,
 		Value:     []byte(`{}`),
 	})
-	if err == nil || !strings.Contains(err.Error(), "negative record offset") {
-		t.Fatalf("DecodeKafkaCommandRecord err = %v, want negative offset", err)
-	}
+	requireErrorContains(t, err, "negative record offset")
 }

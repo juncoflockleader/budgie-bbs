@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 type PostSearchDocument struct {
@@ -173,7 +175,7 @@ func hydrateSearchPostIDs(db *sql.DB, actor *User, ids []string, boardID string,
 		posts = append(posts, post)
 	}
 	for i := range posts {
-		attachments, err := listPostAttachments(db, posts[i].ID)
+		attachments, err := projections.ListPostAttachments(db, posts[i].ID)
 		if err != nil {
 			return nil, err
 		}

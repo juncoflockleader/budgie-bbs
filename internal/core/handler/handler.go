@@ -94,12 +94,14 @@ type Runtime struct {
 	MoveBoardFavorite            func(db *sql.DB, userID, boardID, folderID string, position *int) error
 	ImportFavoriteTree           func(db *sql.DB, userID string, tree *projections.FavoriteTree, replace bool) error
 	GetBoardSettings             func(db *sql.DB, boardID string) (*BoardSettings, error)
+	BoardAllowsPublicSystemPost  func(db *sql.DB, boardID string) (bool, error)
 	SetBoardSettings             func(db *sql.DB, boardID string, patch BoardSettingsPatch) error
 	SetRecommendedBoard          func(db *sql.DB, boardID, note, curatedBy string, position *int, recommended bool) error
 	GetBoardMemberRequirements   func(db *sql.DB, boardID string) (*BoardMemberRequirements, error)
 	SetBoardMemberRequirements   func(db *sql.DB, boardID string, patch BoardMemberRequirementsPatch) error
 	SetBoardModerator            func(db *sql.DB, boardID, userID, actorID string, moderator bool, position *int) error
 	SetBoardMember               func(db *sql.DB, boardID, userID string, member bool, patch BoardMemberPatch) error
+	GetBoardMemberApplication    func(db *sql.DB, applicationID string) (*projections.BoardMemberApplication, error)
 	InsertBoardMemberApplication func(db *sql.DB, id, boardID, userID, note string) error
 	ReviewBoardMemberApplication func(db *sql.DB, applicationID, reviewerID, status, title, reviewNote string) error
 	UpsertDigestEntry            func(db *sql.DB, id, boardID, targetKind, targetID, kind, title, path, note, createdBy string) (string, error)

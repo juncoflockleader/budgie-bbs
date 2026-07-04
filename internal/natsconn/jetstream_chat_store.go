@@ -73,18 +73,9 @@ func NewJetStreamChatStore(ctx context.Context, conn *Conn, options JetStreamCha
 	if conn == nil || conn.nc == nil {
 		return nil, fmt.Errorf("nats chat store: nil connection")
 	}
-	bucket := strings.TrimSpace(options.Bucket)
-	if bucket == "" {
-		bucket = defaultJetStreamChatStoreBucket
-	}
-	wait := options.Wait
-	if wait <= 0 {
-		wait = defaultJetStreamEventLogWait
-	}
-	replicas := options.Replicas
-	if replicas <= 0 {
-		replicas = 1
-	}
+	bucket := JetStreamName(options.Bucket, defaultJetStreamChatStoreBucket)
+	wait := jetStreamWait(options.Wait)
+	replicas := jetStreamReplicas(options.Replicas)
 	js, err := conn.nc.JetStream(nats.MaxWait(wait))
 	if err != nil {
 		return nil, err

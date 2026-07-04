@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	_ "github.com/lib/pq"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/runconfig"
 )
 
 // testRebind converts ?-placeholders to $N when the suite runs against
@@ -34,8 +34,6 @@ func testRebind(query string) string {
 	}
 	return b.String()
 }
-
-var pgHTTPSchemaSeq atomic.Int64
 
 // newHTTPTestCore returns a running Core for HTTP tests. By default it uses a
 // temporary SQLite database; if BUDGIE_TEST_POSTGRES_DSN is set it provisions a
@@ -71,28 +69,20 @@ func newHTTPTestCore(t *testing.T) *core.Core {
 
 func newHTTPTestCorePostgres(t *testing.T, baseDSN string) *core.Core {
 	t.Helper()
-	schema := fmt.Sprintf("budgie_http_test_%d_%d", os.Getpid(), pgHTTPSchemaSeq.Add(1))
 
-	admin, err := sql.Open("postgres", baseDSN)
+	admin, err := core.OpenPostgres(baseDSN)
 	if err != nil {
 		t.Fatalf("open admin postgres: %v", err)
 	}
-	if _, err := admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE"); err != nil {
+	schema, cleanup, err := runconfig.PreparePostgresSchema(context.Background(), admin, "", "budgie_http_test", false, t.Logf)
+	if err != nil {
 		admin.Close()
-		t.Fatalf("reset schema: %v", err)
-	}
-	if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
-		admin.Close()
-		t.Fatalf("create schema: %v", err)
+		t.Fatalf("prepare schema: %v", err)
 	}
 
-	sep := "?"
-	if strings.Contains(baseDSN, "?") {
-		sep = "&"
-	}
-	c, err := core.NewPostgres(baseDSN + sep + "search_path=" + schema)
+	c, err := core.NewPostgres(runconfig.WithSearchPath(baseDSN, schema))
 	if err != nil {
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		cleanup()
 		admin.Close()
 		t.Fatalf("new postgres core: %v", err)
 	}
@@ -105,7 +95,7 @@ func newHTTPTestCorePostgres(t *testing.T, baseDSN string) *core.Core {
 		if c.DB != nil {
 			_ = c.DB.Close()
 		}
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		cleanup()
 		admin.Close()
 	})
 	return c

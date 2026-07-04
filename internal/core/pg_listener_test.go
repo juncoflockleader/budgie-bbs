@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/lib/pq"
@@ -19,10 +20,7 @@ func TestPGWakeupPayloadRoundTrip(t *testing.T) {
 		NodeID: "node_abc123",
 		Scopes: "board:general,thread:thr_xyz",
 	}
-	raw, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	raw := marshalCoreTestJSON(t, "marshal", original)
 	var decoded pgWakeupPayload
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -41,7 +39,7 @@ func TestHandlePGNotificationSkipsSelf(t *testing.T) {
 	bus := &mockBus{publishFn: func() { published++ }}
 
 	payload := pgWakeupPayload{Seq: 1, Event: "post.appended", NodeID: myNodeID, Scopes: "board:general"}
-	raw, _ := json.Marshal(payload)
+	raw := marshalCoreTestJSON(t, "marshal wakeup", payload)
 
 	n := &pq.Notification{Channel: pgNotifyChannel, Extra: string(raw)}
 	// Pass nil db — handlePGNotification should return early before reaching replayEvents.
@@ -65,10 +63,7 @@ func TestHandlePGNotificationBadPayload(t *testing.T) {
 func TestPGWakeupPayloadEIDRoundTrip(t *testing.T) {
 	// With EID set.
 	p := pgWakeupPayload{Seq: 0, Event: "chat.line", NodeID: "node_x", Scopes: "chat:lobby", EID: "chat_abc"}
-	raw, err := json.Marshal(p)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	raw := marshalCoreTestJSON(t, "marshal", p)
 	var dec pgWakeupPayload
 	if err := json.Unmarshal(raw, &dec); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -77,27 +72,16 @@ func TestPGWakeupPayloadEIDRoundTrip(t *testing.T) {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", dec, p)
 	}
 	// EID must appear in JSON when set.
-	if string(raw) == "" || !containsString(string(raw), "eid") {
+	if string(raw) == "" || !strings.Contains(string(raw), "eid") {
 		t.Errorf("expected 'eid' in JSON, got %s", raw)
 	}
 
 	// Without EID — omitempty should suppress the field.
 	p2 := pgWakeupPayload{Seq: 1, Event: "post.appended", NodeID: "node_x", Scopes: "board:g"}
-	raw2, _ := json.Marshal(p2)
-	if containsString(string(raw2), "eid") {
+	raw2 := marshalCoreTestJSON(t, "marshal without eid", p2)
+	if strings.Contains(string(raw2), "eid") {
 		t.Errorf("expected 'eid' to be absent when empty, got %s", raw2)
 	}
-}
-
-func containsString(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && func() bool {
-		for i := 0; i <= len(s)-len(sub); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	}())
 }
 
 // TestHandlePGNotificationEphemeralRoutingSkipsSelf verifies that an ephemeral
@@ -108,7 +92,7 @@ func TestHandlePGNotificationEphemeralRoutingSkipsSelf(t *testing.T) {
 	bus := &mockBus{publishFn: func() { published++ }}
 
 	payload := pgWakeupPayload{Seq: 0, Event: "chat.line", NodeID: myNodeID, Scopes: "chat:lobby", EID: "chat_xyz"}
-	raw, _ := json.Marshal(payload)
+	raw := marshalCoreTestJSON(t, "marshal ephemeral wakeup", payload)
 	n := &pq.Notification{Channel: pgNotifyChannel, Extra: string(raw)}
 
 	handlePGNotification(n, myNodeID, nil, bus)
@@ -134,11 +118,7 @@ func TestHandlePGEphemeralUnknownKindNoOp(t *testing.T) {
 }
 
 func TestHandlePGEphemeralUnorderedTrafficWakeups(t *testing.T) {
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -176,7 +156,7 @@ func TestHandlePGEphemeralUnorderedTrafficWakeups(t *testing.T) {
 	}
 
 	execPGListenerTestCmd(t, c, bob, proto.CmdReactPost, proto.ReactPostPayload{Post: posts[0].ID, Emoji: "heart"})
-	reactionWakeup, _ := json.Marshal(postReactionWakeup{Post: posts[0].ID, User: bob.ID, Emoji: "heart", TS: 1234})
+	reactionWakeup := marshalCoreTestJSON(t, "marshal reaction wakeup", postReactionWakeup{Post: posts[0].ID, User: bob.ID, Emoji: "heart", TS: 1234})
 	reactionBus := &mockBus{}
 	handlePGEphemeralNotification(pgWakeupPayload{
 		Event:  string(proto.EvtPostReacted),
@@ -192,7 +172,7 @@ func TestHandlePGEphemeralUnorderedTrafficWakeups(t *testing.T) {
 	}
 
 	execPGListenerTestCmd(t, c, bob, proto.CmdVotePoll, proto.VotePollPayload{Poll: poll.ID, Option: fullPoll.Options[0].ID})
-	voteWakeup, _ := json.Marshal(pollVoteWakeup{Poll: poll.ID, User: bob.ID, TS: 2345})
+	voteWakeup := marshalCoreTestJSON(t, "marshal vote wakeup", pollVoteWakeup{Poll: poll.ID, User: bob.ID, TS: 2345})
 	voteBus := &mockBus{}
 	handlePGEphemeralNotification(pgWakeupPayload{
 		Event:  string(proto.EvtPollVoted),
@@ -210,10 +190,7 @@ func TestHandlePGEphemeralUnorderedTrafficWakeups(t *testing.T) {
 
 func execPGListenerTestCmd(t *testing.T, c *Core, actor *User, cmd proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal %s: %v", cmd, err)
-	}
+	raw := marshalCoreTestJSON(t, "marshal "+string(cmd), payload)
 	reply := c.ExecCmd(context.Background(), actor, cmd, raw, "")
 	if reply.Err != nil {
 		t.Fatalf("command %s failed: %+v", cmd, reply.Err)

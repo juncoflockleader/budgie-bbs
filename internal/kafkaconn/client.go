@@ -21,80 +21,34 @@ type CommandWriterClientOptions struct {
 	CandidateLimit        int
 }
 
-type CommandLogRuntimeClientOptions struct {
+type RuntimeClientOptions struct {
 	Runtime  RuntimeConfig
 	ClientID string
 }
 
-type CommandLogProducerRuntimeClientOptions struct {
-	Runtime  RuntimeConfig
-	ClientID string
-}
-
-type EventLogRuntimeClientOptions struct {
-	Runtime  RuntimeConfig
-	ClientID string
-}
-
-type EventLogProducerRuntimeClientOptions struct {
-	Runtime  RuntimeConfig
-	ClientID string
-}
+type CommandLogRuntimeClientOptions = RuntimeClientOptions
+type CommandLogProducerRuntimeClientOptions = RuntimeClientOptions
+type EventLogRuntimeClientOptions = RuntimeClientOptions
+type EventLogProducerRuntimeClientOptions = RuntimeClientOptions
 
 func NewCommandLogRuntimeClient(ctx context.Context, options CommandLogRuntimeClientOptions) (*kgo.Client, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	opts, err := CommandLogRuntimeClientOpts(options)
-	if err != nil {
-		return nil, err
-	}
-	return kgo.NewClient(opts...)
+	return newKafkaClient(ctx, options, CommandLogRuntimeClientOpts)
 }
 
 func NewEventLogRuntimeClient(ctx context.Context, options EventLogRuntimeClientOptions) (*kgo.Client, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	opts, err := EventLogRuntimeClientOpts(options)
-	if err != nil {
-		return nil, err
-	}
-	return kgo.NewClient(opts...)
+	return newKafkaClient(ctx, options, EventLogRuntimeClientOpts)
 }
 
 func NewCommandLogProducerRuntimeClient(ctx context.Context, options CommandLogProducerRuntimeClientOptions) (*kgo.Client, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	opts, err := CommandLogProducerRuntimeClientOpts(options)
-	if err != nil {
-		return nil, err
-	}
-	return kgo.NewClient(opts...)
+	return newKafkaClient(ctx, options, CommandLogProducerRuntimeClientOpts)
 }
 
 func NewEventLogProducerRuntimeClient(ctx context.Context, options EventLogProducerRuntimeClientOptions) (*kgo.Client, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	opts, err := EventLogProducerRuntimeClientOpts(options)
-	if err != nil {
-		return nil, err
-	}
-	return kgo.NewClient(opts...)
+	return newKafkaClient(ctx, options, EventLogProducerRuntimeClientOpts)
 }
 
 func CommandLogRuntimeClientOpts(options CommandLogRuntimeClientOptions) ([]kgo.Opt, error) {
-	runtime := options.Runtime.Normalize()
-	if err := runtime.ValidateCommandLog(); err != nil {
-		return nil, err
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return nil, fmt.Errorf("kafka command log client: client id is required")
-	}
-	opts, err := RuntimeClientOpts(runtime, clientID)
+	runtime, _, opts, err := validatedRuntimeClientOpts("command log client", options.Runtime, options.ClientID, RuntimeConfig.ValidateCommandLog)
 	if err != nil {
 		return nil, err
 	}
@@ -111,15 +65,7 @@ func CommandLogRuntimeClientOpts(options CommandLogRuntimeClientOptions) ([]kgo.
 }
 
 func CommandLogProducerRuntimeClientOpts(options CommandLogProducerRuntimeClientOptions) ([]kgo.Opt, error) {
-	runtime := options.Runtime.Normalize()
-	if err := runtime.ValidateCommandLog(); err != nil {
-		return nil, err
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return nil, fmt.Errorf("kafka command log producer: client id is required")
-	}
-	opts, err := RuntimeClientOpts(runtime, clientID)
+	_, _, opts, err := validatedRuntimeClientOpts("command log producer", options.Runtime, options.ClientID, RuntimeConfig.ValidateCommandLog)
 	if err != nil {
 		return nil, err
 	}
@@ -131,15 +77,7 @@ func CommandLogProducerRuntimeClientOpts(options CommandLogProducerRuntimeClient
 }
 
 func EventLogRuntimeClientOpts(options EventLogRuntimeClientOptions) ([]kgo.Opt, error) {
-	runtime := options.Runtime.Normalize()
-	if err := runtime.ValidateEventLog(); err != nil {
-		return nil, err
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return nil, fmt.Errorf("kafka event log client: client id is required")
-	}
-	opts, err := RuntimeClientOpts(runtime, clientID)
+	runtime, _, opts, err := validatedRuntimeClientOpts("event log client", options.Runtime, options.ClientID, RuntimeConfig.ValidateEventLog)
 	if err != nil {
 		return nil, err
 	}
@@ -154,15 +92,7 @@ func EventLogRuntimeClientOpts(options EventLogRuntimeClientOptions) ([]kgo.Opt,
 }
 
 func EventLogProducerRuntimeClientOpts(options EventLogProducerRuntimeClientOptions) ([]kgo.Opt, error) {
-	runtime := options.Runtime.Normalize()
-	if err := runtime.ValidateEventLog(); err != nil {
-		return nil, err
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return nil, fmt.Errorf("kafka event log producer: client id is required")
-	}
-	opts, err := RuntimeClientOpts(runtime, clientID)
+	_, _, opts, err := validatedRuntimeClientOpts("event log producer", options.Runtime, options.ClientID, RuntimeConfig.ValidateEventLog)
 	if err != nil {
 		return nil, err
 	}
@@ -174,21 +104,29 @@ func EventLogProducerRuntimeClientOpts(options EventLogProducerRuntimeClientOpti
 }
 
 func NewCommandWriterClient(ctx context.Context, options CommandWriterClientOptions) (*kgo.Client, error) {
+	return newKafkaClient(ctx, options, CommandWriterClientOpts)
+}
+
+func NewCommandWriterTransactionSession(ctx context.Context, options CommandWriterClientOptions) (*kgo.GroupTransactSession, error) {
+	return newKafkaTransactionSession(ctx, options, CommandWriterClientOpts)
+}
+
+func newKafkaClient[O any](ctx context.Context, options O, optsFor func(O) ([]kgo.Opt, error)) (*kgo.Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	opts, err := CommandWriterClientOpts(options)
+	opts, err := optsFor(options)
 	if err != nil {
 		return nil, err
 	}
 	return kgo.NewClient(opts...)
 }
 
-func NewCommandWriterTransactionSession(ctx context.Context, options CommandWriterClientOptions) (*kgo.GroupTransactSession, error) {
+func newKafkaTransactionSession[O any](ctx context.Context, options O, optsFor func(O) ([]kgo.Opt, error)) (*kgo.GroupTransactSession, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	opts, err := CommandWriterClientOpts(options)
+	opts, err := optsFor(options)
 	if err != nil {
 		return nil, err
 	}
@@ -196,13 +134,9 @@ func NewCommandWriterTransactionSession(ctx context.Context, options CommandWrit
 }
 
 func CommandWriterClientOpts(options CommandWriterClientOptions) ([]kgo.Opt, error) {
-	runtime := options.Runtime.Normalize()
-	if err := runtime.ValidateCommandEventTransaction(); err != nil {
+	runtime, clientID, opts, err := validatedRuntimeClientOpts("command writer client", options.Runtime, options.ClientID, RuntimeConfig.ValidateCommandEventTransaction)
+	if err != nil {
 		return nil, err
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return nil, fmt.Errorf("kafka command writer client: client id is required")
 	}
 	transactionalID := strings.TrimSpace(options.TransactionalID)
 	if transactionalID == "" {
@@ -222,10 +156,6 @@ func CommandWriterClientOpts(options CommandWriterClientOptions) ([]kgo.Opt, err
 		options.CandidateLimit,
 	)
 
-	opts, err := RuntimeClientOpts(runtime, clientID)
-	if err != nil {
-		return nil, err
-	}
 	opts = append(opts,
 		kgo.ConsumeTopics(runtime.CommandTopic),
 		kgo.ConsumerGroup(runtime.ConsumerGroup),
@@ -247,6 +177,19 @@ func CommandWriterClientOpts(options CommandWriterClientOptions) ([]kgo.Opt, err
 		)
 	}
 	return opts, nil
+}
+
+func validatedRuntimeClientOpts(label string, runtime RuntimeConfig, clientID string, validate func(RuntimeConfig) error) (RuntimeConfig, string, []kgo.Opt, error) {
+	runtime = runtime.Normalize()
+	if err := validate(runtime); err != nil {
+		return runtime, "", nil, err
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return runtime, "", nil, fmt.Errorf("kafka %s: client id is required", label)
+	}
+	opts, err := RuntimeClientOpts(runtime, clientID)
+	return runtime, clientID, opts, err
 }
 
 type commandWriterRebalanceCallbacks struct {

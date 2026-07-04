@@ -3,7 +3,6 @@ package kafkaconn
 import (
 	"context"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
@@ -122,13 +121,9 @@ func TestEventLogListPartitionsAndHeadDelegateDurablePositionReaders(t *testing.
 	}
 
 	_, err = NewEventLog(&fakeEventLogClient{}, EventLogOptions{}).ListEventPartitions(ctx, 5)
-	if err == nil || !strings.Contains(err.Error(), "partition listing requires event position reader") {
-		t.Fatalf("ListEventPartitions without lister err = %v, want requirement", err)
-	}
+	requireErrorContains(t, err, "partition listing requires event position reader")
 	_, err = log.AppendEvent(ctx, partitions[0], core.BrokerEventRecord{})
-	if err == nil || !strings.Contains(err.Error(), "append requires command/event transaction") {
-		t.Fatalf("AppendEvent err = %v, want transaction-only append guard", err)
-	}
+	requireErrorContains(t, err, "append requires command/event transaction")
 }
 
 func TestFranzEventLogShadowClientAppendsPositionedSQLMirrorEvent(t *testing.T) {
@@ -209,9 +204,7 @@ func TestFranzEventLogShadowClientRequiresSQLPositionEvidence(t *testing.T) {
 			PartitionCount: 16,
 		})
 		_, err := client.AppendEvent(ctx, partition, record)
-		if err == nil || !strings.Contains(err.Error(), tt.want) {
-			t.Fatalf("%s missing evidence err = %v, want %q", tt.name, err, tt.want)
-		}
+		requireErrorContains(t, err, tt.want)
 	}
 }
 
@@ -221,9 +214,7 @@ func TestDecodeKafkaEventRecordRejectsWrongLogicalKey(t *testing.T) {
 	record.Key = []byte(LogicalPartitionKey(core.LogPartition{Kind: "board", Key: "other"}))
 
 	_, err := DecodeKafkaEventRecord(record)
-	if err == nil || !strings.Contains(err.Error(), "record key") {
-		t.Fatalf("DecodeKafkaEventRecord err = %v, want key mismatch", err)
-	}
+	requireErrorContains(t, err, "record key")
 }
 
 type fakeEventLogClient struct {

@@ -2,18 +2,13 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestLatestFeedProcessorMaterializesAndRebuildsFeed(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "latest-feed-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -153,11 +148,7 @@ func TestLatestFeedProcessorMaterializesAndRebuildsFeed(t *testing.T) {
 
 func TestLatestFeedReadCacheServesStableWatermarkHit(t *testing.T) {
 	cache := &scriptedLatestFeedReadCache{}
-	c, err := New(filepath.Join(t.TempDir(), "latest-feed-read-cache.db"), WithReadCache(cache))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithReadCache(cache))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)

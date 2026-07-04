@@ -13,6 +13,7 @@ import (
 )
 
 const defaultTopicProvisioningTimeout = 30 * time.Second
+const maxTopicReplicationFactor = 32767
 
 // TopicProvisioningSpec describes a Kafka topic shape the runtime requires.
 type TopicProvisioningSpec struct {
@@ -29,30 +30,74 @@ type TopicProvisioningOptions struct {
 	Timeout  time.Duration
 }
 
+func TopicReplicationFactor(raw int) (int16, error) {
+	if raw <= 0 {
+		return 0, fmt.Errorf("kafka topic provisioning: replication factor must be positive")
+	}
+	if raw > maxTopicReplicationFactor {
+		return 0, fmt.Errorf("kafka topic provisioning: replication factor must fit int16, got %d", raw)
+	}
+	return int16(raw), nil
+}
+
+func CommandTopicProvisioningSpecs(runtime RuntimeConfig, commandPartitions int32, rawReplicationFactor int) ([]TopicProvisioningSpec, error) {
+	runtime = runtime.Normalize()
+	replicationFactor, err := TopicReplicationFactor(rawReplicationFactor)
+	if err != nil {
+		return nil, err
+	}
+	return []TopicProvisioningSpec{{
+		Topic:             runtime.CommandTopic,
+		Partitions:        commandPartitions,
+		ReplicationFactor: replicationFactor,
+	}}, nil
+}
+
+func CommandEventTopicProvisioningSpecs(runtime RuntimeConfig, commandPartitions, eventPartitions int32, rawReplicationFactor int) ([]TopicProvisioningSpec, error) {
+	specs, err := CommandTopicProvisioningSpecs(runtime, commandPartitions, rawReplicationFactor)
+	if err != nil {
+		return nil, err
+	}
+	runtime = runtime.Normalize()
+	return append(specs, TopicProvisioningSpec{
+		Topic:             runtime.EventTopic,
+		Partitions:        eventPartitions,
+		ReplicationFactor: specs[0].ReplicationFactor,
+	}), nil
+}
+
 // EnsureTopics creates missing topics and verifies existing topics satisfy the
 // requested partition counts without relying on broker auto-create defaults.
 func EnsureTopics(ctx context.Context, options TopicProvisioningOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	runtime := options.Runtime.Normalize()
-	if len(runtime.Brokers) == 0 {
-		return fmt.Errorf("kafka topic provisioning: broker list is required")
-	}
-	clientID := strings.TrimSpace(options.ClientID)
-	if clientID == "" {
-		return fmt.Errorf("kafka topic provisioning: client id is required")
-	}
-	opts, err := RuntimeClientOpts(runtime, clientID)
+	client, err := openTopicAdminClient("provisioning", options.Runtime, options.ClientID)
 	if err != nil {
 		return err
 	}
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return fmt.Errorf("kafka topic provisioning: create admin client: %w", err)
-	}
 	defer client.Close()
 	return ensureTopicsWithRequestor(ctx, client, options.Topics, options.Timeout)
+}
+
+func openTopicAdminClient(operation string, runtime RuntimeConfig, clientID string) (*kgo.Client, error) {
+	runtime = runtime.Normalize()
+	if len(runtime.Brokers) == 0 {
+		return nil, fmt.Errorf("kafka topic %s: broker list is required", operation)
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return nil, fmt.Errorf("kafka topic %s: client id is required", operation)
+	}
+	opts, err := RuntimeClientOpts(runtime, clientID)
+	if err != nil {
+		return nil, err
+	}
+	client, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("kafka topic %s: create admin client: %w", operation, err)
+	}
+	return client, nil
 }
 
 func ensureTopicsWithRequestor(ctx context.Context, requestor kmsg.Requestor, specs []TopicProvisioningSpec, timeout time.Duration) error {

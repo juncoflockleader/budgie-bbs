@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -131,9 +130,7 @@ func TestFranzCommandEventTransactionRuntimeDoesNotSetOffsetsWhenCommitAborts(t 
 	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_franz_transaction_runtime_aborted_commit", "Aborted commit"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "transaction aborted before commit") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want aborted transaction error", err)
-	}
+	requireErrorContains(t, err, "transaction aborted before commit")
 	if len(runtime.setOffsets) != 0 {
 		t.Fatalf("set offsets = %+v, want none after aborted transaction", runtime.setOffsets)
 	}
@@ -258,9 +255,7 @@ func TestRewriteTxnOffsetCommitRequestRejectsGroupMismatch(t *testing.T) {
 		PhysicalPartition: 1,
 		Offset:            2,
 	})
-	if err == nil || !strings.Contains(err.Error(), "does not match command commit group") {
-		t.Fatalf("rewriteTxnOffsetCommitRequest err = %v, want group mismatch", err)
-	}
+	requireErrorContains(t, err, "does not match command commit group")
 }
 
 func commandOffsetCommitForTest(t *testing.T, command core.CommandLogCommitPosition) CommandOffsetCommit {

@@ -259,7 +259,7 @@ func processCommunityStatSnapshotJob(db *sql.DB, p communityStatSnapshotJob) err
 }
 
 func processPostCommittedJob(db *sql.DB, bus Bus, p postCommittedJob) error {
-	oldTL, newTL, err := recordPostCreated(db, p.ActorID)
+	oldTL, newTL, err := projections.RecordPostCreated(db, p.ActorID)
 	if err != nil {
 		return err
 	}
@@ -270,18 +270,18 @@ func processPostCommittedJob(db *sql.DB, bus Bus, p postCommittedJob) error {
 	}
 
 	for _, username := range parseMentions(p.Body) {
-		u, err := getUserByName(db, username)
+		u, err := projections.GetUserByName(db, username)
 		if err != nil || u == nil || u.ID == p.ActorID {
 			continue
 		}
 		id := notificationID(p.PostID, p.ThreadID, p.ActorID, u.ID, "mention")
-		if err := insertNotification(db, id, u.ID, "mention", p.ThreadID, p.PostID, p.ActorName, p.TS); err != nil {
+		if err := projections.InsertNotification(db, id, u.ID, "mention", p.ThreadID, p.PostID, p.ActorName, p.TS); err != nil {
 			return err
 		}
 	}
 
 	if p.ReplyTo != "" {
-		parent, err := getPost(db, p.ReplyTo)
+		parent, err := projections.GetPost(db, p.ReplyTo)
 		if err != nil {
 			return err
 		}
@@ -292,20 +292,20 @@ func processPostCommittedJob(db *sql.DB, bus Bus, p postCommittedJob) error {
 			}
 			if parentAuthorID != p.ActorID {
 				id := notificationID(p.PostID, p.ThreadID, p.ActorID, parentAuthorID, "reply")
-				if err := insertNotification(db, id, parentAuthorID, "reply", p.ThreadID, p.PostID, p.ActorName, p.TS); err != nil {
+				if err := projections.InsertNotification(db, id, parentAuthorID, "reply", p.ThreadID, p.PostID, p.ActorName, p.TS); err != nil {
 					return err
 				}
 			}
 		}
 	}
 
-	watchers, err := watchersOfThread(db, p.ThreadID, p.ActorID)
+	watchers, err := projections.WatchersOfThread(db, p.ThreadID, p.ActorID)
 	if err != nil {
 		return err
 	}
 	for _, watcherID := range watchers {
 		id := notificationID(p.PostID, p.ThreadID, p.ActorID, watcherID, "watched")
-		if err := insertNotification(db, id, watcherID, "watched", p.ThreadID, p.PostID, p.ActorName, p.TS); err != nil {
+		if err := projections.InsertNotification(db, id, watcherID, "watched", p.ThreadID, p.PostID, p.ActorName, p.TS); err != nil {
 			return err
 		}
 	}

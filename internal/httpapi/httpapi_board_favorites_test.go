@@ -1948,18 +1948,18 @@ func TestHTTPStatsPeriodHistorySystemPosts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Weekly assertions use W23 because W24 overlaps with the fixed current
-	// test date (2026-06-11), and publishing a snapshot upserts today's row.
+	// Use periods that do not overlap the process current day; publishing a
+	// snapshot upserts today's history row and would skew captured-day counts.
 	insertHistory("2026-05-31", 10, 1, 1, 10, 1, 5, 60)
 	insertHistory("2026-06-01", 11, 2, 2, 12, 2, 8, 120)
 	insertHistory("2026-06-07", 12, 3, 4, 24, 5, 20, 600)
-	insertHistory("2026-06-30", 13, 4, 6, 30, 8, 25, 900)
-	insertHistory("2026-07-01", 14, 5, 7, 35, 9, 30, 1200)
-	insertHistory("2026-07-31", 15, 6, 9, 60, 15, 50, 2400)
+	insertHistory("2026-07-31", 13, 4, 6, 30, 8, 25, 900)
+	insertHistory("2026-08-01", 14, 5, 7, 35, 9, 30, 1200)
+	insertHistory("2026-08-31", 15, 6, 9, 60, 15, 50, 2400)
 	insertHistory("2026-12-31", 16, 7, 11, 80, 18, 80, 3000)
 	insertHistory("2027-12-31", 20, 9, 20, 175, 35, 159, 7200)
 
-	for _, date := range []string{"2026-06-07", "2026-07-31", "2027-12-31"} {
+	for _, date := range []string{"2026-06-07", "2026-08-31", "2027-12-31"} {
 		ack := ackResponse{}
 		if status := doJSONRequest(t, handler, http.MethodPost, "/api/v1/stats/community/snapshot", adminToken, map[string]string{
 			"date": date,
@@ -1978,9 +1978,9 @@ func TestHTTPStatsPeriodHistorySystemPosts(t *testing.T) {
 			contains: []string{"Period: 2026-06-01 to 2026-06-07", "Days captured: 2", "New posts: 14", "Logins: 15", "Logouts: 8", "Web logins: 15", "Web logouts: 8", "Guest logins: 2", "Guest logouts: 1"},
 		},
 		{
-			threadID: "bbslists_month_202607",
-			title:    "Monthly activity history 2026-07",
-			contains: []string{"Period: 2026-07-01 to 2026-07-31", "Days captured: 2", "New posts: 30", "Logins: 25", "Logouts: 13", "Web logins: 25", "Web logouts: 13", "Guest logins: 2", "Guest logouts: 1"},
+			threadID: "bbslists_month_202608",
+			title:    "Monthly activity history 2026-08",
+			contains: []string{"Period: 2026-08-01 to 2026-08-31", "Days captured: 2", "New posts: 30", "Logins: 25", "Logouts: 13", "Web logins: 25", "Web logouts: 13", "Guest logins: 2", "Guest logouts: 1"},
 		},
 		{
 			threadID: "bbslists_year_2027",

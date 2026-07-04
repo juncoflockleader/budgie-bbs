@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/mailer"
 )
 
@@ -155,13 +156,13 @@ func (c *Core) VerifyEmailToken(token string) (*User, error) {
 	); err != nil {
 		return nil, err
 	}
-	return getUserByID(c.DB, userID)
+	return projections.GetUserByID(c.DB, userID)
 }
 
 // ResendEmailVerification re-issues a verification email for an unverified
 // account, looked up by name. Returns the email it was sent to (or "" / error).
 func (c *Core) ResendEmailVerification(name string) error {
-	u, err := getUserByName(c.DB, name)
+	u, err := projections.GetUserByName(c.DB, name)
 	if err != nil || u == nil {
 		return ErrInvalidCredentials
 	}

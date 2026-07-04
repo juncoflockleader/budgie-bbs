@@ -178,42 +178,56 @@ func RegisterCommandAssignmentMetricsCollector(assigner CommandPartitionAssigner
 	})
 }
 
+func partitionMetricLabels(kind, key string) map[string]string {
+	return map[string]string{
+		"kind": kind,
+		"key":  key,
+	}
+}
+
+func logPartitionMetricLabels(partition LogPartition) map[string]string {
+	partition = partition.Normalize()
+	return partitionMetricLabels(partition.Kind, partition.Key)
+}
+
+func partitionSignalMetricLabels(kind, key, signal string) map[string]string {
+	labels := partitionMetricLabels(kind, key)
+	labels["signal"] = signal
+	return labels
+}
+
+func hotPartitionCandidateSample(kind, key, signal string, value float64) metrics.Sample {
+	return metrics.Sample{
+		Name:   "budgie_hot_partition_candidate",
+		Help:   "Hot write-ordering partition candidate, with value set to the signal magnitude.",
+		Type:   "gauge",
+		Labels: partitionSignalMetricLabels(kind, key, signal),
+		Value:  value,
+	}
+}
+
+func logHotPartitionCandidateSample(partition LogPartition, signal string, value float64) metrics.Sample {
+	partition = partition.Normalize()
+	return hotPartitionCandidateSample(partition.Kind, partition.Key, signal, value)
+}
+
 func eventPartitionOffsetSamples(db *sql.DB, limit int) ([]metrics.Sample, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := qQuery(db,
-		`SELECT partition_kind, partition_key, last_offset
-		   FROM event_partition_offsets
-		  ORDER BY last_offset DESC, partition_kind, partition_key
-		  LIMIT ?`,
-		limit,
-	)
+	offsets, _, err := listEventPartitionOffsets(context.Background(), NewSQLEventStore(db), limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	samples := []metrics.Sample{}
-	for rows.Next() {
-		var kind, key string
-		var offset int64
-		if err := rows.Scan(&kind, &key, &offset); err != nil {
-			return nil, err
-		}
+	samples := make([]metrics.Sample, 0, len(offsets)+2)
+	for _, offset := range offsets {
 		samples = append(samples, metrics.Sample{
-			Name: "budgie_event_partition_offset",
-			Help: "Latest durable event offset by write-ordering partition.",
-			Type: "gauge",
-			Labels: map[string]string{
-				"kind": kind,
-				"key":  key,
-			},
-			Value: float64(offset),
+			Name:   "budgie_event_partition_offset",
+			Help:   "Latest durable event offset by write-ordering partition.",
+			Type:   "gauge",
+			Labels: logPartitionMetricLabels(offset.Partition),
+			Value:  float64(offset.LastOffset),
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 
 	var count, minOffset, maxOffset int64
@@ -528,18 +542,14 @@ func commandPartitionOffsetSamples(ctx context.Context, lister CommandPartitionO
 	if limit <= 0 {
 		limit = 100
 	}
-	offsets, err := lister.ListCommandPartitionOffsets(ctx, limit)
+	offsets, _, err := listCommandPartitionOffsetsWithLimit(ctx, lister, limit)
 	if err != nil {
 		return nil, err
 	}
 	samples := make([]metrics.Sample, 0, len(offsets)*4+4)
 	var totalLag, maxLag, minLag int64
 	for i, offset := range offsets {
-		partition := offset.Partition.Normalize()
-		lag := offset.TailOffset - offset.CommittedOffset
-		if lag < 0 {
-			lag = 0
-		}
+		lag := offset.Lag()
 		if i == 0 || lag < minLag {
 			minLag = lag
 		}
@@ -547,10 +557,7 @@ func commandPartitionOffsetSamples(ctx context.Context, lister CommandPartitionO
 			maxLag = lag
 		}
 		totalLag += lag
-		labels := map[string]string{
-			"kind": partition.Kind,
-			"key":  partition.Key,
-		}
+		labels := logPartitionMetricLabels(offset.Partition)
 		samples = append(samples,
 			metrics.Sample{
 				Name:   "budgie_command_partition_tail_offset",
@@ -575,17 +582,7 @@ func commandPartitionOffsetSamples(ctx context.Context, lister CommandPartitionO
 			},
 		)
 		if lag > 0 {
-			samples = append(samples, metrics.Sample{
-				Name: "budgie_hot_partition_candidate",
-				Help: "Hot write-ordering partition candidate, with value set to the signal magnitude.",
-				Type: "gauge",
-				Labels: map[string]string{
-					"kind":   partition.Kind,
-					"key":    partition.Key,
-					"signal": "command_lag",
-				},
-				Value: float64(lag),
-			})
+			samples = append(samples, logHotPartitionCandidateSample(offset.Partition, "command_lag", float64(lag)))
 		}
 	}
 	samples = append(samples,
@@ -628,17 +625,7 @@ func gatewayDropHotPartitionSamples(dropSamples []metrics.Sample) []metrics.Samp
 		if !ok {
 			continue
 		}
-		samples = append(samples, metrics.Sample{
-			Name: "budgie_hot_partition_candidate",
-			Help: "Hot write-ordering partition candidate, with value set to the signal magnitude.",
-			Type: "gauge",
-			Labels: map[string]string{
-				"kind":   partition.Kind,
-				"key":    partition.Key,
-				"signal": "gateway_drops",
-			},
-			Value: drop.Value,
-		})
+		samples = append(samples, hotPartitionCandidateSample(partition.Kind, partition.Key, "gateway_drops", drop.Value))
 	}
 	return samples
 }
@@ -701,17 +688,7 @@ func gatewayScopeFanoutSamples(stats BusQueueStats, limit int) []metrics.Sample 
 		if !ok || scope.Subscribers <= 0 {
 			continue
 		}
-		samples = append(samples, metrics.Sample{
-			Name: "budgie_hot_partition_candidate",
-			Help: "Hot write-ordering partition candidate, with value set to the signal magnitude.",
-			Type: "gauge",
-			Labels: map[string]string{
-				"kind":   partition.Kind,
-				"key":    partition.Key,
-				"signal": "gateway_subscribers",
-			},
-			Value: float64(scope.Subscribers),
-		})
+		samples = append(samples, hotPartitionCandidateSample(partition.Kind, partition.Key, "gateway_subscribers", float64(scope.Subscribers)))
 	}
 	return samples
 }

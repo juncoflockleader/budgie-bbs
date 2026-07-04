@@ -2,18 +2,14 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestBlessingRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "blessing-rankings-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -133,7 +129,7 @@ func TestBlessingRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) 
 
 func blessingRankingStatsRows(t *testing.T, c *Core) int {
 	t.Helper()
-	count, err := blessingRankingStatsRowCount(c.DB)
+	count, err := projections.BlessingRankingStatsRowCount(c.DB)
 	if err != nil {
 		t.Fatalf("count blessing ranking stats rows: %v", err)
 	}

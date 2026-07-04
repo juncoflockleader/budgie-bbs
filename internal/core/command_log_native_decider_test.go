@@ -3,31 +3,20 @@ package core
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
-
-func sameStringSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
 
 func TestNativeCommandDecisionCoversOrderedHandlerCommands(t *testing.T) {
 	commandNames := parseNativeDecisionTestCommandNames(t)
@@ -154,50 +143,148 @@ func parseNativeDecisionTestFile(t *testing.T, path string) *ast.File {
 	return file
 }
 
-func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
-	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
+func registerNativeDecisionTestUser(t *testing.T, c *Core, name string) *User {
+	t.Helper()
+	user, err := c.RegisterUser(name, "pw")
 	if err != nil {
-		t.Fatalf("new core: %v", err)
+		t.Fatalf("register %s: %v", name, err)
 	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	return user
+}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+func newNativeDecisionTestHarness(c *Core) (*BrokerCommandLog, *BrokerEventStore, *CommandLogNativeDecisionExecutor, *CommandLogWorker) {
+	harness := newBrokerCommandEventTestHarness()
 	executor := NewCommandLogNativeDecisionExecutor(c)
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
+		Log:       harness.commandLog,
 		BatchSize: 10,
 		Executor:  executor,
 		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
+			Transactions: harness.transactionStore,
 			Events:       executor,
 		},
 	})
+	return harness.commandLog, harness.eventStore, executor, worker
+}
+
+func materializeNativeDecisionPartition(t *testing.T, ctx context.Context, c *Core, store EventStore, source string, partition LogPartition, limit int, label string) EventStorePartitionMaterializationResult {
+	t.Helper()
+	result, err := c.MaterializeEventStorePartition(ctx, store, EventStorePartitionMaterializationConfig{
+		Source:    source,
+		Partition: partition,
+		Limit:     limit,
+	})
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return result
+}
+
+func requireNativeDecisionPayload[T any](t *testing.T, event any, label string) *T {
+	t.Helper()
+	var raw any
+	switch event := event.(type) {
+	case *proto.Event:
+		raw = event.Payload
+	case EventAppend:
+		raw = event.Payload
+	default:
+		t.Fatalf("%s event = %T, want payload-bearing event", label, event)
+	}
+	payload, ok := raw.(*T)
+	if !ok {
+		t.Fatalf("%s = %T, want %T", label, raw, (*T)(nil))
+	}
+	return payload
+}
+
+func requireNativeDecisionEventKinds(t *testing.T, events any, label string, kinds ...proto.EventKind) {
+	t.Helper()
+	want := fmt.Sprintf("event kinds %v", kinds)
+	var gotLen int
+	var kindAt func(int) proto.EventKind
+	switch events := events.(type) {
+	case []*proto.Event:
+		gotLen = len(events)
+		kindAt = func(i int) proto.EventKind { return events[i].Kind }
+	case []EventAppend:
+		gotLen = len(events)
+		kindAt = func(i int) proto.EventKind { return events[i].Kind }
+	default:
+		t.Fatalf("%s = %+v, want %s", label, events, want)
+	}
+	if gotLen != len(kinds) {
+		t.Fatalf("%s = %+v, want %s", label, events, want)
+	}
+	for i, kind := range kinds {
+		if kindAt(i) != kind {
+			t.Fatalf("%s = %+v, want %s", label, events, want)
+		}
+	}
+}
+
+func requireNativeDecisionTerminalError(t *testing.T, reply Reply, code string, label string, messages ...string) {
+	t.Helper()
+	if reply.Err == nil || reply.Err.Code != code || reply.Err.Retryable {
+		t.Fatalf("%s = %+v, want terminal %s", label, reply, code)
+	}
+	if len(messages) != 0 && reply.Err.Message != messages[0] {
+		t.Fatalf("%s = %+v, want terminal %s with message %q", label, reply, code, messages[0])
+	}
+}
+
+func produceNativeDecisionCommand(t *testing.T, ctx context.Context, commandLog *BrokerCommandLog, label string, record CommandLogRecord) CommandLogRecord {
+	t.Helper()
+	produced, err := commandLog.Produce(ctx, record)
+	if err != nil {
+		t.Fatalf("produce %s command: %v", label, err)
+	}
+	return produced
+}
+
+func produceDrainNativeDecisionCommand(t *testing.T, ctx context.Context, commandLog *BrokerCommandLog, worker *CommandLogWorker, label string, record CommandLogRecord) CommandLogRecord {
+	t.Helper()
+	produced := produceNativeDecisionCommand(t, ctx, commandLog, label, record)
+	drainCommandLogWorkerOnce(t, ctx, worker, label)
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, produced.Partition, produced.Offset, label)
+	return produced
+}
+
+func produceDrainReplayNativeDecisionEvents(t *testing.T, ctx context.Context, commandLog *BrokerCommandLog, eventStore EventStore, worker *CommandLogWorker, label string, replayPartition LogPartition, after int64, limit int, record CommandLogRecord) (CommandLogRecord, []*proto.Event) {
+	t.Helper()
+	produced := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, label, record)
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, replayPartition, after, limit, "replay "+label+" events")
+	return produced, events
+}
+
+func produceDrainReplayNativeDecisionCommand(t *testing.T, ctx context.Context, commandLog *BrokerCommandLog, eventStore EventStore, worker *CommandLogWorker, label string, after int64, limit int, record CommandLogRecord) (CommandLogRecord, []*proto.Event) {
+	t.Helper()
+	return produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, label, record.Partition, after, limit, record)
+}
+
+func totalCommandLogWorkerResults(results []CommandLogWorkerResult) (processed int, applied int) {
+	for _, result := range results {
+		processed += result.Processed
+		applied += result.Applied
+	}
+	return processed, applied
+}
+
+func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "clubs"}
-	payload, err := json.Marshal(proto.CreateBoardPayload{
+	payload := marshalCoreTestJSON(t, "marshal create board payload", proto.CreateBoardPayload{
 		ID:          "clubs",
 		Name:        " Clubs ",
 		Description: "Campus clubs",
 		ParentID:    " general ",
 	})
-	if err != nil {
-		t.Fatalf("marshal create board payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  boardPartition,
 		Offset:     1,
@@ -207,17 +294,12 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Retryable {
-		t.Fatalf("create board as non-admin = %+v, want terminal forbidden", forbidden)
-	}
-	missingParentPayload, err := json.Marshal(proto.CreateBoardPayload{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "create board as non-admin")
+	missingParentPayload := marshalCoreTestJSON(t, "marshal missing parent payload", proto.CreateBoardPayload{
 		ID:       "orphan",
 		Name:     "Orphan",
 		ParentID: "missing",
 	})
-	if err != nil {
-		t.Fatalf("marshal missing parent payload: %v", err)
-	}
 	missingParent := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "orphan"},
 		Offset:     1,
@@ -227,11 +309,9 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
 		Payload:    missingParentPayload,
 		EnqueuedAt: 1234,
 	})
-	if missingParent.Err == nil || missingParent.Err.Code != proto.ErrNotFound || missingParent.Err.Retryable {
-		t.Fatalf("create board missing parent = %+v, want terminal not_found", missingParent)
-	}
+	requireNativeDecisionTerminalError(t, missingParent, proto.ErrNotFound, "create board missing parent")
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create board", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-create-board",
@@ -239,37 +319,13 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce create board command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create board once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != record.Offset {
-		t.Fatalf("create board committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create board events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardCreated {
-		t.Fatalf("create board events = %+v, want one board.created", events)
-	}
-	boardEvent, ok := events[0].Payload.(*proto.BoardCreatedPayload)
-	if !ok {
-		t.Fatalf("create board payload = %T, want BoardCreatedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "create board events", proto.EvtBoardCreated)
+	boardEvent := requireNativeDecisionPayload[proto.BoardCreatedPayload](t, events[0], "create board payload")
 	if boardEvent.ID != "clubs" || boardEvent.Name != "Clubs" || boardEvent.Description != "Campus clubs" ||
 		boardEvent.ParentID != "general" || boardEvent.Position != 0 || boardEvent.By != admin.ID || boardEvent.TS != 2234 {
 		t.Fatalf("create board event = %+v, want deterministic child board", boardEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-create-board-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create board event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-create-board-test", boardPartition, 10, "materialize create board event")
 	board, err := c.GetBoard("clubs")
 	if err != nil {
 		t.Fatalf("get projected board: %v", err)
@@ -304,24 +360,18 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
 		retryEvents[0].Kind != proto.EvtBoardCreated {
 		t.Fatalf("create board retry events = %+v, want stable board.created", retryEvents)
 	}
-	retryBoard, ok := retryEvents[0].Payload.(*proto.BoardCreatedPayload)
-	if !ok {
-		t.Fatalf("create board retry payload = %T, want BoardCreatedPayload", retryEvents[0].Payload)
-	}
+	retryBoard := requireNativeDecisionPayload[proto.BoardCreatedPayload](t, retryEvents[0], "create board retry payload")
 	if retryBoard.ID != boardEvent.ID || retryBoard.Name != boardEvent.Name || retryBoard.ParentID != boardEvent.ParentID ||
 		retryBoard.Position != boardEvent.Position || retryBoard.Description != boardEvent.Description {
 		t.Fatalf("create board retry payload = %+v, want stable payload %+v", retryBoard, boardEvent)
 	}
 
-	conflictPayload, err := json.Marshal(proto.CreateBoardPayload{
+	conflictPayload := marshalCoreTestJSON(t, "marshal conflicting create board payload", proto.CreateBoardPayload{
 		ID:          "clubs",
 		Name:        "Other Clubs",
 		Description: "Changed",
 		ParentID:    "general",
 	})
-	if err != nil {
-		t.Fatalf("marshal conflicting create board payload: %v", err)
-	}
 	conflict := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  boardPartition,
 		Offset:     record.Offset + 1,
@@ -331,35 +381,23 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
 		Payload:    conflictPayload,
 		EnqueuedAt: 3234,
 	})
-	if conflict.Err == nil || conflict.Err.Code != proto.ErrConflict || conflict.Err.Retryable {
-		t.Fatalf("conflicting create board = %+v, want terminal conflict", conflict)
-	}
+	requireNativeDecisionTerminalError(t, conflict, proto.ErrConflict, "conflicting create board")
 }
 
 func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 	tx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin board setup: %v", err)
 	}
-	if err := insertBoard(tx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
+	if err := projections.InsertBoard(tx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
 		tx.Rollback()
 		t.Fatalf("insert tech board: %v", err)
 	}
-	if err := insertBoard(tx, "secret", "Secret", "Members only", "", 2); err != nil {
+	if err := projections.InsertBoard(tx, "secret", "Secret", "Members only", "", 2); err != nil {
 		tx.Rollback()
 		t.Fatalf("insert secret board: %v", err)
 	}
@@ -367,37 +405,18 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 		t.Fatalf("commit board setup: %v", err)
 	}
 	memberReadMode := true
-	if err := setBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberReadMode}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberReadMode}); err != nil {
 		t.Fatalf("set secret board settings: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "tech"}
-	payload, err := json.Marshal(proto.SetRecommendedBoardPayload{
+	payload := marshalCoreTestJSON(t, "marshal recommended board payload", proto.SetRecommendedBoardPayload{
 		Board:       " tech ",
 		Recommended: true,
 		Note:        " Start here. ",
 	})
-	if err != nil {
-		t.Fatalf("marshal recommended board payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -407,16 +426,27 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 		Payload:    payload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "admin role required" || forbidden.Err.Retryable {
-		t.Fatalf("set recommended board as non-admin = %+v, want terminal admin error", forbidden)
-	}
-	secretPayload, err := json.Marshal(proto.SetRecommendedBoardPayload{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "set recommended board as non-admin", "admin role required")
+	longRecommendationNote := strings.Repeat("x", proto.MaxBoardNoteLength+1)
+	longNotePayload := marshalCoreTestJSON(t, "marshal long recommended board note payload", proto.SetRecommendedBoardPayload{
+		Board:       "tech",
+		Recommended: true,
+		Note:        longRecommendationNote,
+	})
+	longNote := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  partition,
+		Offset:     1,
+		ActorID:    admin.ID,
+		CID:        "cid-native-recommended-board-long-note",
+		Command:    proto.CmdSetRecommendedBoard,
+		Payload:    longNotePayload,
+		EnqueuedAt: 1234,
+	})
+	requireNativeDecisionTerminalError(t, longNote, proto.ErrValidationFailed, "set recommended board long note", validationMessage(longRecommendationNote, proto.NormalizeBoardRecommendationNote))
+	secretPayload := marshalCoreTestJSON(t, "marshal secret recommended board payload", proto.SetRecommendedBoardPayload{
 		Board:       "secret",
 		Recommended: true,
 	})
-	if err != nil {
-		t.Fatalf("marshal secret recommended board payload: %v", err)
-	}
 	secret := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "secret"},
 		Offset:     1,
@@ -426,11 +456,9 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 		Payload:    secretPayload,
 		EnqueuedAt: 1234,
 	})
-	if secret.Err == nil || secret.Err.Code != proto.ErrValidationFailed || secret.Err.Message != "member-read boards cannot be publicly recommended" || secret.Err.Retryable {
-		t.Fatalf("set recommended member-read board = %+v, want terminal visibility validation", secret)
-	}
+	requireNativeDecisionTerminalError(t, secret, proto.ErrValidationFailed, "set recommended member-read board", "member-read boards cannot be publicly recommended")
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "recommended board", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-recommended-board",
@@ -438,37 +466,13 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce recommended board command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain recommended board once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("recommended board committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay recommended board events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardRecommendedSet {
-		t.Fatalf("recommended board events = %+v, want one board.recommended_set", events)
-	}
-	recommendedEvent, ok := events[0].Payload.(*proto.BoardRecommendedSetPayload)
-	if !ok {
-		t.Fatalf("recommended board payload = %T, want BoardRecommendedSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "recommended board events", proto.EvtBoardRecommendedSet)
+	recommendedEvent := requireNativeDecisionPayload[proto.BoardRecommendedSetPayload](t, events[0], "recommended board payload")
 	if recommendedEvent.Board != "tech" || !recommendedEvent.Recommended || recommendedEvent.Note != "Start here." ||
 		recommendedEvent.Position != 0 || recommendedEvent.CuratedBy != admin.ID || recommendedEvent.TS != 2234 {
 		t.Fatalf("recommended board event = %+v, want deterministic recommendation", recommendedEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-recommended-board-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize recommended board event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-recommended-board-test", partition, 10, "materialize recommended board event")
 	recommended, err := c.ListRecommendedBoards(10, 0)
 	if err != nil {
 		t.Fatalf("list recommended boards: %v", err)
@@ -489,23 +493,17 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 		retryEvents[0].Kind != proto.EvtBoardRecommendedSet {
 		t.Fatalf("recommended board retry events = %+v, want stable recommendation event", retryEvents)
 	}
-	retryRecommended, ok := retryEvents[0].Payload.(*proto.BoardRecommendedSetPayload)
-	if !ok {
-		t.Fatalf("recommended board retry payload = %T, want BoardRecommendedSetPayload", retryEvents[0].Payload)
-	}
+	retryRecommended := requireNativeDecisionPayload[proto.BoardRecommendedSetPayload](t, retryEvents[0], "recommended board retry payload")
 	if retryRecommended.Board != recommendedEvent.Board || retryRecommended.Position != recommendedEvent.Position ||
 		retryRecommended.Note != recommendedEvent.Note || retryRecommended.CuratedBy != recommendedEvent.CuratedBy {
 		t.Fatalf("recommended board retry payload = %+v, want stable payload %+v", retryRecommended, recommendedEvent)
 	}
 
-	clearPayload, err := json.Marshal(proto.SetRecommendedBoardPayload{
+	clearPayload := marshalCoreTestJSON(t, "marshal clear recommended board payload", proto.SetRecommendedBoardPayload{
 		Board:       "tech",
 		Recommended: false,
 	})
-	if err != nil {
-		t.Fatalf("marshal clear recommended board payload: %v", err)
-	}
-	clearRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	clearRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "clear recommended board", CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-recommended-board-clear",
@@ -513,19 +511,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 		Payload:    clearPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce clear recommended board command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain clear recommended board once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-recommended-board-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize clear recommended board event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-recommended-board-test", partition, 10, "materialize clear recommended board event")
 	recommended, err = c.ListRecommendedBoards(10, 0)
 	if err != nil {
 		t.Fatalf("list recommended boards after clear: %v", err)
@@ -541,13 +527,8 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 	if err != nil {
 		t.Fatalf("decide clear recommended board retry events: %v", err)
 	}
-	if len(clearRetryEvents) != 1 || clearRetryEvents[0].Kind != proto.EvtBoardRecommendedSet {
-		t.Fatalf("clear recommended board retry events = %+v, want stable recommendation clear event", clearRetryEvents)
-	}
-	clearEvent, ok := clearRetryEvents[0].Payload.(*proto.BoardRecommendedSetPayload)
-	if !ok {
-		t.Fatalf("clear recommended board retry payload = %T, want BoardRecommendedSetPayload", clearRetryEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, clearRetryEvents, "clear recommended board retry events", proto.EvtBoardRecommendedSet)
+	clearEvent := requireNativeDecisionPayload[proto.BoardRecommendedSetPayload](t, clearRetryEvents[0], "clear recommended board retry payload")
 	if clearEvent.Board != "tech" || clearEvent.Recommended || clearEvent.Position != 0 ||
 		clearEvent.CuratedBy != admin.ID || clearEvent.TS != 3234 {
 		t.Fatalf("clear recommended board retry payload = %+v, want deterministic clear event", clearEvent)
@@ -556,55 +537,24 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	if _, err := c.RegisterUser("admin", "pw"); err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	readOnly := true
 	mailInAllowed := true
 	statsExcluded := true
 	zapAllowed := false
-	payload, err := json.Marshal(proto.SetBoardSettingsPayload{
+	payload := marshalCoreTestJSON(t, "marshal board settings payload", proto.SetBoardSettingsPayload{
 		Board:         " general ",
 		ReadOnly:      &readOnly,
 		MailInAllowed: &mailInAllowed,
 		StatsExcluded: &statsExcluded,
 		ZapAllowed:    &zapAllowed,
 	})
-	if err != nil {
-		t.Fatalf("marshal board settings payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
@@ -615,9 +565,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board settings permission required" || forbidden.Err.Retryable {
-		t.Fatalf("set board settings without permission = %+v, want terminal board-settings forbidden", forbidden)
-	}
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "set board settings without permission", "board settings permission required")
 	if _, err := qExec(c.DB,
 		`INSERT INTO board_members (board_id, user_id, position, can_set_board_settings, created_at, updated_at)
 		 VALUES (?, ?, ?, 1, ?, ?)`,
@@ -626,7 +574,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 		t.Fatalf("grant delegated board-settings permission: %v", err)
 	}
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record, boardEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board settings", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-board-settings",
@@ -634,45 +582,21 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce board settings command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board settings once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("board settings committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board settings events: %v", err)
-	}
-	if len(boardEvents) != 1 || boardEvents[0].Kind != proto.EvtBoardSettingsSet {
-		t.Fatalf("board settings events = %+v, want one board.settings_set", boardEvents)
-	}
-	settingsEvent, ok := boardEvents[0].Payload.(*proto.BoardSettingsSetPayload)
-	if !ok {
-		t.Fatalf("board settings payload = %T, want BoardSettingsSetPayload", boardEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, boardEvents, "board settings events", proto.EvtBoardSettingsSet)
+	settingsEvent := requireNativeDecisionPayload[proto.BoardSettingsSetPayload](t, boardEvents[0], "board settings payload")
 	if settingsEvent.Board != "general" || !settingsEvent.ReadOnly || !settingsEvent.MailInAllowed ||
 		!settingsEvent.StatsExcluded || settingsEvent.ZapAllowed || settingsEvent.By != alice.ID || settingsEvent.TS != 2234 {
 		t.Fatalf("board settings event = %+v, want deterministic final settings", settingsEvent)
 	}
-	syssecurityPartition := LogPartition{Kind: partitionBoard, Key: nativeSyssecuritySystemBoardID}
-	syssecurityEvents, err := eventStore.ReplayPartition(ctx, syssecurityPartition.Kind, syssecurityPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board settings syssecurity events: %v", err)
-	}
+	syssecurityPartition := LogPartition{Kind: partitionBoard, Key: proto.SyssecuritySystemBoardID}
+	syssecurityEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, syssecurityPartition, 0, 10, "replay board settings syssecurity events")
 	if len(syssecurityEvents) != 3 ||
 		syssecurityEvents[0].Kind != proto.EvtBoardCreated ||
 		syssecurityEvents[1].Kind != proto.EvtThreadNew ||
 		syssecurityEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("board settings syssecurity events = %+v, want board/thread/post audit events", syssecurityEvents)
 	}
-	auditPost, ok := syssecurityEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("board settings audit payload = %T, want PostAppendedPayload", syssecurityEvents[2].Payload)
-	}
+	auditPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, syssecurityEvents[2], "board settings audit payload")
 	for _, want := range []string{
 		"Action: board settings changed",
 		"Board: general",
@@ -687,21 +611,9 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 		}
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-settings-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board settings event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-settings-test",
-		Partition: syssecurityPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board settings syssecurity events: %v", err)
-	}
-	settings, err := getBoardSettings(c.DB, "general")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-settings-test", partition, 10, "materialize board settings event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-settings-test", syssecurityPartition, 10, "materialize board settings syssecurity events")
+	settings, err := projections.GetBoardSettings(c.DB, "general")
 	if err != nil {
 		t.Fatalf("get projected board settings: %v", err)
 	}
@@ -709,7 +621,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 		!settings.StatsExcluded || settings.ZapAllowed || settings.UpdatedAt != 2234 {
 		t.Fatalf("projected board settings = %+v, want event final settings", settings)
 	}
-	syssecurityThreads, err := c.ListThreads(nativeSyssecuritySystemBoardID, 10, 0)
+	syssecurityThreads, err := c.ListThreads(proto.SyssecuritySystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list syssecurity threads after board settings: %v", err)
 	}
@@ -734,10 +646,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 		retryEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("board settings retry events = %+v, want stable settings plus existing syssecurity-board audit events", retryEvents)
 	}
-	retrySettings, ok := retryEvents[0].Payload.(*proto.BoardSettingsSetPayload)
-	if !ok {
-		t.Fatalf("board settings retry payload = %T, want BoardSettingsSetPayload", retryEvents[0].Payload)
-	}
+	retrySettings := requireNativeDecisionPayload[proto.BoardSettingsSetPayload](t, retryEvents[0], "board settings retry payload")
 	if retrySettings.Board != settingsEvent.Board || retrySettings.ReadOnly != settingsEvent.ReadOnly ||
 		retrySettings.MailInAllowed != settingsEvent.MailInAllowed ||
 		retrySettings.StatsExcluded != settingsEvent.StatsExcluded ||
@@ -749,48 +658,20 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardSettings(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	if _, err := c.RegisterUser("admin", "pw"); err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	minPostCount := 4
 	minBoardMarkCount := 2
-	if err := setBoardMemberRequirements(c.DB, "general", BoardMemberRequirementsPatch{
+	if err := projections.SetBoardMemberRequirements(c.DB, "general", BoardMemberRequirementsPatch{
 		MinPostCount:      &minPostCount,
 		MinBoardMarkCount: &minBoardMarkCount,
 	}); err != nil {
 		t.Fatalf("seed board member requirements: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	minLoginCount := 3
 	minTrustLevel := 2
@@ -798,7 +679,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 	minBoardDigestCount := 5
 	maxMembers := 42
 	approvalMode := " automatic "
-	payload, err := json.Marshal(proto.SetBoardMemberRequirementsPayload{
+	payload := marshalCoreTestJSON(t, "marshal board member requirements payload", proto.SetBoardMemberRequirementsPayload{
 		Board:               " general ",
 		MinLoginCount:       &minLoginCount,
 		MinTrustLevel:       &minTrustLevel,
@@ -807,9 +688,6 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		MaxMembers:          &maxMembers,
 		ApprovalMode:        &approvalMode,
 	})
-	if err != nil {
-		t.Fatalf("marshal board member requirements payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
@@ -820,9 +698,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		Payload:    payload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board settings permission required" || forbidden.Err.Retryable {
-		t.Fatalf("set board member requirements without permission = %+v, want terminal board-settings forbidden", forbidden)
-	}
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "set board member requirements without permission", "board settings permission required")
 	if _, err := qExec(c.DB,
 		`INSERT INTO board_members (board_id, user_id, position, can_set_board_settings, created_at, updated_at)
 		 VALUES (?, ?, ?, 1, ?, ?)`,
@@ -831,13 +707,10 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		t.Fatalf("grant delegated board-settings permission: %v", err)
 	}
 	negativeMinScore := -1
-	negativePayload, err := json.Marshal(proto.SetBoardMemberRequirementsPayload{
+	negativePayload := marshalCoreTestJSON(t, "marshal negative requirements payload", proto.SetBoardMemberRequirementsPayload{
 		Board:    "general",
 		MinScore: &negativeMinScore,
 	})
-	if err != nil {
-		t.Fatalf("marshal negative requirements payload: %v", err)
-	}
 	negative := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -847,17 +720,12 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		Payload:    negativePayload,
 		EnqueuedAt: 1234,
 	})
-	if negative.Err == nil || negative.Err.Code != proto.ErrValidationFailed || negative.Err.Message != "minScore must be non-negative" || negative.Err.Retryable {
-		t.Fatalf("set negative board member requirement = %+v, want terminal validation", negative)
-	}
+	requireNativeDecisionTerminalError(t, negative, proto.ErrValidationFailed, "set negative board member requirement", "minScore must be non-negative")
 	badApproval := "open"
-	badApprovalPayload, err := json.Marshal(proto.SetBoardMemberRequirementsPayload{
+	badApprovalPayload := marshalCoreTestJSON(t, "marshal bad approval mode payload", proto.SetBoardMemberRequirementsPayload{
 		Board:        "general",
 		ApprovalMode: &badApproval,
 	})
-	if err != nil {
-		t.Fatalf("marshal bad approval mode payload: %v", err)
-	}
 	badMode := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -867,11 +735,9 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		Payload:    badApprovalPayload,
 		EnqueuedAt: 1234,
 	})
-	if badMode.Err == nil || badMode.Err.Code != proto.ErrValidationFailed || badMode.Err.Message != `approvalMode must be "manual" or "auto"` || badMode.Err.Retryable {
-		t.Fatalf("set invalid board member approval mode = %+v, want terminal validation", badMode)
-	}
+	requireNativeDecisionTerminalError(t, badMode, proto.ErrValidationFailed, "set invalid board member approval mode", validationMessage("maybe", proto.NormalizeBoardMemberApprovalMode))
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board member requirements", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-board-member-requirements",
@@ -879,26 +745,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce board member requirements command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board member requirements once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("board member requirements committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board member requirements events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardMemberRequirementsSet {
-		t.Fatalf("board member requirements events = %+v, want one board.member_requirements_set", events)
-	}
-	requirementsEvent, ok := events[0].Payload.(*proto.BoardMemberRequirementsSetPayload)
-	if !ok {
-		t.Fatalf("board member requirements payload = %T, want BoardMemberRequirementsSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "board member requirements events", proto.EvtBoardMemberRequirementsSet)
+	requirementsEvent := requireNativeDecisionPayload[proto.BoardMemberRequirementsSetPayload](t, events[0], "board member requirements payload")
 	if requirementsEvent.Board != "general" ||
 		requirementsEvent.MinLoginCount != 3 ||
 		requirementsEvent.MinPostCount != 4 ||
@@ -912,13 +760,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		requirementsEvent.TS != 2234 {
 		t.Fatalf("board member requirements event = %+v, want deterministic final requirements", requirementsEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-member-requirements-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board member requirements event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-member-requirements-test", partition, 10, "materialize board member requirements event")
 	requirements, err := c.GetBoardMemberRequirements("general")
 	if err != nil {
 		t.Fatalf("get projected board member requirements: %v", err)
@@ -948,10 +790,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 		retryEvents[0].Kind != proto.EvtBoardMemberRequirementsSet {
 		t.Fatalf("board member requirements retry events = %+v, want stable requirements event", retryEvents)
 	}
-	retryRequirements, ok := retryEvents[0].Payload.(*proto.BoardMemberRequirementsSetPayload)
-	if !ok {
-		t.Fatalf("board member requirements retry payload = %T, want BoardMemberRequirementsSetPayload", retryEvents[0].Payload)
-	}
+	retryRequirements := requireNativeDecisionPayload[proto.BoardMemberRequirementsSetPayload](t, retryEvents[0], "board member requirements retry payload")
 	if retryRequirements.Board != requirementsEvent.Board ||
 		retryRequirements.MinLoginCount != requirementsEvent.MinLoginCount ||
 		retryRequirements.MinPostCount != requirementsEvent.MinPostCount ||
@@ -969,66 +808,34 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	tx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin secret board setup: %v", err)
 	}
-	if err := insertBoard(tx, "secret", "Secret", "Private board", "", 10); err != nil {
+	if err := projections.InsertBoard(tx, "secret", "Secret", "Private board", "", 10); err != nil {
 		t.Fatalf("insert secret board: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit secret board: %v", err)
 	}
 	memberRead := true
-	if err := setBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	position := 7
-	appointPayload, err := json.Marshal(proto.SetBoardModeratorPayload{
+	appointPayload := marshalCoreTestJSON(t, "marshal board moderator appoint payload", proto.SetBoardModeratorPayload{
 		Board:     " general ",
 		User:      alice.Name,
 		Moderator: true,
 		Position:  &position,
 	})
-	if err != nil {
-		t.Fatalf("marshal board moderator appoint payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
@@ -1039,17 +846,12 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 		Payload:    appointPayload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "admin role required" || forbidden.Err.Retryable {
-		t.Fatalf("set board moderator as non-admin = %+v, want terminal admin forbidden", forbidden)
-	}
-	missingPayload, err := json.Marshal(proto.SetBoardModeratorPayload{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "set board moderator as non-admin", "admin role required")
+	missingPayload := marshalCoreTestJSON(t, "marshal missing moderator user payload", proto.SetBoardModeratorPayload{
 		Board:     "general",
 		User:      "missing",
 		Moderator: true,
 	})
-	if err != nil {
-		t.Fatalf("marshal missing moderator user payload: %v", err)
-	}
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -1059,11 +861,9 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 		Payload:    missingPayload,
 		EnqueuedAt: 1234,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Message != "user not found" || missing.Err.Retryable {
-		t.Fatalf("set board moderator missing user = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "set board moderator missing user", "user not found")
 
-	appointRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	appointRecord, boardEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board moderator appoint", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-board-moderator-appoint",
@@ -1071,61 +871,28 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 		Payload:    appointPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce board moderator appoint command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board moderator appoint once: %v", err)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board moderator appoint events: %v", err)
-	}
-	if len(boardEvents) != 1 || boardEvents[0].Kind != proto.EvtBoardModeratorSet {
-		t.Fatalf("board moderator appoint events = %+v, want one board.moderator_set", boardEvents)
-	}
-	appointEvent, ok := boardEvents[0].Payload.(*proto.BoardModeratorSetPayload)
-	if !ok {
-		t.Fatalf("board moderator appoint payload = %T, want BoardModeratorSetPayload", boardEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, boardEvents, "board moderator appoint events", proto.EvtBoardModeratorSet)
+	appointEvent := requireNativeDecisionPayload[proto.BoardModeratorSetPayload](t, boardEvents[0], "board moderator appoint payload")
 	if appointEvent.Board != "general" || appointEvent.User != alice.ID || !appointEvent.Moderator ||
 		appointEvent.Position != 7 || appointEvent.By != admin.ID || appointEvent.TS != 2234 {
 		t.Fatalf("board moderator appoint event = %+v, want deterministic final moderator assignment", appointEvent)
 	}
-	syssecurityPartition := LogPartition{Kind: partitionBoard, Key: nativeSyssecuritySystemBoardID}
-	syssecurityEvents, err := eventStore.ReplayPartition(ctx, syssecurityPartition.Kind, syssecurityPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board moderator syssecurity events: %v", err)
-	}
+	syssecurityPartition := LogPartition{Kind: partitionBoard, Key: proto.SyssecuritySystemBoardID}
+	syssecurityEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, syssecurityPartition, 0, 10, "replay board moderator syssecurity events")
 	if len(syssecurityEvents) != 3 ||
 		syssecurityEvents[0].Kind != proto.EvtBoardCreated ||
 		syssecurityEvents[1].Kind != proto.EvtThreadNew ||
 		syssecurityEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("board moderator syssecurity events = %+v, want board/thread/post audit events", syssecurityEvents)
 	}
-	appointAudit, ok := syssecurityEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("board moderator appoint audit payload = %T, want PostAppendedPayload", syssecurityEvents[2].Payload)
-	}
+	appointAudit := requireNativeDecisionPayload[proto.PostAppendedPayload](t, syssecurityEvents[2], "board moderator appoint audit payload")
 	for _, want := range []string{"Action: board moderator appointed", "Board: general", "User: alice", "Actor: admin"} {
 		if !strings.Contains(appointAudit.Body, want) {
 			t.Fatalf("board moderator appoint audit body missing %q:\n%s", want, appointAudit.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-moderator-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board moderator appoint event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-moderator-test",
-		Partition: syssecurityPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board moderator appoint syssecurity events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-moderator-test", partition, 10, "materialize board moderator appoint event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-moderator-test", syssecurityPartition, 10, "materialize board moderator appoint syssecurity events")
 	info, err := c.GetBoardInfo("general")
 	if err != nil {
 		t.Fatalf("get general board info after appoint: %v", err)
@@ -1156,25 +923,19 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 		retryEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("board moderator appoint retry events = %+v, want stable moderator event plus syssecurity thread/post", retryEvents)
 	}
-	retryAppoint, ok := retryEvents[0].Payload.(*proto.BoardModeratorSetPayload)
-	if !ok {
-		t.Fatalf("board moderator appoint retry payload = %T, want BoardModeratorSetPayload", retryEvents[0].Payload)
-	}
+	retryAppoint := requireNativeDecisionPayload[proto.BoardModeratorSetPayload](t, retryEvents[0], "board moderator appoint retry payload")
 	if retryAppoint.Board != appointEvent.Board || retryAppoint.User != appointEvent.User ||
 		retryAppoint.Moderator != appointEvent.Moderator || retryAppoint.Position != appointEvent.Position ||
 		retryAppoint.By != appointEvent.By || retryAppoint.TS != appointEvent.TS {
 		t.Fatalf("board moderator appoint retry payload = %+v, want stable payload %+v", retryAppoint, appointEvent)
 	}
 
-	removePayload, err := json.Marshal(proto.SetBoardModeratorPayload{
+	removePayload := marshalCoreTestJSON(t, "marshal board moderator remove payload", proto.SetBoardModeratorPayload{
 		Board:     "general",
 		User:      alice.ID,
 		Moderator: false,
 	})
-	if err != nil {
-		t.Fatalf("marshal board moderator remove payload: %v", err)
-	}
-	removeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	removeRecord, boardEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board moderator remove", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-board-moderator-remove",
@@ -1182,41 +943,16 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 		Payload:    removePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce board moderator remove command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board moderator remove once: %v", err)
-	}
-	boardEvents, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board moderator events after remove: %v", err)
-	}
 	if len(boardEvents) != 2 || boardEvents[1].Kind != proto.EvtBoardModeratorSet {
 		t.Fatalf("board moderator events after remove = %+v, want appointment then removal", boardEvents)
 	}
-	removeEvent, ok := boardEvents[1].Payload.(*proto.BoardModeratorSetPayload)
-	if !ok {
-		t.Fatalf("board moderator remove payload = %T, want BoardModeratorSetPayload", boardEvents[1].Payload)
-	}
+	removeEvent := requireNativeDecisionPayload[proto.BoardModeratorSetPayload](t, boardEvents[1], "board moderator remove payload")
 	if removeEvent.Board != "general" || removeEvent.User != alice.ID || removeEvent.Moderator ||
 		removeEvent.Position != 7 || removeEvent.By != admin.ID || removeEvent.TS != 3234 {
 		t.Fatalf("board moderator remove event = %+v, want deterministic removal with prior position", removeEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-moderator-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board moderator remove event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-moderator-test",
-		Partition: syssecurityPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board moderator remove syssecurity events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-moderator-test", partition, 10, "materialize board moderator remove event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-moderator-test", syssecurityPartition, 10, "materialize board moderator remove syssecurity events")
 	info, err = c.GetBoardInfo("general")
 	if err != nil {
 		t.Fatalf("get general board info after remove: %v", err)
@@ -1243,48 +979,28 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 	if len(removeRetryEvents) != 3 || removeRetryEvents[0].Kind != proto.EvtBoardModeratorSet {
 		t.Fatalf("board moderator remove retry events = %+v, want stable moderator removal plus syssecurity thread/post", removeRetryEvents)
 	}
-	removeRetry, ok := removeRetryEvents[0].Payload.(*proto.BoardModeratorSetPayload)
-	if !ok {
-		t.Fatalf("board moderator remove retry payload = %T, want BoardModeratorSetPayload", removeRetryEvents[0].Payload)
-	}
+	removeRetry := requireNativeDecisionPayload[proto.BoardModeratorSetPayload](t, removeRetryEvents[0], "board moderator remove retry payload")
 	if removeRetry.Position != removeEvent.Position || removeRetry.Moderator != removeEvent.Moderator ||
 		removeRetry.User != removeEvent.User || removeRetry.TS != removeEvent.TS {
 		t.Fatalf("board moderator remove retry payload = %+v, want stable removal %+v", removeRetry, removeEvent)
 	}
 
-	secretPayload, err := json.Marshal(proto.SetBoardModeratorPayload{
+	secretPayload := marshalCoreTestJSON(t, "marshal secret board moderator payload", proto.SetBoardModeratorPayload{
 		Board:     "secret",
 		User:      bob.Name,
 		Moderator: true,
 	})
-	if err != nil {
-		t.Fatalf("marshal secret board moderator payload: %v", err)
-	}
 	secretPartition := LogPartition{Kind: partitionBoard, Key: "secret"}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, secretEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "secret board moderator", 0, 10, CommandLogRecord{
 		Partition:  secretPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-board-moderator-secret",
 		Command:    proto.CmdSetBoardModerator,
 		Payload:    secretPayload,
 		EnqueuedAt: 4234,
-	}); err != nil {
-		t.Fatalf("produce secret board moderator command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain secret board moderator once: %v", err)
-	}
-	secretEvents, err := eventStore.ReplayPartition(ctx, secretPartition.Kind, secretPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay secret board moderator events: %v", err)
-	}
-	if len(secretEvents) != 1 || secretEvents[0].Kind != proto.EvtBoardModeratorSet {
-		t.Fatalf("secret board moderator events = %+v, want one private board moderator event", secretEvents)
-	}
-	syssecurityEvents, err = eventStore.ReplayPartition(ctx, syssecurityPartition.Kind, syssecurityPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay syssecurity after secret board moderator: %v", err)
-	}
+	})
+	requireNativeDecisionEventKinds(t, secretEvents, "secret board moderator events", proto.EvtBoardModeratorSet)
+	syssecurityEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, syssecurityPartition, 0, 10, "replay syssecurity after secret board moderator")
 	if len(syssecurityEvents) != 5 {
 		t.Fatalf("syssecurity events after private board moderator = %+v, want no new private-board audit", syssecurityEvents)
 	}
@@ -1292,50 +1008,21 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	manager := true
-	if err := setBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanManageMembers: &manager}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanManageMembers: &manager}); err != nil {
 		t.Fatalf("seed delegated board member manager: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	position := 3
 	canCurate := true
 	canSetSettings := true
-	memberPayload, err := json.Marshal(proto.SetBoardMemberPayload{
+	memberPayload := marshalCoreTestJSON(t, "marshal board member payload", proto.SetBoardMemberPayload{
 		Board:               " general ",
 		User:                bob.Name,
 		Member:              true,
@@ -1344,9 +1031,6 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		CanCurate:           &canCurate,
 		CanSetBoardSettings: &canSetSettings,
 	})
-	if err != nil {
-		t.Fatalf("marshal board member payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
@@ -1357,9 +1041,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		Payload:    memberPayload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board member manager permission required" || forbidden.Err.Retryable {
-		t.Fatalf("set board member without manager permission = %+v, want terminal manager forbidden", forbidden)
-	}
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "set board member without manager permission", "board member manager permission required")
 	managerDenied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -1369,20 +1051,14 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		Payload:    memberPayload,
 		EnqueuedAt: 1234,
 	})
-	if managerDenied.Err == nil || managerDenied.Err.Code != proto.ErrForbidden ||
-		managerDenied.Err.Message != "board moderator role required to change member permissions" || managerDenied.Err.Retryable {
-		t.Fatalf("delegated manager changing permissions = %+v, want terminal moderator forbidden", managerDenied)
-	}
+	requireNativeDecisionTerminalError(t, managerDenied, proto.ErrForbidden, "delegated manager changing permissions", "board moderator role required to change member permissions")
 	longTitle := strings.Repeat("x", 81)
-	longTitlePayload, err := json.Marshal(proto.SetBoardMemberPayload{
+	longTitlePayload := marshalCoreTestJSON(t, "marshal long board member title payload", proto.SetBoardMemberPayload{
 		Board:  "general",
 		User:   bob.Name,
 		Member: true,
 		Title:  longTitle,
 	})
-	if err != nil {
-		t.Fatalf("marshal long board member title payload: %v", err)
-	}
 	longTitleReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -1392,12 +1068,9 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		Payload:    longTitlePayload,
 		EnqueuedAt: 1234,
 	})
-	if longTitleReply.Err == nil || longTitleReply.Err.Code != proto.ErrValidationFailed ||
-		longTitleReply.Err.Message != "member title must be 80 characters or less" || longTitleReply.Err.Retryable {
-		t.Fatalf("long board member title = %+v, want terminal title validation", longTitleReply)
-	}
+	requireNativeDecisionTerminalError(t, longTitleReply, proto.ErrValidationFailed, "long board member title", "member title must be 80 characters or less")
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board member add", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-board-member-add",
@@ -1405,26 +1078,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		Payload:    memberPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce board member add command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board member add once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("board member add committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board member events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardMemberSet {
-		t.Fatalf("board member events = %+v, want one board.member_set", events)
-	}
-	memberEvent, ok := events[0].Payload.(*proto.BoardMemberSetPayload)
-	if !ok {
-		t.Fatalf("board member payload = %T, want BoardMemberSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "board member events", proto.EvtBoardMemberSet)
+	memberEvent := requireNativeDecisionPayload[proto.BoardMemberSetPayload](t, events[0], "board member payload")
 	if memberEvent.Board != "general" || memberEvent.User != bob.ID || !memberEvent.Member ||
 		memberEvent.Title != "Curator" || memberEvent.Position != 3 ||
 		!memberEvent.CanCurate || !memberEvent.CanSetBoardSettings ||
@@ -1433,13 +1088,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		memberEvent.By != admin.ID || memberEvent.TS != 2234 {
 		t.Fatalf("board member event = %+v, want deterministic final membership", memberEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-member-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board member add event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-member-test", partition, 10, "materialize board member add event")
 	info, err := c.GetBoardInfo("general")
 	if err != nil {
 		t.Fatalf("get board info after member add: %v", err)
@@ -1467,10 +1116,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		retryEvents[0].Kind != proto.EvtBoardMemberSet {
 		t.Fatalf("board member add retry events = %+v, want stable board.member_set", retryEvents)
 	}
-	retryMember, ok := retryEvents[0].Payload.(*proto.BoardMemberSetPayload)
-	if !ok {
-		t.Fatalf("board member add retry payload = %T, want BoardMemberSetPayload", retryEvents[0].Payload)
-	}
+	retryMember := requireNativeDecisionPayload[proto.BoardMemberSetPayload](t, retryEvents[0], "board member add retry payload")
 	if retryMember.Board != memberEvent.Board || retryMember.User != memberEvent.User ||
 		retryMember.Member != memberEvent.Member || retryMember.Title != memberEvent.Title ||
 		retryMember.Position != memberEvent.Position ||
@@ -1480,14 +1126,11 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		t.Fatalf("board member add retry payload = %+v, want stable payload %+v", retryMember, memberEvent)
 	}
 
-	managerDeniedPrivilegedRemovePayload, err := json.Marshal(proto.SetBoardMemberPayload{
+	managerDeniedPrivilegedRemovePayload := marshalCoreTestJSON(t, "marshal delegated remove payload", proto.SetBoardMemberPayload{
 		Board:  "general",
 		User:   bob.Name,
 		Member: false,
 	})
-	if err != nil {
-		t.Fatalf("marshal delegated remove payload: %v", err)
-	}
 	managerDeniedPrivileged := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -1497,20 +1140,14 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		Payload:    managerDeniedPrivilegedRemovePayload,
 		EnqueuedAt: 1234,
 	})
-	if managerDeniedPrivileged.Err == nil || managerDeniedPrivileged.Err.Code != proto.ErrForbidden ||
-		managerDeniedPrivileged.Err.Message != "board moderator role required to manage delegated board members" || managerDeniedPrivileged.Err.Retryable {
-		t.Fatalf("delegated manager removing privileged member = %+v, want terminal moderator forbidden", managerDeniedPrivileged)
-	}
+	requireNativeDecisionTerminalError(t, managerDeniedPrivileged, proto.ErrForbidden, "delegated manager removing privileged member", "board moderator role required to manage delegated board members")
 
-	removePayload, err := json.Marshal(proto.SetBoardMemberPayload{
+	removePayload := marshalCoreTestJSON(t, "marshal board member remove payload", proto.SetBoardMemberPayload{
 		Board:  "general",
 		User:   bob.ID,
 		Member: false,
 	})
-	if err != nil {
-		t.Fatalf("marshal board member remove payload: %v", err)
-	}
-	removeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	removeRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board member remove", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-board-member-remove",
@@ -1518,36 +1155,17 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 		Payload:    removePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce board member remove command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board member remove once: %v", err)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board member events after remove: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtBoardMemberSet {
 		t.Fatalf("board member events after remove = %+v, want add then remove", events)
 	}
-	removeEvent, ok := events[1].Payload.(*proto.BoardMemberSetPayload)
-	if !ok {
-		t.Fatalf("board member remove payload = %T, want BoardMemberSetPayload", events[1].Payload)
-	}
+	removeEvent := requireNativeDecisionPayload[proto.BoardMemberSetPayload](t, events[1], "board member remove payload")
 	if removeEvent.Board != "general" || removeEvent.User != bob.ID || removeEvent.Member ||
 		removeEvent.Title != "" || removeEvent.Position != 0 ||
 		removeEvent.CanCurate || removeEvent.CanSetBoardSettings ||
 		removeEvent.By != admin.ID || removeEvent.TS != 3234 {
 		t.Fatalf("board member remove event = %+v, want deterministic final removal", removeEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-member-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board member remove event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-member-test", partition, 10, "materialize board member remove event")
 	info, err = c.GetBoardInfo("general")
 	if err != nil {
 		t.Fatalf("get board info after member remove: %v", err)
@@ -1565,13 +1183,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide board member remove retry events: %v", err)
 	}
-	if len(removeRetryEvents) != 1 || removeRetryEvents[0].Kind != proto.EvtBoardMemberSet {
-		t.Fatalf("board member remove retry events = %+v, want stable removal event", removeRetryEvents)
-	}
-	removeRetry, ok := removeRetryEvents[0].Payload.(*proto.BoardMemberSetPayload)
-	if !ok {
-		t.Fatalf("board member remove retry payload = %T, want BoardMemberSetPayload", removeRetryEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, removeRetryEvents, "board member remove retry events", proto.EvtBoardMemberSet)
+	removeRetry := requireNativeDecisionPayload[proto.BoardMemberSetPayload](t, removeRetryEvents[0], "board member remove retry payload")
 	if removeRetry.User != removeEvent.User || removeRetry.Member != removeEvent.Member ||
 		removeRetry.Title != removeEvent.Title || removeRetry.Position != removeEvent.Position ||
 		removeRetry.TS != removeEvent.TS {
@@ -1581,44 +1194,16 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	if _, err := c.RegisterUser("admin", "pw"); err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	if err := setBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{Title: "Resident"}); err != nil {
+	c := newCoreTestCore(t)
+	registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{Title: "Resident"}); err != nil {
 		t.Fatalf("seed bob board membership: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	emptyPayload, err := json.Marshal(proto.LeaveBoardMembershipPayload{Board: " "})
-	if err != nil {
-		t.Fatalf("marshal empty leave membership payload: %v", err)
-	}
+	emptyPayload := marshalCoreTestJSON(t, "marshal empty leave membership payload", proto.LeaveBoardMembershipPayload{Board: " "})
 	emptyReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: partitionGlobal},
 		Offset:     1,
@@ -1628,15 +1213,9 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing
 		Payload:    emptyPayload,
 		EnqueuedAt: 1234,
 	})
-	if emptyReply.Err == nil || emptyReply.Err.Code != proto.ErrValidationFailed ||
-		emptyReply.Err.Message != "board is required" || emptyReply.Err.Retryable {
-		t.Fatalf("leave membership empty board = %+v, want terminal board validation", emptyReply)
-	}
+	requireNativeDecisionTerminalError(t, emptyReply, proto.ErrValidationFailed, "leave membership empty board", "board is required")
 
-	missingPayload, err := json.Marshal(proto.LeaveBoardMembershipPayload{Board: "missing"})
-	if err != nil {
-		t.Fatalf("marshal missing board leave membership payload: %v", err)
-	}
+	missingPayload := marshalCoreTestJSON(t, "marshal missing board leave membership payload", proto.LeaveBoardMembershipPayload{Board: "missing"})
 	missingReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "missing"},
 		Offset:     1,
@@ -1646,17 +1225,11 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing
 		Payload:    missingPayload,
 		EnqueuedAt: 1234,
 	})
-	if missingReply.Err == nil || missingReply.Err.Code != proto.ErrNotFound ||
-		missingReply.Err.Message != "board not found" || missingReply.Err.Retryable {
-		t.Fatalf("leave membership missing board = %+v, want terminal not found", missingReply)
-	}
+	requireNativeDecisionTerminalError(t, missingReply, proto.ErrNotFound, "leave membership missing board", "board not found")
 
-	leavePayload, err := json.Marshal(proto.LeaveBoardMembershipPayload{Board: " general "})
-	if err != nil {
-		t.Fatalf("marshal leave membership payload: %v", err)
-	}
+	leavePayload := marshalCoreTestJSON(t, "marshal leave membership payload", proto.LeaveBoardMembershipPayload{Board: " general "})
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "leave membership", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-leave-membership",
@@ -1664,26 +1237,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing
 		Payload:    leavePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce leave membership command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain leave membership once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("leave membership committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay leave membership events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardMemberSet {
-		t.Fatalf("leave membership events = %+v, want one board.member_set", events)
-	}
-	leaveEvent, ok := events[0].Payload.(*proto.BoardMemberSetPayload)
-	if !ok {
-		t.Fatalf("leave membership payload = %T, want BoardMemberSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "leave membership events", proto.EvtBoardMemberSet)
+	leaveEvent := requireNativeDecisionPayload[proto.BoardMemberSetPayload](t, events[0], "leave membership payload")
 	if leaveEvent.Board != "general" || leaveEvent.User != bob.ID || leaveEvent.Member ||
 		leaveEvent.Title != "" || leaveEvent.Position != 0 ||
 		leaveEvent.CanManageMembers || leaveEvent.CanCurate || leaveEvent.CanModeratePosts ||
@@ -1691,13 +1246,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing
 		leaveEvent.CanSetBoardSettings || leaveEvent.By != bob.ID || leaveEvent.TS != 2234 {
 		t.Fatalf("leave membership event = %+v, want deterministic final removal", leaveEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-membership-leave-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize leave membership event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-membership-leave-test", partition, 10, "materialize leave membership event")
 	isMember, err := c.UserIsBoardMember("general", bob.ID)
 	if err != nil {
 		t.Fatalf("check projected membership after leave: %v", err)
@@ -1727,10 +1276,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing
 		retryEvents[0].Kind != proto.EvtBoardMemberSet {
 		t.Fatalf("leave membership retry events = %+v, want stable board.member_set", retryEvents)
 	}
-	retryLeave, ok := retryEvents[0].Payload.(*proto.BoardMemberSetPayload)
-	if !ok {
-		t.Fatalf("leave membership retry payload = %T, want BoardMemberSetPayload", retryEvents[0].Payload)
-	}
+	retryLeave := requireNativeDecisionPayload[proto.BoardMemberSetPayload](t, retryEvents[0], "leave membership retry payload")
 	if retryLeave.Board != leaveEvent.Board || retryLeave.User != leaveEvent.User ||
 		retryLeave.Member != leaveEvent.Member || retryLeave.By != leaveEvent.By ||
 		retryLeave.TS != leaveEvent.TS {
@@ -1740,45 +1286,18 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	if _, err := c.RegisterUser("admin", "pw"); err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	manualPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	longNotePayload, err := json.Marshal(proto.ApplyBoardMembershipPayload{
+	longApplicationNote := strings.Repeat("x", proto.MaxBoardNoteLength+1)
+	longNotePayload := marshalCoreTestJSON(t, "marshal long membership note payload", proto.ApplyBoardMembershipPayload{
 		Board: "general",
-		Note:  strings.Repeat("x", 501),
+		Note:  longApplicationNote,
 	})
-	if err != nil {
-		t.Fatalf("marshal long membership note payload: %v", err)
-	}
 	longNote := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  manualPartition,
 		Offset:     1,
@@ -1788,19 +1307,13 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		Payload:    longNotePayload,
 		EnqueuedAt: 1234,
 	})
-	if longNote.Err == nil || longNote.Err.Code != proto.ErrValidationFailed ||
-		longNote.Err.Message != "application note must be 500 characters or less" || longNote.Err.Retryable {
-		t.Fatalf("apply membership long note = %+v, want terminal note validation", longNote)
-	}
+	requireNativeDecisionTerminalError(t, longNote, proto.ErrValidationFailed, "apply membership long note", validationMessage(longApplicationNote, proto.NormalizeBoardMembershipApplicationNote))
 
-	manualPayload, err := json.Marshal(proto.ApplyBoardMembershipPayload{
+	manualPayload := marshalCoreTestJSON(t, "marshal manual membership application payload", proto.ApplyBoardMembershipPayload{
 		Board: " general ",
 		Note:  " I read this board daily. ",
 	})
-	if err != nil {
-		t.Fatalf("marshal manual membership application payload: %v", err)
-	}
-	manualRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	manualRecord, manualEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "manual membership application", 0, 10, CommandLogRecord{
 		Partition:  manualPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-apply-membership-manual",
@@ -1808,39 +1321,15 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		Payload:    manualPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce manual membership application command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain manual membership application once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, manualPartition); err != nil || got != manualRecord.Offset {
-		t.Fatalf("manual membership committed offset = %d, %v; want %d, nil", got, err, manualRecord.Offset)
-	}
-	manualEvents, err := eventStore.ReplayPartition(ctx, manualPartition.Kind, manualPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay manual membership events: %v", err)
-	}
-	if len(manualEvents) != 1 || manualEvents[0].Kind != proto.EvtBoardMemberApplicationSubmitted {
-		t.Fatalf("manual membership events = %+v, want one application submitted event", manualEvents)
-	}
-	manualEvent, ok := manualEvents[0].Payload.(*proto.BoardMemberApplicationSubmittedPayload)
-	if !ok {
-		t.Fatalf("manual membership payload = %T, want BoardMemberApplicationSubmittedPayload", manualEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, manualEvents, "manual membership events", proto.EvtBoardMemberApplicationSubmitted)
+	manualEvent := requireNativeDecisionPayload[proto.BoardMemberApplicationSubmittedPayload](t, manualEvents[0], "manual membership payload")
 	manualAppID := stableCommandLogDecisionID("bmap_", manualRecord, 0)
 	if manualEvent.ID != manualAppID || manualEvent.Board != "general" ||
 		manualEvent.User != bob.ID || manualEvent.Note != "I read this board daily." ||
 		manualEvent.TS != 2234 {
 		t.Fatalf("manual membership event = %+v, want deterministic submitted application", manualEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-membership-application-test",
-		Partition: manualPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize manual membership application event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-membership-application-test", manualPartition, 10, "materialize manual membership application event")
 	manualApp, err := c.GetBoardMemberApplication(manualAppID)
 	if err != nil {
 		t.Fatalf("get manual membership application: %v", err)
@@ -1871,10 +1360,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		Payload:    manualPayload,
 		EnqueuedAt: 3234,
 	})
-	if duplicateReply.Err == nil || duplicateReply.Err.Code != proto.ErrConflict ||
-		duplicateReply.Err.Message != "membership application already pending" || duplicateReply.Err.Retryable {
-		t.Fatalf("duplicate manual membership application = %+v, want pending conflict", duplicateReply)
-	}
+	requireNativeDecisionTerminalError(t, duplicateReply, proto.ErrConflict, "duplicate manual membership application", "membership application already pending")
 
 	if _, err := qExec(c.DB,
 		`INSERT INTO boards (id, name, description) VALUES (?, ?, ?)`,
@@ -1883,20 +1369,17 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		t.Fatalf("seed auto board: %v", err)
 	}
 	approvalMode := "auto"
-	if err := setBoardMemberRequirements(c.DB, "autoclub", BoardMemberRequirementsPatch{
+	if err := projections.SetBoardMemberRequirements(c.DB, "autoclub", BoardMemberRequirementsPatch{
 		ApprovalMode: &approvalMode,
 	}); err != nil {
 		t.Fatalf("seed auto approval requirements: %v", err)
 	}
 	autoPartition := LogPartition{Kind: partitionBoard, Key: "autoclub"}
-	autoPayload, err := json.Marshal(proto.ApplyBoardMembershipPayload{
+	autoPayload := marshalCoreTestJSON(t, "marshal auto membership application payload", proto.ApplyBoardMembershipPayload{
 		Board: "autoclub",
 		Note:  "private note",
 	})
-	if err != nil {
-		t.Fatalf("marshal auto membership application payload: %v", err)
-	}
-	autoRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	autoRecord, autoEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "auto membership application", 0, 10, CommandLogRecord{
 		Partition:  autoPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-apply-membership-auto",
@@ -1904,29 +1387,13 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		Payload:    autoPayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce auto membership application command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain auto membership application once: %v", err)
-	}
-	autoEvents, err := eventStore.ReplayPartition(ctx, autoPartition.Kind, autoPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay auto membership events: %v", err)
-	}
 	if len(autoEvents) != 2 ||
 		autoEvents[0].Kind != proto.EvtBoardMemberApplicationSubmitted ||
 		autoEvents[1].Kind != proto.EvtBoardMemberApplicationReviewed {
 		t.Fatalf("auto membership events = %+v, want submitted plus reviewed", autoEvents)
 	}
-	autoSubmit, ok := autoEvents[0].Payload.(*proto.BoardMemberApplicationSubmittedPayload)
-	if !ok {
-		t.Fatalf("auto membership submitted payload = %T, want BoardMemberApplicationSubmittedPayload", autoEvents[0].Payload)
-	}
-	autoReview, ok := autoEvents[1].Payload.(*proto.BoardMemberApplicationReviewedPayload)
-	if !ok {
-		t.Fatalf("auto membership reviewed payload = %T, want BoardMemberApplicationReviewedPayload", autoEvents[1].Payload)
-	}
+	autoSubmit := requireNativeDecisionPayload[proto.BoardMemberApplicationSubmittedPayload](t, autoEvents[0], "auto membership submitted payload")
+	autoReview := requireNativeDecisionPayload[proto.BoardMemberApplicationReviewedPayload](t, autoEvents[1], "auto membership reviewed payload")
 	autoAppID := stableCommandLogDecisionID("bmap_", autoRecord, 0)
 	if autoSubmit.ID != autoAppID || autoSubmit.Board != "autoclub" ||
 		autoSubmit.User != bob.ID || autoSubmit.Note != "private note" || autoSubmit.TS != 4234 {
@@ -1938,21 +1405,15 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		autoReview.TS != 4234 {
 		t.Fatalf("auto reviewed event = %+v, want deterministic auto approval", autoReview)
 	}
-	registryPartition := LogPartition{Kind: partitionBoard, Key: nativeRegistrySystemBoardID}
-	registryEvents, err := eventStore.ReplayPartition(ctx, registryPartition.Kind, registryPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay registry membership events: %v", err)
-	}
+	registryPartition := LogPartition{Kind: partitionBoard, Key: proto.RegistrySystemBoardID}
+	registryEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, registryPartition, 0, 10, "replay registry membership events")
 	if len(registryEvents) != 3 ||
 		registryEvents[0].Kind != proto.EvtBoardCreated ||
 		registryEvents[1].Kind != proto.EvtThreadNew ||
 		registryEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("registry membership events = %+v, want board/thread/post", registryEvents)
 	}
-	registryPost, ok := registryEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("registry post payload = %T, want PostAppendedPayload", registryEvents[2].Payload)
-	}
+	registryPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, registryEvents[2], "registry post payload")
 	if !strings.Contains(registryPost.Body, "Status: approved") ||
 		!strings.Contains(registryPost.Body, "Board: Auto Club (autoclub)") ||
 		!strings.Contains(registryPost.Body, "Applicant: bob") ||
@@ -1960,20 +1421,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		strings.Contains(registryPost.Body, "private note") {
 		t.Fatalf("registry post body = %q, want sanitized auto approval log", registryPost.Body)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-membership-application-test",
-		Partition: autoPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize auto membership events: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-membership-application-test",
-		Partition: registryPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize registry membership events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-membership-application-test", autoPartition, 10, "materialize auto membership events")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-membership-application-test", registryPartition, 10, "materialize registry membership events")
 	autoApp, err := c.GetBoardMemberApplication(autoAppID)
 	if err != nil {
 		t.Fatalf("get auto membership application: %v", err)
@@ -1994,7 +1443,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 	if err != nil {
 		t.Fatalf("get registry thread: %v", err)
 	}
-	if registryThread == nil || registryThread.Board != nativeRegistrySystemBoardID {
+	if registryThread == nil || registryThread.Board != proto.RegistrySystemBoardID {
 		t.Fatalf("registry thread = %+v, want projected registry approval thread", registryThread)
 	}
 	autoRetryReply := executor.ExecuteCommandLogRecord(ctx, autoRecord)
@@ -2014,62 +1463,30 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	manager := true
-	if err := setBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanManageMembers: &manager}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanManageMembers: &manager}); err != nil {
 		t.Fatalf("seed delegated board member manager: %v", err)
 	}
-	if err := insertBoardMemberApplication(c.DB, "app_review_bob", "general", bob.ID, "private application note"); err != nil {
+	if err := projections.InsertBoardMemberApplication(c.DB, "app_review_bob", "general", bob.ID, "private application note"); err != nil {
 		t.Fatalf("insert bob membership application: %v", err)
 	}
-	if err := insertBoardMemberApplication(c.DB, "app_review_alice", "general", alice.ID, "self application note"); err != nil {
+	if err := projections.InsertBoardMemberApplication(c.DB, "app_review_alice", "general", alice.ID, "self application note"); err != nil {
 		t.Fatalf("insert alice membership application: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	reviewPartition := LogPartition{Kind: partitionReview, Key: "app_review_bob"}
-	approvePayload, err := json.Marshal(proto.ReviewBoardMembershipPayload{
+	approvePayload := marshalCoreTestJSON(t, "marshal review approval payload", proto.ReviewBoardMembershipPayload{
 		Application: " app_review_bob ",
 		Status:      "approve",
 		Title:       " resident ",
 		Note:        " welcome aboard ",
 	})
-	if err != nil {
-		t.Fatalf("marshal review approval payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  reviewPartition,
 		Offset:     1,
@@ -2079,17 +1496,11 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		Payload:    approvePayload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden ||
-		forbidden.Err.Message != "board member manager permission required" || forbidden.Err.Retryable {
-		t.Fatalf("review membership without manager permission = %+v, want terminal manager forbidden", forbidden)
-	}
-	selfPayload, err := json.Marshal(proto.ReviewBoardMembershipPayload{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "review membership without manager permission", "board member manager permission required")
+	selfPayload := marshalCoreTestJSON(t, "marshal self review payload", proto.ReviewBoardMembershipPayload{
 		Application: "app_review_alice",
 		Status:      "approved",
 	})
-	if err != nil {
-		t.Fatalf("marshal self review payload: %v", err)
-	}
 	selfReview := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionReview, Key: "app_review_alice"},
 		Offset:     1,
@@ -2099,17 +1510,11 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		Payload:    selfPayload,
 		EnqueuedAt: 1234,
 	})
-	if selfReview.Err == nil || selfReview.Err.Code != proto.ErrForbidden ||
-		selfReview.Err.Message != "board moderator role required to review your own application" || selfReview.Err.Retryable {
-		t.Fatalf("delegated manager self review = %+v, want terminal self-review forbidden", selfReview)
-	}
-	blacklistPayload, err := json.Marshal(proto.ReviewBoardMembershipPayload{
+	requireNativeDecisionTerminalError(t, selfReview, proto.ErrForbidden, "delegated manager self review", "board moderator role required to review your own application")
+	blacklistPayload := marshalCoreTestJSON(t, "marshal blacklist review payload", proto.ReviewBoardMembershipPayload{
 		Application: "app_review_bob",
 		Status:      "blacklisted",
 	})
-	if err != nil {
-		t.Fatalf("marshal blacklist review payload: %v", err)
-	}
 	blacklistDenied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  reviewPartition,
 		Offset:     1,
@@ -2119,18 +1524,12 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		Payload:    blacklistPayload,
 		EnqueuedAt: 1234,
 	})
-	if blacklistDenied.Err == nil || blacklistDenied.Err.Code != proto.ErrForbidden ||
-		blacklistDenied.Err.Message != "board moderator role required to blacklist membership applications" || blacklistDenied.Err.Retryable {
-		t.Fatalf("delegated manager blacklist review = %+v, want terminal moderator forbidden", blacklistDenied)
-	}
-	longTitlePayload, err := json.Marshal(proto.ReviewBoardMembershipPayload{
+	requireNativeDecisionTerminalError(t, blacklistDenied, proto.ErrForbidden, "delegated manager blacklist review", "board moderator role required to blacklist membership applications")
+	longTitlePayload := marshalCoreTestJSON(t, "marshal long title review payload", proto.ReviewBoardMembershipPayload{
 		Application: "app_review_bob",
 		Status:      "approved",
 		Title:       strings.Repeat("x", 81),
 	})
-	if err != nil {
-		t.Fatalf("marshal long title review payload: %v", err)
-	}
 	longTitle := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  reviewPartition,
 		Offset:     1,
@@ -2140,17 +1539,27 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		Payload:    longTitlePayload,
 		EnqueuedAt: 1234,
 	})
-	if longTitle.Err == nil || longTitle.Err.Code != proto.ErrValidationFailed ||
-		longTitle.Err.Message != "member title must be 80 characters or less" || longTitle.Err.Retryable {
-		t.Fatalf("long review title = %+v, want terminal title validation", longTitle)
-	}
-	badStatusPayload, err := json.Marshal(proto.ReviewBoardMembershipPayload{
+	requireNativeDecisionTerminalError(t, longTitle, proto.ErrValidationFailed, "long review title", validationMessage(strings.Repeat("x", proto.MaxBoardMemberTitleLength+1), proto.NormalizeBoardMemberTitle))
+	longReviewNote := strings.Repeat("x", proto.MaxBoardNoteLength+1)
+	longNotePayload := marshalCoreTestJSON(t, "marshal long note review payload", proto.ReviewBoardMembershipPayload{
+		Application: "app_review_bob",
+		Status:      "approved",
+		Note:        longReviewNote,
+	})
+	longNote := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  reviewPartition,
+		Offset:     1,
+		ActorID:    admin.ID,
+		CID:        "cid-native-review-membership-long-note",
+		Command:    proto.CmdReviewBoardMembership,
+		Payload:    longNotePayload,
+		EnqueuedAt: 1234,
+	})
+	requireNativeDecisionTerminalError(t, longNote, proto.ErrValidationFailed, "long review note", validationMessage(longReviewNote, proto.NormalizeBoardMembershipReviewNote))
+	badStatusPayload := marshalCoreTestJSON(t, "marshal bad status review payload", proto.ReviewBoardMembershipPayload{
 		Application: "app_review_bob",
 		Status:      "maybe",
 	})
-	if err != nil {
-		t.Fatalf("marshal bad status review payload: %v", err)
-	}
 	badStatus := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  reviewPartition,
 		Offset:     1,
@@ -2160,12 +1569,10 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		Payload:    badStatusPayload,
 		EnqueuedAt: 1234,
 	})
-	if badStatus.Err == nil || badStatus.Err.Code != proto.ErrValidationFailed ||
-		badStatus.Err.Message != `status must be "approved", "rejected", or "blacklisted"` || badStatus.Err.Retryable {
-		t.Fatalf("bad review status = %+v, want terminal status validation", badStatus)
-	}
+	requireNativeDecisionTerminalError(t, badStatus, proto.ErrValidationFailed, "bad review status", validationMessage("maybe", proto.NormalizeBoardMemberApplicationStatus))
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
+	record, boardEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "review membership", boardPartition, 0, 10, CommandLogRecord{
 		Partition:  reviewPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-review-membership-approve",
@@ -2173,48 +1580,23 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		Payload:    approvePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce review membership command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain review membership once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, reviewPartition); err != nil || got != record.Offset {
-		t.Fatalf("review membership committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	boardEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay review board events: %v", err)
-	}
-	if len(boardEvents) != 1 || boardEvents[0].Kind != proto.EvtBoardMemberApplicationReviewed {
-		t.Fatalf("review board events = %+v, want one reviewed event", boardEvents)
-	}
-	reviewEvent, ok := boardEvents[0].Payload.(*proto.BoardMemberApplicationReviewedPayload)
-	if !ok {
-		t.Fatalf("review event payload = %T, want BoardMemberApplicationReviewedPayload", boardEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, boardEvents, "review board events", proto.EvtBoardMemberApplicationReviewed)
+	reviewEvent := requireNativeDecisionPayload[proto.BoardMemberApplicationReviewedPayload](t, boardEvents[0], "review event payload")
 	if reviewEvent.Application != "app_review_bob" || reviewEvent.Board != "general" ||
 		reviewEvent.User != bob.ID || reviewEvent.Status != "approved" ||
 		reviewEvent.Title != "resident" || reviewEvent.Reviewer != alice.ID ||
 		reviewEvent.ReviewNote != "welcome aboard" || reviewEvent.TS != 2234 {
 		t.Fatalf("review event = %+v, want deterministic approval", reviewEvent)
 	}
-	registryPartition := LogPartition{Kind: partitionBoard, Key: nativeRegistrySystemBoardID}
-	registryEvents, err := eventStore.ReplayPartition(ctx, registryPartition.Kind, registryPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay review registry events: %v", err)
-	}
+	registryPartition := LogPartition{Kind: partitionBoard, Key: proto.RegistrySystemBoardID}
+	registryEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, registryPartition, 0, 10, "replay review registry events")
 	if len(registryEvents) != 3 ||
 		registryEvents[0].Kind != proto.EvtBoardCreated ||
 		registryEvents[1].Kind != proto.EvtThreadNew ||
 		registryEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("review registry events = %+v, want board/thread/post", registryEvents)
 	}
-	registryPost, ok := registryEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("review registry post payload = %T, want PostAppendedPayload", registryEvents[2].Payload)
-	}
+	registryPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, registryEvents[2], "review registry post payload")
 	if !strings.Contains(registryPost.Body, "Status: approved") ||
 		!strings.Contains(registryPost.Body, "Board: General (general)") ||
 		!strings.Contains(registryPost.Body, "Applicant: bob") ||
@@ -2224,20 +1606,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		strings.Contains(registryPost.Body, "resident") {
 		t.Fatalf("review registry post body = %q, want sanitized approval log", registryPost.Body)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-membership-review-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize review board event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-membership-review-test",
-		Partition: registryPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize review registry events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-membership-review-test", boardPartition, 10, "materialize review board event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-membership-review-test", registryPartition, 10, "materialize review registry events")
 	app, err := c.GetBoardMemberApplication("app_review_bob")
 	if err != nil {
 		t.Fatalf("get reviewed membership application: %v", err)
@@ -2274,10 +1644,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		retryEvents[0].Kind != proto.EvtBoardMemberApplicationReviewed {
 		t.Fatalf("review membership retry events = %+v, want stable reviewed event", retryEvents)
 	}
-	retryReview, ok := retryEvents[0].Payload.(*proto.BoardMemberApplicationReviewedPayload)
-	if !ok {
-		t.Fatalf("review retry payload = %T, want BoardMemberApplicationReviewedPayload", retryEvents[0].Payload)
-	}
+	retryReview := requireNativeDecisionPayload[proto.BoardMemberApplicationReviewedPayload](t, retryEvents[0], "review retry payload")
 	if retryReview.Application != reviewEvent.Application ||
 		retryReview.Status != reviewEvent.Status ||
 		retryReview.Title != reviewEvent.Title ||
@@ -2295,45 +1662,26 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 		Payload:    approvePayload,
 		EnqueuedAt: 3234,
 	})
-	if duplicate.Err == nil || duplicate.Err.Code != proto.ErrConflict ||
-		duplicate.Err.Message != "membership application is already reviewed" || duplicate.Err.Retryable {
-		t.Fatalf("duplicate review membership command = %+v, want already-reviewed conflict", duplicate)
-	}
+	requireNativeDecisionTerminalError(t, duplicate, proto.ErrConflict, "duplicate review membership command", "membership application is already reviewed")
 }
 
 func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEvents(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
+	harness := newBrokerCommandEventTestHarness()
+	commandLog := harness.commandLog
+	eventStore := harness.eventStore
+	transactionStore := harness.transactionStore
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native hello",
 		Body:  "first post from broker decision",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record := produceNativeDecisionCommand(t, ctx, commandLog, "reply", CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-create-thread",
@@ -2341,9 +1689,6 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		Payload:    payload,
 		EnqueuedAt: 1234,
 	})
-	if err != nil {
-		t.Fatalf("produce command: %v", err)
-	}
 	executor := NewCommandLogNativeDecisionExecutor(c)
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
@@ -2355,38 +1700,22 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		},
 	})
 
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain once: %v", err)
-	}
+	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
 	if len(results) != 1 || results[0].Processed != 1 || results[0].Applied != 1 || results[0].LastOffset != record.Offset {
 		t.Fatalf("results = %+v, want one native decision committed", results)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay broker events: %v", err)
-	}
-	if len(events) != 2 || events[0].Kind != proto.EvtThreadNew || events[1].Kind != proto.EvtPostAppended {
-		t.Fatalf("events = %+v, want thread.new then post.appended", events)
-	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	postPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("post event payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, partition, record.Offset, "command")
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 0, 10, "replay broker events")
+	requireNativeDecisionEventKinds(t, events, "events", proto.EvtThreadNew, proto.EvtPostAppended)
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	postPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "post event payload")
 	if threadPayload.ID == "" || postPayload.Thread != threadPayload.ID || threadPayload.Title != "Broker-native hello" {
 		t.Fatalf("thread/post payloads = %+v / %+v, want linked broker-native thread", threadPayload, postPayload)
 	}
 	if events[0].PartitionOffset != 1 || events[1].PartitionOffset != 2 {
 		t.Fatalf("event offsets = %d,%d; want 1,2", events[0].PartitionOffset, events[1].PartitionOffset)
 	}
-	materialized, err := getThread(c.DB, threadPayload.ID)
+	materialized, err := projections.GetThread(c.DB, threadPayload.ID)
 	if err != nil {
 		t.Fatalf("get materialized thread: %v", err)
 	}
@@ -2394,51 +1723,34 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		t.Fatalf("materialized thread = %+v, want broker decision to leave SQL projections untouched", materialized)
 	}
 
-	materializedResult, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-create-thread-test",
-		Partition: partition,
-		Limit:     10,
-	})
-	if err != nil {
-		t.Fatalf("materialize broker event partition: %v", err)
-	}
+	materializedResult := materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-create-thread-test", partition, 10, "materialize broker event partition")
 	if materializedResult.StartedOffset != 0 || materializedResult.LastOffset != 2 || materializedResult.Applied != 2 {
 		t.Fatalf("materialization result = %+v, want offsets 0->2 with two applied events", materializedResult)
 	}
-	materialized, err = getThread(c.DB, threadPayload.ID)
+	materialized, err = projections.GetThread(c.DB, threadPayload.ID)
 	if err != nil {
 		t.Fatalf("get materialized thread after event-store projection: %v", err)
 	}
 	if materialized == nil || materialized.Title != "Broker-native hello" || materialized.PostCount != 1 || materialized.LastSeq != 2 {
 		t.Fatalf("materialized thread = %+v, want broker-projected thread with one post", materialized)
 	}
-	post, err := getPost(c.DB, postPayload.ID)
+	post, err := projections.GetPost(c.DB, postPayload.ID)
 	if err != nil {
 		t.Fatalf("get materialized post: %v", err)
 	}
 	if post == nil || post.Thread != threadPayload.ID || post.Body != "first post from broker decision" || post.AuthorID != alice.ID {
 		t.Fatalf("materialized post = %+v, want broker-projected first post", post)
 	}
-	secondResult, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-create-thread-test",
-		Partition: partition,
-		Limit:     10,
-	})
-	if err != nil {
-		t.Fatalf("second materialize broker event partition: %v", err)
-	}
+	secondResult := materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-create-thread-test", partition, 10, "second materialize broker event partition")
 	if secondResult.StartedOffset != 2 || secondResult.LastOffset != 2 || secondResult.Applied != 0 {
 		t.Fatalf("second materialization result = %+v, want checkpointed no-op", secondResult)
 	}
 
-	replyPayload, err := json.Marshal(proto.AppendPostPayload{
+	replyPayload := marshalCoreTestJSON(t, "marshal reply payload", proto.AppendPostPayload{
 		Thread: threadPayload.ID,
 		Body:   "broker-native reply",
 	})
-	if err != nil {
-		t.Fatalf("marshal reply payload: %v", err)
-	}
-	replyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	replyRecord := produceNativeDecisionCommand(t, ctx, commandLog, "reply", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-append-post",
@@ -2446,54 +1758,29 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		Payload:    replyPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce reply command: %v", err)
-	}
-	replyResults, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain reply once: %v", err)
-	}
-	var replyProcessed, replyApplied int
-	for _, result := range replyResults {
-		replyProcessed += result.Processed
-		replyApplied += result.Applied
-	}
+	replyResults := drainCommandLogWorkerOnce(t, ctx, worker, "drain reply once")
+	replyProcessed, replyApplied := totalCommandLogWorkerResults(replyResults)
 	if replyProcessed != 1 || replyApplied != 1 {
 		t.Fatalf("reply results = %+v, want one native appendPost decision committed", replyResults)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, LogPartition{Kind: partitionThread, Key: threadPayload.ID}); err != nil || got != replyRecord.Offset {
-		t.Fatalf("reply committed offset = %d, %v; want %d, nil", got, err, replyRecord.Offset)
-	}
-	replyEvents, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 2, 10)
-	if err != nil {
-		t.Fatalf("replay broker reply event: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, LogPartition{Kind: partitionThread, Key: threadPayload.ID}, replyRecord.Offset, "reply")
+	replyEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 2, 10, "replay broker reply event")
 	if len(replyEvents) != 1 || replyEvents[0].Kind != proto.EvtPostAppended || replyEvents[0].PartitionOffset != 3 {
 		t.Fatalf("reply events = %+v, want one post.appended at board offset 3", replyEvents)
 	}
-	replyPostPayload, ok := replyEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("reply payload = %T, want PostAppendedPayload", replyEvents[0].Payload)
-	}
-	replyMaterialized, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-create-thread-test",
-		Partition: partition,
-		Limit:     10,
-	})
-	if err != nil {
-		t.Fatalf("materialize broker reply event partition: %v", err)
-	}
+	replyPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, replyEvents[0], "reply payload")
+	replyMaterialized := materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-create-thread-test", partition, 10, "materialize broker reply event partition")
 	if replyMaterialized.StartedOffset != 2 || replyMaterialized.LastOffset != 3 || replyMaterialized.Applied != 1 {
 		t.Fatalf("reply materialization result = %+v, want offsets 2->3 with one applied event", replyMaterialized)
 	}
-	replyPost, err := getPost(c.DB, replyPostPayload.ID)
+	replyPost, err := projections.GetPost(c.DB, replyPostPayload.ID)
 	if err != nil {
 		t.Fatalf("get materialized reply: %v", err)
 	}
 	if replyPost == nil || replyPost.Thread != threadPayload.ID || replyPost.Body != "broker-native reply" || replyPost.AuthorID != alice.ID {
 		t.Fatalf("materialized reply = %+v, want broker-projected reply", replyPost)
 	}
-	materialized, err = getThread(c.DB, threadPayload.ID)
+	materialized, err = projections.GetThread(c.DB, threadPayload.ID)
 	if err != nil {
 		t.Fatalf("get materialized thread after reply: %v", err)
 	}
@@ -2501,15 +1788,12 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		t.Fatalf("materialized thread after reply = %+v, want two posts at last seq 3", materialized)
 	}
 
-	directedPayload, err := json.Marshal(proto.AppendPostPayload{
+	directedPayload := marshalCoreTestJSON(t, "marshal directed reply payload", proto.AppendPostPayload{
 		Thread:  threadPayload.ID,
 		ReplyTo: postPayload.ID,
 		Body:    "broker-native directed reply",
 	})
-	if err != nil {
-		t.Fatalf("marshal directed reply payload: %v", err)
-	}
-	directedRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	directedRecord := produceNativeDecisionCommand(t, ctx, commandLog, "directed reply", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    bob.ID,
 		CID:        "cid-native-directed-reply",
@@ -2517,50 +1801,25 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		Payload:    directedPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce directed reply command: %v", err)
-	}
-	directedResults, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain directed reply once: %v", err)
-	}
-	var directedProcessed, directedApplied int
-	for _, result := range directedResults {
-		directedProcessed += result.Processed
-		directedApplied += result.Applied
-	}
+	directedResults := drainCommandLogWorkerOnce(t, ctx, worker, "drain directed reply once")
+	directedProcessed, directedApplied := totalCommandLogWorkerResults(directedResults)
 	if directedProcessed != 1 || directedApplied != 1 {
 		t.Fatalf("directed reply results = %+v, want one native directed appendPost decision committed", directedResults)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, LogPartition{Kind: partitionThread, Key: threadPayload.ID}); err != nil || got != directedRecord.Offset {
-		t.Fatalf("directed reply committed offset = %d, %v; want %d, nil", got, err, directedRecord.Offset)
-	}
-	directedEvents, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 3, 10)
-	if err != nil {
-		t.Fatalf("replay broker directed reply event: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, LogPartition{Kind: partitionThread, Key: threadPayload.ID}, directedRecord.Offset, "directed reply")
+	directedEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 3, 10, "replay broker directed reply event")
 	if len(directedEvents) != 1 || directedEvents[0].Kind != proto.EvtPostAppended || directedEvents[0].PartitionOffset != 4 {
 		t.Fatalf("directed reply events = %+v, want one post.appended at board offset 4", directedEvents)
 	}
-	directedPostPayload, ok := directedEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("directed reply payload = %T, want PostAppendedPayload", directedEvents[0].Payload)
-	}
+	directedPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, directedEvents[0], "directed reply payload")
 	if directedPostPayload.ReplyTo != postPayload.ID {
 		t.Fatalf("directed reply event ReplyTo = %q, want root post %q", directedPostPayload.ReplyTo, postPayload.ID)
 	}
-	directedMaterialized, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-create-thread-test",
-		Partition: partition,
-		Limit:     10,
-	})
-	if err != nil {
-		t.Fatalf("materialize broker directed reply event partition: %v", err)
-	}
+	directedMaterialized := materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-create-thread-test", partition, 10, "materialize broker directed reply event partition")
 	if directedMaterialized.StartedOffset != 3 || directedMaterialized.LastOffset != 4 || directedMaterialized.Applied != 1 {
 		t.Fatalf("directed materialization result = %+v, want offsets 3->4 with one applied event", directedMaterialized)
 	}
-	directedPost, err := getPost(c.DB, directedPostPayload.ID)
+	directedPost, err := projections.GetPost(c.DB, directedPostPayload.ID)
 	if err != nil {
 		t.Fatalf("get materialized directed reply: %v", err)
 	}
@@ -2578,15 +1837,12 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		t.Fatalf("notifications = %+v, want native directed reply notification for alice", notifications)
 	}
 
-	nestedPayload, err := json.Marshal(proto.AppendPostPayload{
+	nestedPayload := marshalCoreTestJSON(t, "marshal nested directed reply payload", proto.AppendPostPayload{
 		Thread:  threadPayload.ID,
 		ReplyTo: directedPostPayload.ID,
 		Body:    "broker-native nested reply",
 	})
-	if err != nil {
-		t.Fatalf("marshal nested directed reply payload: %v", err)
-	}
-	nestedRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	nestedRecord := produceNativeDecisionCommand(t, ctx, commandLog, "nested directed reply", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-nested-directed-reply",
@@ -2594,34 +1850,17 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 		Payload:    nestedPayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce nested directed reply command: %v", err)
-	}
-	nestedResults, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("drain nested directed reply once: %v", err)
-	}
-	var nestedApplied int
-	for _, result := range nestedResults {
-		nestedApplied += result.Applied
-	}
+	nestedResults := drainCommandLogWorkerOnce(t, ctx, worker, "drain nested directed reply once")
+	_, nestedApplied := totalCommandLogWorkerResults(nestedResults)
 	if nestedApplied != 1 {
 		t.Fatalf("nested directed reply results = %+v, want one native appendPost decision committed", nestedResults)
 	}
-	if got, err := commandLog.CommittedOffset(ctx, LogPartition{Kind: partitionThread, Key: threadPayload.ID}); err != nil || got != nestedRecord.Offset {
-		t.Fatalf("nested directed reply committed offset = %d, %v; want %d, nil", got, err, nestedRecord.Offset)
-	}
-	nestedEvents, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 4, 10)
-	if err != nil {
-		t.Fatalf("replay broker nested directed reply event: %v", err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, commandLog, LogPartition{Kind: partitionThread, Key: threadPayload.ID}, nestedRecord.Offset, "nested directed reply")
+	nestedEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 4, 10, "replay broker nested directed reply event")
 	if len(nestedEvents) != 1 || nestedEvents[0].Kind != proto.EvtPostAppended || nestedEvents[0].PartitionOffset != 5 {
 		t.Fatalf("nested directed reply events = %+v, want one post.appended at board offset 5", nestedEvents)
 	}
-	nestedPostPayload, ok := nestedEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("nested directed reply payload = %T, want PostAppendedPayload", nestedEvents[0].Payload)
-	}
+	nestedPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, nestedEvents[0], "nested directed reply payload")
 	if nestedPostPayload.ReplyTo != postPayload.ID {
 		t.Fatalf("nested directed reply event ReplyTo = %q, want flattened root post %q", nestedPostPayload.ReplyTo, postPayload.ID)
 	}
@@ -2629,28 +1868,16 @@ func TestNativeCommandLogDecisionExecutorDrainsBasicCreateThreadThroughBrokerEve
 
 func TestNativeCommandLogDecisionExecutorReusesExecutedDecisionForEvents(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	if _, err := c.RegisterUser("admin", "pw"); err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
 	executor := NewCommandLogNativeDecisionExecutor(c)
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal create thread payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Cached native decision",
 		Body:  "finalization should not re-read mutable board policy",
 	})
-	if err != nil {
-		t.Fatalf("marshal create thread payload: %v", err)
-	}
 	record := CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:     77,
@@ -2666,7 +1893,7 @@ func TestNativeCommandLogDecisionExecutorReusesExecutedDecisionForEvents(t *test
 	}
 
 	readOnly := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
 		t.Fatalf("set board read-only: %v", err)
 	}
 
@@ -2674,63 +1901,369 @@ func TestNativeCommandLogDecisionExecutorReusesExecutedDecisionForEvents(t *test
 	if err != nil {
 		t.Fatalf("decide cached create thread events: %v", err)
 	}
-	if len(events) != 2 || events[0].Kind != proto.EvtThreadNew || events[1].Kind != proto.EvtPostAppended {
-		t.Fatalf("cached events = %+v, want thread.new then post.appended", events)
-	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("cached thread payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "cached events", proto.EvtThreadNew, proto.EvtPostAppended)
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "cached thread payload")
 	if reply.Result.ID != threadPayload.ID {
 		t.Fatalf("reply result id = %q, cached thread id = %q; want match", reply.Result.ID, threadPayload.ID)
 	}
 
 	_, err = executor.DecideCommandLogEvents(ctx, record, reply)
-	if err == nil || !strings.Contains(err.Error(), "board is read-only") {
-		t.Fatalf("second decide events error = %v, want cache consumed and read-only redecision failure", err)
+	requireErrorContains(t, err, "board is read-only")
+}
+
+func TestNativeCommandLogDecisionRejectsOverlongPostBodies(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	executor := NewCommandLogNativeDecisionExecutor(c)
+	longBody := strings.Repeat("x", proto.MaxPostBodyLength+1)
+	wantMessage := proto.ValidatePostBodyLength(longBody)
+	tests := []struct {
+		name      string
+		command   proto.CommandName
+		payload   any
+		partition LogPartition
+	}{
+		{
+			name:    "create thread",
+			command: proto.CmdCreateThread,
+			payload: proto.CreateThreadPayload{
+				Board: "general",
+				Title: "Long body",
+				Body:  longBody,
+			},
+			partition: LogPartition{Kind: partitionBoard, Key: "general"},
+		},
+		{
+			name:    "append post",
+			command: proto.CmdAppendPost,
+			payload: proto.AppendPostPayload{
+				Thread: "thr_long_body",
+				Body:   longBody,
+			},
+			partition: LogPartition{Kind: partitionThread, Key: "thr_long_body"},
+		},
 	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := marshalCoreTestJSON(t, "marshal payload", tt.payload)
+			reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+				Partition:  tt.partition,
+				Offset:     int64(i + 1),
+				ActorID:    "alice",
+				CID:        "cid-native-long-body-" + strings.ReplaceAll(tt.name, " ", "-"),
+				Command:    tt.command,
+				Payload:    raw,
+				EnqueuedAt: 1234,
+			})
+			if reply.Err == nil || reply.Err.Code != proto.ErrValidationFailed || reply.Err.Message != wantMessage || reply.Err.Retryable {
+				t.Fatalf("err = %+v, want terminal validation %q", reply.Err, wantMessage)
+			}
+		})
+	}
+}
+
+func TestNativeCommandLogDecisionRejectsInvalidThreadTitles(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	executor := NewCommandLogNativeDecisionExecutor(c)
+	longTitle := strings.Repeat("x", proto.MaxThreadTitleLength+1)
+	tests := []struct {
+		name      string
+		command   proto.CommandName
+		payload   any
+		partition LogPartition
+		want      string
+	}{
+		{
+			name:    "set thread title blank",
+			command: proto.CmdSetThreadTitle,
+			payload: proto.SetThreadTitlePayload{
+				Thread: "thr_invalid_title",
+				Title:  " \t ",
+			},
+			partition: LogPartition{Kind: partitionThread, Key: "thr_invalid_title"},
+			want:      proto.ValidateThreadTitle(" \t "),
+		},
+		{
+			name:    "set thread title long",
+			command: proto.CmdSetThreadTitle,
+			payload: proto.SetThreadTitlePayload{
+				Thread: "thr_invalid_title",
+				Title:  longTitle,
+			},
+			partition: LogPartition{Kind: partitionThread, Key: "thr_invalid_title"},
+			want:      proto.ValidateThreadTitle(longTitle),
+		},
+		{
+			name:    "system notice long",
+			command: proto.CmdPublishSystemNotice,
+			payload: proto.PublishSystemNoticePayload{
+				Title: longTitle,
+				Body:  "body",
+			},
+			partition: LogPartition{Kind: partitionBoard, Key: partitionGlobal},
+			want:      proto.ValidateThreadTitle(longTitle),
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := marshalCoreTestJSON(t, "marshal payload", tt.payload)
+			reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+				Partition:  tt.partition,
+				Offset:     int64(i + 1),
+				ActorID:    admin.ID,
+				CID:        "cid-native-invalid-title-" + strings.ReplaceAll(tt.name, " ", "-"),
+				Command:    tt.command,
+				Payload:    raw,
+				EnqueuedAt: 1234,
+			})
+			if reply.Err == nil || reply.Err.Code != proto.ErrValidationFailed || reply.Err.Message != tt.want || reply.Err.Retryable {
+				t.Fatalf("err = %+v, want terminal validation %q", reply.Err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNativeCommandLogDecisionRejectsInvalidSystemNoticeSource(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	longSource := strings.Repeat("x", proto.MaxSystemNoticeSourceLength+1)
+	raw := marshalCoreTestJSON(t, "marshal payload", proto.PublishSystemNoticePayload{
+		Title:  "Notice",
+		Body:   "body",
+		Source: longSource,
+	})
+	reply := NewCommandLogNativeDecisionExecutor(c).ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  LogPartition{Kind: partitionBoard, Key: partitionGlobal},
+		Offset:     1,
+		ActorID:    admin.ID,
+		CID:        "cid-native-invalid-system-notice-source",
+		Command:    proto.CmdPublishSystemNotice,
+		Payload:    raw,
+		EnqueuedAt: 1234,
+	})
+	want := proto.ValidateSystemNoticeSource(longSource)
+	if reply.Err == nil || reply.Err.Code != proto.ErrValidationFailed || reply.Err.Message != want || reply.Err.Retryable {
+		t.Fatalf("err = %+v, want terminal validation %q", reply.Err, want)
+	}
+}
+
+func TestNativeCommandLogDecisionRejectsInvalidAttachmentMetadata(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	executor := NewCommandLogNativeDecisionExecutor(c)
+	longFilename := strings.Repeat("x", proto.MaxAttachmentFilenameLength+1)
+	longURL := strings.Repeat("x", proto.MaxAttachmentURLLength+1)
+	tests := []struct {
+		name      string
+		command   proto.CommandName
+		payload   any
+		partition LogPartition
+		want      string
+	}{
+		{
+			name:    "create thread attachment url",
+			command: proto.CmdCreateThread,
+			payload: proto.CreateThreadPayload{
+				Board: "general",
+				Title: "Bad attachment",
+				Body:  "body",
+				Attachments: []proto.AttachmentPayload{{
+					Filename: "proof.txt",
+					URL:      longURL,
+				}},
+			},
+			partition: LogPartition{Kind: partitionBoard, Key: "general"},
+			want:      validationMessage(proto.AttachmentPayload{Filename: "proof.txt", URL: longURL}, proto.NormalizeAttachmentPayload),
+		},
+		{
+			name:    "attach post filename",
+			command: proto.CmdAttachPost,
+			payload: proto.AttachPostPayload{
+				Post:     "pst_bad_attachment",
+				Filename: longFilename,
+			},
+			partition: LogPartition{Kind: partitionPost, Key: "pst_bad_attachment"},
+			want:      validationMessage(proto.AttachmentPayload{Filename: longFilename}, proto.NormalizeAttachmentPayload),
+		},
+		{
+			name:    "attach mail size",
+			command: proto.CmdAttachMail,
+			payload: proto.AttachMailPayload{
+				Mail:      "mail_bad_attachment",
+				Filename:  "proof.txt",
+				SizeBytes: -1,
+			},
+			partition: LogPartition{Kind: partitionMail, Key: "mail_bad_attachment"},
+			want:      validationMessage(proto.AttachmentPayload{Filename: "proof.txt", SizeBytes: -1}, proto.NormalizeAttachmentPayload),
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := marshalCoreTestJSON(t, "marshal payload", tt.payload)
+			reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+				Partition:  tt.partition,
+				Offset:     int64(i + 1),
+				ActorID:    admin.ID,
+				CID:        "cid-native-invalid-attachment-" + strings.ReplaceAll(tt.name, " ", "-"),
+				Command:    tt.command,
+				Payload:    raw,
+				EnqueuedAt: 1234,
+			})
+			if reply.Err == nil || reply.Err.Code != proto.ErrValidationFailed || reply.Err.Message != tt.want || reply.Err.Retryable {
+				t.Fatalf("err = %+v, want terminal validation %q", reply.Err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNativeCommandLogDecisionRejectsAttachmentCountLimits(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	executor := NewCommandLogNativeDecisionExecutor(c)
+	tests := []struct {
+		name      string
+		command   proto.CommandName
+		payload   any
+		partition LogPartition
+		want      string
+	}{
+		{
+			name:    "create thread attachments",
+			command: proto.CmdCreateThread,
+			payload: proto.CreateThreadPayload{
+				Board:       "general",
+				Title:       "Too many attachments",
+				Body:        "body",
+				Attachments: nativeDecisionTestAttachments(proto.MaxPostAttachments + 1),
+			},
+			partition: LogPartition{Kind: partitionBoard, Key: "general"},
+			want:      proto.ValidatePostAttachmentCount(proto.MaxPostAttachments + 1),
+		},
+		{
+			name:    "send mail attachments",
+			command: proto.CmdSendMail,
+			payload: proto.SendMailPayload{
+				To:          []string{bob.Name},
+				Subject:     "Too many attachments",
+				Body:        "body",
+				Attachments: nativeDecisionTestAttachments(proto.MaxMailAttachments + 1),
+			},
+			partition: LogPartition{Kind: partitionMail, Key: admin.ID},
+			want:      proto.ValidateMailAttachmentCount(proto.MaxMailAttachments + 1),
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := marshalCoreTestJSON(t, "marshal payload", tt.payload)
+			reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+				Partition:  tt.partition,
+				Offset:     int64(i + 1),
+				ActorID:    admin.ID,
+				CID:        "cid-native-attachment-count-" + strings.ReplaceAll(tt.name, " ", "-"),
+				Command:    tt.command,
+				Payload:    raw,
+				EnqueuedAt: 1234,
+			})
+			if reply.Err == nil || reply.Err.Code != proto.ErrValidationFailed || reply.Err.Message != tt.want || reply.Err.Retryable {
+				t.Fatalf("err = %+v, want terminal validation %q", reply.Err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNativeCommandLogDecisionRejectsOverlongModerationReasons(t *testing.T) {
+	ctx := context.Background()
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	longReason := strings.Repeat("x", proto.MaxModerationReasonLength+1)
+	_, want := proto.NormalizeModerationReason(longReason)
+	tests := []struct {
+		name    string
+		command proto.CommandName
+		payload any
+	}{
+		{
+			name:    "sanction",
+			command: proto.CmdSanctionUser,
+			payload: proto.SanctionUserPayload{
+				User:   alice.ID,
+				Kind:   "mute",
+				Reason: longReason,
+			},
+		},
+		{
+			name:    "clear sanction",
+			command: proto.CmdClearUserSanction,
+			payload: proto.ClearUserSanctionPayload{
+				User:   alice.ID,
+				Kind:   "mute",
+				Reason: longReason,
+			},
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := marshalCoreTestJSON(t, "marshal payload", tt.payload)
+			reply := NewCommandLogNativeDecisionExecutor(c).ExecuteCommandLogRecord(ctx, CommandLogRecord{
+				Partition:  LogPartition{Kind: partitionUser, Key: alice.ID},
+				Offset:     int64(i + 1),
+				ActorID:    admin.ID,
+				CID:        "cid-native-long-reason-" + strings.ReplaceAll(tt.name, " ", "-"),
+				Command:    tt.command,
+				Payload:    raw,
+				EnqueuedAt: 1234,
+			})
+			if reply.Err == nil || reply.Err.Code != proto.ErrValidationFailed || reply.Err.Message != want || reply.Err.Retryable {
+				t.Fatalf("err = %+v, want terminal validation %q", reply.Err, want)
+			}
+		})
+	}
+}
+
+func nativeDecisionTestAttachments(count int) []proto.AttachmentPayload {
+	attachments := make([]proto.AttachmentPayload, 0, count)
+	for i := 0; i < count; i++ {
+		attachments = append(attachments, proto.AttachmentPayload{
+			Filename: fmt.Sprintf("proof-%02d.txt", i),
+		})
+	}
+	return attachments
+}
+
+func validationMessage[T any](value T, normalize func(T) (T, string)) string {
+	_, msg := normalize(value)
+	return msg
+}
+
+func favoriteFolderNameValidationMessage(name string, required bool) string {
+	_, msg := proto.NormalizeFavoriteFolderName(name, required)
+	return msg
+}
+
+func statsSnapshotDateValidationMessage(date string, ts int64) string {
+	_, _, msg := proto.NormalizeStatsSnapshotDate(date, ts)
+	return msg
 }
 
 func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	if _, err := c.RegisterUser("admin", "pw"); err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
 	expectMailErr := func(partition LogPartition, payload proto.PostBoardMailPayload, wantCode, wantMessage string) {
 		t.Helper()
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			t.Fatalf("marshal postBoardMail payload: %v", err)
-		}
+		raw := marshalCoreTestJSON(t, "marshal postBoardMail payload", payload)
 		reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 			Partition:  partition,
 			Offset:     900,
@@ -2751,19 +2284,16 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 	}, proto.ErrForbidden, "board mail-in is disabled")
 
 	mailInAllowed := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{MailInAllowed: &mailInAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{MailInAllowed: &mailInAllowed}); err != nil {
 		t.Fatalf("enable mail-in: %v", err)
 	}
-	createPayload, err := json.Marshal(proto.PostBoardMailPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create mail payload", proto.PostBoardMailPayload{
 		Board:       "general",
 		Subject:     " Mail thread ",
 		Body:        " posted from mail ",
 		ContentType: "ansi-art",
 	})
-	if err != nil {
-		t.Fatalf("marshal create mail payload: %v", err)
-	}
-	createRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	createRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create mail", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-post-board-mail-create",
@@ -2771,30 +2301,9 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 		Payload:    createPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce create mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != createRecord.Offset {
-		t.Fatalf("create mail committed offset = %d, %v; want %d, nil", got, err, createRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create mail events: %v", err)
-	}
-	if len(events) != 2 || events[0].Kind != proto.EvtThreadNew || events[1].Kind != proto.EvtPostAppended {
-		t.Fatalf("create mail events = %+v, want thread.new and post.appended", events)
-	}
-	threadEvent, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("create mail thread payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootEvent, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("create mail post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "create mail events", proto.EvtThreadNew, proto.EvtPostAppended)
+	threadEvent := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "create mail thread payload")
+	rootEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "create mail post payload")
 	wantThreadID := stableCommandLogDecisionID("thr_", createRecord, 0)
 	wantRootID := stableCommandLogDecisionID("pst_", createRecord, 1)
 	if threadEvent.ID != wantThreadID || threadEvent.Board != "general" || threadEvent.Title != "Mail thread" || threadEvent.AuthorID != bob.ID || threadEvent.TS != 2234 {
@@ -2804,13 +2313,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 		rootEvent.AuthorID != bob.ID || rootEvent.ContentType != "ansi-art" || rootEvent.TS != 2234 {
 		t.Fatalf("create mail root post = %+v, want deterministic mail-in root post", rootEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-board-mail-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create mail events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-board-mail-test", boardPartition, 10, "materialize create mail events")
 	threads, err := c.ListThreads("general", 10, 0)
 	if err != nil {
 		t.Fatalf("list threads after create mail: %v", err)
@@ -2840,14 +2343,11 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 	}
 
 	replyPartition := LogPartition{Kind: partitionBoard, Key: wantThreadID}
-	replyPayload, err := json.Marshal(proto.PostBoardMailPayload{
+	replyPayload := marshalCoreTestJSON(t, "marshal reply mail payload", proto.PostBoardMailPayload{
 		Thread: wantThreadID,
 		Body:   " mail reply ",
 	})
-	if err != nil {
-		t.Fatalf("marshal reply mail payload: %v", err)
-	}
-	replyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	replyRecord, replyEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "reply mail", boardPartition, 2, 10, CommandLogRecord{
 		Partition:  replyPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-post-board-mail-reply",
@@ -2855,38 +2355,16 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 		Payload:    replyPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce reply mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain reply mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, replyPartition); err != nil || got != replyRecord.Offset {
-		t.Fatalf("reply mail committed offset = %d, %v; want %d, nil", got, err, replyRecord.Offset)
-	}
-	replyEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 2, 10)
-	if err != nil {
-		t.Fatalf("replay reply mail events: %v", err)
-	}
 	if len(replyEvents) != 1 || replyEvents[0].Kind != proto.EvtPostAppended || replyEvents[0].PartitionOffset != 3 {
 		t.Fatalf("reply mail events = %+v, want one board-local post.appended", replyEvents)
 	}
-	replyEvent, ok := replyEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("reply mail payload = %T, want PostAppendedPayload", replyEvents[0].Payload)
-	}
+	replyEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, replyEvents[0], "reply mail payload")
 	wantReplyID := stableCommandLogDecisionID("pst_", replyRecord, 0)
 	if replyEvent.ID != wantReplyID || replyEvent.Thread != wantThreadID || replyEvent.Body != "mail reply" || replyEvent.RawBody != "mail reply" ||
 		replyEvent.AuthorID != bob.ID || replyEvent.ContentType != "markup" || replyEvent.TS != 3234 {
 		t.Fatalf("reply mail post = %+v, want deterministic mail-in reply", replyEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-board-mail-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize reply mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-board-mail-test", boardPartition, 10, "materialize reply mail event")
 	posts, err = c.ListPosts(wantThreadID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts after reply mail: %v", err)
@@ -2907,13 +2385,10 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 	}
 
 	pollBody := "[poll]\nMail poll?\nYes\nNo\n[/poll]"
-	pollPayload, err := json.Marshal(proto.PostBoardMailPayload{
+	pollPayload := marshalCoreTestJSON(t, "marshal poll mail payload", proto.PostBoardMailPayload{
 		Thread: wantThreadID,
 		Body:   pollBody,
 	})
-	if err != nil {
-		t.Fatalf("marshal poll mail payload: %v", err)
-	}
 	lowTrustPoll := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  replyPartition,
 		Offset:     901,
@@ -2923,13 +2398,11 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 		Payload:    pollPayload,
 		EnqueuedAt: 4234,
 	})
-	if lowTrustPoll.Err == nil || lowTrustPoll.Err.Code != proto.ErrForbidden || lowTrustPoll.Err.Retryable {
-		t.Fatalf("low-trust poll mail reply = %+v, want terminal forbidden", lowTrustPoll)
-	}
+	requireNativeDecisionTerminalError(t, lowTrustPoll, proto.ErrForbidden, "low-trust poll mail reply")
 	if err := setNativeDecisionTestTrustLevel(c, bob.ID, 2); err != nil {
 		t.Fatalf("raise bob trust level: %v", err)
 	}
-	pollRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	pollRecord, pollEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "poll mail", boardPartition, 3, 10, CommandLogRecord{
 		Partition:  replyPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-post-board-mail-poll",
@@ -2937,38 +2410,16 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 		Payload:    pollPayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce poll mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain poll mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, replyPartition); err != nil || got != pollRecord.Offset {
-		t.Fatalf("poll mail committed offset = %d, %v; want %d, nil", got, err, pollRecord.Offset)
-	}
-	pollEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 3, 10)
-	if err != nil {
-		t.Fatalf("replay poll mail events: %v", err)
-	}
 	if len(pollEvents) != 1 || pollEvents[0].Kind != proto.EvtPostAppended || pollEvents[0].PartitionOffset != 4 {
 		t.Fatalf("poll mail events = %+v, want one board-local post.appended", pollEvents)
 	}
-	pollEvent, ok := pollEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("poll mail payload = %T, want PostAppendedPayload", pollEvents[0].Payload)
-	}
+	pollEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, pollEvents[0], "poll mail payload")
 	wantPollPostID := stableCommandLogDecisionID("pst_", pollRecord, 0)
 	if pollEvent.ID != wantPollPostID || pollEvent.Thread != wantThreadID || pollEvent.Body != "" || pollEvent.RawBody != pollBody ||
 		pollEvent.AuthorID != bob.ID || pollEvent.TS != 4234 {
 		t.Fatalf("poll mail post = %+v, want stripped body and raw poll body", pollEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-board-mail-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize poll mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-board-mail-test", boardPartition, 10, "materialize poll mail event")
 	projectedPoll, err := c.GetPollByPostID(wantPollPostID)
 	if err != nil {
 		t.Fatalf("get mail poll: %v", err)
@@ -2986,38 +2437,25 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
 	sourceMailID := "mail_native_post_to_board_source"
 	tx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin source mail seed: %v", err)
 	}
-	if err := insertMailMessage(tx, sourceMailID, alice.ID, "Campus plans", "Meet in the lab at six.", "", 1734, 1); err != nil {
+	if err := projections.InsertMailMessage(tx, sourceMailID, alice.ID, "Campus plans", "Meet in the lab at six.", "", 1734, 1); err != nil {
 		tx.Rollback() //nolint:errcheck
 		t.Fatalf("insert source mail message: %v", err)
 	}
-	if err := insertMailCopy(tx, sourceMailID, alice.ID, "sender", "sent", true, false, 1734); err != nil {
+	if err := projections.InsertMailCopy(tx, sourceMailID, alice.ID, "sender", "sent", true, false, 1734); err != nil {
 		tx.Rollback() //nolint:errcheck
 		t.Fatalf("insert source sender copy: %v", err)
 	}
-	if err := insertMailCopy(tx, sourceMailID, bob.ID, "recipient", "inbox", false, false, 1734); err != nil {
+	if err := projections.InsertMailCopy(tx, sourceMailID, bob.ID, "recipient", "inbox", false, false, 1734); err != nil {
 		tx.Rollback() //nolint:errcheck
 		t.Fatalf("insert source recipient copy: %v", err)
 	}
@@ -3032,32 +2470,13 @@ func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 		t.Fatalf("bob source mail = %+v, want visible mail copy", sourceMail)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	invisiblePayload, err := json.Marshal(proto.PostMailToBoardPayload{
+	invisiblePayload := marshalCoreTestJSON(t, "marshal invisible post-mail payload", proto.PostMailToBoardPayload{
 		Mail:  sourceMail.ID,
 		Board: "general",
 	})
-	if err != nil {
-		t.Fatalf("marshal invisible post-mail payload: %v", err)
-	}
 	invisible := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  boardPartition,
 		Offset:     1,
@@ -3067,20 +2486,15 @@ func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 		Payload:    invisiblePayload,
 		EnqueuedAt: 1234,
 	})
-	if invisible.Err == nil || invisible.Err.Code != proto.ErrNotFound || invisible.Err.Message != "mail not found" || invisible.Err.Retryable {
-		t.Fatalf("invisible source mail reply = %+v, want terminal not_found", invisible)
-	}
+	requireNativeDecisionTerminalError(t, invisible, proto.ErrNotFound, "invisible source mail reply", "mail not found")
 
-	createPayload, err := json.Marshal(proto.PostMailToBoardPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create post-mail payload", proto.PostMailToBoardPayload{
 		Mail:    sourceMail.ID,
 		Board:   "general",
 		Subject: " Shared campus mail ",
 		Note:    "Please discuss this one.",
 	})
-	if err != nil {
-		t.Fatalf("marshal create post-mail payload: %v", err)
-	}
-	createRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	createRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create post-mail", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-post-mail-to-board-create",
@@ -3088,30 +2502,9 @@ func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 		Payload:    createPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce create post-mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create post-mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != createRecord.Offset {
-		t.Fatalf("create post-mail committed offset = %d, %v; want %d, nil", got, err, createRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create post-mail events: %v", err)
-	}
-	if len(events) != 2 || events[0].Kind != proto.EvtThreadNew || events[1].Kind != proto.EvtPostAppended {
-		t.Fatalf("create post-mail events = %+v, want thread.new and post.appended", events)
-	}
-	threadEvent, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("create post-mail thread payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootEvent, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("create post-mail root payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "create post-mail events", proto.EvtThreadNew, proto.EvtPostAppended)
+	threadEvent := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "create post-mail thread payload")
+	rootEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "create post-mail root payload")
 	wantThreadID := stableCommandLogDecisionID("thr_", createRecord, 0)
 	wantRootID := stableCommandLogDecisionID("pst_", createRecord, 1)
 	if threadEvent.ID != wantThreadID || threadEvent.Board != "general" || threadEvent.Title != "Shared campus mail" ||
@@ -3127,13 +2520,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 			t.Fatalf("create post-mail body missing %q:\nbody=%s\nraw=%s", want, rootEvent.Body, rootEvent.RawBody)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-mail-to-board-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create post-mail events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-mail-to-board-test", boardPartition, 10, "materialize create post-mail events")
 	threads, err := c.ListThreads("general", 10, 0)
 	if err != nil {
 		t.Fatalf("list threads after post-mail create: %v", err)
@@ -3163,15 +2550,12 @@ func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 	}
 
 	replyPartition := LogPartition{Kind: partitionBoard, Key: wantThreadID}
-	replyPayload, err := json.Marshal(proto.PostMailToBoardPayload{
+	replyPayload := marshalCoreTestJSON(t, "marshal reply post-mail payload", proto.PostMailToBoardPayload{
 		Mail:   sourceMail.ID,
 		Thread: wantThreadID,
 		Note:   "Follow-up from mail.",
 	})
-	if err != nil {
-		t.Fatalf("marshal reply post-mail payload: %v", err)
-	}
-	replyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	replyRecord, replyEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "reply post-mail", boardPartition, 2, 10, CommandLogRecord{
 		Partition:  replyPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-post-mail-to-board-reply",
@@ -3179,38 +2563,16 @@ func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 		Payload:    replyPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce reply post-mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain reply post-mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, replyPartition); err != nil || got != replyRecord.Offset {
-		t.Fatalf("reply post-mail committed offset = %d, %v; want %d, nil", got, err, replyRecord.Offset)
-	}
-	replyEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 2, 10)
-	if err != nil {
-		t.Fatalf("replay reply post-mail events: %v", err)
-	}
 	if len(replyEvents) != 1 || replyEvents[0].Kind != proto.EvtPostAppended || replyEvents[0].PartitionOffset != 3 {
 		t.Fatalf("reply post-mail events = %+v, want one board-local post.appended", replyEvents)
 	}
-	replyEvent, ok := replyEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("reply post-mail payload = %T, want PostAppendedPayload", replyEvents[0].Payload)
-	}
+	replyEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, replyEvents[0], "reply post-mail payload")
 	wantReplyID := stableCommandLogDecisionID("pst_", replyRecord, 0)
 	if replyEvent.ID != wantReplyID || replyEvent.Thread != wantThreadID || replyEvent.AuthorID != bob.ID ||
 		replyEvent.ContentType != "markup" || replyEvent.TS != 3234 || !strings.Contains(replyEvent.Body, "Follow-up from mail.") {
 		t.Fatalf("reply post-mail post = %+v, want deterministic mail board reply", replyEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-mail-to-board-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize reply post-mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-mail-to-board-test", boardPartition, 10, "materialize reply post-mail event")
 	posts, err = c.ListPosts(wantThreadID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts after post-mail reply: %v", err)
@@ -3233,51 +2595,19 @@ func TestNativeCommandLogDecisionExecutorProjectsPostMailToBoard(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
-	if err := setBoardModerator(c.DB, "general", alice.ID, alice.ID, true, nil); err != nil {
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
+	if err := projections.SetBoardModerator(c.DB, "general", alice.ID, alice.ID, true, nil); err != nil {
 		t.Fatalf("set alice board moderator: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
 	expectNativeErr := func(actor *User, partition LogPartition, command proto.CommandName, payload any, wantCode string) {
 		t.Helper()
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			t.Fatalf("marshal %s payload: %v", command, err)
-		}
+		raw := marshalCoreTestJSON(t, fmt.Sprintf("marshal %s payload", command), payload)
 		reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 			Partition:  partition,
 			Offset:     900,
@@ -3293,11 +2623,8 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	}
 	produceAndDrain := func(actor *User, partition LogPartition, command proto.CommandName, payload any, cid string, ts int64) CommandLogRecord {
 		t.Helper()
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			t.Fatalf("marshal %s payload: %v", command, err)
-		}
-		record, err := commandLog.Produce(ctx, CommandLogRecord{
+		raw := marshalCoreTestJSON(t, fmt.Sprintf("marshal %s payload", command), payload)
+		return produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, string(command), CommandLogRecord{
 			Partition:  partition,
 			ActorID:    actor.ID,
 			CID:        cid,
@@ -3305,39 +2632,19 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 			Payload:    raw,
 			EnqueuedAt: ts,
 		})
-		if err != nil {
-			t.Fatalf("produce %s: %v", command, err)
-		}
-		if _, err := worker.DrainOnce(ctx); err != nil {
-			t.Fatalf("drain %s: %v", command, err)
-		}
-		if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-			t.Fatalf("%s committed offset = %d, %v; want %d, nil", command, got, err, record.Offset)
-		}
-		return record
 	}
 	materializeBoard := func(wantApplied int) []*proto.Event {
 		t.Helper()
-		result, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-			Source:    "native-board-policy-test",
-			Partition: boardPartition,
-			Limit:     100,
-		})
-		if err != nil {
-			t.Fatalf("materialize board policy events: %v", err)
-		}
+		result := materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-policy-test", boardPartition, 100, "materialize board policy events")
 		if result.Applied != wantApplied {
 			t.Fatalf("materialization result = %+v, want %d applied events", result, wantApplied)
 		}
-		events, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 100)
-		if err != nil {
-			t.Fatalf("replay board policy events: %v", err)
-		}
+		events := replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 100, "replay board policy events")
 		return events
 	}
 
 	readOnly := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
 		t.Fatalf("set read-only board: %v", err)
 	}
 	createPayload := proto.CreateThreadPayload{
@@ -3348,17 +2655,9 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	expectNativeErr(bob, boardPartition, proto.CmdCreateThread, createPayload, proto.ErrForbidden)
 	produceAndDrain(alice, boardPartition, proto.CmdCreateThread, createPayload, "cid-native-policy-readonly-create", 1234)
 	events := materializeBoard(2)
-	if len(events) != 2 || events[0].Kind != proto.EvtThreadNew || events[1].Kind != proto.EvtPostAppended {
-		t.Fatalf("events after read-only create = %+v, want thread.new and post.appended", events)
-	}
-	threadEvent, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootEvent, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root event payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "events after read-only create", proto.EvtThreadNew, proto.EvtPostAppended)
+	threadEvent := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	rootEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root event payload")
 	if threadEvent.AuthorID != alice.ID || rootEvent.AuthorID != alice.ID {
 		t.Fatalf("read-only moderator event authors = %+v / %+v, want alice", threadEvent, rootEvent)
 	}
@@ -3366,7 +2665,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	threadPartition := LogPartition{Kind: partitionThread, Key: threadEvent.ID}
 	noReply := true
 	readOnly = false
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly, NoReply: &noReply}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly, NoReply: &noReply}); err != nil {
 		t.Fatalf("set no-reply board: %v", err)
 	}
 	expectNativeErr(bob, threadPartition, proto.CmdAppendPost, proto.AppendPostPayload{
@@ -3381,10 +2680,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	if len(events) != 3 || events[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("events after no-reply append = %+v, want moderator post.appended", events)
 	}
-	noReplyBypassEvent, ok := events[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("no-reply bypass payload = %T, want PostAppendedPayload", events[2].Payload)
-	}
+	noReplyBypassEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[2], "no-reply bypass payload")
 	if noReplyBypassEvent.AuthorID != alice.ID || noReplyBypassEvent.Body != "moderator no-reply board bypass" {
 		t.Fatalf("no-reply bypass event = %+v, want alice moderator reply", noReplyBypassEvent)
 	}
@@ -3406,7 +2702,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	}
 
 	noReply = false
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{NoReply: &noReply}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{NoReply: &noReply}); err != nil {
 		t.Fatalf("clear no-reply board: %v", err)
 	}
 	if _, err := qExec(c.DB, `UPDATE threads SET locked=0 WHERE id=?`, threadEvent.ID); err != nil {
@@ -3431,10 +2727,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	if _, err := qExec(c.DB, `UPDATE posts SET no_reply=0 WHERE id=?`, rootEvent.ID); err != nil {
 		t.Fatalf("clear root post no-reply directly: %v", err)
 	}
-	replyForParentNoReply, ok := events[4].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root no-reply bypass payload = %T, want PostAppendedPayload", events[4].Payload)
-	}
+	replyForParentNoReply := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[4], "root no-reply bypass payload")
 	if _, err := qExec(c.DB, `UPDATE posts SET no_reply=1 WHERE id=?`, replyForParentNoReply.ID); err != nil {
 		t.Fatalf("set parent reply no-reply directly: %v", err)
 	}
@@ -3452,16 +2745,13 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	if len(events) != 6 {
 		t.Fatalf("events after article no-reply append = %+v, want sixth event", events)
 	}
-	articleNoReplyBypassEvent, ok := events[5].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("article no-reply bypass payload = %T, want PostAppendedPayload", events[5].Payload)
-	}
+	articleNoReplyBypassEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[5], "article no-reply bypass payload")
 	if articleNoReplyBypassEvent.ReplyTo != replyForParentNoReply.ID {
 		t.Fatalf("article no-reply bypass ReplyTo = %q, want %q", articleNoReplyBypassEvent.ReplyTo, replyForParentNoReply.ID)
 	}
 
 	memberMode := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{MemberReadMode: &memberMode, MemberPostMode: &memberMode}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{MemberReadMode: &memberMode, MemberPostMode: &memberMode}); err != nil {
 		t.Fatalf("set member board modes: %v", err)
 	}
 	memberCreatePayload := proto.CreateThreadPayload{
@@ -3470,7 +2760,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 		Body:  "member can create through member board policy",
 	}
 	expectNativeErr(carol, boardPartition, proto.CmdCreateThread, memberCreatePayload, proto.ErrForbidden)
-	if err := setBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{}); err != nil {
 		t.Fatalf("set bob board member: %v", err)
 	}
 	produceAndDrain(bob, boardPartition, proto.CmdCreateThread, memberCreatePayload, "cid-native-policy-member-create", 6234)
@@ -3478,10 +2768,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	if len(events) != 8 || events[6].Kind != proto.EvtThreadNew || events[7].Kind != proto.EvtPostAppended {
 		t.Fatalf("events after member create = %+v, want second native thread", events)
 	}
-	memberThreadEvent, ok := events[6].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("member thread event payload = %T, want ThreadNewPayload", events[6].Payload)
-	}
+	memberThreadEvent := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[6], "member thread event payload")
 	if memberThreadEvent.AuthorID != bob.ID {
 		t.Fatalf("member thread event = %+v, want bob author", memberThreadEvent)
 	}
@@ -3498,10 +2785,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	if len(events) != 9 {
 		t.Fatalf("events after member append = %+v, want ninth event", events)
 	}
-	memberReplyEvent, ok := events[8].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("member reply payload = %T, want PostAppendedPayload", events[8].Payload)
-	}
+	memberReplyEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[8], "member reply payload")
 	if memberReplyEvent.AuthorID != bob.ID || memberReplyEvent.Body != "member reply through native policy" {
 		t.Fatalf("member reply event = %+v, want bob member reply", memberReplyEvent)
 	}
@@ -3509,48 +2793,19 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 
 func TestNativeCommandLogDecisionExecutorProjectsMentionNotifications(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native mentions",
 		Body:  "hello @bob from broker root",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	createRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-create-thread-mention",
@@ -3558,22 +2813,7 @@ func TestNativeCommandLogDecisionExecutorProjectsMentionNotifications(t *testing
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
 	})
-	if err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != createRecord.Offset {
-		t.Fatalf("create committed offset = %d, %v; want %d, nil", got, err, createRecord.Offset)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mention-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mention-test", partition, 10, "materialize create events")
 	if processed := drainOutboxJobsForTest(t, c); processed != 1 {
 		t.Fatalf("processed outbox jobs after create = %d, want root post job", processed)
 	}
@@ -3585,22 +2825,12 @@ func TestNativeCommandLogDecisionExecutorProjectsMentionNotifications(t *testing
 		t.Fatalf("notifications after create = %+v, want one broker-projected mention for bob", notifications)
 	}
 
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay broker events: %v", err)
-	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	appendPayload := marshalCoreTestJSON(t, "marshal append payload", proto.AppendPostPayload{
 		Thread: threadPayload.ID,
 		Body:   "reply also says @bob",
 	})
-	if err != nil {
-		t.Fatalf("marshal append payload: %v", err)
-	}
-	appendRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "append", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-append-post-mention",
@@ -3608,22 +2838,7 @@ func TestNativeCommandLogDecisionExecutorProjectsMentionNotifications(t *testing
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce append command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain append once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, LogPartition{Kind: partitionThread, Key: threadPayload.ID}); err != nil || got != appendRecord.Offset {
-		t.Fatalf("append committed offset = %d, %v; want %d, nil", got, err, appendRecord.Offset)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mention-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize append event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mention-test", partition, 10, "materialize append event")
 	if processed := drainOutboxJobsForTest(t, c); processed != 1 {
 		t.Fatalf("processed outbox jobs after append = %d, want reply post job", processed)
 	}
@@ -3641,90 +2856,40 @@ func TestNativeCommandLogDecisionExecutorProjectsMentionNotifications(t *testing
 
 func TestNativeCommandLogDecisionExecutorProjectsWatchedThreadNotifications(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native watched thread",
 		Body:  "root post",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-create-thread-watch",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-watch-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-watch-test", partition, 10, "materialize create events")
 	if processed := drainOutboxJobsForTest(t, c); processed != 1 {
 		t.Fatalf("processed outbox jobs after create = %d, want root post job", processed)
 	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay broker events: %v", err)
-	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	if err := setThreadPref(c.DB, bob.ID, threadPayload.ID, "watch"); err != nil {
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	if err := projections.SetThreadPref(c.DB, bob.ID, threadPayload.ID, "watch"); err != nil {
 		t.Fatalf("set thread watch: %v", err)
 	}
 
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal append payload", proto.AppendPostPayload{
 		Thread: threadPayload.ID,
 		Body:   "reply for a watcher",
 	})
-	if err != nil {
-		t.Fatalf("marshal append payload: %v", err)
-	}
-	appendRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "append", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-append-post-watch",
@@ -3732,22 +2897,7 @@ func TestNativeCommandLogDecisionExecutorProjectsWatchedThreadNotifications(t *t
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce append command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain append once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, LogPartition{Kind: partitionThread, Key: threadPayload.ID}); err != nil || got != appendRecord.Offset {
-		t.Fatalf("append committed offset = %d, %v; want %d, nil", got, err, appendRecord.Offset)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-watch-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize append event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-watch-test", partition, 10, "materialize append event")
 	if processed := drainOutboxJobsForTest(t, c); processed != 1 {
 		t.Fatalf("processed outbox jobs after append = %d, want reply post job", processed)
 	}
@@ -3765,40 +2915,17 @@ func TestNativeCommandLogDecisionExecutorProjectsWatchedThreadNotifications(t *t
 
 func TestNativeCommandLogDecisionExecutorProjectsInlineAttachmentMetadata(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 	attachmentsAllowed := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
 		t.Fatalf("enable attachments: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native attachment metadata",
 		Body:  "root with an inline attachment",
@@ -3810,44 +2937,20 @@ func TestNativeCommandLogDecisionExecutorProjectsInlineAttachmentMetadata(t *tes
 			URL:         " https://cdn.example/root.png ",
 		}},
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-create-thread-attachment",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-attachment-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-attachment-test", partition, 10, "materialize create events")
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	if len(rootPostPayload.Attachments) != 1 {
 		t.Fatalf("root event attachments = %+v, want one attachment", rootPostPayload.Attachments)
 	}
@@ -3859,7 +2962,7 @@ func TestNativeCommandLogDecisionExecutorProjectsInlineAttachmentMetadata(t *tes
 		t.Fatalf("root attachment = %+v, want normalized metadata", rootAttachment)
 	}
 
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal append payload", proto.AppendPostPayload{
 		Thread: threadPayload.ID,
 		Body:   "reply with an inline attachment",
 		Attachments: []proto.AttachmentPayload{{
@@ -3870,29 +2973,15 @@ func TestNativeCommandLogDecisionExecutorProjectsInlineAttachmentMetadata(t *tes
 			URL:         "https://cdn.example/reply.txt",
 		}},
 	})
-	if err != nil {
-		t.Fatalf("marshal append payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "append", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-append-post-attachment",
 		Command:    proto.CmdAppendPost,
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
-	}); err != nil {
-		t.Fatalf("produce append command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain append once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-attachment-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize append event: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-attachment-test", partition, 10, "materialize append event")
 
 	posts, err := c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
@@ -3918,84 +3007,37 @@ func TestNativeCommandLogDecisionExecutorProjectsInlineAttachmentMetadata(t *tes
 
 func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 	attachmentsAllowed := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
 		t.Fatalf("enable attachments: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native standalone attachment metadata",
 		Body:  "root post",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-attach-post-create-thread",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-attach-post-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-attach-post-test", partition, 10, "materialize create events")
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 
-	missingStagedPayload, err := json.Marshal(proto.AttachPostPayload{
+	missingStagedPayload := marshalCoreTestJSON(t, "marshal missing staged attach payload", proto.AttachPostPayload{
 		ID:           "att_missing_staged",
 		Post:         rootPostPayload.ID,
 		Filename:     "missing.bin",
@@ -4003,9 +3045,6 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 		SizeBytes:    7,
 		StagedBlobID: "missing-staged-blob",
 	})
-	if err != nil {
-		t.Fatalf("marshal missing staged attach payload: %v", err)
-	}
 	missingStagedReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionPost, Key: rootPostPayload.ID},
 		Offset:     1,
@@ -4019,17 +3058,14 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 		t.Fatalf("missing staged attach reply = %+v, want retryable blob staging failure", missingStagedReply)
 	}
 
-	attachPayload, err := json.Marshal(proto.AttachPostPayload{
+	attachPayload := marshalCoreTestJSON(t, "marshal attach payload", proto.AttachPostPayload{
 		Post:        rootPostPayload.ID,
 		Filename:    " proof.txt ",
 		ContentType: " text/plain ",
 		SizeBytes:   42,
 	})
-	if err != nil {
-		t.Fatalf("marshal attach payload: %v", err)
-	}
 	attachPartition := LogPartition{Kind: partitionPost, Key: rootPostPayload.ID}
-	attachRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	attachRecord, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "attach", partition, 0, 10, CommandLogRecord{
 		Partition:  attachPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-attach-post-metadata",
@@ -4037,39 +3073,17 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 		Payload:    attachPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce attach command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain attach once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, attachPartition); err != nil || got != attachRecord.Offset {
-		t.Fatalf("attach committed offset = %d, %v; want %d, nil", got, err, attachRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay attach events: %v", err)
-	}
 	if len(events) != 3 {
 		t.Fatalf("events = %+v, want thread.new, post.appended, post.attachment_added", events)
 	}
-	attachmentPayload, ok := events[2].Payload.(*proto.PostAttachmentAddedPayload)
-	if !ok {
-		t.Fatalf("attachment event payload = %T, want PostAttachmentAddedPayload", events[2].Payload)
-	}
+	attachmentPayload := requireNativeDecisionPayload[proto.PostAttachmentAddedPayload](t, events[2], "attachment event payload")
 	expectedAttachmentID := stableCommandLogDecisionID("att_", attachRecord, 0)
 	if attachmentPayload.ID != expectedAttachmentID || attachmentPayload.Post != rootPostPayload.ID || attachmentPayload.Thread != threadPayload.ID ||
 		attachmentPayload.Filename != "proof.txt" || attachmentPayload.ContentType != "text/plain" || attachmentPayload.SizeBytes != 42 ||
 		attachmentPayload.AuthorID != alice.ID || attachmentPayload.TS != 2234 {
 		t.Fatalf("attachment event = %+v, want normalized deterministic metadata", attachmentPayload)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-attach-post-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize attach event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-attach-post-test", partition, 10, "materialize attach event")
 	posts, err := c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
@@ -4089,7 +3103,7 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 	if err := c.StagePostAttachmentBlob(stagedAttachmentID, alice.ID, stagedBytes, "application/octet-stream"); err != nil {
 		t.Fatalf("stage post attachment blob: %v", err)
 	}
-	stagedPayload, err := json.Marshal(proto.AttachPostPayload{
+	stagedPayload := marshalCoreTestJSON(t, "marshal staged attach payload", proto.AttachPostPayload{
 		ID:           stagedAttachmentID,
 		Post:         rootPostPayload.ID,
 		Filename:     "blob.bin",
@@ -4097,10 +3111,7 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 		SizeBytes:    int64(len(stagedBytes)),
 		StagedBlobID: stagedAttachmentID,
 	})
-	if err != nil {
-		t.Fatalf("marshal staged attach payload: %v", err)
-	}
-	stagedRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "staged attach", partition, 0, 10, CommandLogRecord{
 		Partition:  attachPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-attach-post-staged",
@@ -4108,38 +3119,16 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 		Payload:    stagedPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce staged attach command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain staged attach once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, attachPartition); err != nil || got != stagedRecord.Offset {
-		t.Fatalf("staged attach committed offset = %d, %v; want %d, nil", got, err, stagedRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay staged attach events: %v", err)
-	}
 	if len(events) != 4 {
 		t.Fatalf("events after staged attach = %+v, want fourth post.attachment_added", events)
 	}
-	stagedEvent, ok := events[3].Payload.(*proto.PostAttachmentAddedPayload)
-	if !ok {
-		t.Fatalf("staged attachment event payload = %T, want PostAttachmentAddedPayload", events[3].Payload)
-	}
+	stagedEvent := requireNativeDecisionPayload[proto.PostAttachmentAddedPayload](t, events[3], "staged attachment event payload")
 	if stagedEvent.ID != stagedAttachmentID || stagedEvent.StagedBlobID != stagedAttachmentID ||
 		stagedEvent.Filename != "blob.bin" || stagedEvent.ContentType != "application/octet-stream" ||
 		stagedEvent.SizeBytes != int64(len(stagedBytes)) || stagedEvent.AuthorID != alice.ID || stagedEvent.TS != 3234 {
 		t.Fatalf("staged attachment event = %+v, want staged blob metadata", stagedEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-attach-post-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize staged attach event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-attach-post-test", partition, 10, "materialize staged attach event")
 	storedBytes, storedType, err := c.GetAttachmentBlob(stagedAttachmentID)
 	if err != nil {
 		t.Fatalf("get staged attachment blob: %v", err)
@@ -4165,78 +3154,31 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 
 func TestNativeCommandLogDecisionExecutorProjectsEditPost(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native edit",
 		Body:  "original body",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-edit-post-create-thread",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-edit-post-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-edit-post-test", partition, 10, "materialize create events")
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	posts, err := c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts after create: %v", err)
@@ -4246,13 +3188,10 @@ func TestNativeCommandLogDecisionExecutorProjectsEditPost(t *testing.T) {
 	}
 	originalVersion := posts[0].Version
 
-	pollEditPayload, err := json.Marshal(proto.EditPostPayload{
+	pollEditPayload := marshalCoreTestJSON(t, "marshal poll edit payload", proto.EditPostPayload{
 		Post: rootPostPayload.ID,
 		Body: "edited with poll [poll]\nQuestion?\nOption A\nOption B\n[/poll]",
 	})
-	if err != nil {
-		t.Fatalf("marshal poll edit payload: %v", err)
-	}
 	pollEditReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionPost, Key: rootPostPayload.ID},
 		Offset:     1,
@@ -4262,19 +3201,14 @@ func TestNativeCommandLogDecisionExecutorProjectsEditPost(t *testing.T) {
 		Payload:    pollEditPayload,
 		EnqueuedAt: 2234,
 	})
-	if pollEditReply.Err == nil || pollEditReply.Err.Retryable || pollEditReply.Err.Code != proto.ErrValidationFailed {
-		t.Fatalf("poll edit reply = %+v, want terminal validation failure", pollEditReply)
-	}
+	requireNativeDecisionTerminalError(t, pollEditReply, proto.ErrValidationFailed, "poll edit reply")
 
-	editPayload, err := json.Marshal(proto.EditPostPayload{
+	editPayload := marshalCoreTestJSON(t, "marshal edit payload", proto.EditPostPayload{
 		Post: rootPostPayload.ID,
 		Body: "edited native editposttoken",
 	})
-	if err != nil {
-		t.Fatalf("marshal edit payload: %v", err)
-	}
 	editPartition := LogPartition{Kind: partitionPost, Key: rootPostPayload.ID}
-	editRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "edit", partition, 0, 10, CommandLogRecord{
 		Partition:  editPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-edit-post",
@@ -4282,37 +3216,15 @@ func TestNativeCommandLogDecisionExecutorProjectsEditPost(t *testing.T) {
 		Payload:    editPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce edit command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain edit once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, editPartition); err != nil || got != editRecord.Offset {
-		t.Fatalf("edit committed offset = %d, %v; want %d, nil", got, err, editRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay edit events: %v", err)
-	}
 	if len(events) != 3 {
 		t.Fatalf("events = %+v, want thread.new, post.appended, post.edited", events)
 	}
-	editEvent, ok := events[2].Payload.(*proto.PostEditedPayload)
-	if !ok {
-		t.Fatalf("edit event payload = %T, want PostEditedPayload", events[2].Payload)
-	}
+	editEvent := requireNativeDecisionPayload[proto.PostEditedPayload](t, events[2], "edit event payload")
 	if editEvent.ID != rootPostPayload.ID || editEvent.Thread != threadPayload.ID ||
 		editEvent.NewBody != "edited native editposttoken" || editEvent.Version != originalVersion+1 || editEvent.TS != 2234 {
 		t.Fatalf("edit event = %+v, want deterministic edit payload", editEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-edit-post-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize edit event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-edit-post-test", partition, 10, "materialize edit event")
 	posts, err = c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts after edit: %v", err)
@@ -4332,43 +3244,17 @@ func TestNativeCommandLogDecisionExecutorProjectsEditPost(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	archiveTx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin archive board setup: %v", err)
 	}
-	if err := insertBoard(archiveTx, "archive", "archive", "Archive board", "", 1); err != nil {
+	if err := projections.InsertBoard(archiveTx, "archive", "archive", "Archive board", "", 1); err != nil {
 		archiveTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert archive board: %v", err)
 	}
@@ -4377,55 +3263,31 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 	}
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native title",
 		Body:  "root post",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-thread-controls-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-thread-control-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-thread-control-test", partition, 10, "materialize create events")
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
 
-	titlePayload, err := json.Marshal(proto.SetThreadTitlePayload{
+	titlePayload := marshalCoreTestJSON(t, "marshal title payload", proto.SetThreadTitlePayload{
 		Thread: threadPayload.ID,
 		Title:  " broker-native renamed thread ",
 	})
-	if err != nil {
-		t.Fatalf("marshal title payload: %v", err)
-	}
 	threadPartition := LogPartition{Kind: partitionThread, Key: threadPayload.ID}
-	titleRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	titleRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "title", CommandLogRecord{
 		Partition:  threadPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-thread-title",
@@ -4433,20 +3295,8 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 		Payload:    titlePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce title command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain title once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, threadPartition); err != nil || got != titleRecord.Offset {
-		t.Fatalf("title committed offset = %d, %v; want %d, nil", got, err, titleRecord.Offset)
-	}
 
-	movePayload, err := json.Marshal(proto.MoveThreadPayload{Thread: threadPayload.ID, ToBoard: "archive"})
-	if err != nil {
-		t.Fatalf("marshal move payload: %v", err)
-	}
+	movePayload := marshalCoreTestJSON(t, "marshal move payload", proto.MoveThreadPayload{Thread: threadPayload.ID, ToBoard: "archive"})
 	moveDenied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  threadPartition,
 		Offset:     titleRecord.Offset + 1,
@@ -4456,14 +3306,9 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 		Payload:    movePayload,
 		EnqueuedAt: 4234,
 	})
-	if moveDenied.Err == nil || moveDenied.Err.Code != proto.ErrForbidden || moveDenied.Err.Retryable {
-		t.Fatalf("move reply without permission = %+v, want terminal forbidden", moveDenied)
-	}
+	requireNativeDecisionTerminalError(t, moveDenied, proto.ErrForbidden, "move reply without permission")
 
-	lockPayload, err := json.Marshal(proto.LockThreadPayload{Thread: threadPayload.ID, Locked: true})
-	if err != nil {
-		t.Fatalf("marshal lock payload: %v", err)
-	}
+	lockPayload := marshalCoreTestJSON(t, "marshal lock payload", proto.LockThreadPayload{Thread: threadPayload.ID, Locked: true})
 	lockReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  threadPartition,
 		Offset:     titleRecord.Offset + 1,
@@ -4473,14 +3318,12 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 		Payload:    lockPayload,
 		EnqueuedAt: 3234,
 	})
-	if lockReply.Err == nil || lockReply.Err.Code != proto.ErrForbidden || lockReply.Err.Retryable {
-		t.Fatalf("lock reply without permission = %+v, want terminal forbidden", lockReply)
-	}
+	requireNativeDecisionTerminalError(t, lockReply, proto.ErrForbidden, "lock reply without permission")
 	canModerateThreads := true
-	if err := setBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
 		t.Fatalf("grant bob thread moderation: %v", err)
 	}
-	lockRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "lock", CommandLogRecord{
 		Partition:  threadPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-thread-lock",
@@ -4488,16 +3331,7 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 		Payload:    lockPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce lock command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain lock once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, threadPartition); err != nil || got != lockRecord.Offset {
-		t.Fatalf("lock committed offset = %d, %v; want %d, nil", got, err, lockRecord.Offset)
-	}
-	moveRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "move", CommandLogRecord{
 		Partition:  threadPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-thread-move",
@@ -4505,51 +3339,24 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 		Payload:    movePayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce move command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain move once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, threadPartition); err != nil || got != moveRecord.Offset {
-		t.Fatalf("move committed offset = %d, %v; want %d, nil", got, err, moveRecord.Offset)
-	}
 
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay thread control events: %v", err)
-	}
+	events = replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 0, 10, "replay thread control events")
 	if len(events) != 5 {
 		t.Fatalf("events = %+v, want thread.new, post.appended, thread.title_set, thread.locked, thread.moved", events)
 	}
-	titleEvent, ok := events[2].Payload.(*proto.ThreadTitleSetPayload)
-	if !ok {
-		t.Fatalf("title event payload = %T, want ThreadTitleSetPayload", events[2].Payload)
-	}
+	titleEvent := requireNativeDecisionPayload[proto.ThreadTitleSetPayload](t, events[2], "title event payload")
 	if titleEvent.Thread != threadPayload.ID || titleEvent.Title != "broker-native renamed thread" || titleEvent.By != alice.ID || titleEvent.TS != 2234 {
 		t.Fatalf("title event = %+v, want normalized deterministic title event", titleEvent)
 	}
-	lockEvent, ok := events[3].Payload.(*proto.ThreadLockedPayload)
-	if !ok {
-		t.Fatalf("lock event payload = %T, want ThreadLockedPayload", events[3].Payload)
-	}
+	lockEvent := requireNativeDecisionPayload[proto.ThreadLockedPayload](t, events[3], "lock event payload")
 	if lockEvent.Thread != threadPayload.ID || !lockEvent.Locked || lockEvent.By != bob.ID || lockEvent.TS != 3234 {
 		t.Fatalf("lock event = %+v, want deterministic lock event", lockEvent)
 	}
-	moveEvent, ok := events[4].Payload.(*proto.ThreadMovedPayload)
-	if !ok {
-		t.Fatalf("move event payload = %T, want ThreadMovedPayload", events[4].Payload)
-	}
+	moveEvent := requireNativeDecisionPayload[proto.ThreadMovedPayload](t, events[4], "move event payload")
 	if moveEvent.Thread != threadPayload.ID || moveEvent.FromBoard != "general" || moveEvent.ToBoard != "archive" || moveEvent.By != bob.ID || moveEvent.TS != 4234 {
 		t.Fatalf("move event = %+v, want deterministic move event", moveEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-thread-control-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize thread control events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-thread-control-test", partition, 10, "materialize thread control events")
 	thread, err := c.GetThread(threadPayload.ID)
 	if err != nil {
 		t.Fatalf("get thread: %v", err)
@@ -4561,92 +3368,39 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 
 func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native flags",
 		Body:  "root post",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-post-flags-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-flags-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-flags-test", partition, 10, "materialize create events")
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	postPartition := LogPartition{Kind: partitionPost, Key: rootPostPayload.ID}
 
 	marked := true
-	forbiddenPayload, err := json.Marshal(proto.SetPostFlagPayload{
+	forbiddenPayload := marshalCoreTestJSON(t, "marshal forbidden flag payload", proto.SetPostFlagPayload{
 		Post:   rootPostPayload.ID,
 		Marked: &marked,
 	})
-	if err != nil {
-		t.Fatalf("marshal forbidden flag payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  postPartition,
 		Offset:     1,
@@ -4656,28 +3410,23 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 		Payload:    forbiddenPayload,
 		EnqueuedAt: 2234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Retryable {
-		t.Fatalf("forbidden flag reply = %+v, want terminal forbidden", forbidden)
-	}
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "forbidden flag reply")
 
 	canCurate := true
-	if err := setBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanCurate: &canCurate}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanCurate: &canCurate}); err != nil {
 		t.Fatalf("grant alice curate: %v", err)
 	}
 	recommended := true
 	tex := true
 	mailBack := true
-	flagPayload, err := json.Marshal(proto.SetPostFlagPayload{
+	flagPayload := marshalCoreTestJSON(t, "marshal flag payload", proto.SetPostFlagPayload{
 		Post:        rootPostPayload.ID,
 		Marked:      &marked,
 		Recommended: &recommended,
 		TeX:         &tex,
 		MailBack:    &mailBack,
 	})
-	if err != nil {
-		t.Fatalf("marshal flag payload: %v", err)
-	}
-	flagRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "flag", partition, 0, 10, CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-post-flags-curator-author",
@@ -4685,38 +3434,16 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 		Payload:    flagPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce flag command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain flag once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != flagRecord.Offset {
-		t.Fatalf("flag committed offset = %d, %v; want %d, nil", got, err, flagRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay flag events: %v", err)
-	}
 	if len(events) != 3 {
 		t.Fatalf("events after flag = %+v, want one post.flags_set event", events)
 	}
-	flagEvent, ok := events[2].Payload.(*proto.PostFlagsSetPayload)
-	if !ok {
-		t.Fatalf("flag event payload = %T, want PostFlagsSetPayload", events[2].Payload)
-	}
+	flagEvent := requireNativeDecisionPayload[proto.PostFlagsSetPayload](t, events[2], "flag event payload")
 	if flagEvent.ID != rootPostPayload.ID || flagEvent.Thread != rootPostPayload.Thread ||
 		!flagEvent.Marked || !flagEvent.Recommended || flagEvent.NoReply || !flagEvent.TeX || !flagEvent.MailBack ||
 		flagEvent.By != alice.ID || flagEvent.TS != 2234 {
 		t.Fatalf("flag event = %+v, want curator/author flags", flagEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-flags-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize flag event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-flags-test", partition, 10, "materialize flag event")
 	post, err := c.GetPost(rootPostPayload.ID)
 	if err != nil {
 		t.Fatalf("get post after flag: %v", err)
@@ -4725,7 +3452,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 		t.Fatalf("post after flag = %+v, want materialized curator/author flags", post)
 	}
 
-	noopRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "no-op flag", partition, 0, 10, CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-post-flags-noop",
@@ -4733,36 +3460,20 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 		Payload:    flagPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce no-op flag command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain no-op flag once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != noopRecord.Offset {
-		t.Fatalf("no-op flag committed offset = %d, %v; want %d, nil", got, err, noopRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay after no-op flag: %v", err)
-	}
 	if len(events) != 3 {
 		t.Fatalf("events after no-op = %+v, want no additional event", events)
 	}
 
 	canModerateThreads := true
-	if err := setBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
 		t.Fatalf("grant bob thread moderation: %v", err)
 	}
 	noReply := true
-	noReplyPayload, err := json.Marshal(proto.SetPostFlagPayload{
+	noReplyPayload := marshalCoreTestJSON(t, "marshal no-reply flag payload", proto.SetPostFlagPayload{
 		Post:    rootPostPayload.ID,
 		NoReply: &noReply,
 	})
-	if err != nil {
-		t.Fatalf("marshal no-reply flag payload: %v", err)
-	}
-	noReplyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "no-reply flag", partition, 0, 10, CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-post-flags-no-reply",
@@ -4770,37 +3481,15 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 		Payload:    noReplyPayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce no-reply flag command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain no-reply flag once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != noReplyRecord.Offset {
-		t.Fatalf("no-reply flag committed offset = %d, %v; want %d, nil", got, err, noReplyRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay no-reply flag events: %v", err)
-	}
 	if len(events) != 4 {
 		t.Fatalf("events after no-reply = %+v, want second post.flags_set event", events)
 	}
-	noReplyEvent, ok := events[3].Payload.(*proto.PostFlagsSetPayload)
-	if !ok {
-		t.Fatalf("no-reply event payload = %T, want PostFlagsSetPayload", events[3].Payload)
-	}
+	noReplyEvent := requireNativeDecisionPayload[proto.PostFlagsSetPayload](t, events[3], "no-reply event payload")
 	if noReplyEvent.ID != rootPostPayload.ID || !noReplyEvent.Marked || !noReplyEvent.Recommended ||
 		!noReplyEvent.NoReply || !noReplyEvent.TeX || !noReplyEvent.MailBack || noReplyEvent.By != bob.ID || noReplyEvent.TS != 4234 {
 		t.Fatalf("no-reply event = %+v, want merged moderated flags", noReplyEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-post-flags-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize no-reply event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-post-flags-test", partition, 10, "materialize no-reply event")
 	post, err = c.GetPost(rootPostPayload.ID)
 	if err != nil {
 		t.Fatalf("get post after no-reply: %v", err)
@@ -4812,118 +3501,54 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsArticleMailBack(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Native mail-back",
 		Body:  "root asks for mail-back",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, boardEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-mailback-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mailback-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mailback-test", boardPartition, 10, "materialize create events")
 	if len(boardEvents) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", boardEvents)
 	}
-	rootPostPayload, ok := boardEvents[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", boardEvents[1].Payload)
-	}
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, boardEvents[1], "root post payload")
 
 	mailBack := true
-	flagPayload, err := json.Marshal(proto.SetPostFlagPayload{
+	flagPayload := marshalCoreTestJSON(t, "marshal mail-back flag payload", proto.SetPostFlagPayload{
 		Post:     rootPostPayload.ID,
 		MailBack: &mailBack,
 	})
-	if err != nil {
-		t.Fatalf("marshal mail-back flag payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "mail-back flag", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionPost, Key: rootPostPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-mailback-flag",
 		Command:    proto.CmdSetPostFlag,
 		Payload:    flagPayload,
 		EnqueuedAt: 2234,
-	}); err != nil {
-		t.Fatalf("produce mail-back flag command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain flag once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mailback-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize flag event: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mailback-test", boardPartition, 10, "materialize flag event")
 
 	replyBody := "native mail-back reply"
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal mail-back reply payload", proto.AppendPostPayload{
 		Thread:  rootPostPayload.Thread,
 		ReplyTo: rootPostPayload.ID,
 		Body:    replyBody,
 	})
-	if err != nil {
-		t.Fatalf("marshal mail-back reply payload: %v", err)
-	}
-	replyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, boardEvents = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "mail-back reply", boardPartition, 0, 10, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: rootPostPayload.Thread},
 		ActorID:    bob.ID,
 		CID:        "cid-native-mailback-reply",
@@ -4931,38 +3556,14 @@ func TestNativeCommandLogDecisionExecutorProjectsArticleMailBack(t *testing.T) {
 		Payload:    appendPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce mail-back reply command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain mail-back reply once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, LogPartition{Kind: partitionThread, Key: rootPostPayload.Thread}); err != nil || got != replyRecord.Offset {
-		t.Fatalf("reply committed offset = %d, %v; want %d, nil", got, err, replyRecord.Offset)
-	}
-	boardEvents, err = eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board events after mail-back reply: %v", err)
-	}
 	if len(boardEvents) != 4 || boardEvents[3].Kind != proto.EvtPostAppended {
 		t.Fatalf("board events after mail-back reply = %+v, want reply post.appended", boardEvents)
 	}
-	replyPostPayload, ok := boardEvents[3].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("reply post payload = %T, want PostAppendedPayload", boardEvents[3].Payload)
-	}
+	replyPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, boardEvents[3], "reply post payload")
 	userPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	mailEvents, err := eventStore.ReplayPartition(ctx, userPartition.Kind, userPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay mail-back user events: %v", err)
-	}
-	if len(mailEvents) != 1 || mailEvents[0].Kind != proto.EvtMailSent {
-		t.Fatalf("mail-back user events = %+v, want one mail.sent", mailEvents)
-	}
-	mailPayload, ok := mailEvents[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("mail-back payload = %T, want MailSentPayload", mailEvents[0].Payload)
-	}
+	mailEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, userPartition, 0, 10, "replay mail-back user events")
+	requireNativeDecisionEventKinds(t, mailEvents, "mail-back user events", proto.EvtMailSent)
+	mailPayload := requireNativeDecisionPayload[proto.MailSentPayload](t, mailEvents[0], "mail-back payload")
 	if mailPayload.FromUserID != bob.ID || mailPayload.From != bob.Name || len(mailPayload.ToUserIDs) != 1 ||
 		mailPayload.ToUserIDs[0] != alice.ID || mailPayload.SaveSent ||
 		!strings.Contains(mailPayload.Subject, "Native mail-back") ||
@@ -4971,20 +3572,8 @@ func TestNativeCommandLogDecisionExecutorProjectsArticleMailBack(t *testing.T) {
 		!strings.Contains(mailPayload.Body, replyPostPayload.ID) {
 		t.Fatalf("mail-back payload = %+v, want automatic inbox-only article mail", mailPayload)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mailback-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize reply post event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mailback-test",
-		Partition: userPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize mail-back event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mailback-test", boardPartition, 10, "materialize reply post event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mailback-test", userPartition, 10, "materialize mail-back event")
 	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice inbox: %v", err)
@@ -5005,78 +3594,35 @@ func TestNativeCommandLogDecisionExecutorProjectsArticleMailBack(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsRelayDeliveries(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	relayEnabled := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{RelayEnabled: &relayEnabled}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{RelayEnabled: &relayEnabled}); err != nil {
 		t.Fatalf("enable relay board setting: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Native relay topic",
 		Body:  "first relay body",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "relay create", CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-relay-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce relay create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain relay create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-relay-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize relay create events: %v", err)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay relay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-relay-test", boardPartition, 10, "materialize relay create events")
+	boardEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 10, "replay relay create events")
 	if len(boardEvents) != 2 {
 		t.Fatalf("relay create events = %+v, want thread.new and post.appended", boardEvents)
 	}
-	rootPostPayload, ok := boardEvents[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", boardEvents[1].Payload)
-	}
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, boardEvents[1], "root post payload")
 	deliveries, err := c.ListRelayDeliveries("pending", 10, 0)
 	if err != nil {
 		t.Fatalf("list relay deliveries after create: %v", err)
@@ -5098,44 +3644,24 @@ func TestNativeCommandLogDecisionExecutorProjectsRelayDeliveries(t *testing.T) {
 		t.Fatalf("root relay delivery = %+v, want projected pending root delivery", deliveries[0])
 	}
 
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal append payload", proto.AppendPostPayload{
 		Thread: rootPostPayload.Thread,
 		Body:   "second relay body",
 	})
-	if err != nil {
-		t.Fatalf("marshal append payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "relay reply", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: rootPostPayload.Thread},
 		ActorID:    bob.ID,
 		CID:        "cid-native-relay-reply",
 		Command:    proto.CmdAppendPost,
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
-	}); err != nil {
-		t.Fatalf("produce relay reply command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain relay reply once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-relay-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize relay reply event: %v", err)
-	}
-	boardEvents, err = eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay relay events after reply: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-relay-test", boardPartition, 10, "materialize relay reply event")
+	boardEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 10, "replay relay events after reply")
 	if len(boardEvents) != 3 {
 		t.Fatalf("relay events after reply = %+v, want one reply post.appended", boardEvents)
 	}
-	replyPostPayload, ok := boardEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("reply post payload = %T, want PostAppendedPayload", boardEvents[2].Payload)
-	}
+	replyPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, boardEvents[2], "reply post payload")
 	deliveries, err = c.ListRelayDeliveries("pending", 10, 0)
 	if err != nil {
 		t.Fatalf("list relay deliveries after reply: %v", err)
@@ -5160,24 +3686,14 @@ func TestNativeCommandLogDecisionExecutorProjectsRelayDeliveries(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	tx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin filter setup: %v", err)
 	}
-	if err := upsertContentFilter(tx, "filter_native", "classified", "global", true, admin.ID, 1000); err != nil {
+	if err := projections.UpsertContentFilter(tx, "filter_native", "classified", "global", true, admin.ID, 1000); err != nil {
 		tx.Rollback()
 		t.Fatalf("upsert content filter: %v", err)
 	}
@@ -5185,81 +3701,43 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 		t.Fatalf("commit filter setup: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	filterPartition := LogPartition{Kind: partitionBoard, Key: nativeFilterSystemBoardID}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	filterPartition := LogPartition{Kind: partitionBoard, Key: proto.ContentFilterSystemBoardID}
+	createPayload := marshalCoreTestJSON(t, "marshal filtered create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Native content filter",
 		Body:  "this classified body should enter review",
 	})
-	if err != nil {
-		t.Fatalf("marshal filtered create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "filtered create", CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-content-filter-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce filtered create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain filtered create once: %v", err)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay filtered create board events: %v", err)
-	}
+	})
+	boardEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 10, "replay filtered create board events")
 	// The content-filter flag event carries the reporter + reason, so it must
 	// not appear on the board partition (reporter leak — M8); the board keeps
 	// only the public thread/post events and the flag lands on the global
 	// (moderation) partition.
-	if len(boardEvents) != 2 || boardEvents[0].Kind != proto.EvtThreadNew || boardEvents[1].Kind != proto.EvtPostAppended {
-		t.Fatalf("filtered create board events = %+v, want thread.new, post.appended only", boardEvents)
-	}
+	requireNativeDecisionEventKinds(t, boardEvents, "filtered create board events", proto.EvtThreadNew, proto.EvtPostAppended)
 	for _, e := range boardEvents {
 		if e.Kind == proto.EvtPostFlagged {
 			t.Fatalf("post.flagged must not appear on the board partition (reporter leak): %+v", boardEvents)
 		}
 	}
-	rootPostPayload, ok := boardEvents[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", boardEvents[1].Payload)
-	}
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, boardEvents[1], "root post payload")
 	globalPartition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
-	globalEvents, err := eventStore.ReplayPartition(ctx, globalPartition.Kind, globalPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay global events: %v", err)
-	}
+	globalEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, globalPartition, 0, 10, "replay global events")
 	var filterPayload *proto.PostFlaggedPayload
 	for _, e := range globalEvents {
 		if e.Kind != proto.EvtPostFlagged {
 			continue
 		}
-		p, ok := e.Payload.(*proto.PostFlaggedPayload)
-		if !ok {
-			t.Fatalf("filter payload = %T, want PostFlaggedPayload", e.Payload)
-		}
+		p := requireNativeDecisionPayload[proto.PostFlaggedPayload](t, e, "filter payload")
 		filterPayload = p
 	}
 	if filterPayload == nil {
@@ -5270,39 +3748,18 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 		!strings.Contains(filterPayload.Reason, "filter_native") {
 		t.Fatalf("content filter payload = %+v, want durable content-filter review event", filterPayload)
 	}
-	filterEvents, err := eventStore.ReplayPartition(ctx, filterPartition.Kind, filterPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay generated filter events: %v", err)
-	}
+	filterEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, filterPartition, 0, 10, "replay generated filter events")
 	if len(filterEvents) != 3 ||
 		filterEvents[0].Kind != proto.EvtBoardCreated ||
 		filterEvents[1].Kind != proto.EvtThreadNew ||
 		filterEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("generated filter events = %+v, want board/thread/post log events", filterEvents)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize filtered create board events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-test", boardPartition, 10, "materialize filtered create board events")
 	// post.flagged is scoped moderation-only → global partition (M8); materialize
 	// it there so the content-filter review is built.
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-test",
-		Partition: globalPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize filtered flag event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-test",
-		Partition: filterPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize generated filter events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-test", globalPartition, 10, "materialize filtered flag event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-test", filterPartition, 10, "materialize generated filter events")
 	reviews, err := c.ListModerationReviews("open", 10, 0)
 	if err != nil {
 		t.Fatalf("list moderation reviews: %v", err)
@@ -5312,14 +3769,14 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 		reviews[0].Reporter != bob.ID || !strings.Contains(reviews[0].Reason, "filter_native") {
 		t.Fatalf("reviews after native filtered create = %+v, want open content-filter review", reviews)
 	}
-	filterBoard, err := c.GetBoard(nativeFilterSystemBoardID)
+	filterBoard, err := c.GetBoard(proto.ContentFilterSystemBoardID)
 	if err != nil {
 		t.Fatalf("get filter board: %v", err)
 	}
 	if filterBoard == nil || filterBoard.Name != "Filter" {
 		t.Fatalf("filter board = %+v, want generated Filter board", filterBoard)
 	}
-	filterThreads, err := c.ListThreads(nativeFilterSystemBoardID, 10, 0)
+	filterThreads, err := c.ListThreads(proto.ContentFilterSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list filter threads: %v", err)
 	}
@@ -5344,48 +3801,22 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 		}
 	}
 
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal filtered append payload", proto.AppendPostPayload{
 		Thread: rootPostPayload.Thread,
 		Body:   "another classified reply should also enter review",
 	})
-	if err != nil {
-		t.Fatalf("marshal filtered append payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "filtered append", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: rootPostPayload.Thread},
 		ActorID:    bob.ID,
 		CID:        "cid-native-content-filter-append",
 		Command:    proto.CmdAppendPost,
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
-	}); err != nil {
-		t.Fatalf("produce filtered append command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain filtered append once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize filtered append board events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-test", boardPartition, 10, "materialize filtered append board events")
 	// The append's post.flagged is also scoped moderation-only → global (M8).
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-test",
-		Partition: globalPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize filtered append flag event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-test",
-		Partition: filterPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize filtered append filter events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-test", globalPartition, 10, "materialize filtered append flag event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-test", filterPartition, 10, "materialize filtered append filter events")
 	reviews, err = c.ListModerationReviews("open", 10, 0)
 	if err != nil {
 		t.Fatalf("list moderation reviews after append: %v", err)
@@ -5393,7 +3824,7 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 	if len(reviews) != 2 {
 		t.Fatalf("reviews after filtered append = %+v, want two content-filter reviews", reviews)
 	}
-	filterThreads, err = c.ListThreads(nativeFilterSystemBoardID, 10, 0)
+	filterThreads, err = c.ListThreads(proto.ContentFilterSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list filter threads after append: %v", err)
 	}
@@ -5404,47 +3835,18 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterReviews(t *testing
 
 func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	filterPayload, err := json.Marshal(proto.SetContentFilterPayload{
+	filterPayload := marshalCoreTestJSON(t, "marshal scoped filter payload", proto.SetContentFilterPayload{
 		ID:      "native_filter_policy",
 		Pattern: "classified",
 		Scope:   "general",
 	})
-	if err != nil {
-		t.Fatalf("marshal scoped filter payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  boardPartition,
 		Offset:     1,
@@ -5454,17 +3856,28 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 		Payload:    filterPayload,
 		EnqueuedAt: 1234,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("set content filter as non-admin = %+v, want terminal forbidden", denied)
-	}
-	missingScopePayload, err := json.Marshal(proto.SetContentFilterPayload{
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "set content filter as non-admin")
+	longPattern := strings.Repeat("x", proto.MaxContentFilterPatternLength+1)
+	longPatternPayload := marshalCoreTestJSON(t, "marshal long pattern payload", proto.SetContentFilterPayload{
+		ID:      "long_pattern_filter",
+		Pattern: longPattern,
+		Scope:   "general",
+	})
+	longPatternReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  boardPartition,
+		Offset:     1,
+		ActorID:    admin.ID,
+		CID:        "cid-native-filter-long-pattern",
+		Command:    proto.CmdSetContentFilter,
+		Payload:    longPatternPayload,
+		EnqueuedAt: 1234,
+	})
+	requireNativeDecisionTerminalError(t, longPatternReply, proto.ErrValidationFailed, "set content filter long pattern", proto.ValidateContentFilterPattern(longPattern))
+	missingScopePayload := marshalCoreTestJSON(t, "marshal missing scope payload", proto.SetContentFilterPayload{
 		ID:      "missing_scope_filter",
 		Pattern: "classified",
 		Scope:   "missing",
 	})
-	if err != nil {
-		t.Fatalf("marshal missing scope payload: %v", err)
-	}
 	missingScope := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "missing"},
 		Offset:     1,
@@ -5474,11 +3887,9 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 		Payload:    missingScopePayload,
 		EnqueuedAt: 1234,
 	})
-	if missingScope.Err == nil || missingScope.Err.Code != proto.ErrNotFound || missingScope.Err.Retryable {
-		t.Fatalf("set content filter for missing scope = %+v, want terminal not found", missingScope)
-	}
+	requireNativeDecisionTerminalError(t, missingScope, proto.ErrNotFound, "set content filter for missing scope")
 
-	filterRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, boardEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "scoped filter", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-filter-set",
@@ -5486,37 +3897,13 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 		Payload:    filterPayload,
 		EnqueuedAt: 1234,
 	})
-	if err != nil {
-		t.Fatalf("produce scoped filter command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain scoped filter once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != filterRecord.Offset {
-		t.Fatalf("scoped filter committed offset = %d, %v; want %d, nil", got, err, filterRecord.Offset)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay scoped filter events: %v", err)
-	}
-	if len(boardEvents) != 1 || boardEvents[0].Kind != proto.EvtContentFilterSet {
-		t.Fatalf("scoped filter events = %+v, want one content_filter.set", boardEvents)
-	}
-	setPayload, ok := boardEvents[0].Payload.(*proto.ContentFilterSetPayload)
-	if !ok {
-		t.Fatalf("scoped filter payload = %T, want ContentFilterSetPayload", boardEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, boardEvents, "scoped filter events", proto.EvtContentFilterSet)
+	setPayload := requireNativeDecisionPayload[proto.ContentFilterSetPayload](t, boardEvents[0], "scoped filter payload")
 	if setPayload.ID != "native_filter_policy" || setPayload.Pattern != "classified" ||
 		setPayload.Scope != "general" || !setPayload.Active || setPayload.By != admin.ID || setPayload.TS != 1234 {
 		t.Fatalf("scoped filter payload = %+v, want deterministic content filter event", setPayload)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-setting-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize scoped filter event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-setting-test", boardPartition, 10, "materialize scoped filter event")
 	filters, err := c.ListContentFilters("general", true, 10, 0)
 	if err != nil {
 		t.Fatalf("list scoped content filters: %v", err)
@@ -5527,16 +3914,13 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 	}
 
 	inactive := false
-	updatePayload, err := json.Marshal(proto.SetContentFilterPayload{
+	updatePayload := marshalCoreTestJSON(t, "marshal inactive filter payload", proto.SetContentFilterPayload{
 		ID:      "native_filter_policy",
 		Pattern: "classified",
 		Scope:   "general",
 		Active:  &inactive,
 	})
-	if err != nil {
-		t.Fatalf("marshal inactive filter payload: %v", err)
-	}
-	updateRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "inactive filter", CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-filter-update",
@@ -5544,22 +3928,7 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 		Payload:    updatePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce inactive filter command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain inactive filter once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != updateRecord.Offset {
-		t.Fatalf("inactive filter committed offset = %d, %v; want %d, nil", got, err, updateRecord.Offset)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-setting-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize inactive filter event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-setting-test", boardPartition, 10, "materialize inactive filter event")
 	filters, err = c.ListContentFilters("general", true, 10, 0)
 	if err != nil {
 		t.Fatalf("list inactive scoped content filters: %v", err)
@@ -5568,14 +3937,12 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 		t.Fatalf("scoped filters after inactive update = %+v, want inactive native filter", filters)
 	}
 
-	globalPayload, err := json.Marshal(proto.SetContentFilterPayload{
+	globalPayload := marshalCoreTestJSON(t, "marshal global filter payload", proto.SetContentFilterPayload{
 		Pattern: "global secret",
 	})
-	if err != nil {
-		t.Fatalf("marshal global filter payload: %v", err)
-	}
 	globalCommandPartition := LogPartition{Kind: partitionBoard, Key: partitionGlobal}
-	globalRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	globalEventPartition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
+	_, globalEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "global filter", globalEventPartition, 0, 10, CommandLogRecord{
 		Partition:  globalCommandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-filter-global",
@@ -5583,38 +3950,13 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 		Payload:    globalPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce global filter command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain global filter once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, globalCommandPartition); err != nil || got != globalRecord.Offset {
-		t.Fatalf("global filter committed offset = %d, %v; want %d, nil", got, err, globalRecord.Offset)
-	}
-	globalEventPartition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
-	globalEvents, err := eventStore.ReplayPartition(ctx, globalEventPartition.Kind, globalEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay global filter events: %v", err)
-	}
-	if len(globalEvents) != 1 || globalEvents[0].Kind != proto.EvtContentFilterSet {
-		t.Fatalf("global filter events = %+v, want one global content_filter.set", globalEvents)
-	}
-	globalSetPayload, ok := globalEvents[0].Payload.(*proto.ContentFilterSetPayload)
-	if !ok {
-		t.Fatalf("global filter payload = %T, want ContentFilterSetPayload", globalEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, globalEvents, "global filter events", proto.EvtContentFilterSet)
+	globalSetPayload := requireNativeDecisionPayload[proto.ContentFilterSetPayload](t, globalEvents[0], "global filter payload")
 	if !strings.HasPrefix(globalSetPayload.ID, "filter_") || globalSetPayload.Pattern != "global secret" ||
 		globalSetPayload.Scope != "global" || !globalSetPayload.Active || globalSetPayload.By != admin.ID {
 		t.Fatalf("global filter payload = %+v, want generated global content filter", globalSetPayload)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-content-filter-setting-test",
-		Partition: globalEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize global filter event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-content-filter-setting-test", globalEventPartition, 10, "materialize global filter event")
 	globalFilters, err := c.ListContentFilters("global", true, 10, 0)
 	if err != nil {
 		t.Fatalf("list global content filters: %v", err)
@@ -5626,54 +3968,22 @@ func TestNativeCommandLogDecisionExecutorProjectsContentFilterSettings(t *testin
 
 func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	accountPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
 	sanctionTS := nowMS()
-	sanctionPayload, err := json.Marshal(proto.SanctionUserPayload{
+	sanctionPayload := marshalCoreTestJSON(t, "marshal sanction payload", proto.SanctionUserPayload{
 		User:        alice.ID,
 		Kind:        "mute",
 		Scope:       "general",
 		DurationSec: 60,
 		Reason:      " cooldown ",
 	})
-	if err != nil {
-		t.Fatalf("marshal sanction payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  accountPartition,
 		Offset:     1,
@@ -5683,13 +3993,8 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		Payload:    sanctionPayload,
 		EnqueuedAt: sanctionTS,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("sanction as non-moderator = %+v, want terminal forbidden", denied)
-	}
-	adminTargetPayload, err := json.Marshal(proto.SanctionUserPayload{User: admin.ID, Kind: "mute", Scope: "global"})
-	if err != nil {
-		t.Fatalf("marshal admin target sanction payload: %v", err)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "sanction as non-moderator")
+	adminTargetPayload := marshalCoreTestJSON(t, "marshal admin target sanction payload", proto.SanctionUserPayload{User: admin.ID, Kind: "mute", Scope: "global"})
 	adminTarget := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: admin.ID},
 		Offset:     1,
@@ -5699,11 +4004,9 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		Payload:    adminTargetPayload,
 		EnqueuedAt: 1234,
 	})
-	if adminTarget.Err == nil || adminTarget.Err.Code != proto.ErrForbidden || adminTarget.Err.Retryable {
-		t.Fatalf("sanction admin target = %+v, want terminal forbidden", adminTarget)
-	}
+	requireNativeDecisionTerminalError(t, adminTarget, proto.ErrForbidden, "sanction admin target")
 
-	sanctionRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, accountEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "sanction", 0, 10, CommandLogRecord{
 		Partition:  accountPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-sanction-user",
@@ -5711,75 +4014,36 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		Payload:    sanctionPayload,
 		EnqueuedAt: sanctionTS,
 	})
-	if err != nil {
-		t.Fatalf("produce sanction command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain sanction once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, accountPartition); err != nil || got != sanctionRecord.Offset {
-		t.Fatalf("sanction committed offset = %d, %v; want %d, nil", got, err, sanctionRecord.Offset)
-	}
-	accountEvents, err := eventStore.ReplayPartition(ctx, accountPartition.Kind, accountPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay sanction account events: %v", err)
-	}
-	if len(accountEvents) != 1 || accountEvents[0].Kind != proto.EvtUserSanctioned {
-		t.Fatalf("account sanction events = %+v, want one user.sanctioned", accountEvents)
-	}
-	sanctionEvent, ok := accountEvents[0].Payload.(*proto.UserSanctionedPayload)
-	if !ok {
-		t.Fatalf("sanction payload = %T, want UserSanctionedPayload", accountEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, accountEvents, "account sanction events", proto.EvtUserSanctioned)
+	sanctionEvent := requireNativeDecisionPayload[proto.UserSanctionedPayload](t, accountEvents[0], "sanction payload")
 	if sanctionEvent.User != alice.ID || sanctionEvent.Kind != "mute" || sanctionEvent.Scope != "general" ||
 		sanctionEvent.DurationSec != 60 || sanctionEvent.By != admin.ID || sanctionEvent.Reason != "cooldown" || sanctionEvent.TS != sanctionTS {
 		t.Fatalf("sanction event = %+v, want deterministic board mute", sanctionEvent)
 	}
-	denypostPartition := LogPartition{Kind: partitionBoard, Key: nativeDenyPostSystemBoardID}
-	denypostEvents, err := eventStore.ReplayPartition(ctx, denypostPartition.Kind, denypostPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay denypost events: %v", err)
-	}
+	denypostPartition := LogPartition{Kind: partitionBoard, Key: proto.DenyPostSystemBoardID}
+	denypostEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, denypostPartition, 0, 10, "replay denypost events")
 	if len(denypostEvents) != 3 ||
 		denypostEvents[0].Kind != proto.EvtBoardCreated ||
 		denypostEvents[1].Kind != proto.EvtThreadNew ||
 		denypostEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("denypost events = %+v, want board/thread/post generated record", denypostEvents)
 	}
-	denyThread, ok := denypostEvents[1].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("denypost thread payload = %T, want ThreadNewPayload", denypostEvents[1].Payload)
-	}
+	denyThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, denypostEvents[1], "denypost thread payload")
 	if !strings.Contains(denyThread.Title, "Board posting denied: alice on general") {
 		t.Fatalf("denypost thread title = %q, want board posting denial", denyThread.Title)
 	}
-	denyPost, ok := denypostEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("denypost post payload = %T, want PostAppendedPayload", denypostEvents[2].Payload)
-	}
+	denyPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, denypostEvents[2], "denypost post payload")
 	for _, want := range []string{"# Board posting denied", "- Action: board posting denied", "- User: alice", "(general)", "- Kind: mute", "- Actor: admin", "- Reason: cooldown"} {
 		if !strings.Contains(denyPost.Body, want) {
 			t.Fatalf("denypost body missing %q:\n%s", want, denyPost.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-user-sanction-test",
-		Partition: accountPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize sanction account event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-user-sanction-test",
-		Partition: denypostPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize denypost events: %v", err)
-	}
-	if kind, ok := activeSanction(c.DB, alice.ID, "general"); !ok || kind != "mute" {
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-user-sanction-test", accountPartition, 10, "materialize sanction account event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-user-sanction-test", denypostPartition, 10, "materialize denypost events")
+	if kind, ok := projections.ActiveSanction(c.DB, alice.ID, "general"); !ok || kind != "mute" {
 		t.Fatalf("active general sanction = %q,%v; want mute,true", kind, ok)
 	}
-	denypostThreads, err := c.ListThreads(nativeDenyPostSystemBoardID, 10, 0)
+	denypostThreads, err := c.ListThreads(proto.DenyPostSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list denypost threads: %v", err)
 	}
@@ -5791,7 +4055,7 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin secret board setup: %v", err)
 	}
-	if err := insertBoard(secretTx, "secret", "Secret", "Private board", "", 1); err != nil {
+	if err := projections.InsertBoard(secretTx, "secret", "Secret", "Private board", "", 1); err != nil {
 		secretTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert secret board: %v", err)
 	}
@@ -5799,19 +4063,16 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		t.Fatalf("commit secret board: %v", err)
 	}
 	memberRead := true
-	if err := setBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
-	secretPayload, err := json.Marshal(proto.SanctionUserPayload{
+	secretPayload := marshalCoreTestJSON(t, "marshal secret sanction payload", proto.SanctionUserPayload{
 		User:   alice.ID,
 		Kind:   "ban",
 		Scope:  "secret",
 		Reason: "private board",
 	})
-	if err != nil {
-		t.Fatalf("marshal secret sanction payload: %v", err)
-	}
-	secretRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "secret sanction", CommandLogRecord{
 		Partition:  accountPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-sanction-secret",
@@ -5819,42 +4080,21 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		Payload:    secretPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce secret sanction command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain secret sanction once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, accountPartition); err != nil || got != secretRecord.Offset {
-		t.Fatalf("secret sanction committed offset = %d, %v; want %d, nil", got, err, secretRecord.Offset)
-	}
-	denypostEvents, err = eventStore.ReplayPartition(ctx, denypostPartition.Kind, denypostPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay denypost events after private sanction: %v", err)
-	}
+	denypostEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, denypostPartition, 0, 10, "replay denypost events after private sanction")
 	if len(denypostEvents) != 3 {
 		t.Fatalf("denypost events after private sanction = %+v, want no private-board generated record", denypostEvents)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-user-sanction-test",
-		Partition: accountPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize secret sanction account event: %v", err)
-	}
-	if kind, ok := activeSanction(c.DB, alice.ID, "secret"); !ok || kind != "ban" {
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-user-sanction-test", accountPartition, 10, "materialize secret sanction account event")
+	if kind, ok := projections.ActiveSanction(c.DB, alice.ID, "secret"); !ok || kind != "ban" {
 		t.Fatalf("active secret sanction = %q,%v; want ban,true", kind, ok)
 	}
 
-	clearPayload, err := json.Marshal(proto.ClearUserSanctionPayload{
+	clearPayload := marshalCoreTestJSON(t, "marshal clear sanction payload", proto.ClearUserSanctionPayload{
 		User:   alice.ID,
 		Kind:   "mute",
 		Scope:  "general",
 		Reason: " served ",
 	})
-	if err != nil {
-		t.Fatalf("marshal clear sanction payload: %v", err)
-	}
 	clearDenied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  accountPartition,
 		Offset:     3,
@@ -5864,10 +4104,8 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		Payload:    clearPayload,
 		EnqueuedAt: 3234,
 	})
-	if clearDenied.Err == nil || clearDenied.Err.Code != proto.ErrForbidden || clearDenied.Err.Retryable {
-		t.Fatalf("clear sanction as non-moderator = %+v, want terminal forbidden", clearDenied)
-	}
-	clearRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	requireNativeDecisionTerminalError(t, clearDenied, proto.ErrForbidden, "clear sanction as non-moderator")
+	clearRecord, accountEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "clear sanction", 0, 10, CommandLogRecord{
 		Partition:  accountPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-clear-sanction",
@@ -5875,82 +4113,42 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		Payload:    clearPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce clear sanction command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain clear sanction once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, accountPartition); err != nil || got != clearRecord.Offset {
-		t.Fatalf("clear sanction committed offset = %d, %v; want %d, nil", got, err, clearRecord.Offset)
-	}
-	accountEvents, err = eventStore.ReplayPartition(ctx, accountPartition.Kind, accountPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay clear sanction account events: %v", err)
-	}
 	if len(accountEvents) != 3 || accountEvents[2].Kind != proto.EvtUserSanctionCleared {
 		t.Fatalf("clear sanction account events = %+v, want third user.sanction_cleared", accountEvents)
 	}
-	clearEvent, ok := accountEvents[2].Payload.(*proto.UserSanctionClearedPayload)
-	if !ok {
-		t.Fatalf("clear sanction payload = %T, want UserSanctionClearedPayload", accountEvents[2].Payload)
-	}
+	clearEvent := requireNativeDecisionPayload[proto.UserSanctionClearedPayload](t, accountEvents[2], "clear sanction payload")
 	if clearEvent.User != alice.ID || clearEvent.Kind != "mute" || clearEvent.Scope != "general" ||
 		clearEvent.By != admin.ID || clearEvent.Reason != "served" || clearEvent.TS != 3234 {
 		t.Fatalf("clear sanction event = %+v, want deterministic board mute clear", clearEvent)
 	}
-	undenypostPartition := LogPartition{Kind: partitionBoard, Key: nativeUndenyPostSystemBoardID}
-	undenypostEvents, err := eventStore.ReplayPartition(ctx, undenypostPartition.Kind, undenypostPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay undenypost events: %v", err)
-	}
+	undenypostPartition := LogPartition{Kind: partitionBoard, Key: proto.UndenyPostSystemBoardID}
+	undenypostEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, undenypostPartition, 0, 10, "replay undenypost events")
 	if len(undenypostEvents) != 3 ||
 		undenypostEvents[0].Kind != proto.EvtBoardCreated ||
 		undenypostEvents[1].Kind != proto.EvtThreadNew ||
 		undenypostEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("undenypost events = %+v, want board/thread/post generated record", undenypostEvents)
 	}
-	undenyBoard, ok := undenypostEvents[0].Payload.(*proto.BoardCreatedPayload)
-	if !ok {
-		t.Fatalf("undenypost board payload = %T, want BoardCreatedPayload", undenypostEvents[0].Payload)
-	}
-	undenyThread, ok := undenypostEvents[1].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("undenypost thread payload = %T, want ThreadNewPayload", undenypostEvents[1].Payload)
-	}
+	undenyBoard := requireNativeDecisionPayload[proto.BoardCreatedPayload](t, undenypostEvents[0], "undenypost board payload")
+	undenyThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, undenypostEvents[1], "undenypost thread payload")
 	if !strings.Contains(undenyThread.Title, "Board posting restored: alice on general") {
 		t.Fatalf("undenypost thread title = %q, want board posting restore", undenyThread.Title)
 	}
-	undenyPost, ok := undenypostEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("undenypost post payload = %T, want PostAppendedPayload", undenypostEvents[2].Payload)
-	}
+	undenyPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, undenypostEvents[2], "undenypost post payload")
 	for _, want := range []string{"# Board posting restored", "- Action: board posting restored", "- User: alice", "(general)", "- Kind: mute", "- Actor: admin", "- Reason: served"} {
 		if !strings.Contains(undenyPost.Body, want) {
 			t.Fatalf("undenypost body missing %q:\n%s", want, undenyPost.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-user-sanction-test",
-		Partition: accountPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize clear sanction account event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-user-sanction-test",
-		Partition: undenypostPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize undenypost events: %v", err)
-	}
-	if kind, ok := activeSanction(c.DB, alice.ID, "general"); ok {
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-user-sanction-test", accountPartition, 10, "materialize clear sanction account event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-user-sanction-test", undenypostPartition, 10, "materialize undenypost events")
+	if kind, ok := projections.ActiveSanction(c.DB, alice.ID, "general"); ok {
 		t.Fatalf("active general sanction after clear = %q,%v; want none", kind, ok)
 	}
-	if kind, ok := activeSanction(c.DB, alice.ID, "secret"); !ok || kind != "ban" {
+	if kind, ok := projections.ActiveSanction(c.DB, alice.ID, "secret"); !ok || kind != "ban" {
 		t.Fatalf("active secret sanction after clear = %q,%v; want ban,true", kind, ok)
 	}
-	undenypostThreads, err := c.ListThreads(nativeUndenyPostSystemBoardID, 10, 0)
+	undenypostThreads, err := c.ListThreads(proto.UndenyPostSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list undenypost threads: %v", err)
 	}
@@ -5977,10 +4175,7 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 			t.Fatalf("retry event %d kind = %s, want %s", i, event.Kind, wantRetryKinds[i])
 		}
 	}
-	retryBoard, ok := retryEvents[1].Payload.(*proto.BoardCreatedPayload)
-	if !ok {
-		t.Fatalf("clear sanction retry board payload = %T, want BoardCreatedPayload", retryEvents[1].Payload)
-	}
+	retryBoard := requireNativeDecisionPayload[proto.BoardCreatedPayload](t, retryEvents[1], "clear sanction retry board payload")
 	if retryBoard.ID != undenyBoard.ID || retryBoard.Position != undenyBoard.Position || retryBoard.Name != undenyBoard.Name {
 		t.Fatalf("clear sanction retry board = %+v, want stable board upsert %+v", retryBoard, undenyBoard)
 	}
@@ -5988,46 +4183,14 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsBlessUser(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	selfPayload, err := json.Marshal(proto.BlessUserPayload{User: "alice"})
-	if err != nil {
-		t.Fatalf("marshal self blessing payload: %v", err)
-	}
+	selfPayload := marshalCoreTestJSON(t, "marshal self blessing payload", proto.BlessUserPayload{User: "alice"})
 	self := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: "alice"},
 		Offset:     1,
@@ -6037,16 +4200,26 @@ func TestNativeCommandLogDecisionExecutorProjectsBlessUser(t *testing.T) {
 		Payload:    selfPayload,
 		EnqueuedAt: 1234,
 	})
-	if self.Err == nil || self.Err.Code != proto.ErrValidationFailed || self.Err.Retryable {
-		t.Fatalf("self blessing = %+v, want terminal validation failure", self)
-	}
-	if err := setUserRelationship(c.DB, bob.ID, carol.ID, "ignore", "", true); err != nil {
+	requireNativeDecisionTerminalError(t, self, proto.ErrValidationFailed, "self blessing")
+	longBlessingMessage := strings.Repeat("x", proto.MaxBlessingMessageLength+1)
+	longMessagePayload := marshalCoreTestJSON(t, "marshal long blessing payload", proto.BlessUserPayload{
+		User:    "bob",
+		Message: longBlessingMessage,
+	})
+	longMessage := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  LogPartition{Kind: partitionUser, Key: "bob"},
+		Offset:     1,
+		ActorID:    alice.ID,
+		CID:        "cid-native-bless-long-message",
+		Command:    proto.CmdBlessUser,
+		Payload:    longMessagePayload,
+		EnqueuedAt: 1234,
+	})
+	requireNativeDecisionTerminalError(t, longMessage, proto.ErrValidationFailed, "long blessing message", validationMessage(longBlessingMessage, proto.NormalizeBlessingMessage))
+	if err := projections.SetUserRelationship(c.DB, bob.ID, carol.ID, "ignore", "", true); err != nil {
 		t.Fatalf("set bob ignores carol: %v", err)
 	}
-	ignoredPayload, err := json.Marshal(proto.BlessUserPayload{User: "bob"})
-	if err != nil {
-		t.Fatalf("marshal ignored blessing payload: %v", err)
-	}
+	ignoredPayload := marshalCoreTestJSON(t, "marshal ignored blessing payload", proto.BlessUserPayload{User: "bob"})
 	ignored := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: "bob"},
 		Offset:     1,
@@ -6056,19 +4229,15 @@ func TestNativeCommandLogDecisionExecutorProjectsBlessUser(t *testing.T) {
 		Payload:    ignoredPayload,
 		EnqueuedAt: 1234,
 	})
-	if ignored.Err == nil || ignored.Err.Code != proto.ErrForbidden || ignored.Err.Retryable {
-		t.Fatalf("ignored blessing = %+v, want terminal forbidden", ignored)
-	}
+	requireNativeDecisionTerminalError(t, ignored, proto.ErrForbidden, "ignored blessing")
 
 	commandPartition := LogPartition{Kind: partitionUser, Key: "bob"}
-	blessPayload, err := json.Marshal(proto.BlessUserPayload{
+	blessPayload := marshalCoreTestJSON(t, "marshal blessing payload", proto.BlessUserPayload{
 		User:    "bob",
 		Message: " Good luck on finals. ",
 	})
-	if err != nil {
-		t.Fatalf("marshal blessing payload: %v", err)
-	}
-	blessRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
+	_, accountEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "blessing", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-bless-user",
@@ -6076,74 +4245,33 @@ func TestNativeCommandLogDecisionExecutorProjectsBlessUser(t *testing.T) {
 		Payload:    blessPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce blessing command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain blessing once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != blessRecord.Offset {
-		t.Fatalf("blessing committed offset = %d, %v; want %d, nil", got, err, blessRecord.Offset)
-	}
-
-	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	accountEvents, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay blessing account events: %v", err)
-	}
-	if len(accountEvents) != 1 || accountEvents[0].Kind != proto.EvtUserBlessed {
-		t.Fatalf("account blessing events = %+v, want one user.blessed", accountEvents)
-	}
-	blessingEvent, ok := accountEvents[0].Payload.(*proto.UserBlessedPayload)
-	if !ok {
-		t.Fatalf("blessing payload = %T, want UserBlessedPayload", accountEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, accountEvents, "account blessing events", proto.EvtUserBlessed)
+	blessingEvent := requireNativeDecisionPayload[proto.UserBlessedPayload](t, accountEvents[0], "blessing payload")
 	if blessingEvent.ID == "" || blessingEvent.FromUserID != alice.ID || blessingEvent.From != "alice" ||
 		blessingEvent.ToUserID != bob.ID || blessingEvent.To != "bob" || blessingEvent.Message != "Good luck on finals." || blessingEvent.TS != 3234 {
 		t.Fatalf("blessing event = %+v, want deterministic alice->bob blessing", blessingEvent)
 	}
-	blessingPartition := LogPartition{Kind: partitionBoard, Key: nativeBlessingSystemBoardID}
-	blessingBoardEvents, err := eventStore.ReplayPartition(ctx, blessingPartition.Kind, blessingPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay Blessing board events: %v", err)
-	}
+	blessingPartition := LogPartition{Kind: partitionBoard, Key: proto.BlessingSystemBoardID}
+	blessingBoardEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, blessingPartition, 0, 10, "replay Blessing board events")
 	if len(blessingBoardEvents) != 3 ||
 		blessingBoardEvents[0].Kind != proto.EvtBoardCreated ||
 		blessingBoardEvents[1].Kind != proto.EvtThreadNew ||
 		blessingBoardEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("Blessing board events = %+v, want board/thread/post generated record", blessingBoardEvents)
 	}
-	blessingThread, ok := blessingBoardEvents[1].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("blessing thread payload = %T, want ThreadNewPayload", blessingBoardEvents[1].Payload)
-	}
+	blessingThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, blessingBoardEvents[1], "blessing thread payload")
 	if !strings.Contains(blessingThread.Title, "alice -> bob") {
 		t.Fatalf("blessing thread title = %q, want alice -> bob", blessingThread.Title)
 	}
-	blessingPost, ok := blessingBoardEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("blessing post payload = %T, want PostAppendedPayload", blessingBoardEvents[2].Payload)
-	}
+	blessingPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, blessingBoardEvents[2], "blessing post payload")
 	for _, want := range []string{"# Blessing for bob", "- From: alice", "- To: bob", "Good luck on finals.", "Generated public blessing record"} {
 		if !strings.Contains(blessingPost.Body, want) {
 			t.Fatalf("blessing post body missing %q:\n%s", want, blessingPost.Body)
 		}
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-blessing-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize blessing account event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-blessing-test",
-		Partition: blessingPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize Blessing board events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-blessing-test", eventPartition, 10, "materialize blessing account event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-blessing-test", blessingPartition, 10, "materialize Blessing board events")
 	blessings, err := c.ListBlessings(10, 0)
 	if err != nil {
 		t.Fatalf("list blessings: %v", err)
@@ -6151,7 +4279,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBlessUser(t *testing.T) {
 	if len(blessings) != 1 || blessings[0].ID != blessingEvent.ID || blessings[0].FromName != "alice" || blessings[0].ToName != "bob" {
 		t.Fatalf("materialized blessings = %+v, want alice blessing bob", blessings)
 	}
-	threads, err := c.ListThreads(nativeBlessingSystemBoardID, 10, 0)
+	threads, err := c.ListThreads(proto.BlessingSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list Blessing threads: %v", err)
 	}
@@ -6162,57 +4290,22 @@ func TestNativeCommandLogDecisionExecutorProjectsBlessUser(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	if err := setUserRelationship(c.DB, alice.ID, bob.ID, "ignore", "", true); err != nil {
+	if err := projections.SetUserRelationship(c.DB, alice.ID, bob.ID, "ignore", "", true); err != nil {
 		t.Fatalf("set alice ignores bob: %v", err)
 	}
-	blockedPayload, err := json.Marshal(proto.SendMailPayload{
+	blockedPayload := marshalCoreTestJSON(t, "marshal blocked mail payload", proto.SendMailPayload{
 		To:      []string{"alice"},
 		Subject: "Blocked",
 		Body:    "please read",
 	})
-	if err != nil {
-		t.Fatalf("marshal blocked mail payload: %v", err)
-	}
 	blocked := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionMail, Key: bob.ID},
 		Offset:     1,
@@ -6222,21 +4315,19 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		Payload:    blockedPayload,
 		EnqueuedAt: 1234,
 	})
-	if blocked.Err == nil || blocked.Err.Code != proto.ErrForbidden || blocked.Err.Retryable {
-		t.Fatalf("send mail blocked by ignore = %+v, want terminal forbidden", blocked)
-	}
-	if err := setUserRelationship(c.DB, alice.ID, bob.ID, "ignore", "", false); err != nil {
+	requireNativeDecisionTerminalError(t, blocked, proto.ErrForbidden, "send mail blocked by ignore")
+	if err := projections.SetUserRelationship(c.DB, alice.ID, bob.ID, "ignore", "", false); err != nil {
 		t.Fatalf("clear alice ignores bob: %v", err)
 	}
-	if err := setUserRelationship(c.DB, bob.ID, alice.ID, "friend", "", true); err != nil {
+	if err := projections.SetUserRelationship(c.DB, bob.ID, alice.ID, "friend", "", true); err != nil {
 		t.Fatalf("set bob friends alice: %v", err)
 	}
-	if err := setMailGroup(c.DB, bob.ID, "grp_lab", "lab", []string{alice.ID, carol.ID}); err != nil {
+	if err := projections.SetMailGroup(c.DB, bob.ID, "grp_lab", "lab", []string{alice.ID, carol.ID}); err != nil {
 		t.Fatalf("set bob mail group: %v", err)
 	}
 
 	commandPartition := LogPartition{Kind: partitionMail, Key: bob.ID}
-	payload, err := json.Marshal(proto.SendMailPayload{
+	payload := marshalCoreTestJSON(t, "marshal send mail payload", proto.SendMailPayload{
 		ToGroups: []string{"lab", "friends"},
 		Subject:  " Campus plans ",
 		Body:     " Meet in the lab at six. ",
@@ -6247,10 +4338,8 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 			URL:         " https://example.edu/plan.txt ",
 		}},
 	})
-	if err != nil {
-		t.Fatalf("marshal send mail payload: %v", err)
-	}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "send mail", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-send-mail",
@@ -6258,28 +4347,8 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce send mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain send mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != record.Offset {
-		t.Fatalf("send mail committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-
-	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay send mail events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailSent {
-		t.Fatalf("send mail events = %+v, want one mail.sent", events)
-	}
-	mailEvent, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("mail event payload = %T, want MailSentPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "send mail events", proto.EvtMailSent)
+	mailEvent := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "mail event payload")
 	if mailEvent.ID == "" || mailEvent.FromUserID != bob.ID || mailEvent.From != "bob" ||
 		mailEvent.Subject != "Campus plans" || mailEvent.Body != "Meet in the lab at six." ||
 		!mailEvent.SaveSent || mailEvent.TS != 2234 {
@@ -6294,13 +4363,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		t.Fatalf("mail attachments = %+v, want trimmed deterministic attachment", mailEvent.Attachments)
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-send-mail-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize send mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-send-mail-test", eventPartition, 10, "materialize send mail event")
 	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice inbox: %v", err)
@@ -6327,17 +4390,14 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		t.Fatalf("bob sent = %+v, want read sent copy", bobSent)
 	}
 
-	replyPayload, err := json.Marshal(proto.SendMailPayload{
+	replyPayload := marshalCoreTestJSON(t, "marshal reply mail payload", proto.SendMailPayload{
 		To:      []string{"bob"},
 		Subject: "Re: Campus plans",
 		Body:    "See you there.",
 		ReplyTo: mailEvent.ID,
 	})
-	if err != nil {
-		t.Fatalf("marshal reply mail payload: %v", err)
-	}
 	replyPartition := LogPartition{Kind: partitionMail, Key: alice.ID}
-	replyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "reply mail", CommandLogRecord{
 		Partition:  replyPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-send-mail-reply",
@@ -6345,23 +4405,8 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		Payload:    replyPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce reply mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain reply mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, replyPartition); err != nil || got != replyRecord.Offset {
-		t.Fatalf("reply mail committed offset = %d, %v; want %d, nil", got, err, replyRecord.Offset)
-	}
 	replyEventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-send-mail-test",
-		Partition: replyEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize reply mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-send-mail-test", replyEventPartition, 10, "materialize reply mail event")
 	bobInbox, err := c.ListMail(bob.ID, "inbox", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list bob inbox: %v", err)
@@ -6370,14 +4415,11 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		t.Fatalf("bob inbox = %+v, want alice reply to original native mail", bobInbox)
 	}
 
-	toAllPayload, err := json.Marshal(proto.SendMailPayload{
+	toAllPayload := marshalCoreTestJSON(t, "marshal mail-all payload", proto.SendMailPayload{
 		ToAll:   true,
 		Subject: "Campus bulletin",
 		Body:    "Maintenance at midnight.",
 	})
-	if err != nil {
-		t.Fatalf("marshal mail-all payload: %v", err)
-	}
 	nonAdminToAll := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionMail, Key: bob.ID},
 		Offset:     2,
@@ -6387,11 +4429,10 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		Payload:    toAllPayload,
 		EnqueuedAt: 3234,
 	})
-	if nonAdminToAll.Err == nil || nonAdminToAll.Err.Code != proto.ErrForbidden || nonAdminToAll.Err.Retryable {
-		t.Fatalf("non-admin mail-all = %+v, want terminal forbidden", nonAdminToAll)
-	}
+	requireNativeDecisionTerminalError(t, nonAdminToAll, proto.ErrForbidden, "non-admin mail-all")
 	adminPartition := LogPartition{Kind: partitionMail, Key: admin.ID}
-	adminRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	adminEventPartition := LogPartition{Kind: partitionUser, Key: admin.ID}
+	_, adminEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "mail-all", adminEventPartition, 0, 10, CommandLogRecord{
 		Partition:  adminPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-send-mail-all",
@@ -6399,43 +4440,15 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 		Payload:    toAllPayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce mail-all command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain mail-all once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, adminPartition); err != nil || got != adminRecord.Offset {
-		t.Fatalf("mail-all committed offset = %d, %v; want %d, nil", got, err, adminRecord.Offset)
-	}
-	adminEventPartition := LogPartition{Kind: partitionUser, Key: admin.ID}
-	adminEvents, err := eventStore.ReplayPartition(ctx, adminEventPartition.Kind, adminEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay admin mail events: %v", err)
-	}
-	if len(adminEvents) != 1 || adminEvents[0].Kind != proto.EvtMailSent {
-		t.Fatalf("admin mail events = %+v, want mail.sent", adminEvents)
-	}
-	mailAllEvent, ok := adminEvents[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("mail-all payload = %T, want MailSentPayload", adminEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, adminEvents, "admin mail events", proto.EvtMailSent)
+	mailAllEvent := requireNativeDecisionPayload[proto.MailSentPayload](t, adminEvents[0], "mail-all payload")
 	if len(mailAllEvent.ToUserIDs) != 3 || mailAllEvent.ToUserIDs[0] != alice.ID || mailAllEvent.ToUserIDs[1] != bob.ID || mailAllEvent.ToUserIDs[2] != carol.ID {
 		t.Fatalf("mail-all recipients = %+v, want all non-admin users by name", mailAllEvent.ToUserIDs)
 	}
-	sysmailPartition := LogPartition{Kind: partitionBoard, Key: nativeSysmailSystemBoardID}
-	sysmailEvents, err := eventStore.ReplayPartition(ctx, sysmailPartition.Kind, sysmailPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay sysmail events: %v", err)
-	}
-	if len(sysmailEvents) != 3 || sysmailEvents[0].Kind != proto.EvtBoardCreated ||
-		sysmailEvents[1].Kind != proto.EvtThreadNew || sysmailEvents[2].Kind != proto.EvtPostAppended {
-		t.Fatalf("sysmail events = %+v, want board, thread, and post", sysmailEvents)
-	}
-	sysmailPost, ok := sysmailEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("sysmail post payload = %T, want PostAppendedPayload", sysmailEvents[2].Payload)
-	}
+	sysmailPartition := LogPartition{Kind: partitionBoard, Key: proto.SysmailSystemBoardID}
+	sysmailEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sysmailPartition, 0, 10, "replay sysmail events")
+	requireNativeDecisionEventKinds(t, sysmailEvents, "sysmail events", proto.EvtBoardCreated, proto.EvtThreadNew, proto.EvtPostAppended)
+	sysmailPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, sysmailEvents[2], "sysmail post payload")
 	for _, want := range []string{"# Sysop mail: Campus bulletin", "- Recipients: 3 users", "Maintenance at midnight.", "Generated restricted sysop mail record"} {
 		if !strings.Contains(sysmailPost.Body, want) {
 			t.Fatalf("sysmail body missing %q:\n%s", want, sysmailPost.Body)
@@ -6445,94 +4458,40 @@ func TestNativeCommandLogDecisionExecutorProjectsSendMail(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsAttachMail(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sourcePartition := LogPartition{Kind: partitionMail, Key: bob.ID}
-	sourcePayload, err := json.Marshal(proto.SendMailPayload{
+	sourcePayload := marshalCoreTestJSON(t, "marshal source mail payload", proto.SendMailPayload{
 		To:      []string{"alice"},
 		Subject: "Campus plans",
 		Body:    "Meet in the lab at six.",
 	})
-	if err != nil {
-		t.Fatalf("marshal source mail payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "source mail", CommandLogRecord{
 		Partition:  sourcePartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-attach-mail-source",
 		Command:    proto.CmdSendMail,
 		Payload:    sourcePayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce source mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain source mail once: %v", err)
-	}
+	})
 	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay source mail events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailSent {
-		t.Fatalf("source mail events = %+v, want mail.sent", events)
-	}
-	sourceMail, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("source mail payload = %T, want MailSentPayload", events[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-attach-mail-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize source mail event: %v", err)
-	}
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, 0, 10, "replay source mail events")
+	requireNativeDecisionEventKinds(t, events, "source mail events", proto.EvtMailSent)
+	sourceMail := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "source mail payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-attach-mail-test", eventPartition, 10, "materialize source mail event")
 
 	attachPartition := LogPartition{Kind: partitionMail, Key: sourceMail.ID}
-	unauthorizedPayload, err := json.Marshal(proto.AttachMailPayload{
+	unauthorizedPayload := marshalCoreTestJSON(t, "marshal unauthorized attach payload", proto.AttachMailPayload{
 		Mail:        sourceMail.ID,
 		Filename:    "not-mine.txt",
 		ContentType: "text/plain",
 		SizeBytes:   1,
 	})
-	if err != nil {
-		t.Fatalf("marshal unauthorized attach payload: %v", err)
-	}
 	unauthorized := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  attachPartition,
 		Offset:     1,
@@ -6542,15 +4501,13 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachMail(t *testing.T) {
 		Payload:    unauthorizedPayload,
 		EnqueuedAt: 2234,
 	})
-	if unauthorized.Err == nil || unauthorized.Err.Code != proto.ErrForbidden || unauthorized.Err.Retryable {
-		t.Fatalf("unauthorized attach mail = %+v, want terminal forbidden", unauthorized)
-	}
+	requireNativeDecisionTerminalError(t, unauthorized, proto.ErrForbidden, "unauthorized attach mail")
 
 	attachmentID := "matt_native_mail_blob"
 	if err := c.StageMailAttachmentBlob(attachmentID, bob.ID, []byte("lab bytes"), "text/plain"); err != nil {
 		t.Fatalf("stage mail attachment blob: %v", err)
 	}
-	attachPayload, err := json.Marshal(proto.AttachMailPayload{
+	attachPayload := marshalCoreTestJSON(t, "marshal attach mail payload", proto.AttachMailPayload{
 		ID:           attachmentID,
 		Mail:         sourceMail.ID,
 		Filename:     " lab.txt ",
@@ -6558,10 +4515,7 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachMail(t *testing.T) {
 		SizeBytes:    int64(len("lab bytes")),
 		StagedBlobID: attachmentID,
 	})
-	if err != nil {
-		t.Fatalf("marshal attach mail payload: %v", err)
-	}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "attach mail", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  attachPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-attach-mail",
@@ -6569,38 +4523,16 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachMail(t *testing.T) {
 		Payload:    attachPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce attach mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain attach mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, attachPartition); err != nil || got != record.Offset {
-		t.Fatalf("attach mail committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay attach mail events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtMailAttachmentAdded {
 		t.Fatalf("attach mail events = %+v, want mail.sent then mail.attachment_added", events)
 	}
-	attachmentEvent, ok := events[1].Payload.(*proto.MailAttachmentAddedPayload)
-	if !ok {
-		t.Fatalf("attach mail payload = %T, want MailAttachmentAddedPayload", events[1].Payload)
-	}
+	attachmentEvent := requireNativeDecisionPayload[proto.MailAttachmentAddedPayload](t, events[1], "attach mail payload")
 	if attachmentEvent.ID != attachmentID || attachmentEvent.Mail != sourceMail.ID ||
 		attachmentEvent.Filename != "lab.txt" || attachmentEvent.StagedBlobID != attachmentID ||
 		attachmentEvent.AuthorID != bob.ID || attachmentEvent.TS != 3234 {
 		t.Fatalf("attach mail event = %+v, want deterministic bob attachment", attachmentEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-attach-mail-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize attach mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-attach-mail-test", eventPartition, 10, "materialize attach mail event")
 	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice inbox: %v", err)
@@ -6621,44 +4553,15 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachMail(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsForwardMail(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sourcePartition := LogPartition{Kind: partitionMail, Key: bob.ID}
-	sourcePayload, err := json.Marshal(proto.SendMailPayload{
+	sourcePayload := marshalCoreTestJSON(t, "marshal source mail payload", proto.SendMailPayload{
 		To:      []string{"alice"},
 		Subject: "Campus plans",
 		Body:    "Meet in the lab at six.",
@@ -6669,50 +4572,25 @@ func TestNativeCommandLogDecisionExecutorProjectsForwardMail(t *testing.T) {
 			URL:         "https://example.edu/plan.txt",
 		}},
 	})
-	if err != nil {
-		t.Fatalf("marshal source mail payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "source mail", CommandLogRecord{
 		Partition:  sourcePartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-forward-source",
 		Command:    proto.CmdSendMail,
 		Payload:    sourcePayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce source mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain source mail once: %v", err)
-	}
+	})
 	sourceEventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	sourceEvents, err := eventStore.ReplayPartition(ctx, sourceEventPartition.Kind, sourceEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay source mail event: %v", err)
-	}
-	if len(sourceEvents) != 1 || sourceEvents[0].Kind != proto.EvtMailSent {
-		t.Fatalf("source mail events = %+v, want mail.sent", sourceEvents)
-	}
-	sourceMail, ok := sourceEvents[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("source mail payload = %T, want MailSentPayload", sourceEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-forward-mail-test",
-		Partition: sourceEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize source mail event: %v", err)
-	}
+	sourceEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sourceEventPartition, 0, 10, "replay source mail event")
+	requireNativeDecisionEventKinds(t, sourceEvents, "source mail events", proto.EvtMailSent)
+	sourceMail := requireNativeDecisionPayload[proto.MailSentPayload](t, sourceEvents[0], "source mail payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-forward-mail-test", sourceEventPartition, 10, "materialize source mail event")
 
-	forwardPayload, err := json.Marshal(proto.ForwardMailPayload{
+	forwardPayload := marshalCoreTestJSON(t, "marshal forward mail payload", proto.ForwardMailPayload{
 		Mail: sourceMail.ID,
 		To:   []string{"carol"},
 		Note: "Please see this.",
 	})
-	if err != nil {
-		t.Fatalf("marshal forward mail payload: %v", err)
-	}
 	forwardPartition := LogPartition{Kind: partitionMail, Key: sourceMail.ID}
 	missingCopy := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  forwardPartition,
@@ -6723,11 +4601,10 @@ func TestNativeCommandLogDecisionExecutorProjectsForwardMail(t *testing.T) {
 		Payload:    forwardPayload,
 		EnqueuedAt: 2234,
 	})
-	if missingCopy.Err == nil || missingCopy.Err.Code != proto.ErrNotFound || missingCopy.Err.Retryable {
-		t.Fatalf("forward without mail copy = %+v, want terminal not found", missingCopy)
-	}
+	requireNativeDecisionTerminalError(t, missingCopy, proto.ErrNotFound, "forward without mail copy")
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	forwardEventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "forward mail", forwardEventPartition, 0, 10, CommandLogRecord{
 		Partition:  forwardPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-forward-mail",
@@ -6735,28 +4612,8 @@ func TestNativeCommandLogDecisionExecutorProjectsForwardMail(t *testing.T) {
 		Payload:    forwardPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce forward mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain forward mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, forwardPartition); err != nil || got != record.Offset {
-		t.Fatalf("forward mail committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-
-	forwardEventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	events, err := eventStore.ReplayPartition(ctx, forwardEventPartition.Kind, forwardEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay forward mail events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailSent {
-		t.Fatalf("forward mail events = %+v, want one mail.sent", events)
-	}
-	forwardEvent, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("forward mail payload = %T, want MailSentPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "forward mail events", proto.EvtMailSent)
+	forwardEvent := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "forward mail payload")
 	if forwardEvent.ID == "" || forwardEvent.FromUserID != alice.ID || forwardEvent.From != "alice" ||
 		len(forwardEvent.ToUserIDs) != 1 || forwardEvent.ToUserIDs[0] != carol.ID ||
 		forwardEvent.Subject != "Fwd: Campus plans" || !forwardEvent.SaveSent || forwardEvent.TS != 3234 {
@@ -6768,13 +4625,7 @@ func TestNativeCommandLogDecisionExecutorProjectsForwardMail(t *testing.T) {
 		}
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-forward-mail-test",
-		Partition: forwardEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize forward mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-forward-mail-test", forwardEventPartition, 10, "materialize forward mail event")
 	carolInbox, err := c.ListMail(carol.ID, "inbox", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list carol inbox: %v", err)
@@ -6787,82 +4638,33 @@ func TestNativeCommandLogDecisionExecutorProjectsForwardMail(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sourcePartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	sourcePayload, err := json.Marshal(proto.CreateThreadPayload{
+	sourcePayload := marshalCoreTestJSON(t, "marshal source thread payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Original article",
 		Body:  "source body for excerpt",
 	})
-	if err != nil {
-		t.Fatalf("marshal source thread payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "source thread", CommandLogRecord{
 		Partition:  sourcePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-mail-post-author-source",
 		Command:    proto.CmdCreateThread,
 		Payload:    sourcePayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce source thread command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain source thread once: %v", err)
-	}
-	sourceEvents, err := eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay source thread events: %v", err)
-	}
+	})
+	sourceEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay source thread events")
 	if len(sourceEvents) != 2 {
 		t.Fatalf("source thread events = %+v, want thread and post", sourceEvents)
 	}
-	sourceThread, ok := sourceEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("source thread payload = %T, want ThreadNewPayload", sourceEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mail-post-author-test",
-		Partition: sourcePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize source thread events: %v", err)
-	}
+	sourceThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, sourceEvents[0], "source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mail-post-author-test", sourcePartition, 10, "materialize source thread events")
 	sourcePosts, err := c.ListPosts(sourceThread.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list source posts: %v", err)
@@ -6871,15 +4673,13 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 		t.Fatalf("source posts = %+v, want one", sourcePosts)
 	}
 
-	mailPayload, err := json.Marshal(proto.MailPostAuthorPayload{
+	mailPayload := marshalCoreTestJSON(t, "marshal mail-post-author payload", proto.MailPostAuthorPayload{
 		Post: sourcePosts[0].ID,
 		Body: "Could you share the notes?",
 	})
-	if err != nil {
-		t.Fatalf("marshal mail-post-author payload: %v", err)
-	}
 	mailPartition := LogPartition{Kind: partitionPost, Key: sourcePosts[0].ID}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	mailEventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "mail-post-author", mailEventPartition, 0, 10, CommandLogRecord{
 		Partition:  mailPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-mail-post-author",
@@ -6887,27 +4687,8 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 		Payload:    mailPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce mail-post-author command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain mail-post-author once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, mailPartition); err != nil || got != record.Offset {
-		t.Fatalf("mail-post-author committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	mailEventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, mailEventPartition.Kind, mailEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay mail-post-author events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailSent {
-		t.Fatalf("mail-post-author events = %+v, want mail.sent", events)
-	}
-	mailEvent, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("mail-post-author payload = %T, want MailSentPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "mail-post-author events", proto.EvtMailSent)
+	mailEvent := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "mail-post-author payload")
 	if mailEvent.ID == "" || mailEvent.FromUserID != bob.ID || len(mailEvent.ToUserIDs) != 1 ||
 		mailEvent.ToUserIDs[0] != alice.ID || mailEvent.Subject != "Re: Original article" || mailEvent.TS != 2234 {
 		t.Fatalf("mail-post-author event = %+v, want bob mail to alice", mailEvent)
@@ -6917,13 +4698,7 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 			t.Fatalf("mail-post-author body missing %q:\n%s", want, mailEvent.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mail-post-author-test",
-		Partition: mailEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize mail-post-author event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mail-post-author-test", mailEventPartition, 10, "materialize mail-post-author event")
 	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice inbox: %v", err)
@@ -6936,7 +4711,7 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin secret board setup: %v", err)
 	}
-	if err := insertBoard(secretTx, "secret", "Secret", "Members only", "", 2); err != nil {
+	if err := projections.InsertBoard(secretTx, "secret", "Secret", "Members only", "", 2); err != nil {
 		secretTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert secret board: %v", err)
 	}
@@ -6944,49 +4719,29 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 		t.Fatalf("commit secret board setup: %v", err)
 	}
 	memberRead := true
-	if err := setBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
-	secretPayload, err := json.Marshal(proto.CreateThreadPayload{
+	secretPayload := marshalCoreTestJSON(t, "marshal private source payload", proto.CreateThreadPayload{
 		Board: "secret",
 		Title: "Private article",
 		Body:  "hidden source",
 	})
-	if err != nil {
-		t.Fatalf("marshal private source payload: %v", err)
-	}
 	secretPartition := LogPartition{Kind: partitionBoard, Key: "secret"}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "private source", CommandLogRecord{
 		Partition:  secretPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-mail-post-author-private-source",
 		Command:    proto.CmdCreateThread,
 		Payload:    secretPayload,
 		EnqueuedAt: 3234,
-	}); err != nil {
-		t.Fatalf("produce private source command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain private source once: %v", err)
-	}
-	secretEvents, err := eventStore.ReplayPartition(ctx, secretPartition.Kind, secretPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay private source events: %v", err)
-	}
+	})
+	secretEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, secretPartition, 0, 10, "replay private source events")
 	if len(secretEvents) != 2 {
 		t.Fatalf("private source events = %+v, want thread and post", secretEvents)
 	}
-	secretThread, ok := secretEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("private source thread payload = %T, want ThreadNewPayload", secretEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mail-post-author-test",
-		Partition: secretPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize private source events: %v", err)
-	}
+	secretThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, secretEvents[0], "private source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mail-post-author-test", secretPartition, 10, "materialize private source events")
 	secretPosts, err := c.ListPosts(secretThread.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list private source posts: %v", err)
@@ -6994,13 +4749,10 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 	if len(secretPosts) != 1 {
 		t.Fatalf("private source posts = %+v, want one", secretPosts)
 	}
-	privateMailPayload, err := json.Marshal(proto.MailPostAuthorPayload{
+	privateMailPayload := marshalCoreTestJSON(t, "marshal private mail-post-author payload", proto.MailPostAuthorPayload{
 		Post: secretPosts[0].ID,
 		Body: "Can I see this?",
 	})
-	if err != nil {
-		t.Fatalf("marshal private mail-post-author payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionPost, Key: secretPosts[0].ID},
 		Offset:     2,
@@ -7010,54 +4762,23 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 		Payload:    privateMailPayload,
 		EnqueuedAt: 4234,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("private board mail-post-author denied = %+v, want terminal forbidden", denied)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "private board mail-post-author denied")
 }
 
 func TestNativeCommandLogDecisionExecutorProjectsCreateDigestDirectory(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	payload, err := json.Marshal(proto.CreateDigestDirectoryPayload{
+	payload := marshalCoreTestJSON(t, "marshal digest directory payload", proto.CreateDigestDirectoryPayload{
 		Board: "general",
 		Kind:  "archive",
 		Path:  " faq/empty/ ",
 	})
-	if err != nil {
-		t.Fatalf("marshal digest directory payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -7067,10 +4788,8 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateDigestDirectory(t *testin
 		Payload:    payload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board curator permission required" || forbidden.Err.Retryable {
-		t.Fatalf("create digest directory as non-curator = %+v, want terminal curator permission error", forbidden)
-	}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "create digest directory as non-curator", "board curator permission required")
+	record, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "digest directory", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-directory",
@@ -7078,38 +4797,14 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateDigestDirectory(t *testin
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce digest directory command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain digest directory once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("digest directory committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay digest directory events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDigestDirectorySet {
-		t.Fatalf("digest directory events = %+v, want one directory event", events)
-	}
-	directoryEvent, ok := events[0].Payload.(*proto.DigestDirectorySetPayload)
-	if !ok {
-		t.Fatalf("digest directory payload = %T, want DigestDirectorySetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "digest directory events", proto.EvtDigestDirectorySet)
+	directoryEvent := requireNativeDecisionPayload[proto.DigestDirectorySetPayload](t, events[0], "digest directory payload")
 	if directoryEvent.ID != stableCommandLogDecisionID("dir_", record, 0) || directoryEvent.Board != "general" ||
 		directoryEvent.Kind != "archive" || directoryEvent.Path != "faq/empty" ||
 		directoryEvent.CreatedBy != admin.ID || directoryEvent.TS != 2234 {
 		t.Fatalf("digest directory event = %+v, want deterministic archive directory", directoryEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-directory-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize digest directory event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-directory-test", partition, 10, "materialize digest directory event")
 	tree, err := c.ListDigestPathTree("general", "archive")
 	if err != nil {
 		t.Fatalf("list digest path tree: %v", err)
@@ -7133,10 +4828,7 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateDigestDirectory(t *testin
 		retryEvents[0].Kind != proto.EvtDigestDirectorySet {
 		t.Fatalf("digest directory retry events = %+v, want stable directory event", retryEvents)
 	}
-	retryDirectory, ok := retryEvents[0].Payload.(*proto.DigestDirectorySetPayload)
-	if !ok {
-		t.Fatalf("digest directory retry payload = %T, want DigestDirectorySetPayload", retryEvents[0].Payload)
-	}
+	retryDirectory := requireNativeDecisionPayload[proto.DigestDirectorySetPayload](t, retryEvents[0], "digest directory retry payload")
 	if retryDirectory.ID != directoryEvent.ID || retryDirectory.Board != directoryEvent.Board ||
 		retryDirectory.Kind != directoryEvent.Kind || retryDirectory.Path != directoryEvent.Path {
 		t.Fatalf("digest directory retry payload = %+v, want stable payload %+v", retryDirectory, directoryEvent)
@@ -7145,59 +4837,30 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateDigestDirectory(t *testin
 
 func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	if _, err := upsertDigestEntry(c.DB, "dig_copy_source_post", "general", "post", "post_copy_source", "archive", "Copy source post", "faq/howto", "Source note", admin.ID); err != nil {
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	if _, err := projections.UpsertDigestEntry(c.DB, "dig_copy_source_post", "general", "post", "post_copy_source", "archive", "Copy source post", "faq/howto", "Source note", admin.ID); err != nil {
 		t.Fatalf("upsert source digest entry: %v", err)
 	}
-	if _, err := upsertDigestEntry(c.DB, "dig_copy_source_thread", "general", "thread", "thread_copy_source", "archive", "Copy source thread", "faq/howto/deep", "Thread note", admin.ID); err != nil {
+	if _, err := projections.UpsertDigestEntry(c.DB, "dig_copy_source_thread", "general", "thread", "thread_copy_source", "archive", "Copy source thread", "faq/howto/deep", "Thread note", admin.ID); err != nil {
 		t.Fatalf("upsert nested source digest entry: %v", err)
 	}
-	if _, err := upsertDigestDirectory(c.DB, "dir_copy_empty", "general", "archive", "faq/empty", admin.ID); err != nil {
+	if _, err := projections.UpsertDigestDirectory(c.DB, "dir_copy_empty", "general", "archive", "faq/empty", admin.ID); err != nil {
 		t.Fatalf("upsert source digest directory: %v", err)
 	}
-	if _, err := upsertDigestEntry(c.DB, "dig_copy_conflict", "general", "post", "post_copy_source", "archive", "Conflicting copy target", "conflict/howto", "", admin.ID); err != nil {
+	if _, err := projections.UpsertDigestEntry(c.DB, "dig_copy_conflict", "general", "post", "post_copy_source", "archive", "Conflicting copy target", "conflict/howto", "", admin.ID); err != nil {
 		t.Fatalf("upsert conflicting digest entry: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	payload, err := json.Marshal(proto.CopyDigestPathPayload{
+	payload := marshalCoreTestJSON(t, "marshal copy digest path payload", proto.CopyDigestPathPayload{
 		Board:    "general",
 		FromPath: " faq/ ",
 		ToPath:   " faq-copy/ ",
 	})
-	if err != nil {
-		t.Fatalf("marshal copy digest path payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -7207,18 +4870,13 @@ func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board curator permission required" || forbidden.Err.Retryable {
-		t.Fatalf("copy digest path as non-curator = %+v, want terminal curator permission error", forbidden)
-	}
-	conflictPayload, err := json.Marshal(proto.CopyDigestPathPayload{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "copy digest path as non-curator", "board curator permission required")
+	conflictPayload := marshalCoreTestJSON(t, "marshal conflicting copy digest path payload", proto.CopyDigestPathPayload{
 		Board:    "general",
 		Kind:     "archive",
 		FromPath: "faq",
 		ToPath:   "conflict",
 	})
-	if err != nil {
-		t.Fatalf("marshal conflicting copy digest path payload: %v", err)
-	}
 	conflict := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -7228,11 +4886,9 @@ func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 		Payload:    conflictPayload,
 		EnqueuedAt: 1234,
 	})
-	if conflict.Err == nil || conflict.Err.Code != proto.ErrConflict || conflict.Err.Message != "digest path copy would overwrite an existing entry" || conflict.Err.Retryable {
-		t.Fatalf("conflicting digest path copy = %+v, want terminal conflict", conflict)
-	}
+	requireNativeDecisionTerminalError(t, conflict, proto.ErrConflict, "conflicting digest path copy", "digest path copy would overwrite an existing entry")
 
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "copy digest path", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-copy",
@@ -7240,42 +4896,18 @@ func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce copy digest path command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain copy digest path once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != record.Offset {
-		t.Fatalf("copy digest path committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay copy digest path events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDigestPathCopied {
-		t.Fatalf("copy digest path events = %+v, want one path copied event", events)
-	}
-	copyEvent, ok := events[0].Payload.(*proto.DigestPathCopiedPayload)
-	if !ok {
-		t.Fatalf("copy digest path payload = %T, want DigestPathCopiedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "copy digest path events", proto.EvtDigestPathCopied)
+	copyEvent := requireNativeDecisionPayload[proto.DigestPathCopiedPayload](t, events[0], "copy digest path payload")
 	wantEntryIDs := []string{stableCommandLogDecisionID("dig_", record, 0), stableCommandLogDecisionID("dig_", record, 1)}
 	wantDirectoryIDs := []string{stableCommandLogDecisionID("dir_", record, 0)}
 	if copyEvent.Board != "general" || copyEvent.Kind != "archive" ||
 		copyEvent.FromPath != "faq" || copyEvent.ToPath != "faq-copy" ||
 		copyEvent.Count != 3 || copyEvent.CreatedBy != admin.ID || copyEvent.TS != 2234 ||
-		!sameStringSlice(copyEvent.EntryIDs, wantEntryIDs) ||
-		!sameStringSlice(copyEvent.DirectoryIDs, wantDirectoryIDs) {
+		!slices.Equal(copyEvent.EntryIDs, wantEntryIDs) ||
+		!slices.Equal(copyEvent.DirectoryIDs, wantDirectoryIDs) {
 		t.Fatalf("copy digest path event = %+v, want deterministic archive subtree copy", copyEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-copy-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize copy digest path event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-copy-test", partition, 10, "materialize copy digest path event")
 	var copiedID, copiedTarget, copiedTitle, copiedBy string
 	if err := qQueryRow(c.DB,
 		`SELECT id, target_id, title, created_by
@@ -7324,25 +4956,19 @@ func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 		retryEvents[0].Kind != proto.EvtDigestPathCopied {
 		t.Fatalf("copy digest path retry events = %+v, want stable copied event", retryEvents)
 	}
-	retryCopy, ok := retryEvents[0].Payload.(*proto.DigestPathCopiedPayload)
-	if !ok {
-		t.Fatalf("copy digest path retry payload = %T, want DigestPathCopiedPayload", retryEvents[0].Payload)
-	}
-	if retryCopy.Count != copyEvent.Count || !sameStringSlice(retryCopy.EntryIDs, copyEvent.EntryIDs) ||
-		!sameStringSlice(retryCopy.DirectoryIDs, copyEvent.DirectoryIDs) {
+	retryCopy := requireNativeDecisionPayload[proto.DigestPathCopiedPayload](t, retryEvents[0], "copy digest path retry payload")
+	if retryCopy.Count != copyEvent.Count || !slices.Equal(retryCopy.EntryIDs, copyEvent.EntryIDs) ||
+		!slices.Equal(retryCopy.DirectoryIDs, copyEvent.DirectoryIDs) {
 		t.Fatalf("copy digest path retry payload = %+v, want stable payload %+v", retryCopy, copyEvent)
 	}
 
-	descendantPayload, err := json.Marshal(proto.CopyDigestPathPayload{
+	descendantPayload := marshalCoreTestJSON(t, "marshal descendant copy digest path payload", proto.CopyDigestPathPayload{
 		Board:    "general",
 		Kind:     "archive",
 		FromPath: "faq",
 		ToPath:   "faq/nested-copy",
 	})
-	if err != nil {
-		t.Fatalf("marshal descendant copy digest path payload: %v", err)
-	}
-	descendantRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	descendantRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "descendant copy digest path", CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-copy-descendant",
@@ -7350,19 +4976,7 @@ func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 		Payload:    descendantPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce descendant copy digest path command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain descendant copy digest path once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-copy-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize descendant copy digest path event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-copy-test", partition, 10, "materialize descendant copy digest path event")
 	descendantRetryReply := executor.ExecuteCommandLogRecord(ctx, descendantRecord)
 	if descendantRetryReply.Err != nil || descendantRetryReply.Result == nil || descendantRetryReply.Result.ID != "general:archive:3" {
 		t.Fatalf("descendant copy retry reply = %+v, want original source count despite copied descendants", descendantRetryReply)
@@ -7371,76 +4985,42 @@ func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide descendant copy retry events: %v", err)
 	}
-	if len(descendantRetryEvents) != 1 || descendantRetryEvents[0].Kind != proto.EvtDigestPathCopied {
-		t.Fatalf("descendant copy retry events = %+v, want one stable copied event", descendantRetryEvents)
-	}
-	descendantRetryCopy, ok := descendantRetryEvents[0].Payload.(*proto.DigestPathCopiedPayload)
-	if !ok {
-		t.Fatalf("descendant copy retry payload = %T, want DigestPathCopiedPayload", descendantRetryEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, descendantRetryEvents, "descendant copy retry events", proto.EvtDigestPathCopied)
+	descendantRetryCopy := requireNativeDecisionPayload[proto.DigestPathCopiedPayload](t, descendantRetryEvents[0], "descendant copy retry payload")
 	if descendantRetryCopy.Count != 3 ||
-		!sameStringSlice(descendantRetryCopy.EntryIDs, []string{stableCommandLogDecisionID("dig_", descendantRecord, 0), stableCommandLogDecisionID("dig_", descendantRecord, 1)}) ||
-		!sameStringSlice(descendantRetryCopy.DirectoryIDs, []string{stableCommandLogDecisionID("dir_", descendantRecord, 0)}) {
+		!slices.Equal(descendantRetryCopy.EntryIDs, []string{stableCommandLogDecisionID("dig_", descendantRecord, 0), stableCommandLogDecisionID("dig_", descendantRecord, 1)}) ||
+		!slices.Equal(descendantRetryCopy.DirectoryIDs, []string{stableCommandLogDecisionID("dir_", descendantRecord, 0)}) {
 		t.Fatalf("descendant copy retry payload = %+v, want stable original source count", descendantRetryCopy)
 	}
 }
 
 func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	if _, err := upsertDigestEntry(c.DB, "dig_move_source_post", "general", "post", "post_move_source", "archive", "Move source post", "faq/howto", "Source note", admin.ID); err != nil {
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	if _, err := projections.UpsertDigestEntry(c.DB, "dig_move_source_post", "general", "post", "post_move_source", "archive", "Move source post", "faq/howto", "Source note", admin.ID); err != nil {
 		t.Fatalf("upsert source digest entry: %v", err)
 	}
-	if _, err := upsertDigestEntry(c.DB, "dig_move_source_thread", "general", "thread", "thread_move_source", "archive", "Move source thread", "faq/howto/deep", "Thread note", admin.ID); err != nil {
+	if _, err := projections.UpsertDigestEntry(c.DB, "dig_move_source_thread", "general", "thread", "thread_move_source", "archive", "Move source thread", "faq/howto/deep", "Thread note", admin.ID); err != nil {
 		t.Fatalf("upsert nested source digest entry: %v", err)
 	}
-	if _, err := upsertDigestDirectory(c.DB, "dir_move_empty", "general", "archive", "faq/empty", admin.ID); err != nil {
+	if _, err := projections.UpsertDigestDirectory(c.DB, "dir_move_empty", "general", "archive", "faq/empty", admin.ID); err != nil {
 		t.Fatalf("upsert source digest directory: %v", err)
 	}
-	if _, err := upsertDigestEntry(c.DB, "dig_move_conflict", "general", "post", "post_move_source", "archive", "Conflicting move target", "conflict/howto", "", admin.ID); err != nil {
+	if _, err := projections.UpsertDigestEntry(c.DB, "dig_move_conflict", "general", "post", "post_move_source", "archive", "Conflicting move target", "conflict/howto", "", admin.ID); err != nil {
 		t.Fatalf("upsert conflicting digest entry: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	movePayload, err := json.Marshal(proto.MoveDigestPathPayload{
+	movePayload := marshalCoreTestJSON(t, "marshal move digest path payload", proto.MoveDigestPathPayload{
 		Board:    " general ",
 		Kind:     "archive",
 		FromPath: " faq/ ",
 		ToPath:   " faq-moved/ ",
 	})
-	if err != nil {
-		t.Fatalf("marshal move digest path payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -7450,18 +5030,13 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 		Payload:    movePayload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board curator permission required" || forbidden.Err.Retryable {
-		t.Fatalf("move digest path as non-curator = %+v, want terminal curator permission error", forbidden)
-	}
-	invalidPayload, err := json.Marshal(proto.MoveDigestPathPayload{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "move digest path as non-curator", "board curator permission required")
+	invalidPayload := marshalCoreTestJSON(t, "marshal invalid move digest path payload", proto.MoveDigestPathPayload{
 		Board:    "general",
 		Kind:     "archive",
 		FromPath: "faq",
 		ToPath:   "faq/nested",
 	})
-	if err != nil {
-		t.Fatalf("marshal invalid move digest path payload: %v", err)
-	}
 	invalid := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -7471,19 +5046,13 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 		Payload:    invalidPayload,
 		EnqueuedAt: 1234,
 	})
-	if invalid.Err == nil || invalid.Err.Code != proto.ErrValidationFailed ||
-		invalid.Err.Message != "cannot move an archive path into itself" || invalid.Err.Retryable {
-		t.Fatalf("invalid digest path move = %+v, want terminal self-move validation", invalid)
-	}
-	conflictPayload, err := json.Marshal(proto.MoveDigestPathPayload{
+	requireNativeDecisionTerminalError(t, invalid, proto.ErrValidationFailed, "invalid digest path move", "cannot move an archive path into itself")
+	conflictPayload := marshalCoreTestJSON(t, "marshal conflicting move digest path payload", proto.MoveDigestPathPayload{
 		Board:    "general",
 		Kind:     "archive",
 		FromPath: "faq",
 		ToPath:   "conflict",
 	})
-	if err != nil {
-		t.Fatalf("marshal conflicting move digest path payload: %v", err)
-	}
 	conflict := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  partition,
 		Offset:     1,
@@ -7493,12 +5062,9 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 		Payload:    conflictPayload,
 		EnqueuedAt: 1234,
 	})
-	if conflict.Err == nil || conflict.Err.Code != proto.ErrConflict ||
-		conflict.Err.Message != "digest path move would overwrite an existing entry" || conflict.Err.Retryable {
-		t.Fatalf("conflicting digest path move = %+v, want terminal conflict", conflict)
-	}
+	requireNativeDecisionTerminalError(t, conflict, proto.ErrConflict, "conflicting digest path move", "digest path move would overwrite an existing entry")
 
-	moveRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	moveRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "move digest path", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-move",
@@ -7506,35 +5072,14 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 		Payload:    movePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce move digest path command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain move digest path once: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay move digest path events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDigestPathMoved {
-		t.Fatalf("move digest path events = %+v, want one path moved event", events)
-	}
-	moveEvent, ok := events[0].Payload.(*proto.DigestPathMovedPayload)
-	if !ok {
-		t.Fatalf("move digest path payload = %T, want DigestPathMovedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "move digest path events", proto.EvtDigestPathMoved)
+	moveEvent := requireNativeDecisionPayload[proto.DigestPathMovedPayload](t, events[0], "move digest path payload")
 	if moveEvent.Board != "general" || moveEvent.Kind != "archive" ||
 		moveEvent.FromPath != "faq" || moveEvent.ToPath != "faq-moved" ||
 		moveEvent.Count != 3 || moveEvent.By != admin.ID || moveEvent.TS != 2234 {
 		t.Fatalf("move digest path event = %+v, want deterministic archive subtree move", moveEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-move-delete-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize move digest path event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-move-delete-test", partition, 10, "materialize move digest path event")
 	movedEntries, err := c.ListDigestEntries("general", "archive", "faq-moved/howto", 10, 0)
 	if err != nil {
 		t.Fatalf("list moved digest entries: %v", err)
@@ -7568,24 +5113,18 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 		retryMoveEvents[0].Kind != proto.EvtDigestPathMoved {
 		t.Fatalf("move digest path retry events = %+v, want stable moved event", retryMoveEvents)
 	}
-	retryMove, ok := retryMoveEvents[0].Payload.(*proto.DigestPathMovedPayload)
-	if !ok {
-		t.Fatalf("move digest path retry payload = %T, want DigestPathMovedPayload", retryMoveEvents[0].Payload)
-	}
+	retryMove := requireNativeDecisionPayload[proto.DigestPathMovedPayload](t, retryMoveEvents[0], "move digest path retry payload")
 	if retryMove.Count != moveEvent.Count || retryMove.FromPath != moveEvent.FromPath ||
 		retryMove.ToPath != moveEvent.ToPath || retryMove.By != moveEvent.By || retryMove.TS != moveEvent.TS {
 		t.Fatalf("move digest path retry payload = %+v, want stable payload %+v", retryMove, moveEvent)
 	}
 
-	deletePayload, err := json.Marshal(proto.DeleteDigestPathPayload{
+	deletePayload := marshalCoreTestJSON(t, "marshal delete digest path payload", proto.DeleteDigestPathPayload{
 		Board: "general",
 		Kind:  "archive",
 		Path:  "faq-moved",
 	})
-	if err != nil {
-		t.Fatalf("marshal delete digest path payload: %v", err)
-	}
-	deleteRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	deleteRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "delete digest path", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-delete-path",
@@ -7593,35 +5132,16 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 		Payload:    deletePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce delete digest path command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain delete digest path once: %v", err)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay delete digest path events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtDigestPathDeleted {
 		t.Fatalf("delete digest path events = %+v, want path moved then deleted", events)
 	}
-	deleteEvent, ok := events[1].Payload.(*proto.DigestPathDeletedPayload)
-	if !ok {
-		t.Fatalf("delete digest path payload = %T, want DigestPathDeletedPayload", events[1].Payload)
-	}
+	deleteEvent := requireNativeDecisionPayload[proto.DigestPathDeletedPayload](t, events[1], "delete digest path payload")
 	if deleteEvent.Board != "general" || deleteEvent.Kind != "archive" ||
 		deleteEvent.Path != "faq-moved" || deleteEvent.Count != 3 ||
 		deleteEvent.By != admin.ID || deleteEvent.TS != 3234 {
 		t.Fatalf("delete digest path event = %+v, want deterministic archive subtree deletion", deleteEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-move-delete-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize delete digest path event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-move-delete-test", partition, 10, "materialize delete digest path event")
 	deletedEntries, err := c.ListDigestEntries("general", "archive", "faq-moved/howto", 10, 0)
 	if err != nil {
 		t.Fatalf("list deleted digest entries: %v", err)
@@ -7657,10 +5177,7 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 		retryDeleteEvents[0].Kind != proto.EvtDigestPathDeleted {
 		t.Fatalf("delete digest path retry events = %+v, want stable deleted event", retryDeleteEvents)
 	}
-	retryDelete, ok := retryDeleteEvents[0].Payload.(*proto.DigestPathDeletedPayload)
-	if !ok {
-		t.Fatalf("delete digest path retry payload = %T, want DigestPathDeletedPayload", retryDeleteEvents[0].Payload)
-	}
+	retryDelete := requireNativeDecisionPayload[proto.DigestPathDeletedPayload](t, retryDeleteEvents[0], "delete digest path retry payload")
 	if retryDelete.Count != deleteEvent.Count || retryDelete.Path != deleteEvent.Path ||
 		retryDelete.By != deleteEvent.By || retryDelete.TS != deleteEvent.TS {
 		t.Fatalf("delete digest path retry payload = %+v, want stable payload %+v", retryDelete, deleteEvent)
@@ -7669,78 +5186,32 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveAndDeleteDigestPath(t *test
 
 func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sourcePartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	sourcePayload, err := json.Marshal(proto.CreateThreadPayload{
+	sourcePayload := marshalCoreTestJSON(t, "marshal source thread payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Curatable topic",
 		Body:  "First public body.",
 	})
-	if err != nil {
-		t.Fatalf("marshal source thread payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "source thread", CommandLogRecord{
 		Partition:  sourcePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-digest-curation-source",
 		Command:    proto.CmdCreateThread,
 		Payload:    sourcePayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce source thread command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain source thread once: %v", err)
-	}
-	sourceEvents, err := eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay source events: %v", err)
-	}
+	})
+	sourceEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay source events")
 	if len(sourceEvents) != 2 {
 		t.Fatalf("source events = %+v, want thread and post", sourceEvents)
 	}
-	sourceThread, ok := sourceEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("source thread payload = %T, want ThreadNewPayload", sourceEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-curation-test",
-		Partition: sourcePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize source events: %v", err)
-	}
+	sourceThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, sourceEvents[0], "source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-curation-test", sourcePartition, 10, "materialize source events")
 	sourcePosts, err := c.ListPosts(sourceThread.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list source posts: %v", err)
@@ -7749,16 +5220,27 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 		t.Fatalf("source posts = %+v, want one", sourcePosts)
 	}
 
-	postPayload, err := json.Marshal(proto.CuratePostPayload{
+	postPayload := marshalCoreTestJSON(t, "marshal curate post payload", proto.CuratePostPayload{
 		Post: sourcePosts[0].ID,
 		Kind: "DiGeSt",
 		Path: "/faq/",
 		Note: "Useful local note.",
 	})
-	if err != nil {
-		t.Fatalf("marshal curate post payload: %v", err)
-	}
 	postPartition := LogPartition{Kind: partitionPost, Key: sourcePosts[0].ID}
+	invalidKindPayload := marshalCoreTestJSON(t, "marshal invalid digest kind payload", proto.CuratePostPayload{
+		Post: sourcePosts[0].ID,
+		Kind: "unknown",
+	})
+	invalidKind := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  postPartition,
+		Offset:     1,
+		ActorID:    admin.ID,
+		CID:        "cid-native-digest-curation-invalid-kind",
+		Command:    proto.CmdCuratePost,
+		Payload:    invalidKindPayload,
+		EnqueuedAt: 2234,
+	})
+	requireNativeDecisionTerminalError(t, invalidKind, proto.ErrValidationFailed, "invalid digest kind", validationMessage("unknown", proto.NormalizeDigestKind))
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  postPartition,
 		Offset:     1,
@@ -7768,10 +5250,8 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 		Payload:    postPayload,
 		EnqueuedAt: 2234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board curator permission required" || forbidden.Err.Retryable {
-		t.Fatalf("curate post as non-curator = %+v, want terminal curator permission error", forbidden)
-	}
-	postRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "curate post as non-curator", proto.DigestCurationPermissionMessage("digest"))
+	postRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "curate post", CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-curation-post",
@@ -7779,23 +5259,11 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 		Payload:    postPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce curate post command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain curate post once: %v", err)
-	}
-	generalEvents, err := eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay general events after curate post: %v", err)
-	}
+	generalEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay general events after curate post")
 	if len(generalEvents) != 3 || generalEvents[2].Kind != proto.EvtDigestEntryUpserted {
 		t.Fatalf("general events after curate post = %+v, want digest entry event", generalEvents)
 	}
-	postDigest, ok := generalEvents[2].Payload.(*proto.DigestEntryUpsertedPayload)
-	if !ok {
-		t.Fatalf("post digest payload = %T, want DigestEntryUpsertedPayload", generalEvents[2].Payload)
-	}
+	postDigest := requireNativeDecisionPayload[proto.DigestEntryUpsertedPayload](t, generalEvents[2], "post digest payload")
 	wantPostTitle := fmt.Sprintf("Curatable topic #%d", sourcePosts[0].CreatedSeq)
 	if postDigest.ID != stableCommandLogDecisionID("dig_", postRecord, 0) || postDigest.Board != "general" ||
 		postDigest.TargetKind != "post" || postDigest.TargetID != sourcePosts[0].ID ||
@@ -7804,13 +5272,7 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 		postDigest.CreatedBy != admin.ID || postDigest.TS != 2234 {
 		t.Fatalf("post digest event = %+v, want deterministic post digest", postDigest)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-curation-test",
-		Partition: sourcePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize post digest event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-curation-test", sourcePartition, 10, "materialize post digest event")
 	digestEntries, err := c.ListDigestEntries("general", "digest", "faq", 10, 0)
 	if err != nil {
 		t.Fatalf("list digest entries: %v", err)
@@ -7830,26 +5292,20 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 		retryPostEvents[0].Kind != proto.EvtDigestEntryUpserted {
 		t.Fatalf("curate post retry events = %+v, want stable digest event", retryPostEvents)
 	}
-	retryPostDigest, ok := retryPostEvents[0].Payload.(*proto.DigestEntryUpsertedPayload)
-	if !ok {
-		t.Fatalf("curate post retry payload = %T, want DigestEntryUpsertedPayload", retryPostEvents[0].Payload)
-	}
+	retryPostDigest := requireNativeDecisionPayload[proto.DigestEntryUpsertedPayload](t, retryPostEvents[0], "curate post retry payload")
 	if retryPostDigest.ID != postDigest.ID || retryPostDigest.Kind != "digest" || retryPostDigest.Path != "faq" {
 		t.Fatalf("curate post retry payload = %+v, want stable digest payload %+v", retryPostDigest, postDigest)
 	}
 
-	recommendPayload, err := json.Marshal(proto.CurateThreadPayload{
+	recommendPayload := marshalCoreTestJSON(t, "marshal recommended thread payload", proto.CurateThreadPayload{
 		Thread: sourceThread.ID,
 		Kind:   "recommended",
 		Title:  "Front page pick",
 		Path:   "frontpage",
 		Note:   "Worth reading.",
 	})
-	if err != nil {
-		t.Fatalf("marshal recommended thread payload: %v", err)
-	}
 	threadPartition := LogPartition{Kind: partitionThread, Key: sourceThread.ID}
-	recommendRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	recommendRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "recommended thread", CommandLogRecord{
 		Partition:  threadPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-curation-recommend",
@@ -7857,70 +5313,34 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 		Payload:    recommendPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce recommended thread command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain recommended thread once: %v", err)
-	}
-	generalEvents, err = eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay general events after recommended curation: %v", err)
-	}
+	generalEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay general events after recommended curation")
 	if len(generalEvents) != 4 || generalEvents[3].Kind != proto.EvtDigestEntryUpserted {
 		t.Fatalf("general events after recommended curation = %+v, want digest entry event", generalEvents)
 	}
-	recommendedDigest, ok := generalEvents[3].Payload.(*proto.DigestEntryUpsertedPayload)
-	if !ok {
-		t.Fatalf("recommended digest payload = %T, want DigestEntryUpsertedPayload", generalEvents[3].Payload)
-	}
+	recommendedDigest := requireNativeDecisionPayload[proto.DigestEntryUpsertedPayload](t, generalEvents[3], "recommended digest payload")
 	if recommendedDigest.ID != stableCommandLogDecisionID("dig_", recommendRecord, 0) ||
 		recommendedDigest.TargetKind != "thread" || recommendedDigest.TargetID != sourceThread.ID ||
 		recommendedDigest.Kind != "recommended" || recommendedDigest.Title != "Front page pick" ||
 		recommendedDigest.Path != "frontpage" || recommendedDigest.Note != "Worth reading." {
 		t.Fatalf("recommended digest event = %+v, want deterministic thread recommendation", recommendedDigest)
 	}
-	recommendPartition := LogPartition{Kind: partitionBoard, Key: nativeRecommendSystemBoardID}
-	recommendEvents, err := eventStore.ReplayPartition(ctx, recommendPartition.Kind, recommendPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay recommend mirror events: %v", err)
-	}
-	if len(recommendEvents) != 3 || recommendEvents[0].Kind != proto.EvtBoardCreated ||
-		recommendEvents[1].Kind != proto.EvtThreadNew || recommendEvents[2].Kind != proto.EvtPostAppended {
-		t.Fatalf("recommend mirror events = %+v, want board, thread, post", recommendEvents)
-	}
-	recommendThread, ok := recommendEvents[1].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("recommend mirror thread payload = %T, want ThreadNewPayload", recommendEvents[1].Payload)
-	}
-	if recommendThread.ID != "recommend_thr_"+recommendedDigest.ID || recommendThread.Board != nativeRecommendSystemBoardID ||
+	recommendPartition := LogPartition{Kind: partitionBoard, Key: projections.DigestMirrorRecommendedBoardID}
+	recommendEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, recommendPartition, 0, 10, "replay recommend mirror events")
+	requireNativeDecisionEventKinds(t, recommendEvents, "recommend mirror events", proto.EvtBoardCreated, proto.EvtThreadNew, proto.EvtPostAppended)
+	recommendThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, recommendEvents[1], "recommend mirror thread payload")
+	if recommendThread.ID != "recommend_thr_"+recommendedDigest.ID || recommendThread.Board != projections.DigestMirrorRecommendedBoardID ||
 		recommendThread.Title != "Front page pick" || recommendThread.AuthorID != admin.ID || recommendThread.TS != 3234 {
 		t.Fatalf("recommend mirror thread = %+v, want deterministic mirror thread", recommendThread)
 	}
-	recommendPost, ok := recommendEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("recommend mirror post payload = %T, want PostAppendedPayload", recommendEvents[2].Payload)
-	}
+	recommendPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, recommendEvents[2], "recommend mirror post payload")
 	for _, want := range []string{"Front page pick", "Board: General (general)", "Kind: recommended", "Path: frontpage", "Note: Worth reading.", "From: alice", "First public body."} {
 		if !strings.Contains(recommendPost.Body, want) {
 			t.Fatalf("recommend mirror body missing %q:\n%s", want, recommendPost.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-curation-test",
-		Partition: sourcePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize recommended digest event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-curation-test",
-		Partition: recommendPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize recommend mirror events: %v", err)
-	}
-	recommendThreads, err := c.ListThreads(nativeRecommendSystemBoardID, 10, 0)
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-curation-test", sourcePartition, 10, "materialize recommended digest event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-curation-test", recommendPartition, 10, "materialize recommend mirror events")
+	recommendThreads, err := c.ListThreads(projections.DigestMirrorRecommendedBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list recommend threads: %v", err)
 	}
@@ -7935,61 +5355,36 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decide recommended retry events: %v", err)
 	}
-	if len(retryRecommendEvents) != 1 || retryRecommendEvents[0].Kind != proto.EvtDigestEntryUpserted {
-		t.Fatalf("recommended retry events = %+v, want digest event without duplicate mirror", retryRecommendEvents)
-	}
+	requireNativeDecisionEventKinds(t, retryRecommendEvents, "recommended retry events", proto.EvtDigestEntryUpserted)
 
-	announcementPayload, err := json.Marshal(proto.CurateThreadPayload{
+	announcementPayload := marshalCoreTestJSON(t, "marshal announcement thread payload", proto.CurateThreadPayload{
 		Thread: sourceThread.ID,
 		Kind:   "announcement",
 		Title:  "Public announcement",
 		Note:   "Campus-wide note.",
 	})
-	if err != nil {
-		t.Fatalf("marshal announcement thread payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "announcement thread", CommandLogRecord{
 		Partition:  threadPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-curation-announcement",
 		Command:    proto.CmdCurateThread,
 		Payload:    announcementPayload,
 		EnqueuedAt: 4234,
-	}); err != nil {
-		t.Fatalf("produce announcement thread command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain announcement thread once: %v", err)
-	}
-	generalEvents, err = eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay general events after announcement curation: %v", err)
-	}
+	})
+	generalEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay general events after announcement curation")
 	if len(generalEvents) != 5 || generalEvents[4].Kind != proto.EvtDigestEntryUpserted {
 		t.Fatalf("general events after announcement curation = %+v, want digest entry event", generalEvents)
 	}
-	announcementDigest, ok := generalEvents[4].Payload.(*proto.DigestEntryUpsertedPayload)
-	if !ok {
-		t.Fatalf("announcement digest payload = %T, want DigestEntryUpsertedPayload", generalEvents[4].Payload)
-	}
+	announcementDigest := requireNativeDecisionPayload[proto.DigestEntryUpsertedPayload](t, generalEvents[4], "announcement digest payload")
 	if announcementDigest.Kind != "announcement" || announcementDigest.Title != "Public announcement" ||
 		announcementDigest.Note != "Campus-wide note." {
 		t.Fatalf("announcement digest event = %+v, want deterministic announcement", announcementDigest)
 	}
-	announcementPartition := LogPartition{Kind: partitionBoard, Key: nativeAnnouncementSystemBoardID}
-	announcementEvents, err := eventStore.ReplayPartition(ctx, announcementPartition.Kind, announcementPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay announcement mirror events: %v", err)
-	}
-	if len(announcementEvents) != 3 || announcementEvents[0].Kind != proto.EvtBoardCreated ||
-		announcementEvents[1].Kind != proto.EvtThreadNew || announcementEvents[2].Kind != proto.EvtPostAppended {
-		t.Fatalf("announcement mirror events = %+v, want board, thread, post", announcementEvents)
-	}
-	announcementThread, ok := announcementEvents[1].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("announcement mirror thread payload = %T, want ThreadNewPayload", announcementEvents[1].Payload)
-	}
-	if announcementThread.ID != "ann_thr_"+announcementDigest.ID || announcementThread.Board != nativeAnnouncementSystemBoardID ||
+	announcementPartition := LogPartition{Kind: partitionBoard, Key: projections.DigestMirrorAnnouncementBoardID}
+	announcementEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, announcementPartition, 0, 10, "replay announcement mirror events")
+	requireNativeDecisionEventKinds(t, announcementEvents, "announcement mirror events", proto.EvtBoardCreated, proto.EvtThreadNew, proto.EvtPostAppended)
+	announcementThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, announcementEvents[1], "announcement mirror thread payload")
+	if announcementThread.ID != "ann_thr_"+announcementDigest.ID || announcementThread.Board != projections.DigestMirrorAnnouncementBoardID ||
 		announcementThread.Title != "Public announcement" || announcementThread.AuthorID != admin.ID || announcementThread.TS != 4234 {
 		t.Fatalf("announcement mirror thread = %+v, want deterministic mirror thread", announcementThread)
 	}
@@ -7997,64 +5392,27 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestCuration(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sourcePartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	sourcePayload, err := json.Marshal(proto.CreateThreadPayload{
+	sourcePayload := marshalCoreTestJSON(t, "marshal source thread payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Digest maintenance source",
 		Body:  "Original source body.",
 	})
-	if err != nil {
-		t.Fatalf("marshal source thread payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "source thread", CommandLogRecord{
 		Partition:  sourcePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-digest-maintenance-source",
 		Command:    proto.CmdCreateThread,
 		Payload:    sourcePayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce source thread command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain source thread once: %v", err)
-	}
-	sourceEvents, err := eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay source events: %v", err)
-	}
+	})
+	sourceEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay source events")
 	if len(sourceEvents) != 2 {
 		t.Fatalf("source events = %+v, want thread and post", sourceEvents)
 	}
@@ -8062,17 +5420,8 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 	if maintenanceAfter <= 0 {
 		maintenanceAfter = int64(len(sourceEvents))
 	}
-	sourceThread, ok := sourceEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("source thread payload = %T, want ThreadNewPayload", sourceEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-maintenance-test",
-		Partition: sourcePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize source events: %v", err)
-	}
+	sourceThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, sourceEvents[0], "source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-maintenance-test", sourcePartition, 10, "materialize source events")
 	sourcePosts, err := c.ListPosts(sourceThread.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list source posts: %v", err)
@@ -8080,11 +5429,11 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 	if len(sourcePosts) != 1 {
 		t.Fatalf("source posts = %+v, want one", sourcePosts)
 	}
-	entryID, err := upsertDigestEntry(c.DB, "dig_maintenance", "general", "post", sourcePosts[0].ID, "archive", "Original title", "faq/original", "Original note", admin.ID)
+	entryID, err := projections.UpsertDigestEntry(c.DB, "dig_maintenance", "general", "post", sourcePosts[0].ID, "archive", "Original title", "faq/original", "Original note", admin.ID)
 	if err != nil {
 		t.Fatalf("upsert digest entry: %v", err)
 	}
-	if _, err := upsertDigestEntry(c.DB, "dig_maintenance_conflict", "general", "post", sourcePosts[0].ID, "archive", "Conflict title", "faq/conflict", "", admin.ID); err != nil {
+	if _, err := projections.UpsertDigestEntry(c.DB, "dig_maintenance_conflict", "general", "post", sourcePosts[0].ID, "archive", "Conflict title", "faq/conflict", "", admin.ID); err != nil {
 		t.Fatalf("upsert conflicting digest entry: %v", err)
 	}
 	commandPartition := LogPartition{Kind: partitionBoard, Key: entryID}
@@ -8092,15 +5441,12 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 	newTitle := "Edited archive title"
 	newPath := "faq/edited"
 	newNote := "Edited note"
-	updatePayload, err := json.Marshal(proto.UpdateDigestEntryPayload{
+	updatePayload := marshalCoreTestJSON(t, "marshal update digest payload", proto.UpdateDigestEntryPayload{
 		Entry: entryID,
 		Title: &newTitle,
 		Path:  &newPath,
 		Note:  &newNote,
 	})
-	if err != nil {
-		t.Fatalf("marshal update digest payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -8110,17 +5456,12 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		Payload:    updatePayload,
 		EnqueuedAt: 2234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Message != "board curator permission required" || forbidden.Err.Retryable {
-		t.Fatalf("update digest as non-curator = %+v, want terminal curator permission error", forbidden)
-	}
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "update digest as non-curator", "board curator permission required")
 	emptyTitle := ""
-	emptyTitlePayload, err := json.Marshal(proto.UpdateDigestEntryPayload{
+	emptyTitlePayload := marshalCoreTestJSON(t, "marshal empty-title update payload", proto.UpdateDigestEntryPayload{
 		Entry: entryID,
 		Title: &emptyTitle,
 	})
-	if err != nil {
-		t.Fatalf("marshal empty-title update payload: %v", err)
-	}
 	invalidTitle := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -8130,17 +5471,12 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		Payload:    emptyTitlePayload,
 		EnqueuedAt: 2234,
 	})
-	if invalidTitle.Err == nil || invalidTitle.Err.Code != proto.ErrValidationFailed || invalidTitle.Err.Message != "title is required" || invalidTitle.Err.Retryable {
-		t.Fatalf("empty-title digest update = %+v, want terminal validation error", invalidTitle)
-	}
+	requireNativeDecisionTerminalError(t, invalidTitle, proto.ErrValidationFailed, "empty-title digest update", "title is required")
 	conflictPath := "faq/conflict"
-	conflictPayload, err := json.Marshal(proto.UpdateDigestEntryPayload{
+	conflictPayload := marshalCoreTestJSON(t, "marshal conflict update payload", proto.UpdateDigestEntryPayload{
 		Entry: entryID,
 		Path:  &conflictPath,
 	})
-	if err != nil {
-		t.Fatalf("marshal conflict update payload: %v", err)
-	}
 	conflict := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -8150,11 +5486,9 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		Payload:    conflictPayload,
 		EnqueuedAt: 2234,
 	})
-	if conflict.Err == nil || conflict.Err.Code != proto.ErrConflict || conflict.Err.Message != "digest entry already exists at that path" || conflict.Err.Retryable {
-		t.Fatalf("conflicting digest update = %+v, want terminal conflict", conflict)
-	}
+	requireNativeDecisionTerminalError(t, conflict, proto.ErrConflict, "conflicting digest update", "digest entry already exists at that path")
 
-	updateRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	updateRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "update digest", CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-maintenance-update",
@@ -8162,37 +5496,17 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		Payload:    updatePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce update digest command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain update digest once: %v", err)
-	}
 	eventPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, maintenanceAfter, 10)
-	if err != nil {
-		t.Fatalf("replay update digest events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDigestEntryUpdated {
-		t.Fatalf("update digest events = %+v, want digest.entry_updated", events)
-	}
-	updateEvent, ok := events[0].Payload.(*proto.DigestEntryUpdatedPayload)
-	if !ok {
-		t.Fatalf("update digest payload = %T, want DigestEntryUpdatedPayload", events[0].Payload)
-	}
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, maintenanceAfter, 10, "replay update digest events")
+	requireNativeDecisionEventKinds(t, events, "update digest events", proto.EvtDigestEntryUpdated)
+	updateEvent := requireNativeDecisionPayload[proto.DigestEntryUpdatedPayload](t, events[0], "update digest payload")
 	if updateEvent.ID != entryID || updateEvent.Board != "general" || updateEvent.TargetKind != "post" ||
 		updateEvent.TargetID != sourcePosts[0].ID || updateEvent.Kind != "archive" ||
 		updateEvent.Title != newTitle || updateEvent.Path != newPath || updateEvent.Note != newNote ||
 		updateEvent.By != admin.ID || updateEvent.TS != 2234 {
 		t.Fatalf("update digest event = %+v, want deterministic metadata update", updateEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-maintenance-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize update digest event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-maintenance-test", eventPartition, 10, "materialize update digest event")
 	updatedEntries, err := c.ListDigestEntries("general", "archive", newPath, 10, 0)
 	if err != nil {
 		t.Fatalf("list updated digest entries: %v", err)
@@ -8212,23 +5526,17 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		retryUpdateEvents[0].Kind != proto.EvtDigestEntryUpdated {
 		t.Fatalf("update digest retry events = %+v, want stable digest update event", retryUpdateEvents)
 	}
-	retryUpdatePayload, ok := retryUpdateEvents[0].Payload.(*proto.DigestEntryUpdatedPayload)
-	if !ok {
-		t.Fatalf("update digest retry payload = %T, want DigestEntryUpdatedPayload", retryUpdateEvents[0].Payload)
-	}
+	retryUpdatePayload := requireNativeDecisionPayload[proto.DigestEntryUpdatedPayload](t, retryUpdateEvents[0], "update digest retry payload")
 	if retryUpdatePayload.ID != updateEvent.ID || retryUpdatePayload.Title != updateEvent.Title ||
 		retryUpdatePayload.Path != updateEvent.Path || retryUpdatePayload.Note != updateEvent.Note {
 		t.Fatalf("update digest retry payload = %+v, want stable payload %+v", retryUpdatePayload, updateEvent)
 	}
 
-	bodyPayload, err := json.Marshal(proto.SetDigestEntryBodyPayload{
+	bodyPayload := marshalCoreTestJSON(t, "marshal set digest body payload", proto.SetDigestEntryBodyPayload{
 		Entry: entryID,
 		Body:  "Edited archive body.",
 	})
-	if err != nil {
-		t.Fatalf("marshal set digest body payload: %v", err)
-	}
-	bodyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	bodyRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "set digest body", CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-maintenance-body",
@@ -8236,34 +5544,16 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		Payload:    bodyPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce set digest body command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain set digest body once: %v", err)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, maintenanceAfter, 10)
-	if err != nil {
-		t.Fatalf("replay body digest events: %v", err)
-	}
+	events = replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, maintenanceAfter, 10, "replay body digest events")
 	if len(events) != 2 || events[1].Kind != proto.EvtDigestEntryBodySet {
 		t.Fatalf("body digest events = %+v, want digest.entry_body_set", events)
 	}
-	bodyEvent, ok := events[1].Payload.(*proto.DigestEntryBodySetPayload)
-	if !ok {
-		t.Fatalf("body digest payload = %T, want DigestEntryBodySetPayload", events[1].Payload)
-	}
+	bodyEvent := requireNativeDecisionPayload[proto.DigestEntryBodySetPayload](t, events[1], "body digest payload")
 	if bodyEvent.ID != entryID || bodyEvent.Board != "general" || bodyEvent.Kind != "archive" ||
 		bodyEvent.Body != "Edited archive body." || !bodyEvent.Edited || bodyEvent.By != admin.ID || bodyEvent.TS != 3234 {
 		t.Fatalf("body digest event = %+v, want deterministic body edit", bodyEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-maintenance-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize body digest event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-maintenance-test", eventPartition, 10, "materialize body digest event")
 	export, err := c.GetDigestExport(entryID)
 	if err != nil {
 		t.Fatalf("get edited digest export: %v", err)
@@ -8284,48 +5574,28 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		t.Fatalf("set digest body retry events = %+v, want stable body event", retryBodyEvents)
 	}
 
-	resetPayload, err := json.Marshal(proto.SetDigestEntryBodyPayload{
+	resetPayload := marshalCoreTestJSON(t, "marshal reset digest body payload", proto.SetDigestEntryBodyPayload{
 		Entry: entryID,
 		Body:  "ignored on reset",
 		Reset: true,
 	})
-	if err != nil {
-		t.Fatalf("marshal reset digest body payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "reset digest body", CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-maintenance-reset",
 		Command:    proto.CmdSetDigestEntryBody,
 		Payload:    resetPayload,
 		EnqueuedAt: 4234,
-	}); err != nil {
-		t.Fatalf("produce reset digest body command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain reset digest body once: %v", err)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, maintenanceAfter, 10)
-	if err != nil {
-		t.Fatalf("replay reset digest events: %v", err)
-	}
+	})
+	events = replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, maintenanceAfter, 10, "replay reset digest events")
 	if len(events) != 3 || events[2].Kind != proto.EvtDigestEntryBodySet {
 		t.Fatalf("reset digest events = %+v, want digest.entry_body_set reset", events)
 	}
-	resetEvent, ok := events[2].Payload.(*proto.DigestEntryBodySetPayload)
-	if !ok {
-		t.Fatalf("reset digest payload = %T, want DigestEntryBodySetPayload", events[2].Payload)
-	}
+	resetEvent := requireNativeDecisionPayload[proto.DigestEntryBodySetPayload](t, events[2], "reset digest payload")
 	if resetEvent.ID != entryID || resetEvent.Body != "" || resetEvent.Edited || resetEvent.By != admin.ID || resetEvent.TS != 4234 {
 		t.Fatalf("reset digest event = %+v, want deterministic reset", resetEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-maintenance-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize reset digest event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-maintenance-test", eventPartition, 10, "materialize reset digest event")
 	export, err = c.GetDigestExport(entryID)
 	if err != nil {
 		t.Fatalf("get reset digest export: %v", err)
@@ -8334,13 +5604,10 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		t.Fatalf("reset digest export = %+v, want source body restored", export)
 	}
 
-	removePayload, err := json.Marshal(proto.RemoveDigestEntryPayload{
+	removePayload := marshalCoreTestJSON(t, "marshal remove digest payload", proto.RemoveDigestEntryPayload{
 		Entry: entryID,
 	})
-	if err != nil {
-		t.Fatalf("marshal remove digest payload: %v", err)
-	}
-	removeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	removeRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "remove digest", CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-maintenance-remove",
@@ -8348,34 +5615,16 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		Payload:    removePayload,
 		EnqueuedAt: 5234,
 	})
-	if err != nil {
-		t.Fatalf("produce remove digest command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain remove digest once: %v", err)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, maintenanceAfter, 10)
-	if err != nil {
-		t.Fatalf("replay remove digest events: %v", err)
-	}
+	events = replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, maintenanceAfter, 10, "replay remove digest events")
 	if len(events) != 4 || events[3].Kind != proto.EvtDigestEntryRemoved {
 		t.Fatalf("remove digest events = %+v, want digest.entry_removed", events)
 	}
-	removeEvent, ok := events[3].Payload.(*proto.DigestEntryRemovedPayload)
-	if !ok {
-		t.Fatalf("remove digest payload = %T, want DigestEntryRemovedPayload", events[3].Payload)
-	}
+	removeEvent := requireNativeDecisionPayload[proto.DigestEntryRemovedPayload](t, events[3], "remove digest payload")
 	if removeEvent.ID != entryID || removeEvent.Board != "general" || removeEvent.Kind != "archive" ||
 		removeEvent.By != admin.ID || removeEvent.TS != 5234 {
 		t.Fatalf("remove digest event = %+v, want deterministic removal", removeEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-maintenance-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize remove digest event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-maintenance-test", eventPartition, 10, "materialize remove digest event")
 	removedEntries, err := c.ListDigestEntries("general", "archive", newPath, 10, 0)
 	if err != nil {
 		t.Fatalf("list removed digest entries: %v", err)
@@ -8411,10 +5660,7 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 		retryRemoveEvents[0].Kind != proto.EvtDigestEntryRemoved {
 		t.Fatalf("remove digest retry events = %+v, want stable removal event", retryRemoveEvents)
 	}
-	retryRemovePayload, ok := retryRemoveEvents[0].Payload.(*proto.DigestEntryRemovedPayload)
-	if !ok {
-		t.Fatalf("remove digest retry payload = %T, want DigestEntryRemovedPayload", retryRemoveEvents[0].Payload)
-	}
+	retryRemovePayload := requireNativeDecisionPayload[proto.DigestEntryRemovedPayload](t, retryRemoveEvents[0], "remove digest retry payload")
 	if retryRemovePayload.ID != removeEvent.ID || retryRemovePayload.Board != removeEvent.Board ||
 		retryRemovePayload.Kind != removeEvent.Kind || retryRemovePayload.By != removeEvent.By ||
 		retryRemovePayload.TS != removeEvent.TS {
@@ -8424,82 +5670,33 @@ func TestNativeCommandLogDecisionExecutorProjectsDigestEntryMaintenance(t *testi
 
 func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sourcePartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	sourcePayload, err := json.Marshal(proto.CreateThreadPayload{
+	sourcePayload := marshalCoreTestJSON(t, "marshal source thread payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Archive source",
 		Body:  "Useful digest body.",
 	})
-	if err != nil {
-		t.Fatalf("marshal source thread payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "source thread", CommandLogRecord{
 		Partition:  sourcePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-digest-mail-source",
 		Command:    proto.CmdCreateThread,
 		Payload:    sourcePayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce source thread command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain source thread once: %v", err)
-	}
-	sourceEvents, err := eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay source thread events: %v", err)
-	}
+	})
+	sourceEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay source thread events")
 	if len(sourceEvents) != 2 {
 		t.Fatalf("source thread events = %+v, want thread and post", sourceEvents)
 	}
-	sourceThread, ok := sourceEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("source thread payload = %T, want ThreadNewPayload", sourceEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-mail-test",
-		Partition: sourcePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize source thread events: %v", err)
-	}
+	sourceThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, sourceEvents[0], "source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-mail-test", sourcePartition, 10, "materialize source thread events")
 	sourcePosts, err := c.ListPosts(sourceThread.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list source posts: %v", err)
@@ -8507,7 +5704,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 	if len(sourcePosts) != 1 {
 		t.Fatalf("source posts = %+v, want one", sourcePosts)
 	}
-	entryID, err := upsertDigestEntry(c.DB, "dig_native", "general", "post", sourcePosts[0].ID, "archive", "Archive child", "faq/howto", "Useful digest note", bob.ID)
+	entryID, err := projections.UpsertDigestEntry(c.DB, "dig_native", "general", "post", sourcePosts[0].ID, "archive", "Archive child", "faq/howto", "Useful digest note", bob.ID)
 	if err != nil {
 		t.Fatalf("upsert digest entry: %v", err)
 	}
@@ -8519,16 +5716,14 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 		t.Fatalf("digest export = %+v, want source body", export)
 	}
 
-	mailPayload, err := json.Marshal(proto.SendDigestEntryMailPayload{
+	mailPayload := marshalCoreTestJSON(t, "marshal digest mail payload", proto.SendDigestEntryMailPayload{
 		Entry: entryID,
 		To:    []string{"alice"},
 		Note:  "Please keep this one.",
 	})
-	if err != nil {
-		t.Fatalf("marshal digest mail payload: %v", err)
-	}
 	mailPartition := LogPartition{Kind: partitionMail, Key: entryID}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	mailEventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "digest mail", mailEventPartition, 0, 10, CommandLogRecord{
 		Partition:  mailPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-digest-mail",
@@ -8536,27 +5731,8 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 		Payload:    mailPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce digest mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain digest mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, mailPartition); err != nil || got != record.Offset {
-		t.Fatalf("digest mail committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-	mailEventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, mailEventPartition.Kind, mailEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay digest mail events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailSent {
-		t.Fatalf("digest mail events = %+v, want mail.sent", events)
-	}
-	mailEvent, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("digest mail payload = %T, want MailSentPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "digest mail events", proto.EvtMailSent)
+	mailEvent := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "digest mail payload")
 	if mailEvent.ID == "" || mailEvent.FromUserID != bob.ID || len(mailEvent.ToUserIDs) != 1 ||
 		mailEvent.ToUserIDs[0] != alice.ID || mailEvent.Subject != "Archive: Archive child" || mailEvent.TS != 2234 {
 		t.Fatalf("digest mail event = %+v, want bob mail to alice", mailEvent)
@@ -8566,13 +5742,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 			t.Fatalf("digest mail body missing %q:\n%s", want, mailEvent.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-mail-test",
-		Partition: mailEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize digest mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-mail-test", mailEventPartition, 10, "materialize digest mail event")
 	aliceInbox, err := c.ListMail(alice.ID, "inbox", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice inbox: %v", err)
@@ -8585,7 +5755,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 	if err != nil {
 		t.Fatalf("begin secret board setup: %v", err)
 	}
-	if err := insertBoard(secretTx, "secret", "Secret", "Members only", "", 2); err != nil {
+	if err := projections.InsertBoard(secretTx, "secret", "Secret", "Members only", "", 2); err != nil {
 		secretTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert secret board: %v", err)
 	}
@@ -8593,49 +5763,28 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 		t.Fatalf("commit secret board setup: %v", err)
 	}
 	memberRead := true
-	if err := setBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
-	secretPayload, err := json.Marshal(proto.CreateThreadPayload{
+	secretPayload := marshalCoreTestJSON(t, "marshal private source payload", proto.CreateThreadPayload{
 		Board: "secret",
 		Title: "Private archive source",
 		Body:  "hidden digest body",
 	})
-	if err != nil {
-		t.Fatalf("marshal private source payload: %v", err)
-	}
 	secretPartition := LogPartition{Kind: partitionBoard, Key: "secret"}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, secretEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "private source", 0, 10, CommandLogRecord{
 		Partition:  secretPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-digest-mail-private-source",
 		Command:    proto.CmdCreateThread,
 		Payload:    secretPayload,
 		EnqueuedAt: 3234,
-	}); err != nil {
-		t.Fatalf("produce private source command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain private source once: %v", err)
-	}
-	secretEvents, err := eventStore.ReplayPartition(ctx, secretPartition.Kind, secretPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay private source events: %v", err)
-	}
+	})
 	if len(secretEvents) != 2 {
 		t.Fatalf("private source events = %+v, want thread and post", secretEvents)
 	}
-	secretThread, ok := secretEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("private source thread payload = %T, want ThreadNewPayload", secretEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-digest-mail-test",
-		Partition: secretPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize private source events: %v", err)
-	}
+	secretThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, secretEvents[0], "private source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-digest-mail-test", secretPartition, 10, "materialize private source events")
 	secretPosts, err := c.ListPosts(secretThread.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list private source posts: %v", err)
@@ -8643,17 +5792,14 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 	if len(secretPosts) != 1 {
 		t.Fatalf("private source posts = %+v, want one", secretPosts)
 	}
-	secretEntryID, err := upsertDigestEntry(c.DB, "dig_secret_native", "secret", "post", secretPosts[0].ID, "archive", "Secret archive", "", "", admin.ID)
+	secretEntryID, err := projections.UpsertDigestEntry(c.DB, "dig_secret_native", "secret", "post", secretPosts[0].ID, "archive", "Secret archive", "", "", admin.ID)
 	if err != nil {
 		t.Fatalf("upsert private digest entry: %v", err)
 	}
-	privateMailPayload, err := json.Marshal(proto.SendDigestEntryMailPayload{
+	privateMailPayload := marshalCoreTestJSON(t, "marshal private digest mail payload", proto.SendDigestEntryMailPayload{
 		Entry: secretEntryID,
 		To:    []string{"alice"},
 	})
-	if err != nil {
-		t.Fatalf("marshal private digest mail payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionMail, Key: secretEntryID},
 		Offset:     2,
@@ -8663,57 +5809,23 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 		Payload:    privateMailPayload,
 		EnqueuedAt: 4234,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("private digest mail denied = %+v, want terminal forbidden", denied)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "private digest mail denied")
 }
 
 func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	commandPartition := LogPartition{Kind: partitionMail, Key: bob.ID}
-	invalidPayload, err := json.Marshal(proto.SetMailGroupPayload{
+	invalidPayload := marshalCoreTestJSON(t, "marshal invalid mail group payload", proto.SetMailGroupPayload{
 		Name:    "lab",
 		Members: []string{"bob"},
 	})
-	if err != nil {
-		t.Fatalf("marshal invalid mail group payload: %v", err)
-	}
 	invalid := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -8723,18 +5835,14 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 		Payload:    invalidPayload,
 		EnqueuedAt: 1234,
 	})
-	if invalid.Err == nil || invalid.Err.Code != proto.ErrValidationFailed || invalid.Err.Retryable {
-		t.Fatalf("invalid mail group decision = %+v, want terminal validation failure", invalid)
-	}
+	requireNativeDecisionTerminalError(t, invalid, proto.ErrValidationFailed, "invalid mail group decision")
 
-	payload, err := json.Marshal(proto.SetMailGroupPayload{
+	payload := marshalCoreTestJSON(t, "marshal mail group payload", proto.SetMailGroupPayload{
 		Name:    " lab ",
 		Members: []string{"alice", "carol", "alice"},
 	})
-	if err != nil {
-		t.Fatalf("marshal mail group payload: %v", err)
-	}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "mail group", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-mail-group",
@@ -8742,40 +5850,14 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce mail group command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain mail group once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != record.Offset {
-		t.Fatalf("mail group committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-
-	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay mail group events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailGroupSet {
-		t.Fatalf("mail group events = %+v, want one mail.group_set", events)
-	}
-	groupEvent, ok := events[0].Payload.(*proto.MailGroupSetPayload)
-	if !ok {
-		t.Fatalf("mail group payload = %T, want MailGroupSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "mail group events", proto.EvtMailGroupSet)
+	groupEvent := requireNativeDecisionPayload[proto.MailGroupSetPayload](t, events[0], "mail group payload")
 	if groupEvent.ID == "" || groupEvent.OwnerID != bob.ID || groupEvent.Name != "lab" ||
 		len(groupEvent.MemberIDs) != 2 || groupEvent.MemberIDs[0] != alice.ID ||
 		groupEvent.MemberIDs[1] != carol.ID || groupEvent.TS != 2234 {
 		t.Fatalf("mail group event = %+v, want normalized deduped group", groupEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mail-group-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize mail group event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mail-group-test", eventPartition, 10, "materialize mail group event")
 	groups, err := c.ListMailGroups(bob.ID)
 	if err != nil {
 		t.Fatalf("list mail groups: %v", err)
@@ -8792,10 +5874,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 		t.Fatalf("mail groups after projection = %+v, want lab with alice/carol", groups)
 	}
 
-	invalidDeletePayload, err := json.Marshal(proto.DeleteMailGroupPayload{Group: " "})
-	if err != nil {
-		t.Fatalf("marshal invalid delete mail group payload: %v", err)
-	}
+	invalidDeletePayload := marshalCoreTestJSON(t, "marshal invalid delete mail group payload", proto.DeleteMailGroupPayload{Group: " "})
 	invalidDelete := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionMail, Key: "missing"},
 		Offset:     1,
@@ -8805,15 +5884,9 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 		Payload:    invalidDeletePayload,
 		EnqueuedAt: 3234,
 	})
-	if invalidDelete.Err == nil || invalidDelete.Err.Code != proto.ErrValidationFailed ||
-		invalidDelete.Err.Message != "group is required" || invalidDelete.Err.Retryable {
-		t.Fatalf("invalid delete mail group decision = %+v, want terminal group-required failure", invalidDelete)
-	}
+	requireNativeDecisionTerminalError(t, invalidDelete, proto.ErrValidationFailed, "invalid delete mail group decision", "group is required")
 
-	missingDeletePayload, err := json.Marshal(proto.DeleteMailGroupPayload{Group: "missing"})
-	if err != nil {
-		t.Fatalf("marshal missing delete mail group payload: %v", err)
-	}
+	missingDeletePayload := marshalCoreTestJSON(t, "marshal missing delete mail group payload", proto.DeleteMailGroupPayload{Group: "missing"})
 	missingDelete := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionMail, Key: "missing"},
 		Offset:     1,
@@ -8823,17 +5896,11 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 		Payload:    missingDeletePayload,
 		EnqueuedAt: 3234,
 	})
-	if missingDelete.Err == nil || missingDelete.Err.Code != proto.ErrNotFound ||
-		missingDelete.Err.Message != "mail group not found" || missingDelete.Err.Retryable {
-		t.Fatalf("missing delete mail group decision = %+v, want terminal not-found failure", missingDelete)
-	}
+	requireNativeDecisionTerminalError(t, missingDelete, proto.ErrNotFound, "missing delete mail group decision", "mail group not found")
 
-	deletePayload, err := json.Marshal(proto.DeleteMailGroupPayload{Group: groupEvent.ID})
-	if err != nil {
-		t.Fatalf("marshal delete mail group payload: %v", err)
-	}
+	deletePayload := marshalCoreTestJSON(t, "marshal delete mail group payload", proto.DeleteMailGroupPayload{Group: groupEvent.ID})
 	deletePartition := LogPartition{Kind: partitionMail, Key: groupEvent.ID}
-	deleteRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	deleteRecord, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "delete mail group", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  deletePartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-mail-group-delete",
@@ -8841,36 +5908,14 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 		Payload:    deletePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce delete mail group command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain delete mail group once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, deletePartition); err != nil || got != deleteRecord.Offset {
-		t.Fatalf("delete mail group committed offset = %d, %v; want %d, nil", got, err, deleteRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay delete mail group events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtMailGroupDeleted {
 		t.Fatalf("delete mail group events = %+v, want set then deleted", events)
 	}
-	deletedEvent, ok := events[1].Payload.(*proto.MailGroupDeletedPayload)
-	if !ok {
-		t.Fatalf("delete mail group payload = %T, want MailGroupDeletedPayload", events[1].Payload)
-	}
+	deletedEvent := requireNativeDecisionPayload[proto.MailGroupDeletedPayload](t, events[1], "delete mail group payload")
 	if deletedEvent.ID != groupEvent.ID || deletedEvent.OwnerID != bob.ID || deletedEvent.TS != 3234 {
 		t.Fatalf("delete mail group event = %+v, want stable deleted group", deletedEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-mail-group-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize delete mail group event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-mail-group-test", eventPartition, 10, "materialize delete mail group event")
 	groups, err = c.ListMailGroups(bob.ID)
 	if err != nil {
 		t.Fatalf("list mail groups after delete: %v", err)
@@ -8899,10 +5944,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 		retryDeleteEvents[0].Kind != proto.EvtMailGroupDeleted {
 		t.Fatalf("delete mail group retry events = %+v, want stable deleted event", retryDeleteEvents)
 	}
-	retryDeleted, ok := retryDeleteEvents[0].Payload.(*proto.MailGroupDeletedPayload)
-	if !ok {
-		t.Fatalf("delete mail group retry payload = %T, want MailGroupDeletedPayload", retryDeleteEvents[0].Payload)
-	}
+	retryDeleted := requireNativeDecisionPayload[proto.MailGroupDeletedPayload](t, retryDeleteEvents[0], "delete mail group retry payload")
 	if retryDeleted.ID != deletedEvent.ID || retryDeleted.OwnerID != deletedEvent.OwnerID || retryDeleted.TS != deletedEvent.TS {
 		t.Fatalf("delete mail group retry payload = %+v, want %+v", retryDeleted, deletedEvent)
 	}
@@ -8910,89 +5952,35 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsUpdateMail(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sendPartition := LogPartition{Kind: partitionMail, Key: bob.ID}
-	sendPayload, err := json.Marshal(proto.SendMailPayload{
+	sendPayload := marshalCoreTestJSON(t, "marshal send mail payload", proto.SendMailPayload{
 		To:      []string{"alice"},
 		Subject: "Campus plans",
 		Body:    "Meet by the old terminal.",
 	})
-	if err != nil {
-		t.Fatalf("marshal send mail payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "send mail", CommandLogRecord{
 		Partition:  sendPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-update-mail-send",
 		Command:    proto.CmdSendMail,
 		Payload:    sendPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce send mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain send mail once: %v", err)
-	}
+	})
 	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay send mail events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailSent {
-		t.Fatalf("send mail events = %+v, want one mail.sent", events)
-	}
-	mailEvent, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("send mail payload = %T, want MailSentPayload", events[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-update-mail-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize send mail event: %v", err)
-	}
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, 0, 10, "replay send mail events")
+	requireNativeDecisionEventKinds(t, events, "send mail events", proto.EvtMailSent)
+	mailEvent := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "send mail payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-update-mail-test", eventPartition, 10, "materialize send mail event")
 
 	updatePartition := LogPartition{Kind: partitionMail, Key: mailEvent.ID}
-	emptyPayload, err := json.Marshal(proto.UpdateMailPayload{Mail: mailEvent.ID})
-	if err != nil {
-		t.Fatalf("marshal empty update mail payload: %v", err)
-	}
+	emptyPayload := marshalCoreTestJSON(t, "marshal empty update mail payload", proto.UpdateMailPayload{Mail: mailEvent.ID})
 	empty := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  updatePartition,
 		Offset:     1,
@@ -9002,14 +5990,9 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateMail(t *testing.T) {
 		Payload:    emptyPayload,
 		EnqueuedAt: 1734,
 	})
-	if empty.Err == nil || empty.Err.Code != proto.ErrValidationFailed || empty.Err.Retryable {
-		t.Fatalf("empty update mail decision = %+v, want terminal validation failure", empty)
-	}
+	requireNativeDecisionTerminalError(t, empty, proto.ErrValidationFailed, "empty update mail decision")
 	read := true
-	carolPayload, err := json.Marshal(proto.UpdateMailPayload{Mail: mailEvent.ID, Read: &read})
-	if err != nil {
-		t.Fatalf("marshal carol update mail payload: %v", err)
-	}
+	carolPayload := marshalCoreTestJSON(t, "marshal carol update mail payload", proto.UpdateMailPayload{Mail: mailEvent.ID, Read: &read})
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  updatePartition,
 		Offset:     2,
@@ -9019,22 +6002,32 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateMail(t *testing.T) {
 		Payload:    carolPayload,
 		EnqueuedAt: 1834,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Retryable {
-		t.Fatalf("missing update mail decision = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "missing update mail decision")
+	invalidMailbox := "bad.mailbox"
+	invalidMailboxPayload := marshalCoreTestJSON(t, "marshal invalid mailbox update payload", proto.UpdateMailPayload{
+		Mail:    mailEvent.ID,
+		Mailbox: &invalidMailbox,
+	})
+	invalidMailboxReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  updatePartition,
+		Offset:     3,
+		ActorID:    alice.ID,
+		CID:        "cid-native-update-mail-invalid-mailbox",
+		Command:    proto.CmdUpdateMail,
+		Payload:    invalidMailboxPayload,
+		EnqueuedAt: 1934,
+	})
+	requireNativeDecisionTerminalError(t, invalidMailboxReply, proto.ErrValidationFailed, "invalid mailbox update decision", validationMessage(invalidMailbox, proto.NormalizeMailbox))
 
 	kept := true
 	mailbox := "Keep"
-	updatePayload, err := json.Marshal(proto.UpdateMailPayload{
+	updatePayload := marshalCoreTestJSON(t, "marshal update mail payload", proto.UpdateMailPayload{
 		Mail:    mailEvent.ID,
 		Mailbox: &mailbox,
 		Read:    &read,
 		Kept:    &kept,
 	})
-	if err != nil {
-		t.Fatalf("marshal update mail payload: %v", err)
-	}
-	updateRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "update mail", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  updatePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-update-mail",
@@ -9042,38 +6035,16 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateMail(t *testing.T) {
 		Payload:    updatePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce update mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain update mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, updatePartition); err != nil || got != updateRecord.Offset {
-		t.Fatalf("update mail committed offset = %d, %v; want %d, nil", got, err, updateRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay update mail events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtMailCopyUpdated {
 		t.Fatalf("update mail events = %+v, want mail.sent then mail.copy_updated", events)
 	}
-	updateEvent, ok := events[1].Payload.(*proto.MailCopyUpdatedPayload)
-	if !ok {
-		t.Fatalf("update mail payload = %T, want MailCopyUpdatedPayload", events[1].Payload)
-	}
+	updateEvent := requireNativeDecisionPayload[proto.MailCopyUpdatedPayload](t, events[1], "update mail payload")
 	if updateEvent.Mail != mailEvent.ID || updateEvent.UserID != alice.ID || updateEvent.Mailbox == nil ||
 		*updateEvent.Mailbox != "keep" || updateEvent.Read == nil || !*updateEvent.Read ||
 		updateEvent.Kept == nil || !*updateEvent.Kept || updateEvent.TS != 2234 {
 		t.Fatalf("update mail event = %+v, want normalized keep/read/kept update", updateEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-update-mail-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize update mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-update-mail-test", eventPartition, 10, "materialize update mail event")
 	aliceKeep, err := c.ListMail(alice.ID, "keep", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice keep mail: %v", err)
@@ -9092,89 +6063,35 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateMail(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsDeleteMail(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sendPartition := LogPartition{Kind: partitionMail, Key: bob.ID}
-	sendPayload, err := json.Marshal(proto.SendMailPayload{
+	sendPayload := marshalCoreTestJSON(t, "marshal send mail payload", proto.SendMailPayload{
 		To:      []string{"alice"},
 		Subject: "Campus plans",
 		Body:    "Please archive this.",
 	})
-	if err != nil {
-		t.Fatalf("marshal send mail payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "send mail", CommandLogRecord{
 		Partition:  sendPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-delete-mail-send",
 		Command:    proto.CmdSendMail,
 		Payload:    sendPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce send mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain send mail once: %v", err)
-	}
+	})
 	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay send mail events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtMailSent {
-		t.Fatalf("send mail events = %+v, want one mail.sent", events)
-	}
-	mailEvent, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("send mail payload = %T, want MailSentPayload", events[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-delete-mail-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize send mail event: %v", err)
-	}
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, 0, 10, "replay send mail events")
+	requireNativeDecisionEventKinds(t, events, "send mail events", proto.EvtMailSent)
+	mailEvent := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "send mail payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-delete-mail-test", eventPartition, 10, "materialize send mail event")
 
 	deletePartition := LogPartition{Kind: partitionMail, Key: mailEvent.ID}
-	deletePayload, err := json.Marshal(proto.DeleteMailPayload{Mail: mailEvent.ID})
-	if err != nil {
-		t.Fatalf("marshal delete mail payload: %v", err)
-	}
+	deletePayload := marshalCoreTestJSON(t, "marshal delete mail payload", proto.DeleteMailPayload{Mail: mailEvent.ID})
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  deletePartition,
 		Offset:     1,
@@ -9184,11 +6101,9 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteMail(t *testing.T) {
 		Payload:    deletePayload,
 		EnqueuedAt: 1834,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Retryable {
-		t.Fatalf("missing delete mail decision = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "missing delete mail decision")
 
-	deleteRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "delete mail", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  deletePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-delete-mail",
@@ -9196,37 +6111,15 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteMail(t *testing.T) {
 		Payload:    deletePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce delete mail command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain delete mail once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, deletePartition); err != nil || got != deleteRecord.Offset {
-		t.Fatalf("delete mail committed offset = %d, %v; want %d, nil", got, err, deleteRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay delete mail events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtMailCopyUpdated {
 		t.Fatalf("delete mail events = %+v, want mail.sent then mail.copy_updated", events)
 	}
-	deleteEvent, ok := events[1].Payload.(*proto.MailCopyUpdatedPayload)
-	if !ok {
-		t.Fatalf("delete mail payload = %T, want MailCopyUpdatedPayload", events[1].Payload)
-	}
+	deleteEvent := requireNativeDecisionPayload[proto.MailCopyUpdatedPayload](t, events[1], "delete mail payload")
 	if deleteEvent.Mail != mailEvent.ID || deleteEvent.UserID != alice.ID || deleteEvent.Mailbox == nil ||
 		*deleteEvent.Mailbox != "trash" || deleteEvent.Read != nil || deleteEvent.Kept != nil || deleteEvent.TS != 2234 {
 		t.Fatalf("delete mail event = %+v, want trash mailbox update only", deleteEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-delete-mail-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize delete mail event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-delete-mail-test", eventPartition, 10, "materialize delete mail event")
 	aliceTrash, err := c.ListMail(alice.ID, "trash", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice trash mail: %v", err)
@@ -9245,92 +6138,38 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteMail(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsDeleteMailRange(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sendPartition := LogPartition{Kind: partitionMail, Key: bob.ID}
 	for i, subject := range []string{"Campus one", "Campus two"} {
-		payload, err := json.Marshal(proto.SendMailPayload{
+		payload := marshalCoreTestJSON(t, fmt.Sprintf("marshal send mail payload %d", i), proto.SendMailPayload{
 			To:      []string{"alice"},
 			Subject: subject,
 			Body:    "Please archive this.",
 		})
-		if err != nil {
-			t.Fatalf("marshal send mail payload %d: %v", i, err)
-		}
-		if _, err := commandLog.Produce(ctx, CommandLogRecord{
+		produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, fmt.Sprintf("send mail %d", i), CommandLogRecord{
 			Partition:  sendPartition,
 			ActorID:    bob.ID,
 			CID:        fmt.Sprintf("cid-native-delete-mail-range-send-%d", i),
 			Command:    proto.CmdSendMail,
 			Payload:    payload,
 			EnqueuedAt: int64(1234 + i),
-		}); err != nil {
-			t.Fatalf("produce send mail command %d: %v", i, err)
-		}
-		if _, err := worker.DrainOnce(ctx); err != nil {
-			t.Fatalf("drain send mail %d once: %v", i, err)
-		}
+		})
 	}
 
 	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay send mail events: %v", err)
-	}
-	if len(events) != 2 || events[0].Kind != proto.EvtMailSent || events[1].Kind != proto.EvtMailSent {
-		t.Fatalf("send mail events = %+v, want two mail.sent events", events)
-	}
-	firstMail, ok := events[0].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("first send mail payload = %T, want MailSentPayload", events[0].Payload)
-	}
-	secondMail, ok := events[1].Payload.(*proto.MailSentPayload)
-	if !ok {
-		t.Fatalf("second send mail payload = %T, want MailSentPayload", events[1].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-delete-mail-range-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize send mail events: %v", err)
-	}
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, eventPartition, 0, 10, "replay send mail events")
+	requireNativeDecisionEventKinds(t, events, "send mail events", proto.EvtMailSent, proto.EvtMailSent)
+	firstMail := requireNativeDecisionPayload[proto.MailSentPayload](t, events[0], "first send mail payload")
+	secondMail := requireNativeDecisionPayload[proto.MailSentPayload](t, events[1], "second send mail payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-delete-mail-range-test", eventPartition, 10, "materialize send mail events")
 
 	rangePartition := LogPartition{Kind: partitionMail, Key: firstMail.ID}
-	missingPayload, err := json.Marshal(proto.DeleteMailRangePayload{Mail: []string{firstMail.ID, "missing_mail"}})
-	if err != nil {
-		t.Fatalf("marshal missing range payload: %v", err)
-	}
+	missingPayload := marshalCoreTestJSON(t, "marshal missing range payload", proto.DeleteMailRangePayload{Mail: []string{firstMail.ID, "missing_mail"}})
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  rangePartition,
 		Offset:     1,
@@ -9340,15 +6179,21 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteMailRange(t *testing.T) {
 		Payload:    missingPayload,
 		EnqueuedAt: 1834,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Retryable {
-		t.Fatalf("missing range delete decision = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "missing range delete decision")
+	emptyRangePayload := marshalCoreTestJSON(t, "marshal empty range payload", proto.DeleteMailRangePayload{})
+	emptyRange := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  rangePartition,
+		Offset:     1,
+		ActorID:    alice.ID,
+		CID:        "cid-native-delete-mail-range-empty",
+		Command:    proto.CmdDeleteMailRange,
+		Payload:    emptyRangePayload,
+		EnqueuedAt: 1834,
+	})
+	requireNativeDecisionTerminalError(t, emptyRange, proto.ErrValidationFailed, "empty range delete decision", validationMessage(nil, proto.NormalizeMailRangeIDs))
 
-	rangePayload, err := json.Marshal(proto.DeleteMailRangePayload{Mail: []string{firstMail.ID, secondMail.ID, firstMail.ID}})
-	if err != nil {
-		t.Fatalf("marshal range payload: %v", err)
-	}
-	rangeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	rangePayload := marshalCoreTestJSON(t, "marshal range payload", proto.DeleteMailRangePayload{Mail: []string{firstMail.ID, secondMail.ID, firstMail.ID}})
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "range delete", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  rangePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-delete-mail-range",
@@ -9356,28 +6201,12 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteMailRange(t *testing.T) {
 		Payload:    rangePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce range delete command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain range delete once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, rangePartition); err != nil || got != rangeRecord.Offset {
-		t.Fatalf("range delete committed offset = %d, %v; want %d, nil", got, err, rangeRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay range delete events: %v", err)
-	}
 	if len(events) != 4 || events[2].Kind != proto.EvtMailCopyUpdated || events[3].Kind != proto.EvtMailCopyUpdated {
 		t.Fatalf("range delete events = %+v, want two sends then two copy updates", events)
 	}
 	deleted := map[string]bool{}
 	for _, event := range events[2:] {
-		updateEvent, ok := event.Payload.(*proto.MailCopyUpdatedPayload)
-		if !ok {
-			t.Fatalf("range delete payload = %T, want MailCopyUpdatedPayload", event.Payload)
-		}
+		updateEvent := requireNativeDecisionPayload[proto.MailCopyUpdatedPayload](t, event, "range delete payload")
 		if updateEvent.UserID != alice.ID || updateEvent.Mailbox == nil || *updateEvent.Mailbox != "trash" ||
 			updateEvent.Read != nil || updateEvent.Kept != nil || updateEvent.TS != 2234 {
 			t.Fatalf("range delete event = %+v, want trash update only", updateEvent)
@@ -9387,13 +6216,7 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteMailRange(t *testing.T) {
 	if !deleted[firstMail.ID] || !deleted[secondMail.ID] || len(deleted) != 2 {
 		t.Fatalf("range delete event ids = %+v, want both unique mails", deleted)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-delete-mail-range-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize range delete events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-delete-mail-range-test", eventPartition, 10, "materialize range delete events")
 	aliceTrash, err := c.ListMail(alice.ID, "trash", 10, 0, false)
 	if err != nil {
 		t.Fatalf("list alice trash mail: %v", err)
@@ -9416,48 +6239,19 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteMailRange(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsDirectMessages(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	if err := setDirectMessageSettings(c.DB, alice.ID, "friends"); err != nil {
+	if err := projections.SetDirectMessageSettings(c.DB, alice.ID, "friends"); err != nil {
 		t.Fatalf("set alice direct-message policy: %v", err)
 	}
-	blockedPayload, err := json.Marshal(proto.SendDirectMessagePayload{
+	blockedPayload := marshalCoreTestJSON(t, "marshal blocked direct message payload", proto.SendDirectMessagePayload{
 		To:   "alice",
 		Body: "blocked short ping",
 	})
-	if err != nil {
-		t.Fatalf("marshal blocked direct message payload: %v", err)
-	}
 	blocked := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: "alice"},
 		Offset:     1,
@@ -9467,22 +6261,18 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessages(t *testing.T) {
 		Payload:    blockedPayload,
 		EnqueuedAt: 1234,
 	})
-	if blocked.Err == nil || blocked.Err.Code != proto.ErrForbidden || blocked.Err.Retryable {
-		t.Fatalf("direct message blocked by friends policy = %+v, want terminal forbidden", blocked)
-	}
-	if err := setUserRelationship(c.DB, alice.ID, bob.ID, "friend", "", true); err != nil {
+	requireNativeDecisionTerminalError(t, blocked, proto.ErrForbidden, "direct message blocked by friends policy")
+	if err := projections.SetUserRelationship(c.DB, alice.ID, bob.ID, "friend", "", true); err != nil {
 		t.Fatalf("set alice friends bob: %v", err)
 	}
 
 	commandPartition := LogPartition{Kind: partitionUser, Key: "alice"}
-	payload, err := json.Marshal(proto.SendDirectMessagePayload{
+	payload := marshalCoreTestJSON(t, "marshal direct message payload", proto.SendDirectMessagePayload{
 		To:   "alice",
 		Body: " Short ping ",
 	})
-	if err != nil {
-		t.Fatalf("marshal direct message payload: %v", err)
-	}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "direct message", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-direct-message",
@@ -9490,43 +6280,17 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessages(t *testing.T) {
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce direct message command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain direct message once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != record.Offset {
-		t.Fatalf("direct message committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-
-	eventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay direct message events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDirectMessageSent {
-		t.Fatalf("direct message events = %+v, want one direct_message.sent", events)
-	}
-	dmEvent, ok := events[0].Payload.(*proto.DirectMessageSentPayload)
-	if !ok {
-		t.Fatalf("direct message payload = %T, want DirectMessageSentPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "direct message events", proto.EvtDirectMessageSent)
+	dmEvent := requireNativeDecisionPayload[proto.DirectMessageSentPayload](t, events[0], "direct message payload")
 	if dmEvent.ID == "" || dmEvent.FromUserID != bob.ID || dmEvent.From != "bob" ||
 		dmEvent.ToUserID != alice.ID || dmEvent.To != "alice" || dmEvent.Body != "Short ping" || dmEvent.TS != 2234 {
 		t.Fatalf("direct message event = %+v, want deterministic bob->alice message", dmEvent)
 	}
-	if dmEvent.ConversationID != nativeDirectConversationID(bob.ID, alice.ID) {
-		t.Fatalf("conversation id = %q, want %q", dmEvent.ConversationID, nativeDirectConversationID(bob.ID, alice.ID))
+	if dmEvent.ConversationID != proto.DirectConversationID(bob.ID, alice.ID) {
+		t.Fatalf("conversation id = %q, want %q", dmEvent.ConversationID, proto.DirectConversationID(bob.ID, alice.ID))
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-direct-message-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize direct message event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-direct-message-test", eventPartition, 10, "materialize direct message event")
 	messages, err := c.ListDirectMessages(alice.ID, bob.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list alice direct messages: %v", err)
@@ -9545,79 +6309,31 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessages(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsDirectMessageRead(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sendPartition := LogPartition{Kind: partitionUser, Key: "alice"}
-	sendPayload, err := json.Marshal(proto.SendDirectMessagePayload{
+	sendPayload := marshalCoreTestJSON(t, "marshal direct message payload", proto.SendDirectMessagePayload{
 		To:   "alice",
 		Body: "read me",
 	})
-	if err != nil {
-		t.Fatalf("marshal direct message payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "direct message", CommandLogRecord{
 		Partition:  sendPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-direct-message-read-send",
 		Command:    proto.CmdSendDirectMessage,
 		Payload:    sendPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce direct message command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain direct message send once: %v", err)
-	}
+	})
 
 	senderEventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, senderEventPartition.Kind, senderEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay direct message send events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDirectMessageSent {
-		t.Fatalf("direct message send events = %+v, want one send event", events)
-	}
-	dmEvent, ok := events[0].Payload.(*proto.DirectMessageSentPayload)
-	if !ok {
-		t.Fatalf("direct message payload = %T, want DirectMessageSentPayload", events[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-direct-message-read-test",
-		Partition: senderEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize direct message send event: %v", err)
-	}
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, senderEventPartition, 0, 10, "replay direct message send events")
+	requireNativeDecisionEventKinds(t, events, "direct message send events", proto.EvtDirectMessageSent)
+	dmEvent := requireNativeDecisionPayload[proto.DirectMessageSentPayload](t, events[0], "direct message payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-direct-message-read-test", senderEventPartition, 10, "materialize direct message send event")
 	unread, err := c.CountUnreadDirectMessages(alice.ID)
 	if err != nil {
 		t.Fatalf("count unread direct messages after send: %v", err)
@@ -9627,10 +6343,7 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageRead(t *testing.T)
 	}
 
 	readPartition := LogPartition{Kind: partitionUser, Key: dmEvent.ID}
-	readPayload, err := json.Marshal(proto.MarkDirectMessageReadPayload{Message: dmEvent.ID})
-	if err != nil {
-		t.Fatalf("marshal direct message read payload: %v", err)
-	}
+	readPayload := marshalCoreTestJSON(t, "marshal direct message read payload", proto.MarkDirectMessageReadPayload{Message: dmEvent.ID})
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  readPartition,
 		Offset:     1,
@@ -9640,11 +6353,9 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageRead(t *testing.T)
 		Payload:    readPayload,
 		EnqueuedAt: 1734,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrNotFound || denied.Err.Retryable {
-		t.Fatalf("sender direct-message read decision = %+v, want terminal not found", denied)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrNotFound, "sender direct-message read decision")
 
-	readRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "direct message read", senderEventPartition, 0, 10, CommandLogRecord{
 		Partition:  readPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-direct-message-read",
@@ -9652,36 +6363,14 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageRead(t *testing.T)
 		Payload:    readPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce direct message read command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain direct message read once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, readPartition); err != nil || got != readRecord.Offset {
-		t.Fatalf("direct message read committed offset = %d, %v; want %d, nil", got, err, readRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, senderEventPartition.Kind, senderEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay direct message read events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtDirectMessageRead {
 		t.Fatalf("direct message read events = %+v, want send then read", events)
 	}
-	readEvent, ok := events[1].Payload.(*proto.DirectMessageReadPayload)
-	if !ok {
-		t.Fatalf("direct message read payload = %T, want DirectMessageReadPayload", events[1].Payload)
-	}
+	readEvent := requireNativeDecisionPayload[proto.DirectMessageReadPayload](t, events[1], "direct message read payload")
 	if readEvent.MessageID != dmEvent.ID || readEvent.UserID != alice.ID || readEvent.ReadAt != 2234 || readEvent.TS != 2234 {
 		t.Fatalf("direct message read event = %+v, want alice read at event timestamp", readEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-direct-message-read-test",
-		Partition: senderEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize direct message read event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-direct-message-read-test", senderEventPartition, 10, "materialize direct message read event")
 	messages, err := c.ListDirectMessages(alice.ID, bob.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list direct messages after read: %v", err)
@@ -9697,7 +6386,7 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageRead(t *testing.T)
 		t.Fatalf("unread direct messages after read = %d, want 0", unread)
 	}
 
-	noopRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "no-op direct message read", senderEventPartition, 0, 10, CommandLogRecord{
 		Partition:  readPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-direct-message-read-noop",
@@ -9705,19 +6394,6 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageRead(t *testing.T)
 		Payload:    readPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce no-op direct message read command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain no-op direct message read once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, readPartition); err != nil || got != noopRecord.Offset {
-		t.Fatalf("no-op direct message read committed offset = %d, %v; want %d, nil", got, err, noopRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, senderEventPartition.Kind, senderEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay after no-op direct message read: %v", err)
-	}
 	if len(events) != 2 {
 		t.Fatalf("events after no-op direct message read = %+v, want no additional event", events)
 	}
@@ -9725,85 +6401,34 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageRead(t *testing.T)
 
 func TestNativeCommandLogDecisionExecutorProjectsDirectMessageDelete(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
-	sendPayload, err := json.Marshal(proto.SendDirectMessagePayload{
+	sendPayload := marshalCoreTestJSON(t, "marshal direct message payload", proto.SendDirectMessagePayload{
 		To:   "alice",
 		Body: "delete me",
 	})
-	if err != nil {
-		t.Fatalf("marshal direct message payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "direct message", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: "alice"},
 		ActorID:    bob.ID,
 		CID:        "cid-native-direct-message-delete-send",
 		Command:    proto.CmdSendDirectMessage,
 		Payload:    sendPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce direct message command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain direct message send once: %v", err)
-	}
+	})
 
 	senderEventPartition := LogPartition{Kind: partitionUser, Key: bob.ID}
-	events, err := eventStore.ReplayPartition(ctx, senderEventPartition.Kind, senderEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay direct message send events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDirectMessageSent {
-		t.Fatalf("direct message send events = %+v, want one send event", events)
-	}
-	dmEvent, ok := events[0].Payload.(*proto.DirectMessageSentPayload)
-	if !ok {
-		t.Fatalf("direct message payload = %T, want DirectMessageSentPayload", events[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-direct-message-delete-test",
-		Partition: senderEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize direct message send event: %v", err)
-	}
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, senderEventPartition, 0, 10, "replay direct message send events")
+	requireNativeDecisionEventKinds(t, events, "direct message send events", proto.EvtDirectMessageSent)
+	dmEvent := requireNativeDecisionPayload[proto.DirectMessageSentPayload](t, events[0], "direct message payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-direct-message-delete-test", senderEventPartition, 10, "materialize direct message send event")
 
 	deletePartition := LogPartition{Kind: partitionUser, Key: dmEvent.ID}
-	deletePayload, err := json.Marshal(proto.DeleteDirectMessagePayload{Message: dmEvent.ID})
-	if err != nil {
-		t.Fatalf("marshal direct message delete payload: %v", err)
-	}
-	recipientDelete, err := commandLog.Produce(ctx, CommandLogRecord{
+	deletePayload := marshalCoreTestJSON(t, "marshal direct message delete payload", proto.DeleteDirectMessagePayload{Message: dmEvent.ID})
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "recipient direct message delete", senderEventPartition, 0, 10, CommandLogRecord{
 		Partition:  deletePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-direct-message-delete-recipient",
@@ -9811,37 +6436,15 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageDelete(t *testing.
 		Payload:    deletePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce recipient direct message delete command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain recipient direct message delete once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, deletePartition); err != nil || got != recipientDelete.Offset {
-		t.Fatalf("recipient direct message delete committed offset = %d, %v; want %d, nil", got, err, recipientDelete.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, senderEventPartition.Kind, senderEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay recipient direct message delete events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtDirectMessageDeleted {
 		t.Fatalf("recipient direct message delete events = %+v, want send then delete", events)
 	}
-	deleteEvent, ok := events[1].Payload.(*proto.DirectMessageDeletedPayload)
-	if !ok {
-		t.Fatalf("direct message delete payload = %T, want DirectMessageDeletedPayload", events[1].Payload)
-	}
+	deleteEvent := requireNativeDecisionPayload[proto.DirectMessageDeletedPayload](t, events[1], "direct message delete payload")
 	if deleteEvent.MessageID != dmEvent.ID || deleteEvent.UserID != alice.ID || deleteEvent.SenderDeleted ||
 		!deleteEvent.RecipientDeleted || deleteEvent.TS != 2234 {
 		t.Fatalf("recipient direct message delete event = %+v, want recipient-only delete", deleteEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-direct-message-delete-test",
-		Partition: senderEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize recipient direct message delete event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-direct-message-delete-test", senderEventPartition, 10, "materialize recipient direct message delete event")
 	aliceMessages, err := c.ListDirectMessages(alice.ID, bob.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list alice direct messages after delete: %v", err)
@@ -9857,7 +6460,7 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageDelete(t *testing.
 		t.Fatalf("bob direct messages after recipient delete = %+v, want sender copy", bobMessages)
 	}
 
-	noopDelete, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "no-op recipient direct message delete", senderEventPartition, 0, 10, CommandLogRecord{
 		Partition:  deletePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-direct-message-delete-recipient-noop",
@@ -9865,24 +6468,11 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageDelete(t *testing.
 		Payload:    deletePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce no-op recipient direct message delete command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain no-op recipient direct message delete once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, deletePartition); err != nil || got != noopDelete.Offset {
-		t.Fatalf("no-op recipient direct message delete committed offset = %d, %v; want %d, nil", got, err, noopDelete.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, senderEventPartition.Kind, senderEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay after no-op recipient direct message delete: %v", err)
-	}
 	if len(events) != 2 {
 		t.Fatalf("events after no-op recipient direct message delete = %+v, want no additional event", events)
 	}
 
-	senderDelete, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "sender direct message delete", senderEventPartition, 0, 10, CommandLogRecord{
 		Partition:  deletePartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-direct-message-delete-sender",
@@ -9890,37 +6480,15 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageDelete(t *testing.
 		Payload:    deletePayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce sender direct message delete command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain sender direct message delete once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, deletePartition); err != nil || got != senderDelete.Offset {
-		t.Fatalf("sender direct message delete committed offset = %d, %v; want %d, nil", got, err, senderDelete.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, senderEventPartition.Kind, senderEventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay sender direct message delete events: %v", err)
-	}
 	if len(events) != 3 || events[2].Kind != proto.EvtDirectMessageDeleted {
 		t.Fatalf("sender direct message delete events = %+v, want second delete", events)
 	}
-	senderDeleteEvent, ok := events[2].Payload.(*proto.DirectMessageDeletedPayload)
-	if !ok {
-		t.Fatalf("sender direct message delete payload = %T, want DirectMessageDeletedPayload", events[2].Payload)
-	}
+	senderDeleteEvent := requireNativeDecisionPayload[proto.DirectMessageDeletedPayload](t, events[2], "sender direct message delete payload")
 	if senderDeleteEvent.UserID != bob.ID || !senderDeleteEvent.SenderDeleted ||
 		senderDeleteEvent.RecipientDeleted || senderDeleteEvent.TS != 4234 {
 		t.Fatalf("sender direct message delete event = %+v, want sender-only delete", senderDeleteEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-direct-message-delete-test",
-		Partition: senderEventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize sender direct message delete event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-direct-message-delete-test", senderEventPartition, 10, "materialize sender direct message delete event")
 	bobMessages, err = c.ListDirectMessages(bob.ID, alice.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list bob direct messages after sender delete: %v", err)
@@ -9932,39 +6500,13 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageDelete(t *testing.
 
 func TestNativeCommandLogDecisionExecutorProjectsDirectMessageSettings(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	commandPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	invalidPayload, err := json.Marshal(proto.SetDirectMessageSettingsPayload{Policy: "strangers"})
-	if err != nil {
-		t.Fatalf("marshal invalid direct-message settings payload: %v", err)
-	}
+	invalidPayload := marshalCoreTestJSON(t, "marshal invalid direct-message settings payload", proto.SetDirectMessageSettingsPayload{Policy: "strangers"})
 	invalid := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -9974,15 +6516,10 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageSettings(t *testin
 		Payload:    invalidPayload,
 		EnqueuedAt: 1234,
 	})
-	if invalid.Err == nil || invalid.Err.Code != proto.ErrValidationFailed || invalid.Err.Retryable {
-		t.Fatalf("invalid direct-message settings decision = %+v, want terminal validation failure", invalid)
-	}
+	requireNativeDecisionTerminalError(t, invalid, proto.ErrValidationFailed, "invalid direct-message settings decision", validationMessage("strangers", proto.NormalizeDirectMessagePolicy))
 
-	payload, err := json.Marshal(proto.SetDirectMessageSettingsPayload{Policy: "friends-only"})
-	if err != nil {
-		t.Fatalf("marshal direct-message settings payload: %v", err)
-	}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	payload := marshalCoreTestJSON(t, "marshal direct-message settings payload", proto.SetDirectMessageSettingsPayload{Policy: "friends-only"})
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "direct-message settings", 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-direct-message-settings",
@@ -9990,38 +6527,13 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageSettings(t *testin
 		Payload:    payload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce direct-message settings command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain direct-message settings once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != record.Offset {
-		t.Fatalf("direct-message settings committed offset = %d, %v; want %d, nil", got, err, record.Offset)
-	}
-
-	events, err := eventStore.ReplayPartition(ctx, commandPartition.Kind, commandPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay direct-message settings events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtDirectMessageSettingsSet {
-		t.Fatalf("direct-message settings events = %+v, want one settings event", events)
-	}
-	settingsEvent, ok := events[0].Payload.(*proto.DirectMessageSettingsSetPayload)
-	if !ok {
-		t.Fatalf("direct-message settings payload = %T, want DirectMessageSettingsSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "direct-message settings events", proto.EvtDirectMessageSettingsSet)
+	settingsEvent := requireNativeDecisionPayload[proto.DirectMessageSettingsSetPayload](t, events[0], "direct-message settings payload")
 	if settingsEvent.UserID != alice.ID || settingsEvent.Policy != "friends" || settingsEvent.TS != 2234 {
 		t.Fatalf("direct-message settings event = %+v, want normalized friends policy", settingsEvent)
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-direct-message-settings-test",
-		Partition: commandPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize direct-message settings event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-direct-message-settings-test", commandPartition, 10, "materialize direct-message settings event")
 	settings, err := c.GetDirectMessageSettings(alice.ID)
 	if err != nil {
 		t.Fatalf("get direct-message settings: %v", err)
@@ -10033,47 +6545,18 @@ func TestNativeCommandLogDecisionExecutorProjectsDirectMessageSettings(t *testin
 
 func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	commandPartition := LogPartition{Kind: partitionUser, Key: "bob"}
-	invalidPayload, err := json.Marshal(proto.SetUserRelationshipPayload{
+	invalidPayload := marshalCoreTestJSON(t, "marshal invalid relationship payload", proto.SetUserRelationshipPayload{
 		User:   "bob",
 		Kind:   "enemy",
 		Active: true,
 	})
-	if err != nil {
-		t.Fatalf("marshal invalid relationship payload: %v", err)
-	}
 	invalid := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -10083,20 +6566,33 @@ func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T)
 		Payload:    invalidPayload,
 		EnqueuedAt: 1234,
 	})
-	if invalid.Err == nil || invalid.Err.Code != proto.ErrValidationFailed || invalid.Err.Retryable {
-		t.Fatalf("invalid relationship decision = %+v, want terminal validation failure", invalid)
-	}
+	requireNativeDecisionTerminalError(t, invalid, proto.ErrValidationFailed, "invalid relationship decision")
+	longRelationshipNote := strings.Repeat("x", proto.MaxUserRelationshipNoteLength+1)
+	longNotePayload := marshalCoreTestJSON(t, "marshal long relationship note payload", proto.SetUserRelationshipPayload{
+		User:   "bob",
+		Kind:   "friends",
+		Active: true,
+		Note:   longRelationshipNote,
+	})
+	longNote := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  commandPartition,
+		Offset:     1,
+		ActorID:    alice.ID,
+		CID:        "cid-native-relationship-long-note",
+		Command:    proto.CmdSetUserRelationship,
+		Payload:    longNotePayload,
+		EnqueuedAt: 1234,
+	})
+	requireNativeDecisionTerminalError(t, longNote, proto.ErrValidationFailed, "long relationship note decision", validationMessage(longRelationshipNote, proto.NormalizeUserRelationshipNote))
 
-	addPayload, err := json.Marshal(proto.SetUserRelationshipPayload{
+	addPayload := marshalCoreTestJSON(t, "marshal relationship add payload", proto.SetUserRelationshipPayload{
 		User:   "bob",
 		Kind:   "friends",
 		Active: true,
 		Note:   " lab partner ",
 	})
-	if err != nil {
-		t.Fatalf("marshal relationship add payload: %v", err)
-	}
-	addRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "relationship add", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-relationship-add",
@@ -10104,39 +6600,13 @@ func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T)
 		Payload:    addPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce relationship add command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain relationship add once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != addRecord.Offset {
-		t.Fatalf("relationship add committed offset = %d, %v; want %d, nil", got, err, addRecord.Offset)
-	}
-
-	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay relationship events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtUserRelationshipSet {
-		t.Fatalf("relationship events = %+v, want one relationship event", events)
-	}
-	addEvent, ok := events[0].Payload.(*proto.UserRelationshipSetPayload)
-	if !ok {
-		t.Fatalf("relationship payload = %T, want UserRelationshipSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "relationship events", proto.EvtUserRelationshipSet)
+	addEvent := requireNativeDecisionPayload[proto.UserRelationshipSetPayload](t, events[0], "relationship payload")
 	if addEvent.UserID != alice.ID || addEvent.TargetUserID != bob.ID || addEvent.Kind != "friend" ||
 		!addEvent.Active || addEvent.Note != "lab partner" || addEvent.TS != 2234 {
 		t.Fatalf("relationship add event = %+v, want normalized friend add", addEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-relationship-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize relationship add event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-relationship-test", eventPartition, 10, "materialize relationship add event")
 	friends, err := c.ListSocialUsers(alice.ID, "friends", false)
 	if err != nil {
 		t.Fatalf("list friends after relationship add: %v", err)
@@ -10145,15 +6615,12 @@ func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T)
 		t.Fatalf("friends after relationship add = %+v, want bob with note", friends)
 	}
 
-	removePayload, err := json.Marshal(proto.SetUserRelationshipPayload{
+	removePayload := marshalCoreTestJSON(t, "marshal relationship remove payload", proto.SetUserRelationshipPayload{
 		User:   "bob",
 		Kind:   "follow",
 		Active: false,
 	})
-	if err != nil {
-		t.Fatalf("marshal relationship remove payload: %v", err)
-	}
-	removeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "relationship remove", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-relationship-remove",
@@ -10161,37 +6628,15 @@ func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T)
 		Payload:    removePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce relationship remove command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain relationship remove once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != removeRecord.Offset {
-		t.Fatalf("relationship remove committed offset = %d, %v; want %d, nil", got, err, removeRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay relationship remove events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtUserRelationshipSet {
 		t.Fatalf("relationship remove events = %+v, want add then remove", events)
 	}
-	removeEvent, ok := events[1].Payload.(*proto.UserRelationshipSetPayload)
-	if !ok {
-		t.Fatalf("relationship remove payload = %T, want UserRelationshipSetPayload", events[1].Payload)
-	}
+	removeEvent := requireNativeDecisionPayload[proto.UserRelationshipSetPayload](t, events[1], "relationship remove payload")
 	if removeEvent.UserID != alice.ID || removeEvent.TargetUserID != bob.ID || removeEvent.Kind != "friend" ||
 		removeEvent.Active || removeEvent.TS != 3234 {
 		t.Fatalf("relationship remove event = %+v, want normalized friend remove", removeEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-relationship-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize relationship remove event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-relationship-test", eventPartition, 10, "materialize relationship remove event")
 	friends, err = c.ListSocialUsers(alice.ID, "friends", false)
 	if err != nil {
 		t.Fatalf("list friends after relationship remove: %v", err)
@@ -10200,7 +6645,7 @@ func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T)
 		t.Fatalf("friends after relationship remove = %+v, want none", friends)
 	}
 
-	noopRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "no-op relationship remove", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-relationship-remove-noop",
@@ -10208,19 +6653,6 @@ func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T)
 		Payload:    removePayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce no-op relationship remove command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain no-op relationship remove once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != noopRecord.Offset {
-		t.Fatalf("no-op relationship remove committed offset = %d, %v; want %d, nil", got, err, noopRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay after no-op relationship remove: %v", err)
-	}
 	if len(events) != 2 {
 		t.Fatalf("events after no-op relationship remove = %+v, want no additional event", events)
 	}
@@ -10228,50 +6660,18 @@ func TestNativeCommandLogDecisionExecutorProjectsUserRelationships(t *testing.T)
 
 func TestNativeCommandLogDecisionExecutorProjectsLoginWatch(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
-	if err := setUserRelationship(c.DB, alice.ID, bob.ID, "friend", "", true); err != nil {
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
+	if err := projections.SetUserRelationship(c.DB, alice.ID, bob.ID, "friend", "", true); err != nil {
 		t.Fatalf("seed alice friend bob: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	commandPartition := LogPartition{Kind: partitionUser, Key: "bob"}
-	forbiddenPayload, err := json.Marshal(proto.SetLoginWatchPayload{User: "bob", Active: true})
-	if err != nil {
-		t.Fatalf("marshal forbidden login watch payload: %v", err)
-	}
+	forbiddenPayload := marshalCoreTestJSON(t, "marshal forbidden login watch payload", proto.SetLoginWatchPayload{User: "bob", Active: true})
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -10281,15 +6681,11 @@ func TestNativeCommandLogDecisionExecutorProjectsLoginWatch(t *testing.T) {
 		Payload:    forbiddenPayload,
 		EnqueuedAt: 1234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Retryable {
-		t.Fatalf("forbidden login watch decision = %+v, want terminal forbidden", forbidden)
-	}
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "forbidden login watch decision")
 
-	watchPayload, err := json.Marshal(proto.SetLoginWatchPayload{User: "bob", Active: true})
-	if err != nil {
-		t.Fatalf("marshal login watch payload: %v", err)
-	}
-	watchRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	watchPayload := marshalCoreTestJSON(t, "marshal login watch payload", proto.SetLoginWatchPayload{User: "bob", Active: true})
+	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "login watch", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-login-watch",
@@ -10297,47 +6693,19 @@ func TestNativeCommandLogDecisionExecutorProjectsLoginWatch(t *testing.T) {
 		Payload:    watchPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce login watch command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain login watch once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != watchRecord.Offset {
-		t.Fatalf("login watch committed offset = %d, %v; want %d, nil", got, err, watchRecord.Offset)
-	}
-	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay login watch events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtUserRelationshipSet {
-		t.Fatalf("login watch events = %+v, want one relationship event", events)
-	}
-	watchEvent, ok := events[0].Payload.(*proto.UserRelationshipSetPayload)
-	if !ok {
-		t.Fatalf("login watch relationship payload = %T, want UserRelationshipSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "login watch events", proto.EvtUserRelationshipSet)
+	watchEvent := requireNativeDecisionPayload[proto.UserRelationshipSetPayload](t, events[0], "login watch relationship payload")
 	if watchEvent.UserID != alice.ID || watchEvent.TargetUserID != bob.ID || watchEvent.Kind != "login_watch" ||
 		!watchEvent.Active || watchEvent.TS != 2234 {
 		t.Fatalf("login watch relationship event = %+v, want active login watch", watchEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-login-watch-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize login watch event: %v", err)
-	}
-	if exists, err := nativeRelationshipExists(c.DB, alice.ID, bob.ID, "login_watch"); err != nil || !exists {
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-login-watch-test", eventPartition, 10, "materialize login watch event")
+	if exists, err := projections.UserRelationshipExists(c.DB, alice.ID, bob.ID, "login_watch"); err != nil || !exists {
 		t.Fatalf("login watch relationship exists = %v, %v; want true, nil", exists, err)
 	}
 
-	cancelPayload, err := json.Marshal(proto.SetLoginWatchPayload{User: "bob", Active: false})
-	if err != nil {
-		t.Fatalf("marshal login watch cancel payload: %v", err)
-	}
-	cancelRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	cancelPayload := marshalCoreTestJSON(t, "marshal login watch cancel payload", proto.SetLoginWatchPayload{User: "bob", Active: false})
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "login watch cancel", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-login-watch-cancel",
@@ -10345,45 +6713,23 @@ func TestNativeCommandLogDecisionExecutorProjectsLoginWatch(t *testing.T) {
 		Payload:    cancelPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce login watch cancel command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain login watch cancel once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != cancelRecord.Offset {
-		t.Fatalf("login watch cancel committed offset = %d, %v; want %d, nil", got, err, cancelRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay login watch cancel events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtUserRelationshipSet {
 		t.Fatalf("login watch cancel events = %+v, want second relationship event", events)
 	}
-	cancelEvent, ok := events[1].Payload.(*proto.UserRelationshipSetPayload)
-	if !ok {
-		t.Fatalf("login watch cancel payload = %T, want UserRelationshipSetPayload", events[1].Payload)
-	}
+	cancelEvent := requireNativeDecisionPayload[proto.UserRelationshipSetPayload](t, events[1], "login watch cancel payload")
 	if cancelEvent.UserID != alice.ID || cancelEvent.TargetUserID != bob.ID || cancelEvent.Kind != "login_watch" ||
 		cancelEvent.Active || cancelEvent.TS != 3234 {
 		t.Fatalf("login watch cancel event = %+v, want inactive login watch", cancelEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-login-watch-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize login watch cancel event: %v", err)
-	}
-	if exists, err := nativeRelationshipExists(c.DB, alice.ID, bob.ID, "login_watch"); err != nil || exists {
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-login-watch-test", eventPartition, 10, "materialize login watch cancel event")
+	if exists, err := projections.UserRelationshipExists(c.DB, alice.ID, bob.ID, "login_watch"); err != nil || exists {
 		t.Fatalf("login watch relationship after cancel = %v, %v; want false, nil", exists, err)
 	}
 
 	if err := setUserPresence(c.DB, bob.ID, "web", "active", "reading", "general", "", "General", "127.0.0.1", nowMS()); err != nil {
 		t.Fatalf("seed bob presence: %v", err)
 	}
-	onlineRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	onlineRecord, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "online login watch", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-login-watch-online",
@@ -10391,47 +6737,22 @@ func TestNativeCommandLogDecisionExecutorProjectsLoginWatch(t *testing.T) {
 		Payload:    watchPayload,
 		EnqueuedAt: 4234,
 	})
-	if err != nil {
-		t.Fatalf("produce online login watch command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain online login watch once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != onlineRecord.Offset {
-		t.Fatalf("online login watch committed offset = %d, %v; want %d, nil", got, err, onlineRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay online login watch events: %v", err)
-	}
 	if len(events) != 4 || events[2].Kind != proto.EvtNotificationCreated || events[3].Kind != proto.EvtUserRelationshipSet {
 		t.Fatalf("online login watch events = %+v, want notification then relationship clear", events)
 	}
-	notificationEvent, ok := events[2].Payload.(*proto.NotificationCreatedPayload)
-	if !ok {
-		t.Fatalf("online login watch notification payload = %T, want NotificationCreatedPayload", events[2].Payload)
-	}
+	notificationEvent := requireNativeDecisionPayload[proto.NotificationCreatedPayload](t, events[2], "online login watch notification payload")
 	if notificationEvent.ID != stableCommandLogDecisionID("notif_", onlineRecord, 0) ||
 		notificationEvent.UserID != alice.ID || notificationEvent.Kind != "login" ||
 		notificationEvent.Actor != "bob" || notificationEvent.ThreadID != "" ||
 		notificationEvent.PostID != "" || notificationEvent.TS != 4234 {
 		t.Fatalf("online login watch notification = %+v, want login notification for alice", notificationEvent)
 	}
-	clearEvent, ok := events[3].Payload.(*proto.UserRelationshipSetPayload)
-	if !ok {
-		t.Fatalf("online login watch clear payload = %T, want UserRelationshipSetPayload", events[3].Payload)
-	}
+	clearEvent := requireNativeDecisionPayload[proto.UserRelationshipSetPayload](t, events[3], "online login watch clear payload")
 	if clearEvent.UserID != alice.ID || clearEvent.TargetUserID != bob.ID || clearEvent.Kind != "login_watch" ||
 		clearEvent.Active || clearEvent.TS != 4234 {
 		t.Fatalf("online login watch clear event = %+v, want inactive login watch", clearEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-login-watch-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize online login watch events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-login-watch-test", eventPartition, 10, "materialize online login watch events")
 	notifications, err := c.ListNotifications(alice.ID, 10, 0, false)
 	if err != nil {
 		t.Fatalf("list login watch notifications: %v", err)
@@ -10440,45 +6761,19 @@ func TestNativeCommandLogDecisionExecutorProjectsLoginWatch(t *testing.T) {
 		notifications[0].ThreadID != "" || notifications[0].PostID != "" {
 		t.Fatalf("login watch notifications = %+v, want one login notification from bob", notifications)
 	}
-	if exists, err := nativeRelationshipExists(c.DB, alice.ID, bob.ID, "login_watch"); err != nil || exists {
+	if exists, err := projections.UserRelationshipExists(c.DB, alice.ID, bob.ID, "login_watch"); err != nil || exists {
 		t.Fatalf("login watch relationship after online notification = %v, %v; want false, nil", exists, err)
 	}
 }
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardZap(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	missingPayload, err := json.Marshal(proto.SetBoardZapPayload{Board: "missing", Zapped: true})
-	if err != nil {
-		t.Fatalf("marshal missing board zap payload: %v", err)
-	}
+	missingPayload := marshalCoreTestJSON(t, "marshal missing board zap payload", proto.SetBoardZapPayload{Board: "missing", Zapped: true})
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "missing"},
 		Offset:     1,
@@ -10488,16 +6783,11 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardZap(t *testing.T) {
 		Payload:    missingPayload,
 		EnqueuedAt: 1234,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Retryable {
-		t.Fatalf("missing board zap decision = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "missing board zap decision")
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	zapPayload, err := json.Marshal(proto.SetBoardZapPayload{Board: "general", Zapped: true})
-	if err != nil {
-		t.Fatalf("marshal board zap payload: %v", err)
-	}
-	zapRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	zapPayload := marshalCoreTestJSON(t, "marshal board zap payload", proto.SetBoardZapPayload{Board: "general", Zapped: true})
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board zap", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-board-zap",
@@ -10505,36 +6795,12 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardZap(t *testing.T) {
 		Payload:    zapPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce board zap command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board zap once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != zapRecord.Offset {
-		t.Fatalf("board zap committed offset = %d, %v; want %d, nil", got, err, zapRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board zap events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardZapSet {
-		t.Fatalf("board zap events = %+v, want one board.zap_set", events)
-	}
-	zapEvent, ok := events[0].Payload.(*proto.BoardZapSetPayload)
-	if !ok {
-		t.Fatalf("board zap payload = %T, want BoardZapSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "board zap events", proto.EvtBoardZapSet)
+	zapEvent := requireNativeDecisionPayload[proto.BoardZapSetPayload](t, events[0], "board zap payload")
 	if zapEvent.UserID != alice.ID || zapEvent.Board != "general" || !zapEvent.Zapped || zapEvent.TS != 2234 {
 		t.Fatalf("board zap event = %+v, want alice zapping general", zapEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-zap-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board zap event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-zap-test", partition, 10, "materialize board zap event")
 	summaries, err := c.ListBoardSummaries(alice.ID, false)
 	if err != nil {
 		t.Fatalf("list board summaries after zap: %v", err)
@@ -10544,11 +6810,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardZap(t *testing.T) {
 		t.Fatalf("general summary after zap = %+v, want zapped", general)
 	}
 
-	clearPayload, err := json.Marshal(proto.SetBoardZapPayload{Board: "general", Zapped: false})
-	if err != nil {
-		t.Fatalf("marshal board zap clear payload: %v", err)
-	}
-	clearRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	clearPayload := marshalCoreTestJSON(t, "marshal board zap clear payload", proto.SetBoardZapPayload{Board: "general", Zapped: false})
+	_, events = produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board zap clear", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-board-zap-clear",
@@ -10556,36 +6819,14 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardZap(t *testing.T) {
 		Payload:    clearPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce board zap clear command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board zap clear once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != clearRecord.Offset {
-		t.Fatalf("board zap clear committed offset = %d, %v; want %d, nil", got, err, clearRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board zap clear events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtBoardZapSet {
 		t.Fatalf("board zap clear events = %+v, want second board.zap_set", events)
 	}
-	clearEvent, ok := events[1].Payload.(*proto.BoardZapSetPayload)
-	if !ok {
-		t.Fatalf("board zap clear payload = %T, want BoardZapSetPayload", events[1].Payload)
-	}
+	clearEvent := requireNativeDecisionPayload[proto.BoardZapSetPayload](t, events[1], "board zap clear payload")
 	if clearEvent.UserID != alice.ID || clearEvent.Board != "general" || clearEvent.Zapped || clearEvent.TS != 3234 {
 		t.Fatalf("board zap clear event = %+v, want alice clearing general zap", clearEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-zap-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board zap clear event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-zap-test", partition, 10, "materialize board zap clear event")
 	summaries, err = c.ListBoardSummaries(alice.ID, false)
 	if err != nil {
 		t.Fatalf("list board summaries after clear: %v", err)
@@ -10598,38 +6839,12 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardZap(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	missingBoardPayload, err := json.Marshal(proto.SetBoardFavoritePayload{Board: "missing", Favorite: true})
-	if err != nil {
-		t.Fatalf("marshal missing board favorite payload: %v", err)
-	}
+	missingBoardPayload := marshalCoreTestJSON(t, "marshal missing board favorite payload", proto.SetBoardFavoritePayload{Board: "missing", Favorite: true})
 	missingBoard := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "missing"},
 		Offset:     1,
@@ -10639,15 +6854,13 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 		Payload:    missingBoardPayload,
 		EnqueuedAt: 1234,
 	})
-	if missingBoard.Err == nil || missingBoard.Err.Code != proto.ErrNotFound || missingBoard.Err.Retryable {
-		t.Fatalf("missing board favorite decision = %+v, want terminal not found", missingBoard)
-	}
+	requireNativeDecisionTerminalError(t, missingBoard, proto.ErrNotFound, "missing board favorite decision")
 
 	techTx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin tech board setup: %v", err)
 	}
-	if err := insertBoard(techTx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
+	if err := projections.InsertBoard(techTx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
 		techTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert tech board: %v", err)
 	}
@@ -10655,10 +6868,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 		t.Fatalf("commit tech board setup: %v", err)
 	}
 
-	missingFolderPayload, err := json.Marshal(proto.SetBoardFavoritePayload{Board: "tech", Favorite: true, FolderID: "missing"})
-	if err != nil {
-		t.Fatalf("marshal missing folder favorite payload: %v", err)
-	}
+	missingFolderPayload := marshalCoreTestJSON(t, "marshal missing folder favorite payload", proto.SetBoardFavoritePayload{Board: "tech", Favorite: true, FolderID: "missing"})
 	missingFolder := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "tech"},
 		Offset:     2,
@@ -10668,17 +6878,12 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 		Payload:    missingFolderPayload,
 		EnqueuedAt: 1334,
 	})
-	if missingFolder.Err == nil || missingFolder.Err.Code != proto.ErrNotFound || missingFolder.Err.Retryable {
-		t.Fatalf("missing folder favorite decision = %+v, want terminal not found", missingFolder)
-	}
+	requireNativeDecisionTerminalError(t, missingFolder, proto.ErrNotFound, "missing folder favorite decision")
 
 	partition := LogPartition{Kind: partitionBoard, Key: "tech"}
 	position := 0
-	favoritePayload, err := json.Marshal(proto.SetBoardFavoritePayload{Board: "tech", Favorite: true, Position: &position})
-	if err != nil {
-		t.Fatalf("marshal board favorite payload: %v", err)
-	}
-	favoriteRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	favoritePayload := marshalCoreTestJSON(t, "marshal board favorite payload", proto.SetBoardFavoritePayload{Board: "tech", Favorite: true, Position: &position})
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board favorite", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-board-favorite",
@@ -10686,37 +6891,13 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 		Payload:    favoritePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce board favorite command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board favorite once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != favoriteRecord.Offset {
-		t.Fatalf("board favorite committed offset = %d, %v; want %d, nil", got, err, favoriteRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board favorite events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardFavoriteSet {
-		t.Fatalf("board favorite events = %+v, want one board.favorite_set", events)
-	}
-	favoriteEvent, ok := events[0].Payload.(*proto.BoardFavoriteSetPayload)
-	if !ok {
-		t.Fatalf("board favorite payload = %T, want BoardFavoriteSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "board favorite events", proto.EvtBoardFavoriteSet)
+	favoriteEvent := requireNativeDecisionPayload[proto.BoardFavoriteSetPayload](t, events[0], "board favorite payload")
 	if favoriteEvent.UserID != alice.ID || favoriteEvent.Board != "tech" || !favoriteEvent.Favorite ||
 		favoriteEvent.Position == nil || *favoriteEvent.Position != 0 || favoriteEvent.TS != 2234 {
 		t.Fatalf("board favorite event = %+v, want alice favoriting tech at position 0", favoriteEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-favorite-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board favorite event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-favorite-test", partition, 10, "materialize board favorite event")
 	favorites, err := c.ListFavoriteBoards(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite boards after favorite: %v", err)
@@ -10725,11 +6906,8 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 		t.Fatalf("favorite boards after favorite = %+v, want tech", favorites)
 	}
 
-	clearPayload, err := json.Marshal(proto.SetBoardFavoritePayload{Board: "tech", Favorite: false})
-	if err != nil {
-		t.Fatalf("marshal board favorite clear payload: %v", err)
-	}
-	clearRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	clearPayload := marshalCoreTestJSON(t, "marshal board favorite clear payload", proto.SetBoardFavoritePayload{Board: "tech", Favorite: false})
+	_, events = produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "board favorite clear", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-board-favorite-clear",
@@ -10737,36 +6915,14 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 		Payload:    clearPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce board favorite clear command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain board favorite clear once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != clearRecord.Offset {
-		t.Fatalf("board favorite clear committed offset = %d, %v; want %d, nil", got, err, clearRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board favorite clear events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtBoardFavoriteSet {
 		t.Fatalf("board favorite clear events = %+v, want second board.favorite_set", events)
 	}
-	clearEvent, ok := events[1].Payload.(*proto.BoardFavoriteSetPayload)
-	if !ok {
-		t.Fatalf("board favorite clear payload = %T, want BoardFavoriteSetPayload", events[1].Payload)
-	}
+	clearEvent := requireNativeDecisionPayload[proto.BoardFavoriteSetPayload](t, events[1], "board favorite clear payload")
 	if clearEvent.UserID != alice.ID || clearEvent.Board != "tech" || clearEvent.Favorite || clearEvent.TS != 3234 {
 		t.Fatalf("board favorite clear event = %+v, want alice clearing tech favorite", clearEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-board-favorite-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize board favorite clear event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-board-favorite-test", partition, 10, "materialize board favorite clear event")
 	favorites, err = c.ListFavoriteBoards(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite boards after clear: %v", err)
@@ -10778,38 +6934,12 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardFavorite(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsCreateFavoriteFolder(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	emptyNamePayload, err := json.Marshal(proto.CreateFavoriteFolderPayload{Name: "   "})
-	if err != nil {
-		t.Fatalf("marshal empty favorite folder payload: %v", err)
-	}
+	emptyNamePayload := marshalCoreTestJSON(t, "marshal empty favorite folder payload", proto.CreateFavoriteFolderPayload{Name: "   "})
 	emptyName := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: alice.ID},
 		Offset:     1,
@@ -10819,14 +6949,21 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateFavoriteFolder(t *testing
 		Payload:    emptyNamePayload,
 		EnqueuedAt: 1234,
 	})
-	if emptyName.Err == nil || emptyName.Err.Code != proto.ErrValidationFailed || emptyName.Err.Retryable {
-		t.Fatalf("empty favorite folder decision = %+v, want terminal validation failure", emptyName)
-	}
+	requireNativeDecisionTerminalError(t, emptyName, proto.ErrValidationFailed, "empty favorite folder decision")
+	longFolderName := strings.Repeat("x", proto.MaxFavoriteFolderNameLength+1)
+	longNamePayload := marshalCoreTestJSON(t, "marshal long favorite folder name payload", proto.CreateFavoriteFolderPayload{Name: longFolderName})
+	longName := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  LogPartition{Kind: partitionUser, Key: alice.ID},
+		Offset:     1,
+		ActorID:    alice.ID,
+		CID:        "cid-native-favorite-folder-long-name",
+		Command:    proto.CmdCreateFavoriteFolder,
+		Payload:    longNamePayload,
+		EnqueuedAt: 1234,
+	})
+	requireNativeDecisionTerminalError(t, longName, proto.ErrValidationFailed, "long favorite folder decision", favoriteFolderNameValidationMessage(longFolderName, true))
 
-	missingParentPayload, err := json.Marshal(proto.CreateFavoriteFolderPayload{Name: "Work", ParentID: "missing"})
-	if err != nil {
-		t.Fatalf("marshal missing parent favorite folder payload: %v", err)
-	}
+	missingParentPayload := marshalCoreTestJSON(t, "marshal missing parent favorite folder payload", proto.CreateFavoriteFolderPayload{Name: "Work", ParentID: "missing"})
 	missingParent := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: alice.ID},
 		Offset:     2,
@@ -10836,16 +6973,11 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateFavoriteFolder(t *testing
 		Payload:    missingParentPayload,
 		EnqueuedAt: 1334,
 	})
-	if missingParent.Err == nil || missingParent.Err.Code != proto.ErrNotFound || missingParent.Err.Retryable {
-		t.Fatalf("missing parent favorite folder decision = %+v, want terminal not found", missingParent)
-	}
+	requireNativeDecisionTerminalError(t, missingParent, proto.ErrNotFound, "missing parent favorite folder decision")
 
 	partition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	rootPayload, err := json.Marshal(proto.CreateFavoriteFolderPayload{Name: " Work "})
-	if err != nil {
-		t.Fatalf("marshal root favorite folder payload: %v", err)
-	}
-	rootRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	rootPayload := marshalCoreTestJSON(t, "marshal root favorite folder payload", proto.CreateFavoriteFolderPayload{Name: " Work "})
+	rootRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "root favorite folder", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-favorite-folder-root",
@@ -10853,38 +6985,14 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateFavoriteFolder(t *testing
 		Payload:    rootPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce root favorite folder command: %v", err)
-	}
 	rootID := stableCommandLogDecisionID("favfld_", rootRecord, 0)
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain root favorite folder once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != rootRecord.Offset {
-		t.Fatalf("root favorite folder committed offset = %d, %v; want %d, nil", got, err, rootRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay root favorite folder events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtFavoriteFolderCreated {
-		t.Fatalf("root favorite folder events = %+v, want one favorite_folder.created", events)
-	}
-	rootEvent, ok := events[0].Payload.(*proto.FavoriteFolderCreatedPayload)
-	if !ok {
-		t.Fatalf("root favorite folder payload = %T, want FavoriteFolderCreatedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "root favorite folder events", proto.EvtFavoriteFolderCreated)
+	rootEvent := requireNativeDecisionPayload[proto.FavoriteFolderCreatedPayload](t, events[0], "root favorite folder payload")
 	if rootEvent.ID != rootID || rootEvent.UserID != alice.ID || rootEvent.ParentID != "" ||
 		rootEvent.Name != "Work" || rootEvent.Position != 0 || rootEvent.TS != 2234 {
 		t.Fatalf("root favorite folder event = %+v, want normalized Work root folder", rootEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-favorite-folder-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize root favorite folder event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-favorite-folder-test", partition, 10, "materialize root favorite folder event")
 	tree, err := c.ListFavoriteTree(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite tree after root folder: %v", err)
@@ -10895,11 +7003,8 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateFavoriteFolder(t *testing
 	}
 
 	childPosition := 0
-	childPayload, err := json.Marshal(proto.CreateFavoriteFolderPayload{Name: "Child", ParentID: rootID, Position: &childPosition})
-	if err != nil {
-		t.Fatalf("marshal child favorite folder payload: %v", err)
-	}
-	childRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	childPayload := marshalCoreTestJSON(t, "marshal child favorite folder payload", proto.CreateFavoriteFolderPayload{Name: "Child", ParentID: rootID, Position: &childPosition})
+	childRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "child favorite folder", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-favorite-folder-child",
@@ -10907,38 +7012,16 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateFavoriteFolder(t *testing
 		Payload:    childPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce child favorite folder command: %v", err)
-	}
 	childID := stableCommandLogDecisionID("favfld_", childRecord, 0)
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain child favorite folder once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != childRecord.Offset {
-		t.Fatalf("child favorite folder committed offset = %d, %v; want %d, nil", got, err, childRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay child favorite folder events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtFavoriteFolderCreated {
 		t.Fatalf("child favorite folder events = %+v, want second favorite_folder.created", events)
 	}
-	childEvent, ok := events[1].Payload.(*proto.FavoriteFolderCreatedPayload)
-	if !ok {
-		t.Fatalf("child favorite folder payload = %T, want FavoriteFolderCreatedPayload", events[1].Payload)
-	}
+	childEvent := requireNativeDecisionPayload[proto.FavoriteFolderCreatedPayload](t, events[1], "child favorite folder payload")
 	if childEvent.ID != childID || childEvent.UserID != alice.ID || childEvent.ParentID != rootID ||
 		childEvent.Name != "Child" || childEvent.Position != 0 || childEvent.TS != 3234 {
 		t.Fatalf("child favorite folder event = %+v, want child under root folder", childEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-favorite-folder-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize child favorite folder event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-favorite-folder-test", partition, 10, "materialize child favorite folder event")
 	tree, err = c.ListFavoriteTree(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite tree after child folder: %v", err)
@@ -10951,47 +7034,21 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateFavoriteFolder(t *testing
 
 func TestNativeCommandLogDecisionExecutorProjectsUpdateFavoriteFolder(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
 	const workID = "favfld_work"
 	const projectID = "favfld_project"
-	if err := createFavoriteFolder(c.DB, alice.ID, workID, "", "Work", nil); err != nil {
+	if err := projections.CreateFavoriteFolder(c.DB, alice.ID, workID, "", "Work", nil); err != nil {
 		t.Fatalf("create work folder setup: %v", err)
 	}
-	if err := createFavoriteFolder(c.DB, alice.ID, projectID, workID, "Projects", nil); err != nil {
+	if err := projections.CreateFavoriteFolder(c.DB, alice.ID, projectID, workID, "Projects", nil); err != nil {
 		t.Fatalf("create project folder setup: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	missingPayload, err := json.Marshal(proto.UpdateFavoriteFolderPayload{Folder: "missing", Name: "Nope"})
-	if err != nil {
-		t.Fatalf("marshal missing update favorite folder payload: %v", err)
-	}
+	missingPayload := marshalCoreTestJSON(t, "marshal missing update favorite folder payload", proto.UpdateFavoriteFolderPayload{Folder: "missing", Name: "Nope"})
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: "missing"},
 		Offset:     1,
@@ -11001,15 +7058,10 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateFavoriteFolder(t *testing
 		Payload:    missingPayload,
 		EnqueuedAt: 1234,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Retryable {
-		t.Fatalf("missing favorite folder update decision = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "missing favorite folder update decision")
 
 	selfParent := workID
-	selfPayload, err := json.Marshal(proto.UpdateFavoriteFolderPayload{Folder: workID, ParentID: &selfParent})
-	if err != nil {
-		t.Fatalf("marshal self-parent update favorite folder payload: %v", err)
-	}
+	selfPayload := marshalCoreTestJSON(t, "marshal self-parent update favorite folder payload", proto.UpdateFavoriteFolderPayload{Folder: workID, ParentID: &selfParent})
 	self := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: workID},
 		Offset:     2,
@@ -11019,15 +7071,10 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateFavoriteFolder(t *testing
 		Payload:    selfPayload,
 		EnqueuedAt: 1334,
 	})
-	if self.Err == nil || self.Err.Code != proto.ErrValidationFailed || self.Err.Retryable {
-		t.Fatalf("self-parent favorite folder update decision = %+v, want terminal validation failure", self)
-	}
+	requireNativeDecisionTerminalError(t, self, proto.ErrValidationFailed, "self-parent favorite folder update decision")
 
 	descendantParent := projectID
-	descendantPayload, err := json.Marshal(proto.UpdateFavoriteFolderPayload{Folder: workID, ParentID: &descendantParent})
-	if err != nil {
-		t.Fatalf("marshal descendant update favorite folder payload: %v", err)
-	}
+	descendantPayload := marshalCoreTestJSON(t, "marshal descendant update favorite folder payload", proto.UpdateFavoriteFolderPayload{Folder: workID, ParentID: &descendantParent})
 	descendant := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: workID},
 		Offset:     3,
@@ -11037,23 +7084,19 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateFavoriteFolder(t *testing
 		Payload:    descendantPayload,
 		EnqueuedAt: 1434,
 	})
-	if descendant.Err == nil || descendant.Err.Code != proto.ErrValidationFailed || descendant.Err.Retryable {
-		t.Fatalf("descendant favorite folder update decision = %+v, want terminal validation failure", descendant)
-	}
+	requireNativeDecisionTerminalError(t, descendant, proto.ErrValidationFailed, "descendant favorite folder update decision")
 
 	rootParent := ""
 	zero := 0
-	updatePayload, err := json.Marshal(proto.UpdateFavoriteFolderPayload{
+	updatePayload := marshalCoreTestJSON(t, "marshal update favorite folder payload", proto.UpdateFavoriteFolderPayload{
 		Folder:   projectID,
 		Name:     " Projects Renamed ",
 		ParentID: &rootParent,
 		Position: &zero,
 	})
-	if err != nil {
-		t.Fatalf("marshal update favorite folder payload: %v", err)
-	}
 	commandPartition := LogPartition{Kind: partitionUser, Key: projectID}
-	updateRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "update favorite folder", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-update-favorite-folder",
@@ -11061,38 +7104,13 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateFavoriteFolder(t *testing
 		Payload:    updatePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce update favorite folder command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain update favorite folder once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != updateRecord.Offset {
-		t.Fatalf("update favorite folder committed offset = %d, %v; want %d, nil", got, err, updateRecord.Offset)
-	}
-	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay update favorite folder events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtFavoriteFolderUpdated {
-		t.Fatalf("update favorite folder events = %+v, want one favorite_folder.updated", events)
-	}
-	updateEvent, ok := events[0].Payload.(*proto.FavoriteFolderUpdatedPayload)
-	if !ok {
-		t.Fatalf("update favorite folder payload = %T, want FavoriteFolderUpdatedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "update favorite folder events", proto.EvtFavoriteFolderUpdated)
+	updateEvent := requireNativeDecisionPayload[proto.FavoriteFolderUpdatedPayload](t, events[0], "update favorite folder payload")
 	if updateEvent.ID != projectID || updateEvent.UserID != alice.ID || updateEvent.ParentID != "" ||
 		updateEvent.Name != "Projects Renamed" || updateEvent.Position != 0 || updateEvent.TS != 2234 {
 		t.Fatalf("update favorite folder event = %+v, want renamed root project folder", updateEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-update-favorite-folder-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize update favorite folder event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-update-favorite-folder-test", eventPartition, 10, "materialize update favorite folder event")
 	tree, err := c.ListFavoriteTree(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite tree after update: %v", err)
@@ -11109,21 +7127,14 @@ func TestNativeCommandLogDecisionExecutorProjectsUpdateFavoriteFolder(t *testing
 
 func TestNativeCommandLogDecisionExecutorProjectsDeleteFavoriteFolder(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
 	techTx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin tech board setup: %v", err)
 	}
-	if err := insertBoard(techTx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
+	if err := projections.InsertBoard(techTx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
 		techTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert tech board: %v", err)
 	}
@@ -11132,38 +7143,19 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteFavoriteFolder(t *testing
 	}
 	const workID = "favfld_work"
 	const childID = "favfld_child"
-	if err := createFavoriteFolder(c.DB, alice.ID, workID, "", "Work", nil); err != nil {
+	if err := projections.CreateFavoriteFolder(c.DB, alice.ID, workID, "", "Work", nil); err != nil {
 		t.Fatalf("create work folder setup: %v", err)
 	}
-	if err := createFavoriteFolder(c.DB, alice.ID, childID, workID, "Child", nil); err != nil {
+	if err := projections.CreateFavoriteFolder(c.DB, alice.ID, childID, workID, "Child", nil); err != nil {
 		t.Fatalf("create child folder setup: %v", err)
 	}
-	if err := setBoardFavorite(c.DB, alice.ID, "tech", workID, nil, true); err != nil {
+	if err := projections.SetBoardFavorite(c.DB, alice.ID, "tech", workID, nil, true); err != nil {
 		t.Fatalf("favorite tech in work setup: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	missingPayload, err := json.Marshal(proto.DeleteFavoriteFolderPayload{Folder: "missing"})
-	if err != nil {
-		t.Fatalf("marshal missing delete favorite folder payload: %v", err)
-	}
+	missingPayload := marshalCoreTestJSON(t, "marshal missing delete favorite folder payload", proto.DeleteFavoriteFolderPayload{Folder: "missing"})
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: "missing"},
 		Offset:     1,
@@ -11173,16 +7165,12 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteFavoriteFolder(t *testing
 		Payload:    missingPayload,
 		EnqueuedAt: 1234,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Retryable {
-		t.Fatalf("missing favorite folder delete decision = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "missing favorite folder delete decision")
 
 	commandPartition := LogPartition{Kind: partitionUser, Key: workID}
-	deletePayload, err := json.Marshal(proto.DeleteFavoriteFolderPayload{Folder: workID})
-	if err != nil {
-		t.Fatalf("marshal delete favorite folder payload: %v", err)
-	}
-	deleteRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	deletePayload := marshalCoreTestJSON(t, "marshal delete favorite folder payload", proto.DeleteFavoriteFolderPayload{Folder: workID})
+	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "delete favorite folder", eventPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-delete-favorite-folder",
@@ -11190,37 +7178,12 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteFavoriteFolder(t *testing
 		Payload:    deletePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce delete favorite folder command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain delete favorite folder once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != deleteRecord.Offset {
-		t.Fatalf("delete favorite folder committed offset = %d, %v; want %d, nil", got, err, deleteRecord.Offset)
-	}
-	eventPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	events, err := eventStore.ReplayPartition(ctx, eventPartition.Kind, eventPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay delete favorite folder events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtFavoriteFolderDeleted {
-		t.Fatalf("delete favorite folder events = %+v, want one favorite_folder.deleted", events)
-	}
-	deleteEvent, ok := events[0].Payload.(*proto.FavoriteFolderDeletedPayload)
-	if !ok {
-		t.Fatalf("delete favorite folder payload = %T, want FavoriteFolderDeletedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "delete favorite folder events", proto.EvtFavoriteFolderDeleted)
+	deleteEvent := requireNativeDecisionPayload[proto.FavoriteFolderDeletedPayload](t, events[0], "delete favorite folder payload")
 	if deleteEvent.ID != workID || deleteEvent.UserID != alice.ID || deleteEvent.ParentID != "" || deleteEvent.TS != 2234 {
 		t.Fatalf("delete favorite folder event = %+v, want work folder deleted to root", deleteEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-delete-favorite-folder-test",
-		Partition: eventPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize delete favorite folder event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-delete-favorite-folder-test", eventPartition, 10, "materialize delete favorite folder event")
 	tree, err := c.ListFavoriteTree(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite tree after delete: %v", err)
@@ -11240,21 +7203,14 @@ func TestNativeCommandLogDecisionExecutorProjectsDeleteFavoriteFolder(t *testing
 
 func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
 	techTx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin tech board setup: %v", err)
 	}
-	if err := insertBoard(techTx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
+	if err := projections.InsertBoard(techTx, "tech", "Tech", "Technology discussion", "", 1); err != nil {
 		techTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert tech board: %v", err)
 	}
@@ -11262,32 +7218,13 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T)
 		t.Fatalf("commit tech board setup: %v", err)
 	}
 	const workFolderID = "favfld_work"
-	if err := createFavoriteFolder(c.DB, alice.ID, workFolderID, "", "Work", nil); err != nil {
+	if err := projections.CreateFavoriteFolder(c.DB, alice.ID, workFolderID, "", "Work", nil); err != nil {
 		t.Fatalf("create work folder setup: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	missingBoardPayload, err := json.Marshal(proto.MoveBoardFavoritePayload{Board: "missing", FolderID: workFolderID})
-	if err != nil {
-		t.Fatalf("marshal missing board move favorite payload: %v", err)
-	}
+	missingBoardPayload := marshalCoreTestJSON(t, "marshal missing board move favorite payload", proto.MoveBoardFavoritePayload{Board: "missing", FolderID: workFolderID})
 	missingBoard := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "missing"},
 		Offset:     1,
@@ -11297,14 +7234,9 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T)
 		Payload:    missingBoardPayload,
 		EnqueuedAt: 1234,
 	})
-	if missingBoard.Err == nil || missingBoard.Err.Code != proto.ErrNotFound || missingBoard.Err.Retryable {
-		t.Fatalf("missing board move favorite decision = %+v, want terminal not found", missingBoard)
-	}
+	requireNativeDecisionTerminalError(t, missingBoard, proto.ErrNotFound, "missing board move favorite decision")
 
-	missingFolderPayload, err := json.Marshal(proto.MoveBoardFavoritePayload{Board: "tech", FolderID: "missing"})
-	if err != nil {
-		t.Fatalf("marshal missing folder move favorite payload: %v", err)
-	}
+	missingFolderPayload := marshalCoreTestJSON(t, "marshal missing folder move favorite payload", proto.MoveBoardFavoritePayload{Board: "tech", FolderID: "missing"})
 	missingFolder := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "tech"},
 		Offset:     2,
@@ -11314,17 +7246,12 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T)
 		Payload:    missingFolderPayload,
 		EnqueuedAt: 1334,
 	})
-	if missingFolder.Err == nil || missingFolder.Err.Code != proto.ErrNotFound || missingFolder.Err.Retryable {
-		t.Fatalf("missing folder move favorite decision = %+v, want terminal not found", missingFolder)
-	}
+	requireNativeDecisionTerminalError(t, missingFolder, proto.ErrNotFound, "missing folder move favorite decision")
 
 	partition := LogPartition{Kind: partitionBoard, Key: "tech"}
 	position := 0
-	movePayload, err := json.Marshal(proto.MoveBoardFavoritePayload{Board: "tech", FolderID: workFolderID, Position: &position})
-	if err != nil {
-		t.Fatalf("marshal move favorite payload: %v", err)
-	}
-	moveRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	movePayload := marshalCoreTestJSON(t, "marshal move favorite payload", proto.MoveBoardFavoritePayload{Board: "tech", FolderID: workFolderID, Position: &position})
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "move favorite", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-move-favorite",
@@ -11332,37 +7259,13 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T)
 		Payload:    movePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce move favorite command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain move favorite once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != moveRecord.Offset {
-		t.Fatalf("move favorite committed offset = %d, %v; want %d, nil", got, err, moveRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay move favorite events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtBoardFavoriteSet {
-		t.Fatalf("move favorite events = %+v, want one board.favorite_set", events)
-	}
-	moveEvent, ok := events[0].Payload.(*proto.BoardFavoriteSetPayload)
-	if !ok {
-		t.Fatalf("move favorite payload = %T, want BoardFavoriteSetPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "move favorite events", proto.EvtBoardFavoriteSet)
+	moveEvent := requireNativeDecisionPayload[proto.BoardFavoriteSetPayload](t, events[0], "move favorite payload")
 	if moveEvent.UserID != alice.ID || moveEvent.Board != "tech" || !moveEvent.Favorite ||
 		moveEvent.FolderID != workFolderID || moveEvent.Position == nil || *moveEvent.Position != 0 || moveEvent.TS != 2234 {
 		t.Fatalf("move favorite event = %+v, want tech moved into work at position 0", moveEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-move-favorite-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize move favorite event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-move-favorite-test", partition, 10, "materialize move favorite event")
 	tree, err := c.ListFavoriteTree(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite tree after move: %v", err)
@@ -11372,11 +7275,8 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T)
 		t.Fatalf("tech favorite after move = %+v in tree %+v", techFavorite, tree)
 	}
 
-	rootPayload, err := json.Marshal(proto.MoveBoardFavoritePayload{Board: "tech"})
-	if err != nil {
-		t.Fatalf("marshal move favorite root payload: %v", err)
-	}
-	rootRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	rootPayload := marshalCoreTestJSON(t, "marshal move favorite root payload", proto.MoveBoardFavoritePayload{Board: "tech"})
+	_, events = produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "move favorite root", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-move-favorite-root",
@@ -11384,37 +7284,15 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T)
 		Payload:    rootPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce move favorite root command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain move favorite root once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != rootRecord.Offset {
-		t.Fatalf("move favorite root committed offset = %d, %v; want %d, nil", got, err, rootRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay move favorite root events: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtBoardFavoriteSet {
 		t.Fatalf("move favorite root events = %+v, want second board.favorite_set", events)
 	}
-	rootEvent, ok := events[1].Payload.(*proto.BoardFavoriteSetPayload)
-	if !ok {
-		t.Fatalf("move favorite root payload = %T, want BoardFavoriteSetPayload", events[1].Payload)
-	}
+	rootEvent := requireNativeDecisionPayload[proto.BoardFavoriteSetPayload](t, events[1], "move favorite root payload")
 	if rootEvent.UserID != alice.ID || rootEvent.Board != "tech" || !rootEvent.Favorite ||
 		rootEvent.FolderID != "" || rootEvent.Position != nil || rootEvent.TS != 3234 {
 		t.Fatalf("move favorite root event = %+v, want tech moved to root", rootEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-move-favorite-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize move favorite root event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-move-favorite-test", partition, 10, "materialize move favorite root event")
 	tree, err = c.ListFavoriteTree(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite tree after root move: %v", err)
@@ -11427,15 +7305,8 @@ func TestNativeCommandLogDecisionExecutorProjectsMoveBoardFavorite(t *testing.T)
 
 func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
 	boardTx, err := c.DB.Begin()
 	if err != nil {
@@ -11450,7 +7321,7 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 		{id: "life", name: "Life", description: "Life discussion"},
 		{id: "old", name: "Old", description: "Old favorite"},
 	} {
-		if err := insertBoard(boardTx, board.id, board.name, board.description, "", i+1); err != nil {
+		if err := projections.InsertBoard(boardTx, board.id, board.name, board.description, "", i+1); err != nil {
 			boardTx.Rollback() //nolint:errcheck
 			t.Fatalf("insert board %s: %v", board.id, err)
 		}
@@ -11459,40 +7330,21 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 		t.Fatalf("commit board setup: %v", err)
 	}
 	const oldFolderID = "favfld_old"
-	if err := createFavoriteFolder(c.DB, alice.ID, oldFolderID, "", "Old", nil); err != nil {
+	if err := projections.CreateFavoriteFolder(c.DB, alice.ID, oldFolderID, "", "Old", nil); err != nil {
 		t.Fatalf("create old folder setup: %v", err)
 	}
-	if err := setBoardFavorite(c.DB, alice.ID, "old", oldFolderID, nil, true); err != nil {
+	if err := projections.SetBoardFavorite(c.DB, alice.ID, "old", oldFolderID, nil, true); err != nil {
 		t.Fatalf("favorite old board setup: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	duplicatePayload, err := json.Marshal(proto.ImportFavoriteTreePayload{
+	duplicatePayload := marshalCoreTestJSON(t, "marshal duplicate import payload", proto.ImportFavoriteTreePayload{
 		Folders: []proto.ImportFavoriteFolderPayload{
 			{ID: "src", Name: "One"},
 			{ID: "src", Name: "Two"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal duplicate import payload: %v", err)
-	}
 	duplicate := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: alice.ID},
 		Offset:     1,
@@ -11502,19 +7354,14 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 		Payload:    duplicatePayload,
 		EnqueuedAt: 1234,
 	})
-	if duplicate.Err == nil || duplicate.Err.Code != proto.ErrValidationFailed || duplicate.Err.Retryable {
-		t.Fatalf("duplicate favorite import decision = %+v, want terminal validation failure", duplicate)
-	}
+	requireNativeDecisionTerminalError(t, duplicate, proto.ErrValidationFailed, "duplicate favorite import decision")
 
-	cyclePayload, err := json.Marshal(proto.ImportFavoriteTreePayload{
+	cyclePayload := marshalCoreTestJSON(t, "marshal cycle import payload", proto.ImportFavoriteTreePayload{
 		Folders: []proto.ImportFavoriteFolderPayload{
 			{ID: "a", ParentID: "b", Name: "A"},
 			{ID: "b", ParentID: "a", Name: "B"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal cycle import payload: %v", err)
-	}
 	cycle := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: alice.ID},
 		Offset:     2,
@@ -11524,16 +7371,11 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 		Payload:    cyclePayload,
 		EnqueuedAt: 1334,
 	})
-	if cycle.Err == nil || cycle.Err.Code != proto.ErrValidationFailed || cycle.Err.Retryable {
-		t.Fatalf("cycle favorite import decision = %+v, want terminal validation failure", cycle)
-	}
+	requireNativeDecisionTerminalError(t, cycle, proto.ErrValidationFailed, "cycle favorite import decision")
 
-	missingBoardPayload, err := json.Marshal(proto.ImportFavoriteTreePayload{
+	missingBoardPayload := marshalCoreTestJSON(t, "marshal missing board import payload", proto.ImportFavoriteTreePayload{
 		Boards: []proto.ImportFavoriteBoardPayload{{ID: "missing"}},
 	})
-	if err != nil {
-		t.Fatalf("marshal missing board import payload: %v", err)
-	}
 	missingBoard := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: alice.ID},
 		Offset:     3,
@@ -11543,12 +7385,10 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 		Payload:    missingBoardPayload,
 		EnqueuedAt: 1434,
 	})
-	if missingBoard.Err == nil || missingBoard.Err.Code != proto.ErrValidationFailed || missingBoard.Err.Retryable {
-		t.Fatalf("missing board favorite import decision = %+v, want terminal validation failure", missingBoard)
-	}
+	requireNativeDecisionTerminalError(t, missingBoard, proto.ErrValidationFailed, "missing board favorite import decision")
 
 	replace := true
-	importPayload, err := json.Marshal(proto.ImportFavoriteTreePayload{
+	importPayload := marshalCoreTestJSON(t, "marshal import favorite tree payload", proto.ImportFavoriteTreePayload{
 		Replace: &replace,
 		Folders: []proto.ImportFavoriteFolderPayload{
 			{ID: "src_root", Name: " Work ", Position: 2},
@@ -11560,11 +7400,8 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 			{ID: "tech", Position: 9},
 		},
 	})
-	if err != nil {
-		t.Fatalf("marshal import favorite tree payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	importRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	importRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "import favorite tree", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-import-favorite-tree",
@@ -11572,28 +7409,10 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 		Payload:    importPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce import favorite tree command: %v", err)
-	}
 	rootID := stableCommandLogDecisionID("favfld_", importRecord, 0)
 	childID := stableCommandLogDecisionID("favfld_", importRecord, 1)
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain import favorite tree once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, partition); err != nil || got != importRecord.Offset {
-		t.Fatalf("import favorite tree committed offset = %d, %v; want %d, nil", got, err, importRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay import favorite tree events: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtFavoriteTreeImported {
-		t.Fatalf("import favorite tree events = %+v, want one favorite_tree.imported", events)
-	}
-	importEvent, ok := events[0].Payload.(*proto.FavoriteTreeImportedPayload)
-	if !ok {
-		t.Fatalf("import favorite tree payload = %T, want FavoriteTreeImportedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "import favorite tree events", proto.EvtFavoriteTreeImported)
+	importEvent := requireNativeDecisionPayload[proto.FavoriteTreeImportedPayload](t, events[0], "import favorite tree payload")
 	if importEvent.UserID != alice.ID || !importEvent.Replace || importEvent.TS != 2234 {
 		t.Fatalf("import favorite tree event = %+v, want alice replace import at ts 2234", importEvent)
 	}
@@ -11609,13 +7428,7 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 		importEvent.Boards[1].ID != "life" || importEvent.Boards[1].FolderID != "" || importEvent.Boards[1].Position != 1 {
 		t.Fatalf("import favorite tree boards = %+v, want duplicate tech skipped and folders mapped", importEvent.Boards)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-import-favorite-tree-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize import favorite tree event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-import-favorite-tree-test", partition, 10, "materialize import favorite tree event")
 	tree, err := c.ListFavoriteTree(alice.ID)
 	if err != nil {
 		t.Fatalf("list favorite tree after import: %v", err)
@@ -11651,10 +7464,7 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 	if len(retryEvents) != 1 || retryEvents[0].ID != events[0].ID || retryEvents[0].Kind != proto.EvtFavoriteTreeImported {
 		t.Fatalf("retry import favorite tree events = %+v, want same deterministic event", retryEvents)
 	}
-	retryEvent, ok := retryEvents[0].Payload.(*proto.FavoriteTreeImportedPayload)
-	if !ok {
-		t.Fatalf("retry import favorite tree payload = %T, want FavoriteTreeImportedPayload", retryEvents[0].Payload)
-	}
+	retryEvent := requireNativeDecisionPayload[proto.FavoriteTreeImportedPayload](t, retryEvents[0], "retry import favorite tree payload")
 	if len(retryEvent.Folders) != 2 || retryEvent.Folders[0].ID != rootID || retryEvent.Folders[1].ID != childID ||
 		len(retryEvent.Boards) != 2 || retryEvent.Boards[0].FolderID != childID {
 		t.Fatalf("retry import favorite tree payload = %+v, want same mapped folder ids", retryEvent)
@@ -11705,29 +7515,16 @@ func findFavoriteBoardEntryForTest(tree *FavoriteTree, boardID string) *Favorite
 
 func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
 	campusTx, err := c.DB.Begin()
 	if err != nil {
 		t.Fatalf("begin campus board setup: %v", err)
 	}
-	if err := insertBoard(campusTx, "campus", "Campus", "Shared campus notes", "", 1); err != nil {
+	if err := projections.InsertBoard(campusTx, "campus", "Campus", "Shared campus notes", "", 1); err != nil {
 		campusTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert campus board: %v", err)
 	}
@@ -11735,64 +7532,28 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 		t.Fatalf("commit campus board setup: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	sourcePartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	sourcePayload, err := json.Marshal(proto.CreateThreadPayload{
+	sourcePayload := marshalCoreTestJSON(t, "marshal source create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Original article",
 		Body:  "source body",
 	})
-	if err != nil {
-		t.Fatalf("marshal source create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "source create", CommandLogRecord{
 		Partition:  sourcePartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-repost-source",
 		Command:    proto.CmdCreateThread,
 		Payload:    sourcePayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce source create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain source create once: %v", err)
-	}
-	sourceEvents, err := eventStore.ReplayPartition(ctx, sourcePartition.Kind, sourcePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay source events: %v", err)
-	}
+	})
+	sourceEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, sourcePartition, 0, 10, "replay source events")
 	if len(sourceEvents) != 2 {
 		t.Fatalf("source events = %+v, want thread and post", sourceEvents)
 	}
-	sourceThreadPayload, ok := sourceEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("source thread payload = %T, want ThreadNewPayload", sourceEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-repost-test",
-		Partition: sourcePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize source events: %v", err)
-	}
+	sourceThreadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, sourceEvents[0], "source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-repost-test", sourcePartition, 10, "materialize source events")
 	sourcePosts, err := c.ListPosts(sourceThreadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list source posts: %v", err)
@@ -11802,15 +7563,12 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 	}
 
 	repostPartition := LogPartition{Kind: partitionBoard, Key: "campus"}
-	repostPayload, err := json.Marshal(proto.RepostPostPayload{
+	repostPayload := marshalCoreTestJSON(t, "marshal repost payload", proto.RepostPostPayload{
 		Post:  sourcePosts[0].ID,
 		Board: "campus",
 		Title: "Shared original article",
 	})
-	if err != nil {
-		t.Fatalf("marshal repost payload: %v", err)
-	}
-	repostRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "repost", 0, 10, CommandLogRecord{
 		Partition:  repostPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-repost-post",
@@ -11818,30 +7576,9 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 		Payload:    repostPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce repost command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain repost once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, repostPartition); err != nil || got != repostRecord.Offset {
-		t.Fatalf("repost committed offset = %d, %v; want %d, nil", got, err, repostRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, repostPartition.Kind, repostPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay repost events: %v", err)
-	}
-	if len(events) != 2 || events[0].Kind != proto.EvtThreadNew || events[1].Kind != proto.EvtPostAppended {
-		t.Fatalf("repost events = %+v, want thread.new then post.appended", events)
-	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("repost thread payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	postPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("repost post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "repost events", proto.EvtThreadNew, proto.EvtPostAppended)
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "repost thread payload")
+	postPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "repost post payload")
 	if threadPayload.Board != "campus" || threadPayload.AuthorID != bob.ID || threadPayload.Title != "Shared original article" {
 		t.Fatalf("repost thread payload = %+v, want bob-authored campus thread", threadPayload)
 	}
@@ -11853,13 +7590,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 		t.Fatalf("repost post body = %q, want source body and original post id", postPayload.Body)
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-repost-test",
-		Partition: repostPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize repost events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-repost-test", repostPartition, 10, "materialize repost events")
 	repostedPosts, err := c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list reposted posts: %v", err)
@@ -11877,7 +7608,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin secret board setup: %v", err)
 	}
-	if err := insertBoard(secretTx, "secret", "Secret", "Members only", "", 2); err != nil {
+	if err := projections.InsertBoard(secretTx, "secret", "Secret", "Members only", "", 2); err != nil {
 		secretTx.Rollback() //nolint:errcheck
 		t.Fatalf("insert secret board: %v", err)
 	}
@@ -11885,49 +7616,29 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 		t.Fatalf("commit secret board setup: %v", err)
 	}
 	memberRead := true
-	if err := setBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
-	secretPayload, err := json.Marshal(proto.CreateThreadPayload{
+	secretPayload := marshalCoreTestJSON(t, "marshal private source create payload", proto.CreateThreadPayload{
 		Board: "secret",
 		Title: "Private article",
 		Body:  "hidden source",
 	})
-	if err != nil {
-		t.Fatalf("marshal private source create payload: %v", err)
-	}
 	secretPartition := LogPartition{Kind: partitionBoard, Key: "secret"}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "private source create", CommandLogRecord{
 		Partition:  secretPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-repost-private-source-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    secretPayload,
 		EnqueuedAt: 3234,
-	}); err != nil {
-		t.Fatalf("produce private source create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain private source create once: %v", err)
-	}
-	secretEvents, err := eventStore.ReplayPartition(ctx, secretPartition.Kind, secretPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay private source events: %v", err)
-	}
+	})
+	secretEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, secretPartition, 0, 10, "replay private source events")
 	if len(secretEvents) != 2 {
 		t.Fatalf("private source events = %+v, want thread and post", secretEvents)
 	}
-	secretThreadPayload, ok := secretEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("private source thread payload = %T, want ThreadNewPayload", secretEvents[0].Payload)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-repost-test",
-		Partition: secretPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize private source events: %v", err)
-	}
+	secretThreadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, secretEvents[0], "private source thread payload")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-repost-test", secretPartition, 10, "materialize private source events")
 	secretPosts, err := c.ListPosts(secretThreadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list private source posts: %v", err)
@@ -11935,13 +7646,10 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 	if len(secretPosts) != 1 {
 		t.Fatalf("private source posts = %+v, want one", secretPosts)
 	}
-	privateRepostPayload, err := json.Marshal(proto.RepostPostPayload{
+	privateRepostPayload := marshalCoreTestJSON(t, "marshal private repost payload", proto.RepostPostPayload{
 		Post:  secretPosts[0].ID,
 		Board: "campus",
 	})
-	if err != nil {
-		t.Fatalf("marshal private repost payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  repostPartition,
 		Offset:     2,
@@ -11951,54 +7659,20 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 		Payload:    privateRepostPayload,
 		EnqueuedAt: 3334,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("private source repost denied = %+v, want terminal forbidden", denied)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "private source repost denied")
 }
 
 func TestNativeCommandLogDecisionExecutorProjectsRoleChanges(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	userPartition := LogPartition{Kind: partitionUser, Key: alice.ID}
-	grantPayload, err := json.Marshal(proto.GrantRolePayload{User: alice.ID, Role: "moderator"})
-	if err != nil {
-		t.Fatalf("marshal grant payload: %v", err)
-	}
+	grantPayload := marshalCoreTestJSON(t, "marshal grant payload", proto.GrantRolePayload{User: alice.ID, Role: "moderator"})
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  userPartition,
 		Offset:     1,
@@ -12008,13 +7682,8 @@ func TestNativeCommandLogDecisionExecutorProjectsRoleChanges(t *testing.T) {
 		Payload:    grantPayload,
 		EnqueuedAt: 1234,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("grant role as non-admin = %+v, want terminal forbidden", denied)
-	}
-	missingPayload, err := json.Marshal(proto.GrantRolePayload{User: "usr_missing", Role: "moderator"})
-	if err != nil {
-		t.Fatalf("marshal missing grant payload: %v", err)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "grant role as non-admin")
+	missingPayload := marshalCoreTestJSON(t, "marshal missing grant payload", proto.GrantRolePayload{User: "usr_missing", Role: "moderator"})
 	missing := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionUser, Key: "usr_missing"},
 		Offset:     1,
@@ -12024,11 +7693,9 @@ func TestNativeCommandLogDecisionExecutorProjectsRoleChanges(t *testing.T) {
 		Payload:    missingPayload,
 		EnqueuedAt: 1234,
 	})
-	if missing.Err == nil || missing.Err.Code != proto.ErrNotFound || missing.Err.Retryable {
-		t.Fatalf("grant missing user = %+v, want terminal not found", missing)
-	}
+	requireNativeDecisionTerminalError(t, missing, proto.ErrNotFound, "grant missing user")
 
-	grantRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, accountEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "grant role", 0, 10, CommandLogRecord{
 		Partition:  userPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-grant-role",
@@ -12036,71 +7703,35 @@ func TestNativeCommandLogDecisionExecutorProjectsRoleChanges(t *testing.T) {
 		Payload:    grantPayload,
 		EnqueuedAt: 1234,
 	})
-	if err != nil {
-		t.Fatalf("produce grant role command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain grant role once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, userPartition); err != nil || got != grantRecord.Offset {
-		t.Fatalf("grant committed offset = %d, %v; want %d, nil", got, err, grantRecord.Offset)
-	}
-	accountEvents, err := eventStore.ReplayPartition(ctx, userPartition.Kind, userPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay account role events: %v", err)
-	}
-	if len(accountEvents) != 1 || accountEvents[0].Kind != proto.EvtRoleGranted {
-		t.Fatalf("account role events = %+v, want one role.granted", accountEvents)
-	}
-	grantEvent, ok := accountEvents[0].Payload.(*proto.RoleGrantedPayload)
-	if !ok {
-		t.Fatalf("grant payload = %T, want RoleGrantedPayload", accountEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, accountEvents, "account role events", proto.EvtRoleGranted)
+	grantEvent := requireNativeDecisionPayload[proto.RoleGrantedPayload](t, accountEvents[0], "grant payload")
 	if grantEvent.User != alice.ID || grantEvent.Role != "moderator" || grantEvent.By != admin.ID || grantEvent.TS != 1234 {
 		t.Fatalf("grant event = %+v, want deterministic role grant", grantEvent)
 	}
-	syssecurityPartition := LogPartition{Kind: partitionBoard, Key: nativeSyssecuritySystemBoardID}
-	syssecurityEvents, err := eventStore.ReplayPartition(ctx, syssecurityPartition.Kind, syssecurityPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay syssecurity grant events: %v", err)
-	}
+	syssecurityPartition := LogPartition{Kind: partitionBoard, Key: proto.SyssecuritySystemBoardID}
+	syssecurityEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, syssecurityPartition, 0, 10, "replay syssecurity grant events")
 	if len(syssecurityEvents) != 3 ||
 		syssecurityEvents[0].Kind != proto.EvtBoardCreated ||
 		syssecurityEvents[1].Kind != proto.EvtThreadNew ||
 		syssecurityEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("syssecurity grant events = %+v, want board/thread/post audit events", syssecurityEvents)
 	}
-	grantAuditPost, ok := syssecurityEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("grant audit payload = %T, want PostAppendedPayload", syssecurityEvents[2].Payload)
-	}
+	grantAuditPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, syssecurityEvents[2], "grant audit payload")
 	for _, want := range []string{"Action: role granted", "User: alice", "Role: moderator", "Actor: admin"} {
 		if !strings.Contains(grantAuditPost.Body, want) {
 			t.Fatalf("grant audit body missing %q:\n%s", want, grantAuditPost.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-role-change-test",
-		Partition: userPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize grant account event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-role-change-test",
-		Partition: syssecurityPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize grant syssecurity events: %v", err)
-	}
-	aliceUser, err := getUserByID(c.DB, alice.ID)
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-role-change-test", userPartition, 10, "materialize grant account event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-role-change-test", syssecurityPartition, 10, "materialize grant syssecurity events")
+	aliceUser, err := projections.GetUserByID(c.DB, alice.ID)
 	if err != nil {
 		t.Fatalf("get alice after grant: %v", err)
 	}
 	if aliceUser == nil || aliceUser.Role != "moderator" {
 		t.Fatalf("alice after grant = %+v, want moderator role", aliceUser)
 	}
-	syssecurityThreads, err := c.ListThreads(nativeSyssecuritySystemBoardID, 10, 0)
+	syssecurityThreads, err := c.ListThreads(proto.SyssecuritySystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list syssecurity after grant: %v", err)
 	}
@@ -12108,11 +7739,8 @@ func TestNativeCommandLogDecisionExecutorProjectsRoleChanges(t *testing.T) {
 		t.Fatalf("syssecurity threads after grant = %+v, want one audit thread", syssecurityThreads)
 	}
 
-	revokePayload, err := json.Marshal(proto.RevokeRolePayload{User: alice.ID, Role: "moderator"})
-	if err != nil {
-		t.Fatalf("marshal revoke payload: %v", err)
-	}
-	revokeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	revokePayload := marshalCoreTestJSON(t, "marshal revoke payload", proto.RevokeRolePayload{User: alice.ID, Role: "moderator"})
+	_, accountEvents = produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "revoke role", 0, 10, CommandLogRecord{
 		Partition:  userPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-revoke-role",
@@ -12120,69 +7748,35 @@ func TestNativeCommandLogDecisionExecutorProjectsRoleChanges(t *testing.T) {
 		Payload:    revokePayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce revoke role command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain revoke role once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, userPartition); err != nil || got != revokeRecord.Offset {
-		t.Fatalf("revoke committed offset = %d, %v; want %d, nil", got, err, revokeRecord.Offset)
-	}
-	accountEvents, err = eventStore.ReplayPartition(ctx, userPartition.Kind, userPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay account role events after revoke: %v", err)
-	}
 	if len(accountEvents) != 2 || accountEvents[1].Kind != proto.EvtRoleRevoked {
 		t.Fatalf("account role events after revoke = %+v, want role.granted then role.revoked", accountEvents)
 	}
-	revokeEvent, ok := accountEvents[1].Payload.(*proto.RoleRevokedPayload)
-	if !ok {
-		t.Fatalf("revoke payload = %T, want RoleRevokedPayload", accountEvents[1].Payload)
-	}
+	revokeEvent := requireNativeDecisionPayload[proto.RoleRevokedPayload](t, accountEvents[1], "revoke payload")
 	if revokeEvent.User != alice.ID || revokeEvent.Role != "moderator" || revokeEvent.By != admin.ID || revokeEvent.TS != 2234 {
 		t.Fatalf("revoke event = %+v, want deterministic role revoke", revokeEvent)
 	}
-	syssecurityEvents, err = eventStore.ReplayPartition(ctx, syssecurityPartition.Kind, syssecurityPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay syssecurity events after revoke: %v", err)
-	}
+	syssecurityEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, syssecurityPartition, 0, 10, "replay syssecurity events after revoke")
 	if len(syssecurityEvents) != 5 ||
 		syssecurityEvents[3].Kind != proto.EvtThreadNew ||
 		syssecurityEvents[4].Kind != proto.EvtPostAppended {
 		t.Fatalf("syssecurity events after revoke = %+v, want grant board/thread/post then revoke thread/post", syssecurityEvents)
 	}
-	revokeAuditPost, ok := syssecurityEvents[4].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("revoke audit payload = %T, want PostAppendedPayload", syssecurityEvents[4].Payload)
-	}
+	revokeAuditPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, syssecurityEvents[4], "revoke audit payload")
 	for _, want := range []string{"Action: role revoked", "User: alice", "Role: moderator", "Actor: admin"} {
 		if !strings.Contains(revokeAuditPost.Body, want) {
 			t.Fatalf("revoke audit body missing %q:\n%s", want, revokeAuditPost.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-role-change-test",
-		Partition: userPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize revoke account event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-role-change-test",
-		Partition: syssecurityPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize revoke syssecurity events: %v", err)
-	}
-	aliceUser, err = getUserByID(c.DB, alice.ID)
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-role-change-test", userPartition, 10, "materialize revoke account event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-role-change-test", syssecurityPartition, 10, "materialize revoke syssecurity events")
+	aliceUser, err = projections.GetUserByID(c.DB, alice.ID)
 	if err != nil {
 		t.Fatalf("get alice after revoke: %v", err)
 	}
 	if aliceUser == nil || aliceUser.Role != "user" {
 		t.Fatalf("alice after revoke = %+v, want user role", aliceUser)
 	}
-	syssecurityThreads, err = c.ListThreads(nativeSyssecuritySystemBoardID, 10, 0)
+	syssecurityThreads, err = c.ListThreads(proto.SyssecuritySystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list syssecurity after revoke: %v", err)
 	}
@@ -12193,43 +7787,14 @@ func TestNativeCommandLogDecisionExecutorProjectsRoleChanges(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	commandPartition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
-	statsPayload, err := json.Marshal(proto.PublishStatsSnapshotPayload{Date: "2026-06-04"})
-	if err != nil {
-		t.Fatalf("marshal stats snapshot payload: %v", err)
-	}
+	statsPayload := marshalCoreTestJSON(t, "marshal stats snapshot payload", proto.PublishStatsSnapshotPayload{Date: "2026-06-04"})
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     1,
@@ -12239,13 +7804,8 @@ func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing
 		Payload:    statsPayload,
 		EnqueuedAt: 1234,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("publish stats as non-admin = %+v, want terminal forbidden", denied)
-	}
-	invalidPayload, err := json.Marshal(proto.PublishStatsSnapshotPayload{Date: "06/04/2026"})
-	if err != nil {
-		t.Fatalf("marshal invalid stats snapshot payload: %v", err)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "publish stats as non-admin")
+	invalidPayload := marshalCoreTestJSON(t, "marshal invalid stats snapshot payload", proto.PublishStatsSnapshotPayload{Date: "06/04/2026"})
 	invalid := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  commandPartition,
 		Offset:     2,
@@ -12255,11 +7815,10 @@ func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing
 		Payload:    invalidPayload,
 		EnqueuedAt: 1334,
 	})
-	if invalid.Err == nil || invalid.Err.Code != proto.ErrValidationFailed || invalid.Err.Retryable {
-		t.Fatalf("publish stats invalid date = %+v, want terminal validation", invalid)
-	}
+	requireNativeDecisionTerminalError(t, invalid, proto.ErrValidationFailed, "publish stats invalid date", statsSnapshotDateValidationMessage("06/04/2026", 1334))
 
-	statsRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	globalPartition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
+	statsRecord, globalEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "stats snapshot", globalPartition, 0, 10, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-stats-snapshot",
@@ -12267,35 +7826,13 @@ func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing
 		Payload:    statsPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce stats snapshot command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain stats snapshot once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != statsRecord.Offset {
-		t.Fatalf("stats snapshot committed offset = %d, %v; want %d, nil", got, err, statsRecord.Offset)
-	}
-
-	globalEvents, err := eventStore.ReplayPartition(ctx, partitionGlobal, partitionGlobal, 0, 10)
-	if err != nil {
-		t.Fatalf("replay stats global events: %v", err)
-	}
-	if len(globalEvents) != 1 || globalEvents[0].Kind != proto.EvtCommunityStatsSnapshotRecorded {
-		t.Fatalf("stats global events = %+v, want one community_stats.snapshot_recorded", globalEvents)
-	}
-	snapshotEvent, ok := globalEvents[0].Payload.(*proto.CommunityStatsSnapshotRecordedPayload)
-	if !ok {
-		t.Fatalf("stats global payload = %T, want CommunityStatsSnapshotRecordedPayload", globalEvents[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, globalEvents, "stats global events", proto.EvtCommunityStatsSnapshotRecorded)
+	snapshotEvent := requireNativeDecisionPayload[proto.CommunityStatsSnapshotRecordedPayload](t, globalEvents[0], "stats global payload")
 	if snapshotEvent.Day != "2026-06-04" || snapshotEvent.SnapshotAt != 2234 || snapshotEvent.TotalUsers != 2 {
 		t.Fatalf("stats snapshot event = %+v, want 2026-06-04 current stats", snapshotEvent)
 	}
 
-	boardEvents, err := eventStore.ReplayPartition(ctx, partitionBoard, "BBSLists", 0, 100)
-	if err != nil {
-		t.Fatalf("replay BBSLists events: %v", err)
-	}
+	boardEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, LogPartition{Kind: partitionBoard, Key: "BBSLists"}, 0, 100, "replay BBSLists events")
 	if len(boardEvents) != 29 {
 		t.Fatalf("BBSLists event count = %d, want board create plus 14 thread/post pairs: %+v", len(boardEvents), boardEvents)
 	}
@@ -12316,21 +7853,9 @@ func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing
 		t.Fatalf("BBSLists thread/post events = %d/%d, want 14/14", threadEvents, postEvents)
 	}
 
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-stats-snapshot-test",
-		Partition: commandPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize stats global event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-stats-snapshot-test", commandPartition, 10, "materialize stats global event")
 	statsBoardPartition := LogPartition{Kind: partitionBoard, Key: "BBSLists"}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-stats-snapshot-test",
-		Partition: statsBoardPartition,
-		Limit:     100,
-	}); err != nil {
-		t.Fatalf("materialize BBSLists events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-stats-snapshot-test", statsBoardPartition, 100, "materialize BBSLists events")
 	history, err := c.ListCommunityStatHistory(5, 0)
 	if err != nil {
 		t.Fatalf("list stat history after native snapshot: %v", err)
@@ -12395,11 +7920,8 @@ func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing
 		t.Fatalf("retry stats snapshot events = %+v, want same snapshot-recorded event only", retryEvents)
 	}
 
-	weeklyPayload, err := json.Marshal(proto.PublishStatsSnapshotPayload{Date: "2026-06-07"})
-	if err != nil {
-		t.Fatalf("marshal weekly stats snapshot payload: %v", err)
-	}
-	weeklyRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	weeklyPayload := marshalCoreTestJSON(t, "marshal weekly stats snapshot payload", proto.PublishStatsSnapshotPayload{Date: "2026-06-07"})
+	_, weeklyBoardEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "weekly stats snapshot", statsBoardPartition, 29, 100, CommandLogRecord{
 		Partition:  commandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-stats-snapshot-weekly",
@@ -12407,36 +7929,11 @@ func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing
 		Payload:    weeklyPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce weekly stats snapshot command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain weekly stats snapshot once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, commandPartition); err != nil || got != weeklyRecord.Offset {
-		t.Fatalf("weekly stats snapshot committed offset = %d, %v; want %d, nil", got, err, weeklyRecord.Offset)
-	}
-	weeklyBoardEvents, err := eventStore.ReplayPartition(ctx, partitionBoard, "BBSLists", 29, 100)
-	if err != nil {
-		t.Fatalf("replay weekly BBSLists events: %v", err)
-	}
 	if len(weeklyBoardEvents) != 32 {
 		t.Fatalf("weekly BBSLists event count = %d, want 16 thread/post pairs: %+v", len(weeklyBoardEvents), weeklyBoardEvents)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-stats-snapshot-test",
-		Partition: commandPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize weekly stats global event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-stats-snapshot-test",
-		Partition: statsBoardPartition,
-		Limit:     100,
-	}); err != nil {
-		t.Fatalf("materialize weekly BBSLists events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-stats-snapshot-test", commandPartition, 10, "materialize weekly stats global event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-stats-snapshot-test", statsBoardPartition, 100, "materialize weekly BBSLists events")
 	threads, err = c.ListThreads("BBSLists", 40, 0)
 	if err != nil {
 		t.Fatalf("list BBSLists threads after weekly snapshot: %v", err)
@@ -12459,47 +7956,18 @@ func TestNativeCommandLogDecisionExecutorProjectsPublishStatsSnapshot(t *testing
 
 func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	defaultCommandPartition := LogPartition{Kind: partitionBoard, Key: partitionGlobal}
-	noticePayload, err := json.Marshal(proto.PublishSystemNoticePayload{
+	noticePayload := marshalCoreTestJSON(t, "marshal notice payload", proto.PublishSystemNoticePayload{
 		Title:  "Campus notice",
 		Body:   "Maintenance tonight at 23:00.",
 		Source: "operator broadcast",
 	})
-	if err != nil {
-		t.Fatalf("marshal notice payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  defaultCommandPartition,
 		Offset:     1,
@@ -12509,17 +7977,12 @@ func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 		Payload:    noticePayload,
 		EnqueuedAt: 1234,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("publish system notice as non-admin = %+v, want terminal forbidden", denied)
-	}
-	invalidPayload, err := json.Marshal(proto.PublishSystemNoticePayload{
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "publish system notice as non-admin")
+	invalidPayload := marshalCoreTestJSON(t, "marshal invalid notice payload", proto.PublishSystemNoticePayload{
 		Board: "Filter",
 		Title: "Filtered",
 		Body:  "not a public notice board",
 	})
-	if err != nil {
-		t.Fatalf("marshal invalid notice payload: %v", err)
-	}
 	invalid := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "Filter"},
 		Offset:     1,
@@ -12529,11 +7992,10 @@ func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 		Payload:    invalidPayload,
 		EnqueuedAt: 1234,
 	})
-	if invalid.Err == nil || invalid.Err.Code != proto.ErrValidationFailed || invalid.Err.Retryable {
-		t.Fatalf("publish system notice to invalid board = %+v, want terminal validation", invalid)
-	}
+	requireNativeDecisionTerminalError(t, invalid, proto.ErrValidationFailed, "publish system notice to invalid board")
 
-	noticeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	notepadPartition := LogPartition{Kind: partitionBoard, Key: "notepad"}
+	_, notepadEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "system notice", notepadPartition, 0, 10, CommandLogRecord{
 		Partition:  defaultCommandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-system-notice",
@@ -12541,34 +8003,14 @@ func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 		Payload:    noticePayload,
 		EnqueuedAt: 1234,
 	})
-	if err != nil {
-		t.Fatalf("produce system notice command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain system notice once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, defaultCommandPartition); err != nil || got != noticeRecord.Offset {
-		t.Fatalf("system notice committed offset = %d, %v; want %d, nil", got, err, noticeRecord.Offset)
-	}
-	notepadPartition := LogPartition{Kind: partitionBoard, Key: "notepad"}
-	notepadEvents, err := eventStore.ReplayPartition(ctx, notepadPartition.Kind, notepadPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay notepad notice events: %v", err)
-	}
 	if len(notepadEvents) != 3 ||
 		notepadEvents[0].Kind != proto.EvtBoardCreated ||
 		notepadEvents[1].Kind != proto.EvtThreadNew ||
 		notepadEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("notepad notice events = %+v, want board/thread/post", notepadEvents)
 	}
-	threadEvent, ok := notepadEvents[1].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("notice thread payload = %T, want ThreadNewPayload", notepadEvents[1].Payload)
-	}
-	postEvent, ok := notepadEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("notice post payload = %T, want PostAppendedPayload", notepadEvents[2].Payload)
-	}
+	threadEvent := requireNativeDecisionPayload[proto.ThreadNewPayload](t, notepadEvents[1], "notice thread payload")
+	postEvent := requireNativeDecisionPayload[proto.PostAppendedPayload](t, notepadEvents[2], "notice post payload")
 	if threadEvent.Board != "notepad" || threadEvent.Title != "Campus notice" ||
 		postEvent.Thread != threadEvent.ID || postEvent.AuthorID != admin.ID {
 		t.Fatalf("notice thread/post payloads = %+v / %+v, want deterministic notepad notice", threadEvent, postEvent)
@@ -12578,13 +8020,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 			t.Fatalf("notice body missing %q:\n%s", want, postEvent.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-system-notice-test",
-		Partition: notepadPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize notepad notice events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-system-notice-test", notepadPartition, 10, "materialize notepad notice events")
 	notepad, err := c.GetBoard("notepad")
 	if err != nil {
 		t.Fatalf("get notepad board: %v", err)
@@ -12600,16 +8036,13 @@ func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 		t.Fatalf("notice posts = %+v, want materialized notice post", posts)
 	}
 
-	secondPayload, err := json.Marshal(proto.PublishSystemNoticePayload{
+	secondPayload := marshalCoreTestJSON(t, "marshal second notice payload", proto.PublishSystemNoticePayload{
 		Board: "notepad",
 		Title: "Second notice",
 		Body:  "Another maintenance window.",
 	})
-	if err != nil {
-		t.Fatalf("marshal second notice payload: %v", err)
-	}
 	secondCommandPartition := LogPartition{Kind: partitionBoard, Key: "notepad"}
-	secondRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, notepadEvents = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "second system notice", notepadPartition, 0, 10, CommandLogRecord{
 		Partition:  secondCommandPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-system-notice-second",
@@ -12617,31 +8050,12 @@ func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 		Payload:    secondPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce second system notice command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain second system notice once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, secondCommandPartition); err != nil || got != secondRecord.Offset {
-		t.Fatalf("second notice committed offset = %d, %v; want %d, nil", got, err, secondRecord.Offset)
-	}
-	notepadEvents, err = eventStore.ReplayPartition(ctx, notepadPartition.Kind, notepadPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay notepad events after second notice: %v", err)
-	}
 	if len(notepadEvents) != 5 ||
 		notepadEvents[3].Kind != proto.EvtThreadNew ||
 		notepadEvents[4].Kind != proto.EvtPostAppended {
 		t.Fatalf("notepad events after second notice = %+v, want original board/thread/post plus second thread/post", notepadEvents)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-system-notice-test",
-		Partition: notepadPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize second notepad notice events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-system-notice-test", notepadPartition, 10, "materialize second notepad notice events")
 	notepadThreads, err := c.ListThreads("notepad", 10, 0)
 	if err != nil {
 		t.Fatalf("list notepad threads after second notice: %v", err)
@@ -12653,90 +8067,40 @@ func TestNativeCommandLogDecisionExecutorProjectsSystemNotices(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	moderationPartition := LogPartition{Kind: partitionBoard, Key: nativeModerationSystemBoardID}
+	moderationPartition := LogPartition{Kind: partitionBoard, Key: proto.ModerationSystemBoardID}
 	globalPartition := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Native moderation review",
 		Body:  "public body should stay out of logs",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, boardEvents := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-moderation-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-moderation-review-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-moderation-review-test", boardPartition, 10, "materialize create events")
 	if len(boardEvents) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", boardEvents)
 	}
-	rootPostPayload, ok := boardEvents[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", boardEvents[1].Payload)
-	}
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, boardEvents[1], "root post payload")
 
-	flagPayload, err := json.Marshal(proto.FlagPostPayload{
+	flagPayload := marshalCoreTestJSON(t, "marshal flag payload", proto.FlagPostPayload{
 		Post:   rootPostPayload.ID,
 		Reason: "sensitive report reason",
 	})
-	if err != nil {
-		t.Fatalf("marshal flag payload: %v", err)
-	}
 	postPartition := LogPartition{Kind: partitionPost, Key: rootPostPayload.ID}
-	flagRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "flag", CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-flag-post",
@@ -12744,41 +8108,23 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		Payload:    flagPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce flag command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain flag once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != flagRecord.Offset {
-		t.Fatalf("flag committed offset = %d, %v; want %d, nil", got, err, flagRecord.Offset)
-	}
 	// The flag event carries the reporter + reason, so it must NOT land on the
 	// board partition (delivering/replaying it to board subscribers would leak
 	// the reporter's identity — M8). The board partition keeps only the public
 	// thread/post events; the flag event lands on the moderation/global partition.
-	boardEvents, err = eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay board events: %v", err)
-	}
+	boardEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 10, "replay board events")
 	for _, e := range boardEvents {
 		if e.Kind == proto.EvtPostFlagged {
 			t.Fatalf("post.flagged must not appear on the board partition (reporter leak): %+v", boardEvents)
 		}
 	}
-	globalEvents, err := eventStore.ReplayPartition(ctx, globalPartition.Kind, globalPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay global events: %v", err)
-	}
+	globalEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, globalPartition, 0, 10, "replay global events")
 	var flagEvent *proto.PostFlaggedPayload
 	for _, e := range globalEvents {
 		if e.Kind != proto.EvtPostFlagged {
 			continue
 		}
-		p, ok := e.Payload.(*proto.PostFlaggedPayload)
-		if !ok {
-			t.Fatalf("flag payload = %T, want PostFlaggedPayload", e.Payload)
-		}
+		p := requireNativeDecisionPayload[proto.PostFlaggedPayload](t, e, "flag payload")
 		flagEvent = p
 	}
 	if flagEvent == nil {
@@ -12788,20 +8134,14 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		flagEvent.Reporter != bob.ID || flagEvent.Reason != "sensitive report reason" || flagEvent.TS != 2234 {
 		t.Fatalf("flag event = %+v, want deterministic post flag review", flagEvent)
 	}
-	moderationEvents, err := eventStore.ReplayPartition(ctx, moderationPartition.Kind, moderationPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay generated moderation events: %v", err)
-	}
+	moderationEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, moderationPartition, 0, 10, "replay generated moderation events")
 	if len(moderationEvents) != 3 ||
 		moderationEvents[0].Kind != proto.EvtBoardCreated ||
 		moderationEvents[1].Kind != proto.EvtThreadNew ||
 		moderationEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("generated moderation events = %+v, want board/thread/post log events", moderationEvents)
 	}
-	flagLogPost, ok := moderationEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("flag log payload = %T, want PostAppendedPayload", moderationEvents[2].Payload)
-	}
+	flagLogPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, moderationEvents[2], "flag log payload")
 	for _, want := range []string{"Status: opened", "Board: general", "Thread: " + rootPostPayload.Thread, "Post: " + rootPostPayload.ID, "Actor: bob"} {
 		if !strings.Contains(flagLogPost.Body, want) {
 			t.Fatalf("generated flag log missing %q:\n%s", want, flagLogPost.Body)
@@ -12812,22 +8152,10 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 			t.Fatalf("generated flag log leaked %q:\n%s", secret, flagLogPost.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source: "native-moderation-review-test",
-		// post.flagged is scoped moderation-only, so it lands on the global
-		// partition (M8) — materialize it there to build the review.
-		Partition: globalPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize flag event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-moderation-review-test",
-		Partition: moderationPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize generated flag log: %v", err)
-	}
+	// post.flagged is scoped moderation-only, so it lands on the global
+	// partition (M8) — materialize it there to build the review.
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-moderation-review-test", globalPartition, 10, "materialize flag event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-moderation-review-test", moderationPartition, 10, "materialize generated flag log")
 	reviews, err := c.ListModerationReviews("open", 10, 0)
 	if err != nil {
 		t.Fatalf("list open reviews: %v", err)
@@ -12837,7 +8165,7 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		reviews[0].Reason != "sensitive report reason" {
 		t.Fatalf("open reviews after native flag = %+v, want projected post flag review", reviews)
 	}
-	moderationThreads, err := c.ListThreads(nativeModerationSystemBoardID, 10, 0)
+	moderationThreads, err := c.ListThreads(proto.ModerationSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list moderation threads after flag: %v", err)
 	}
@@ -12845,13 +8173,10 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		t.Fatalf("moderation threads after flag = %+v, want generated flag thread", moderationThreads)
 	}
 
-	resolvePayload, err := json.Marshal(proto.ResolveReviewPayload{
+	resolvePayload := marshalCoreTestJSON(t, "marshal resolve payload", proto.ResolveReviewPayload{
 		Review:     flagEvent.ReviewID,
 		Resolution: "private moderator note",
 	})
-	if err != nil {
-		t.Fatalf("marshal resolve payload: %v", err)
-	}
 	resolveDenied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionReview, Key: flagEvent.ReviewID},
 		Offset:     1,
@@ -12861,11 +8186,9 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		Payload:    resolvePayload,
 		EnqueuedAt: 3234,
 	})
-	if resolveDenied.Err == nil || resolveDenied.Err.Code != proto.ErrForbidden || resolveDenied.Err.Retryable {
-		t.Fatalf("resolve reply without permission = %+v, want terminal forbidden", resolveDenied)
-	}
+	requireNativeDecisionTerminalError(t, resolveDenied, proto.ErrForbidden, "resolve reply without permission")
 	reviewPartition := LogPartition{Kind: partitionReview, Key: flagEvent.ReviewID}
-	resolveRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "resolve", CommandLogRecord{
 		Partition:  reviewPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-resolve-review",
@@ -12873,19 +8196,7 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		Payload:    resolvePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce resolve command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain resolve once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, reviewPartition); err != nil || got != resolveRecord.Offset {
-		t.Fatalf("resolve committed offset = %d, %v; want %d, nil", got, err, resolveRecord.Offset)
-	}
-	globalEvents, err = eventStore.ReplayPartition(ctx, globalPartition.Kind, globalPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay resolve events: %v", err)
-	}
+	globalEvents = replayCommandLogWorkerPartition(t, ctx, eventStore, globalPartition, 0, 10, "replay resolve events")
 	// The moderation/global partition now holds both the earlier post.flagged
 	// and this review.resolved (flag events are scoped moderation-only — M8).
 	var resolveEvent *proto.ReviewResolvedPayload
@@ -12893,10 +8204,7 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		if e.Kind != proto.EvtReviewResolved {
 			continue
 		}
-		p, ok := e.Payload.(*proto.ReviewResolvedPayload)
-		if !ok {
-			t.Fatalf("resolve payload = %T, want ReviewResolvedPayload", e.Payload)
-		}
+		p := requireNativeDecisionPayload[proto.ReviewResolvedPayload](t, e, "resolve payload")
 		resolveEvent = p
 	}
 	if resolveEvent == nil {
@@ -12905,20 +8213,8 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 	if resolveEvent.ReviewID != flagEvent.ReviewID || resolveEvent.Resolution != "private moderator note" || resolveEvent.By != admin.ID || resolveEvent.TS != 3234 {
 		t.Fatalf("resolve event = %+v, want deterministic review resolution", resolveEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-moderation-review-test",
-		Partition: globalPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize resolve event: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-moderation-review-test",
-		Partition: moderationPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize generated resolve log: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-moderation-review-test", globalPartition, 10, "materialize resolve event")
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-moderation-review-test", moderationPartition, 10, "materialize generated resolve log")
 	resolvedReviews, err := c.ListModerationReviews("resolved", 10, 0)
 	if err != nil {
 		t.Fatalf("list resolved reviews: %v", err)
@@ -12927,7 +8223,7 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 		resolvedReviews[0].Actor != admin.ID || resolvedReviews[0].Resolution != "private moderator note" {
 		t.Fatalf("resolved reviews = %+v, want projected native resolution", resolvedReviews)
 	}
-	moderationThreads, err = c.ListThreads(nativeModerationSystemBoardID, 10, 0)
+	moderationThreads, err = c.ListThreads(proto.ModerationSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list moderation threads after resolve: %v", err)
 	}
@@ -12948,85 +8244,36 @@ func TestNativeCommandLogDecisionExecutorProjectsModerationReviews(t *testing.T)
 
 func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 	if err := setNativeDecisionTestTrustLevel(c, alice.ID, 2); err != nil {
 		t.Fatalf("set alice trust level: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Native vote result poll",
 		Body:  "[poll]\nBest option?\nOption A\nOption B\n[/poll]",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "poll create", CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-poll-result-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce poll create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain poll create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-poll-result-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize poll create events: %v", err)
-	}
-	boardEvents, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay poll create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-poll-result-test", boardPartition, 10, "materialize poll create events")
+	boardEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 10, "replay poll create events")
 	if len(boardEvents) != 2 || boardEvents[1].Kind != proto.EvtPostAppended {
 		t.Fatalf("poll create events = %+v, want thread.new and post.appended", boardEvents)
 	}
-	rootPostPayload, ok := boardEvents[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root poll post payload = %T, want PostAppendedPayload", boardEvents[1].Payload)
-	}
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, boardEvents[1], "root poll post payload")
 	rootPoll, err := c.GetPollByPostID(rootPostPayload.ID)
 	if err != nil {
 		t.Fatalf("get root poll: %v", err)
@@ -13053,10 +8300,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 		t.Fatalf("commit vote mutation: %v", err)
 	}
 
-	publishPayload, err := json.Marshal(proto.PublishPollResultPayload{Poll: rootPoll.ID})
-	if err != nil {
-		t.Fatalf("marshal publish payload: %v", err)
-	}
+	publishPayload := marshalCoreTestJSON(t, "marshal publish payload", proto.PublishPollResultPayload{Poll: rootPoll.ID})
 	pollPartition := LogPartition{Kind: partitionPoll, Key: rootPoll.ID}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  pollPartition,
@@ -13067,14 +8311,13 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 		Payload:    publishPayload,
 		EnqueuedAt: 2234,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("publish reply without permission = %+v, want terminal forbidden", denied)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "publish reply without permission")
 	canManagePolls := true
-	if err := setBoardMember(c.DB, "general", carol.ID, true, BoardMemberPatch{CanManagePolls: &canManagePolls}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", carol.ID, true, BoardMemberPatch{CanManagePolls: &canManagePolls}); err != nil {
 		t.Fatalf("set carol poll manager: %v", err)
 	}
-	publishRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	votePartition := LogPartition{Kind: partitionBoard, Key: proto.VoteSystemBoardID}
+	_, voteEvents := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "publish poll result", votePartition, 0, 10, CommandLogRecord{
 		Partition:  pollPartition,
 		ActorID:    carol.ID,
 		CID:        "cid-native-poll-result-publish",
@@ -13082,37 +8325,18 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 		Payload:    publishPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce publish poll result command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain publish poll result once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, pollPartition); err != nil || got != publishRecord.Offset {
-		t.Fatalf("publish committed offset = %d, %v; want %d, nil", got, err, publishRecord.Offset)
-	}
-	votePartition := LogPartition{Kind: partitionBoard, Key: nativeVoteSystemBoardID}
-	voteEvents, err := eventStore.ReplayPartition(ctx, votePartition.Kind, votePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay generated vote events: %v", err)
-	}
 	if len(voteEvents) != 3 ||
 		voteEvents[0].Kind != proto.EvtBoardCreated ||
 		voteEvents[1].Kind != proto.EvtThreadNew ||
 		voteEvents[2].Kind != proto.EvtPostAppended {
 		t.Fatalf("generated vote events = %+v, want board/thread/post result events", voteEvents)
 	}
-	resultThread, ok := voteEvents[1].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("vote thread payload = %T, want ThreadNewPayload", voteEvents[1].Payload)
-	}
-	resultPost, ok := voteEvents[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("vote post payload = %T, want PostAppendedPayload", voteEvents[2].Payload)
-	}
-	if resultThread.ID != "vote_poll_"+rootPoll.ID || resultThread.Board != nativeVoteSystemBoardID ||
+	resultThread := requireNativeDecisionPayload[proto.ThreadNewPayload](t, voteEvents[1], "vote thread payload")
+	resultPost := requireNativeDecisionPayload[proto.PostAppendedPayload](t, voteEvents[2], "vote post payload")
+	expectedThreadID, expectedPostID := proto.PollResultPostIDs(rootPoll.ID)
+	if resultThread.ID != expectedThreadID || resultThread.Board != proto.VoteSystemBoardID ||
 		!strings.Contains(resultThread.Title, "Best option?") || resultPost.Thread != resultThread.ID ||
-		resultPost.ID != "vote_poll_post_"+rootPoll.ID {
+		resultPost.ID != expectedPostID {
 		t.Fatalf("result thread/post payloads = %+v / %+v, want deterministic vote result records", resultThread, resultPost)
 	}
 	for _, want := range []string{"# Poll result: Best option?", "Source thread: Native vote result poll", "Source board: general", "Total votes: 1", "Option A: 1 vote", "Option B: 0 vote", "Generated public poll result"} {
@@ -13120,18 +8344,12 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 			t.Fatalf("generated vote result body missing %q:\n%s", want, resultPost.Body)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-poll-result-test",
-		Partition: votePartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize generated vote events: %v", err)
-	}
-	voteBoard, err := c.GetBoard(nativeVoteSystemBoardID)
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-poll-result-test", votePartition, 10, "materialize generated vote events")
+	voteBoard, err := c.GetBoard(proto.VoteSystemBoardID)
 	if err != nil {
 		t.Fatalf("get vote board: %v", err)
 	}
-	if voteBoard == nil || voteBoard.Name != nativeVoteSystemBoardID {
+	if voteBoard == nil || voteBoard.Name != proto.VoteSystemBoardName {
 		t.Fatalf("vote board = %+v, want generated vote board", voteBoard)
 	}
 	resultPosts, err := c.ListPosts(resultThread.ID, 10, 0)
@@ -13142,7 +8360,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 		t.Fatalf("result posts = %+v, want materialized generated result post", resultPosts)
 	}
 
-	duplicateRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, voteEvents = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "duplicate publish poll result", votePartition, 0, 10, CommandLogRecord{
 		Partition:  pollPartition,
 		ActorID:    carol.ID,
 		CID:        "cid-native-poll-result-duplicate",
@@ -13150,23 +8368,10 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 		Payload:    publishPayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce duplicate publish poll result command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain duplicate publish poll result once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, pollPartition); err != nil || got != duplicateRecord.Offset {
-		t.Fatalf("duplicate publish committed offset = %d, %v; want %d, nil", got, err, duplicateRecord.Offset)
-	}
-	voteEvents, err = eventStore.ReplayPartition(ctx, votePartition.Kind, votePartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay generated vote events after duplicate: %v", err)
-	}
 	if len(voteEvents) != 3 {
 		t.Fatalf("generated vote events after duplicate = %+v, want no duplicate events", voteEvents)
 	}
-	voteThreads, err := c.ListThreads(nativeVoteSystemBoardID, 10, 0)
+	voteThreads, err := c.ListThreads(proto.VoteSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatalf("list vote threads after duplicate: %v", err)
 	}
@@ -13177,94 +8382,41 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 
 func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native redaction",
 		Body:  "redactsearchtoken visible body",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-redact-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-redact-restore-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-redact-restore-test", partition, 10, "materialize create events")
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	postPartition := LogPartition{Kind: partitionPost, Key: rootPostPayload.ID}
 	if search, err := c.SearchReadablePosts(alice, "redactsearchtoken", "", 10); err != nil || len(search) != 1 {
 		t.Fatalf("search before redact = %+v, %v; want visible post", search, err)
 	}
 
-	redactPayload, err := json.Marshal(proto.RedactPostPayload{
+	redactPayload := marshalCoreTestJSON(t, "marshal redact payload", proto.RedactPostPayload{
 		Post:   rootPostPayload.ID,
 		Reason: "author cleanup",
 	})
-	if err != nil {
-		t.Fatalf("marshal redact payload: %v", err)
-	}
 	forbidden := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  postPartition,
 		Offset:     1,
@@ -13274,10 +8426,8 @@ func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing
 		Payload:    redactPayload,
 		EnqueuedAt: 2234,
 	})
-	if forbidden.Err == nil || forbidden.Err.Code != proto.ErrForbidden || forbidden.Err.Retryable {
-		t.Fatalf("forbidden redact reply = %+v, want terminal forbidden", forbidden)
-	}
-	redactRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "forbidden redact reply")
+	redactRecord, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "redact", partition, 0, 10, CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-redact-author",
@@ -13285,37 +8435,15 @@ func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing
 		Payload:    redactPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce redact command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain redact once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != redactRecord.Offset {
-		t.Fatalf("redact committed offset = %d, %v; want %d, nil", got, err, redactRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay redact events: %v", err)
-	}
 	if len(events) != 3 {
 		t.Fatalf("events after redact = %+v, want post.redacted", events)
 	}
-	redactEvent, ok := events[2].Payload.(*proto.PostRedactedPayload)
-	if !ok {
-		t.Fatalf("redact event payload = %T, want PostRedactedPayload", events[2].Payload)
-	}
+	redactEvent := requireNativeDecisionPayload[proto.PostRedactedPayload](t, events[2], "redact event payload")
 	if redactEvent.ID != rootPostPayload.ID || redactEvent.Thread != rootPostPayload.Thread ||
 		redactEvent.By != alice.ID || redactEvent.Reason != "author cleanup" || redactEvent.TS != 2234 {
 		t.Fatalf("redact event = %+v, want deterministic author redaction", redactEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-redact-restore-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize redact event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-redact-restore-test", partition, 10, "materialize redact event")
 	post, err := c.GetPost(rootPostPayload.ID)
 	if err != nil {
 		t.Fatalf("get post after redact: %v", err)
@@ -13335,10 +8463,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing
 		t.Fatalf("junk deleted posts = %+v, want author deletion row", deleted)
 	}
 
-	restorePayload, err := json.Marshal(proto.RestorePostPayload{Post: rootPostPayload.ID})
-	if err != nil {
-		t.Fatalf("marshal restore payload: %v", err)
-	}
+	restorePayload := marshalCoreTestJSON(t, "marshal restore payload", proto.RestorePostPayload{Post: rootPostPayload.ID})
 	restoreDenied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  postPartition,
 		Offset:     redactRecord.Offset + 1,
@@ -13348,14 +8473,12 @@ func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing
 		Payload:    restorePayload,
 		EnqueuedAt: 3234,
 	})
-	if restoreDenied.Err == nil || restoreDenied.Err.Code != proto.ErrForbidden || restoreDenied.Err.Retryable {
-		t.Fatalf("restore denied reply = %+v, want terminal forbidden", restoreDenied)
-	}
+	requireNativeDecisionTerminalError(t, restoreDenied, proto.ErrForbidden, "restore denied reply")
 	canModeratePosts := true
-	if err := setBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
 		t.Fatalf("grant bob post moderation: %v", err)
 	}
-	restoreRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "restore", partition, 0, 10, CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-restore",
@@ -13363,36 +8486,14 @@ func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing
 		Payload:    restorePayload,
 		EnqueuedAt: 3234,
 	})
-	if err != nil {
-		t.Fatalf("produce restore command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain restore once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != restoreRecord.Offset {
-		t.Fatalf("restore committed offset = %d, %v; want %d, nil", got, err, restoreRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay restore events: %v", err)
-	}
 	if len(events) != 4 {
 		t.Fatalf("events after restore = %+v, want post.restored", events)
 	}
-	restoreEvent, ok := events[3].Payload.(*proto.PostRestoredPayload)
-	if !ok {
-		t.Fatalf("restore event payload = %T, want PostRestoredPayload", events[3].Payload)
-	}
+	restoreEvent := requireNativeDecisionPayload[proto.PostRestoredPayload](t, events[3], "restore event payload")
 	if restoreEvent.ID != rootPostPayload.ID || restoreEvent.Thread != rootPostPayload.Thread || restoreEvent.By != bob.ID || restoreEvent.TS != 3234 {
 		t.Fatalf("restore event = %+v, want deterministic restore", restoreEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-redact-restore-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize restore event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-redact-restore-test", partition, 10, "materialize restore event")
 	post, err = c.GetPost(rootPostPayload.ID)
 	if err != nil {
 		t.Fatalf("get post after restore: %v", err)
@@ -13415,40 +8516,24 @@ func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing
 func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	go c.Run(ctx)
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Range moderation",
 		Body:  "first range post",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
 	createReply := c.ExecCmd(ctx, bob, proto.CmdCreateThread, createPayload, "cid-sql-range-create")
 	if createReply.Err != nil || createReply.Result == nil {
 		t.Fatalf("create range thread reply = %+v", createReply)
 	}
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal append payload", proto.AppendPostPayload{
 		Thread: createReply.Result.ID,
 		Body:   "second range post",
 	})
-	if err != nil {
-		t.Fatalf("marshal append payload: %v", err)
-	}
 	appendReply := c.ExecCmd(ctx, bob, proto.CmdAppendPost, appendPayload, "cid-sql-range-append")
 	if appendReply.Err != nil || appendReply.Result == nil {
 		t.Fatalf("append range post reply = %+v", appendReply)
@@ -13463,36 +8548,17 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 	firstPostID := posts[0].ID
 	secondPostID := posts[1].ID
 	canModeratePosts := true
-	if err := setBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
 		t.Fatalf("grant bob post moderation: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	rangePayload, err := json.Marshal(proto.RedactPostRangePayload{
+	rangePayload := marshalCoreTestJSON(t, "marshal redact range payload", proto.RedactPostRangePayload{
 		Board:  "general",
 		Posts:  []string{firstPostID, secondPostID, firstPostID},
 		Reason: "range cleanup",
 	})
-	if err != nil {
-		t.Fatalf("marshal redact range payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  boardPartition,
 		Offset:     1,
@@ -13502,9 +8568,21 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 		Payload:    rangePayload,
 		EnqueuedAt: 3333,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("range redact denied reply = %+v, want terminal forbidden", denied)
-	}
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "range redact denied reply")
+	emptyPostRangePayload := marshalCoreTestJSON(t, "marshal empty post range payload", proto.RedactPostRangePayload{
+		Board:  "general",
+		Reason: "range cleanup",
+	})
+	emptyPostRange := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
+		Partition:  boardPartition,
+		Offset:     1,
+		ActorID:    bob.ID,
+		CID:        "cid-native-range-redact-empty",
+		Command:    proto.CmdRedactPostRange,
+		Payload:    emptyPostRangePayload,
+		EnqueuedAt: 3333,
+	})
+	requireNativeDecisionTerminalError(t, emptyPostRange, proto.ErrValidationFailed, "empty range redact decision", validationMessage(nil, proto.NormalizePostRangeIDs))
 	dryRun := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  boardPartition,
 		Offset:     1,
@@ -13517,7 +8595,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 	if dryRun.Err != nil || dryRun.Result == nil || dryRun.Result.ID != "2" {
 		t.Fatalf("range redact dry run = %+v, want ack count 2", dryRun)
 	}
-	redactRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "range redact", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-range-redact",
@@ -13525,38 +8603,14 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 		Payload:    rangePayload,
 		EnqueuedAt: 3333,
 	})
-	if err != nil {
-		t.Fatalf("produce range redact command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain range redact once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != redactRecord.Offset {
-		t.Fatalf("range redact committed offset = %d, %v; want %d, nil", got, err, redactRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay range redact events: %v", err)
-	}
-	if len(events) != 2 || events[0].Kind != proto.EvtPostRedacted || events[1].Kind != proto.EvtPostRedacted {
-		t.Fatalf("range redact events = %+v, want two post.redacted events", events)
-	}
+	requireNativeDecisionEventKinds(t, events, "range redact events", proto.EvtPostRedacted, proto.EvtPostRedacted)
 	for i, event := range events {
-		payload, ok := event.Payload.(*proto.PostRedactedPayload)
-		if !ok {
-			t.Fatalf("range redact event %d payload = %T, want PostRedactedPayload", i, event.Payload)
-		}
+		payload := requireNativeDecisionPayload[proto.PostRedactedPayload](t, event, fmt.Sprintf("range redact event %d payload", i))
 		if payload.By != bob.ID || payload.Reason != "range cleanup" || payload.DeletionKind != "recycle" || payload.TS != 3333 {
 			t.Fatalf("range redact payload %d = %+v, want moderator recycle redaction", i, payload)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-range-moderation-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize range redact events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-range-moderation-test", boardPartition, 10, "materialize range redact events")
 	for _, postID := range []string{firstPostID, secondPostID} {
 		post, err := c.GetPost(postID)
 		if err != nil {
@@ -13581,14 +8635,11 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 		t.Fatalf("recycle after range redact = %+v, want two posts", recycle)
 	}
 
-	restorePayload, err := json.Marshal(proto.RestorePostRangePayload{
+	restorePayload := marshalCoreTestJSON(t, "marshal restore range payload", proto.RestorePostRangePayload{
 		Board: "general",
 		Posts: []string{firstPostID},
 	})
-	if err != nil {
-		t.Fatalf("marshal restore range payload: %v", err)
-	}
-	restoreRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events = produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "range restore", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    bob.ID,
 		CID:        "cid-native-range-restore",
@@ -13596,36 +8647,14 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 		Payload:    restorePayload,
 		EnqueuedAt: 4444,
 	})
-	if err != nil {
-		t.Fatalf("produce range restore command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain range restore once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != restoreRecord.Offset {
-		t.Fatalf("range restore committed offset = %d, %v; want %d, nil", got, err, restoreRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay range restore events: %v", err)
-	}
 	if len(events) != 3 || events[2].Kind != proto.EvtPostRestored {
 		t.Fatalf("range events after restore = %+v, want post.restored", events)
 	}
-	restoreEvent, ok := events[2].Payload.(*proto.PostRestoredPayload)
-	if !ok {
-		t.Fatalf("range restore payload = %T, want PostRestoredPayload", events[2].Payload)
-	}
+	restoreEvent := requireNativeDecisionPayload[proto.PostRestoredPayload](t, events[2], "range restore payload")
 	if restoreEvent.ID != firstPostID || restoreEvent.By != bob.ID || restoreEvent.TS != 4444 {
 		t.Fatalf("range restore event = %+v, want first post restored by bob", restoreEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-range-moderation-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize range restore event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-range-moderation-test", boardPartition, 10, "materialize range restore event")
 	firstPost, err := c.GetPost(firstPostID)
 	if err != nil {
 		t.Fatalf("get first post after range restore: %v", err)
@@ -13652,39 +8681,23 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	go c.Run(ctx)
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 	canModeratePosts := true
-	if err := setBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
 		t.Fatalf("grant alice post moderation: %v", err)
 	}
 
 	createJunkPost := func(cid, title string) string {
 		t.Helper()
-		createPayload, err := json.Marshal(proto.CreateThreadPayload{
+		createPayload := marshalCoreTestJSON(t, "marshal create junk post payload", proto.CreateThreadPayload{
 			Board: "general",
 			Title: title,
 			Body:  title + " body",
 		})
-		if err != nil {
-			t.Fatalf("marshal create junk post payload: %v", err)
-		}
 		reply := c.ExecCmd(ctx, bob, proto.CmdCreateThread, createPayload, cid+"-create")
 		if reply.Err != nil || reply.Result == nil {
 			t.Fatalf("create junk post reply = %+v", reply)
@@ -13696,13 +8709,10 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 		if len(posts) != 1 {
 			t.Fatalf("junk target posts = %+v, want one post", posts)
 		}
-		redactPayload, err := json.Marshal(proto.RedactPostPayload{
+		redactPayload := marshalCoreTestJSON(t, "marshal redact junk post payload", proto.RedactPostPayload{
 			Post:   posts[0].ID,
 			Reason: "author cleanup",
 		})
-		if err != nil {
-			t.Fatalf("marshal redact junk post payload: %v", err)
-		}
 		redactReply := c.ExecCmd(ctx, bob, proto.CmdRedactPost, redactPayload, cid+"-redact")
 		if redactReply.Err != nil {
 			t.Fatalf("redact junk post reply = %+v", redactReply)
@@ -13712,31 +8722,12 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 	firstPostID := createJunkPost("cid-sql-junk-one", "Junk one")
 	secondPostID := createJunkPost("cid-sql-junk-two", "Junk two")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	clearPayload, err := json.Marshal(proto.ClearBoardJunkPayload{
+	clearPayload := marshalCoreTestJSON(t, "marshal selected junk clear payload", proto.ClearBoardJunkPayload{
 		Board: "general",
 		Posts: []string{firstPostID, firstPostID},
 	})
-	if err != nil {
-		t.Fatalf("marshal selected junk clear payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  boardPartition,
 		Offset:     1,
@@ -13746,10 +8737,8 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 		Payload:    clearPayload,
 		EnqueuedAt: 5555,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("clear junk denied reply = %+v, want terminal forbidden", denied)
-	}
-	clearRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "clear junk denied reply")
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "selected junk clear", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-clear-junk-one",
@@ -13757,36 +8746,12 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 		Payload:    clearPayload,
 		EnqueuedAt: 5555,
 	})
-	if err != nil {
-		t.Fatalf("produce selected junk clear command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain selected junk clear once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != clearRecord.Offset {
-		t.Fatalf("selected junk clear committed offset = %d, %v; want %d, nil", got, err, clearRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay selected junk clear event: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtPostDeletionCleared {
-		t.Fatalf("selected junk clear events = %+v, want post.deletion_cleared", events)
-	}
-	clearEvent, ok := events[0].Payload.(*proto.PostDeletionClearedPayload)
-	if !ok {
-		t.Fatalf("selected junk clear payload = %T, want PostDeletionClearedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "selected junk clear events", proto.EvtPostDeletionCleared)
+	clearEvent := requireNativeDecisionPayload[proto.PostDeletionClearedPayload](t, events[0], "selected junk clear payload")
 	if clearEvent.ID != firstPostID || clearEvent.Board != "general" || clearEvent.Kind != "junk" || clearEvent.By != alice.ID || clearEvent.TS != 5555 {
 		t.Fatalf("selected junk clear event = %+v, want first junk post cleared by alice", clearEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-clear-junk-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize selected junk clear event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-clear-junk-test", boardPartition, 10, "materialize selected junk clear event")
 	junk, err := c.ListBoardDeletedPosts("general", "junk", 10, 0)
 	if err != nil {
 		t.Fatalf("list junk after selected clear: %v", err)
@@ -13795,11 +8760,8 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 		t.Fatalf("junk after selected clear = %+v, want only second post", junk)
 	}
 
-	clearAllPayload, err := json.Marshal(proto.ClearBoardJunkPayload{Board: "general"})
-	if err != nil {
-		t.Fatalf("marshal all junk clear payload: %v", err)
-	}
-	clearAllRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	clearAllPayload := marshalCoreTestJSON(t, "marshal all junk clear payload", proto.ClearBoardJunkPayload{Board: "general"})
+	_, events = produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "all junk clear", 0, 10, CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-clear-junk-all",
@@ -13807,36 +8769,14 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 		Payload:    clearAllPayload,
 		EnqueuedAt: 6666,
 	})
-	if err != nil {
-		t.Fatalf("produce all junk clear command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain all junk clear once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, boardPartition); err != nil || got != clearAllRecord.Offset {
-		t.Fatalf("all junk clear committed offset = %d, %v; want %d, nil", got, err, clearAllRecord.Offset)
-	}
-	events, err = eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay all junk clear event: %v", err)
-	}
 	if len(events) != 2 || events[1].Kind != proto.EvtPostDeletionCleared {
 		t.Fatalf("events after all junk clear = %+v, want second post.deletion_cleared", events)
 	}
-	clearAllEvent, ok := events[1].Payload.(*proto.PostDeletionClearedPayload)
-	if !ok {
-		t.Fatalf("all junk clear payload = %T, want PostDeletionClearedPayload", events[1].Payload)
-	}
+	clearAllEvent := requireNativeDecisionPayload[proto.PostDeletionClearedPayload](t, events[1], "all junk clear payload")
 	if clearAllEvent.ID != secondPostID || clearAllEvent.By != alice.ID || clearAllEvent.TS != 6666 {
 		t.Fatalf("all junk clear event = %+v, want second junk post cleared by alice", clearAllEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-clear-junk-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize all junk clear event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-clear-junk-test", boardPartition, 10, "materialize all junk clear event")
 	junk, err = c.ListBoardDeletedPosts("general", "junk", 10, 0)
 	if err != nil {
 		t.Fatalf("list junk after all clear: %v", err)
@@ -13858,29 +8798,16 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 func TestNativeCommandLogDecisionExecutorProjectsPurgePost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	go c.Run(ctx)
-	admin, err := c.RegisterUser("admin", "pw")
-	if err != nil {
-		t.Fatalf("register admin: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	admin := registerNativeDecisionTestUser(t, c, "admin")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal purge target payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Native purge target",
 		Body:  "purgeprivacytoken body that must leave local fts",
 	})
-	if err != nil {
-		t.Fatalf("marshal purge target payload: %v", err)
-	}
 	createReply := c.ExecCmd(ctx, bob, proto.CmdCreateThread, createPayload, "cid-sql-purge-target")
 	if createReply.Err != nil || createReply.Result == nil {
 		t.Fatalf("create purge target reply = %+v", createReply)
@@ -13901,31 +8828,12 @@ func TestNativeCommandLogDecisionExecutorProjectsPurgePost(t *testing.T) {
 		t.Fatalf("fts rows before purge = %d, %v; want 1, nil", ftsRows, err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 	postPartition := LogPartition{Kind: partitionPost, Key: postID}
-	purgePayload, err := json.Marshal(proto.PurgePostPayload{
+	purgePayload := marshalCoreTestJSON(t, "marshal purge payload", proto.PurgePostPayload{
 		Post:   postID,
 		Reason: "privacy request",
 	})
-	if err != nil {
-		t.Fatalf("marshal purge payload: %v", err)
-	}
 	denied := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  postPartition,
 		Offset:     1,
@@ -13935,10 +8843,9 @@ func TestNativeCommandLogDecisionExecutorProjectsPurgePost(t *testing.T) {
 		Payload:    purgePayload,
 		EnqueuedAt: 7777,
 	})
-	if denied.Err == nil || denied.Err.Code != proto.ErrForbidden || denied.Err.Retryable {
-		t.Fatalf("purge denied reply = %+v, want terminal forbidden", denied)
-	}
-	purgeRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "purge denied reply")
+	purgePartition := LogPartition{Kind: partitionBoard, Key: "general"}
+	_, events := produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "purge", purgePartition, 0, 10, CommandLogRecord{
 		Partition:  postPartition,
 		ActorID:    admin.ID,
 		CID:        "cid-native-purge-post",
@@ -13946,36 +8853,12 @@ func TestNativeCommandLogDecisionExecutorProjectsPurgePost(t *testing.T) {
 		Payload:    purgePayload,
 		EnqueuedAt: 7777,
 	})
-	if err != nil {
-		t.Fatalf("produce purge command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain purge once: %v", err)
-	}
-	if got, err := commandLog.CommittedOffset(ctx, postPartition); err != nil || got != purgeRecord.Offset {
-		t.Fatalf("purge committed offset = %d, %v; want %d, nil", got, err, purgeRecord.Offset)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partitionBoard, "general", 0, 10)
-	if err != nil {
-		t.Fatalf("replay purge event: %v", err)
-	}
-	if len(events) != 1 || events[0].Kind != proto.EvtPostPurged {
-		t.Fatalf("purge events = %+v, want post.purged", events)
-	}
-	purgeEvent, ok := events[0].Payload.(*proto.PostPurgedPayload)
-	if !ok {
-		t.Fatalf("purge event payload = %T, want PostPurgedPayload", events[0].Payload)
-	}
+	requireNativeDecisionEventKinds(t, events, "purge events", proto.EvtPostPurged)
+	purgeEvent := requireNativeDecisionPayload[proto.PostPurgedPayload](t, events[0], "purge event payload")
 	if purgeEvent.ID != postID || purgeEvent.Thread != createReply.Result.ID || purgeEvent.By != admin.ID || purgeEvent.Reason != "privacy request" || purgeEvent.TS != 7777 {
 		t.Fatalf("purge event = %+v, want deterministic admin purge", purgeEvent)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-purge-test",
-		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize purge event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-purge-test", purgePartition, 10, "materialize purge event")
 	post, err := c.GetPost(postID)
 	if err != nil {
 		t.Fatalf("get post after purge: %v", err)
@@ -13993,49 +8876,20 @@ func TestNativeCommandLogDecisionExecutorProjectsPurgePost(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsPollPosts(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	if err := setNativeDecisionTestTrustLevel(c, alice.ID, 2); err != nil {
 		t.Fatalf("seed alice trust level: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 
-	blockedPollPayload, err := json.Marshal(proto.CreateThreadPayload{
+	blockedPollPayload := marshalCoreTestJSON(t, "marshal blocked poll payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Blocked native poll",
 		Body:  "[poll]\nQuestion?\nOption A\nOption B\n[/poll]",
 	})
-	if err != nil {
-		t.Fatalf("marshal blocked poll payload: %v", err)
-	}
 	blocked := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:     1,
@@ -14045,55 +8899,30 @@ func TestNativeCommandLogDecisionExecutorProjectsPollPosts(t *testing.T) {
 		Payload:    blockedPollPayload,
 		EnqueuedAt: 1111,
 	})
-	if blocked.Err == nil || blocked.Err.Retryable || blocked.Err.Code != proto.ErrForbidden {
-		t.Fatalf("blocked low-trust poll reply = %+v, want terminal forbidden", blocked)
-	}
+	requireNativeDecisionTerminalError(t, blocked, proto.ErrForbidden, "blocked low-trust poll reply")
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	createBody := "intro\n[poll]\nQuestion?\nOption A\nOption B\n[/poll]\noutro"
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create poll payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native poll",
 		Body:  createBody,
 	})
-	if err != nil {
-		t.Fatalf("marshal create poll payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "create poll", CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-create-thread-poll",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create poll command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create poll once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-poll-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create poll events: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create poll events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-poll-test", partition, 10, "materialize create poll events")
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 0, 10, "replay create poll events")
 	if len(events) != 2 {
 		t.Fatalf("create poll events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	if rootPostPayload.Body != "intro\noutro" || rootPostPayload.RawBody != createBody {
 		t.Fatalf("root poll event body/rawBody = %q/%q, want stripped body and raw poll body", rootPostPayload.Body, rootPostPayload.RawBody)
 	}
@@ -14119,13 +8948,10 @@ func TestNativeCommandLogDecisionExecutorProjectsPollPosts(t *testing.T) {
 		t.Fatalf("full root poll = %+v, want two projected options", fullRootPoll)
 	}
 
-	editExistingPollPayload, err := json.Marshal(proto.EditPostPayload{
+	editExistingPollPayload := marshalCoreTestJSON(t, "marshal edit existing poll payload", proto.EditPostPayload{
 		Post: rootPostPayload.ID,
 		Body: "edited poll body",
 	})
-	if err != nil {
-		t.Fatalf("marshal edit existing poll payload: %v", err)
-	}
 	editExistingPollReply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionPost, Key: rootPostPayload.ID},
 		Offset:     1,
@@ -14135,40 +8961,24 @@ func TestNativeCommandLogDecisionExecutorProjectsPollPosts(t *testing.T) {
 		Payload:    editExistingPollPayload,
 		EnqueuedAt: 1734,
 	})
-	if editExistingPollReply.Err == nil || editExistingPollReply.Err.Retryable || editExistingPollReply.Err.Code != proto.ErrValidationFailed {
-		t.Fatalf("edit existing poll reply = %+v, want terminal validation failure", editExistingPollReply)
-	}
+	requireNativeDecisionTerminalError(t, editExistingPollReply, proto.ErrValidationFailed, "edit existing poll reply")
 	if !strings.Contains(editExistingPollReply.Err.Message, "contain a poll") {
 		t.Fatalf("edit existing poll error = %q, want poll-bearing post validation", editExistingPollReply.Err.Message)
 	}
 
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal append poll payload", proto.AppendPostPayload{
 		Thread: threadPayload.ID,
 		Body:   "[poll]\nReply question?\nYes\nNo\n[/poll]",
 	})
-	if err != nil {
-		t.Fatalf("marshal append poll payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "append poll", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-append-post-poll",
 		Command:    proto.CmdAppendPost,
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
-	}); err != nil {
-		t.Fatalf("produce append poll command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain append poll once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-poll-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize append poll event: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-poll-test", partition, 10, "materialize append poll event")
 	posts, err = c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts after append poll: %v", err)
@@ -14204,89 +9014,36 @@ func setNativeDecisionTestTrustLevel(c *Core, userID string, trustLevel int) err
 
 func TestNativeCommandLogDecisionExecutorProjectsQuotedReplies(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
-	carol, err := c.RegisterUser("carol", "pw")
-	if err != nil {
-		t.Fatalf("register carol: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
+	carol := registerNativeDecisionTestUser(t, c, "carol")
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native quoted reply",
 		Body:  "root mentions @bob\nsecond line",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	_, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-create-thread-quote",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-quote-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-quote-test", partition, 10, "materialize create events")
 	if processed := drainOutboxJobsForTest(t, c); processed != 1 {
 		t.Fatalf("processed outbox jobs after create = %d, want root post job", processed)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
 	}
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	bobNotifications, err := c.ListNotifications(bob.ID, 10, 0, false)
 	if err != nil {
 		t.Fatalf("ListNotifications(bob) after create: %v", err)
@@ -14296,39 +9053,23 @@ func TestNativeCommandLogDecisionExecutorProjectsQuotedReplies(t *testing.T) {
 	}
 
 	replyBody := "quoted reply without a mention"
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal quoted reply payload", proto.AppendPostPayload{
 		Thread:    threadPayload.ID,
 		ReplyTo:   rootPostPayload.ID,
 		QuotePost: true,
 		Body:      replyBody,
 	})
-	if err != nil {
-		t.Fatalf("marshal quoted reply payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "quoted reply", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    carol.ID,
 		CID:        "cid-native-append-post-quote",
 		Command:    proto.CmdAppendPost,
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
-	}); err != nil {
-		t.Fatalf("produce quoted reply command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain quoted reply once: %v", err)
-	}
-	quoteEvents, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 2, 10)
-	if err != nil {
-		t.Fatalf("replay quoted reply event: %v", err)
-	}
-	if len(quoteEvents) != 1 || quoteEvents[0].Kind != proto.EvtPostAppended {
-		t.Fatalf("quote events = %+v, want one post.appended", quoteEvents)
-	}
-	quotePostPayload, ok := quoteEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("quote post payload = %T, want PostAppendedPayload", quoteEvents[0].Payload)
-	}
+	})
+	quoteEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 2, 10, "replay quoted reply event")
+	requireNativeDecisionEventKinds(t, quoteEvents, "quote events", proto.EvtPostAppended)
+	quotePostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, quoteEvents[0], "quote post payload")
 	expectedPrefix := "> alice wrote:\n> root mentions @bob\n> second line\n\n"
 	if quotePostPayload.Body != expectedPrefix+replyBody || quotePostPayload.RawBody != expectedPrefix+replyBody || quotePostPayload.PostCommitBody == nil || *quotePostPayload.PostCommitBody != replyBody {
 		postCommitBody := "<nil>"
@@ -14340,13 +9081,7 @@ func TestNativeCommandLogDecisionExecutorProjectsQuotedReplies(t *testing.T) {
 	if quotePostPayload.ReplyTo != rootPostPayload.ID {
 		t.Fatalf("quote payload ReplyTo = %q, want root %q", quotePostPayload.ReplyTo, rootPostPayload.ID)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-quote-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize quoted reply event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-quote-test", partition, 10, "materialize quoted reply event")
 	if processed := drainOutboxJobsForTest(t, c); processed != 1 {
 		t.Fatalf("processed outbox jobs after quoted reply = %d, want quoted reply post job", processed)
 	}
@@ -14375,15 +9110,8 @@ func TestNativeCommandLogDecisionExecutorProjectsQuotedReplies(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorProjectsRandomSignatures(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
 	first, err := c.SaveUserSignature(alice.ID, "", "First", "signature one", -1, true)
 	if err != nil {
 		t.Fatalf("save first signature: %v", err)
@@ -14395,34 +9123,15 @@ func TestNativeCommandLogDecisionExecutorProjectsRandomSignatures(t *testing.T) 
 		t.Fatalf("enable random signatures: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal create payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Broker-native random signature",
 		Body:  "root post",
 	})
-	if err != nil {
-		t.Fatalf("marshal create payload: %v", err)
-	}
-	createRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	createRecord, events := produceDrainReplayNativeDecisionCommand(t, ctx, commandLog, eventStore, worker, "create", 0, 10, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-create-thread-random-signature",
@@ -14430,27 +9139,11 @@ func TestNativeCommandLogDecisionExecutorProjectsRandomSignatures(t *testing.T) 
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
 	})
-	if err != nil {
-		t.Fatalf("produce create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain create once: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay create events: %v", err)
-	}
 	if len(events) != 2 {
 		t.Fatalf("create events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread event payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread event payload")
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	expectedRootSignature, err := nativePostSignature(c.DB, alice.ID, createRecord)
 	if err != nil {
 		t.Fatalf("expected root native signature: %v", err)
@@ -14458,13 +9151,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRandomSignatures(t *testing.T) 
 	if rootPostPayload.Signature != expectedRootSignature || !nativeSignatureIn(rootPostPayload.Signature, "signature one", "signature two") {
 		t.Fatalf("root signature = %q, want deterministic active random signature %q", rootPostPayload.Signature, expectedRootSignature)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-random-signature-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize create events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-random-signature-test", partition, 10, "materialize create events")
 	posts, err := c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts after create: %v", err)
@@ -14473,14 +9160,11 @@ func TestNativeCommandLogDecisionExecutorProjectsRandomSignatures(t *testing.T) 
 		t.Fatalf("posts after create = %+v, want broker-projected random signature %q", posts, rootPostPayload.Signature)
 	}
 
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal append payload", proto.AppendPostPayload{
 		Thread: threadPayload.ID,
 		Body:   "reply post",
 	})
-	if err != nil {
-		t.Fatalf("marshal append payload: %v", err)
-	}
-	appendRecord, err := commandLog.Produce(ctx, CommandLogRecord{
+	appendRecord := produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "append", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-append-post-random-signature",
@@ -14488,23 +9172,11 @@ func TestNativeCommandLogDecisionExecutorProjectsRandomSignatures(t *testing.T) 
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
 	})
-	if err != nil {
-		t.Fatalf("produce append command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain append once: %v", err)
-	}
-	appendEvents, err := eventStore.ReplayPartition(ctx, partition.Kind, partition.Key, 2, 10)
-	if err != nil {
-		t.Fatalf("replay append event: %v", err)
-	}
+	appendEvents := replayCommandLogWorkerPartition(t, ctx, eventStore, partition, 2, 10, "replay append event")
 	if len(appendEvents) != 1 {
 		t.Fatalf("append events = %+v, want one post.appended", appendEvents)
 	}
-	replyPostPayload, ok := appendEvents[0].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("reply post payload = %T, want PostAppendedPayload", appendEvents[0].Payload)
-	}
+	replyPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, appendEvents[0], "reply post payload")
 	expectedReplySignature, err := nativePostSignature(c.DB, alice.ID, appendRecord)
 	if err != nil {
 		t.Fatalf("expected reply native signature: %v", err)
@@ -14512,13 +9184,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRandomSignatures(t *testing.T) 
 	if replyPostPayload.Signature != expectedReplySignature || !nativeSignatureIn(replyPostPayload.Signature, "signature one", "signature two") {
 		t.Fatalf("reply signature = %q, want deterministic active random signature %q", replyPostPayload.Signature, expectedReplySignature)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-random-signature-test",
-		Partition: partition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize append event: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-random-signature-test", partition, 10, "materialize append event")
 	posts, err = c.ListPosts(threadPayload.ID, 10, 0)
 	if err != nil {
 		t.Fatalf("list posts after append: %v", err)
@@ -14539,96 +9205,47 @@ func nativeSignatureIn(got string, options ...string) bool {
 
 func TestNativeCommandLogDecisionExecutorProjectsAnonymousPosts(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	alice, err := c.RegisterUser("alice", "pw")
-	if err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	alice := registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	if err := c.UpdateUserProfile(alice.ID, "Alice", "", "bio", "", "private-ish signature", "", ""); err != nil {
 		t.Fatalf("update alice profile signature: %v", err)
 	}
 	anonymousAllowed := true
-	if err := setBoardSettings(c.DB, "general", BoardSettingsPatch{AnonymousAllowed: &anonymousAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{AnonymousAllowed: &anonymousAllowed}); err != nil {
 		t.Fatalf("enable anonymous posting: %v", err)
 	}
 
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	executor := NewCommandLogNativeDecisionExecutor(c)
-	worker := NewCommandLogWorker(CommandLogWorkerConfig{
-		Log:       commandLog,
-		BatchSize: 10,
-		Executor:  executor,
-		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: transactionStore,
-			Events:       executor,
-		},
-	})
+	commandLog, eventStore, _, worker := newNativeDecisionTestHarness(c)
 
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal anonymous create payload", proto.CreateThreadPayload{
 		Board:     "general",
 		Title:     "Broker-native anonymous post",
 		Body:      "anonymous root post",
 		Anonymous: true,
 	})
-	if err != nil {
-		t.Fatalf("marshal anonymous create payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "anonymous create", CommandLogRecord{
 		Partition:  boardPartition,
 		ActorID:    alice.ID,
 		CID:        "cid-native-anonymous-create",
 		Command:    proto.CmdCreateThread,
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
-	}); err != nil {
-		t.Fatalf("produce anonymous create command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain anonymous create once: %v", err)
-	}
-	events, err := eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay anonymous create events: %v", err)
-	}
+	})
+	events := replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 10, "replay anonymous create events")
 	if len(events) != 2 {
 		t.Fatalf("anonymous create events = %+v, want thread.new and post.appended", events)
 	}
-	threadPayload, ok := events[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("thread payload = %T, want ThreadNewPayload", events[0].Payload)
-	}
-	rootPostPayload, ok := events[1].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("root post payload = %T, want PostAppendedPayload", events[1].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, events[0], "thread payload")
+	rootPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[1], "root post payload")
 	if threadPayload.Author != "Anonymous" || threadPayload.AuthorID != "" ||
 		rootPostPayload.Author != "Anonymous" || rootPostPayload.AuthorID != "" ||
 		rootPostPayload.Signature != "" || rootPostPayload.PostCommitActorID != alice.ID ||
 		rootPostPayload.PostCommitActorName != "Anonymous" {
 		t.Fatalf("anonymous create payloads = thread %+v post %+v, want public anonymous identity with hidden commit actor", threadPayload, rootPostPayload)
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-anonymous-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize anonymous create events: %v", err)
-	}
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-anonymous-test", boardPartition, 10, "materialize anonymous create events")
 	thread, err := c.GetThread(threadPayload.ID)
 	if err != nil {
 		t.Fatalf("get anonymous thread: %v", err)
@@ -14662,48 +9279,28 @@ func TestNativeCommandLogDecisionExecutorProjectsAnonymousPosts(t *testing.T) {
 	}
 
 	watchLevel := "watch"
-	if err := setThreadPref(c.DB, bob.ID, threadPayload.ID, watchLevel); err != nil {
+	if err := projections.SetThreadPref(c.DB, bob.ID, threadPayload.ID, watchLevel); err != nil {
 		t.Fatalf("watch anonymous thread: %v", err)
 	}
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	appendPayload := marshalCoreTestJSON(t, "marshal anonymous reply payload", proto.AppendPostPayload{
 		Thread:    threadPayload.ID,
 		Anonymous: true,
 		Body:      "anonymous reply body",
 	})
-	if err != nil {
-		t.Fatalf("marshal anonymous reply payload: %v", err)
-	}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "anonymous reply", CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		ActorID:    alice.ID,
 		CID:        "cid-native-anonymous-reply",
 		Command:    proto.CmdAppendPost,
 		Payload:    appendPayload,
 		EnqueuedAt: 2234,
-	}); err != nil {
-		t.Fatalf("produce anonymous reply command: %v", err)
-	}
-	if _, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("drain anonymous reply once: %v", err)
-	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-anonymous-test",
-		Partition: boardPartition,
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize anonymous reply event: %v", err)
-	}
-	events, err = eventStore.ReplayPartition(ctx, boardPartition.Kind, boardPartition.Key, 0, 10)
-	if err != nil {
-		t.Fatalf("replay anonymous reply events: %v", err)
-	}
+	})
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-anonymous-test", boardPartition, 10, "materialize anonymous reply event")
+	events = replayCommandLogWorkerPartition(t, ctx, eventStore, boardPartition, 0, 10, "replay anonymous reply events")
 	if len(events) != 3 {
 		t.Fatalf("anonymous events after reply = %+v, want three board events", events)
 	}
-	replyPostPayload, ok := events[2].Payload.(*proto.PostAppendedPayload)
-	if !ok {
-		t.Fatalf("reply post payload = %T, want PostAppendedPayload", events[2].Payload)
-	}
+	replyPostPayload := requireNativeDecisionPayload[proto.PostAppendedPayload](t, events[2], "reply post payload")
 	if replyPostPayload.Author != "Anonymous" || replyPostPayload.AuthorID != "" ||
 		replyPostPayload.Signature != "" || replyPostPayload.PostCommitActorID != alice.ID ||
 		replyPostPayload.PostCommitActorName != "Anonymous" {
@@ -14731,28 +9328,16 @@ func TestNativeCommandLogDecisionExecutorProjectsAnonymousPosts(t *testing.T) {
 
 func TestNativeCommandLogDecisionExecutorRejectsAnonymousWhenDisabled(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
-	if _, err := c.RegisterUser("alice", "pw"); err != nil {
-		t.Fatalf("register alice: %v", err)
-	}
-	bob, err := c.RegisterUser("bob", "pw")
-	if err != nil {
-		t.Fatalf("register bob: %v", err)
-	}
+	c := newCoreTestCore(t)
+	registerNativeDecisionTestUser(t, c, "alice")
+	bob := registerNativeDecisionTestUser(t, c, "bob")
 	executor := NewCommandLogNativeDecisionExecutor(c)
-	createPayload, err := json.Marshal(proto.CreateThreadPayload{
+	createPayload := marshalCoreTestJSON(t, "marshal anonymous create payload", proto.CreateThreadPayload{
 		Board:     "general",
 		Title:     "Anonymous disabled",
 		Body:      "anonymous should need board policy",
 		Anonymous: true,
 	})
-	if err != nil {
-		t.Fatalf("marshal anonymous create payload: %v", err)
-	}
 	reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:     1,
@@ -14762,18 +9347,13 @@ func TestNativeCommandLogDecisionExecutorRejectsAnonymousWhenDisabled(t *testing
 		Payload:    createPayload,
 		EnqueuedAt: 1234,
 	})
-	if reply.Err == nil || reply.Err.Retryable || reply.Err.Code != proto.ErrForbidden {
-		t.Fatalf("anonymous create reply = %+v, want terminal forbidden when board policy disables anonymity", reply)
-	}
+	requireNativeDecisionTerminalError(t, reply, proto.ErrForbidden, "anonymous create reply")
 
-	basePayload, err := json.Marshal(proto.CreateThreadPayload{
+	basePayload := marshalCoreTestJSON(t, "marshal base payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Native anonymous disabled base",
 		Body:  "root post",
 	})
-	if err != nil {
-		t.Fatalf("marshal base payload: %v", err)
-	}
 	baseRecord := CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:     2,
@@ -14791,31 +9371,19 @@ func TestNativeCommandLogDecisionExecutorRejectsAnonymousWhenDisabled(t *testing
 	if baseReply.Err != nil || len(baseEvents) != 2 {
 		t.Fatalf("base native create reply = %+v, want decided thread events", baseReply)
 	}
-	threadPayload, ok := baseEvents[0].Payload.(*proto.ThreadNewPayload)
-	if !ok {
-		t.Fatalf("base thread payload = %T, want ThreadNewPayload", baseEvents[0].Payload)
-	}
+	threadPayload := requireNativeDecisionPayload[proto.ThreadNewPayload](t, baseEvents[0], "base thread payload")
 	eventStore := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
 	for _, event := range baseEvents {
 		if _, err := eventStore.Append(ctx, event); err != nil {
 			t.Fatalf("append base native event %s: %v", event.ID, err)
 		}
 	}
-	if _, err := c.MaterializeEventStorePartition(ctx, eventStore, EventStorePartitionMaterializationConfig{
-		Source:    "native-anonymous-disabled-test",
-		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
-		Limit:     10,
-	}); err != nil {
-		t.Fatalf("materialize base native events: %v", err)
-	}
-	appendPayload, err := json.Marshal(proto.AppendPostPayload{
+	materializeNativeDecisionPartition(t, ctx, c, eventStore, "native-anonymous-disabled-test", LogPartition{Kind: partitionBoard, Key: "general"}, 10, "materialize base native events")
+	appendPayload := marshalCoreTestJSON(t, "marshal anonymous reply payload", proto.AppendPostPayload{
 		Thread:    threadPayload.ID,
 		Anonymous: true,
 		Body:      "anonymous reply should need board policy",
 	})
-	if err != nil {
-		t.Fatalf("marshal anonymous reply payload: %v", err)
-	}
 	reply = executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionThread, Key: threadPayload.ID},
 		Offset:     1,
@@ -14825,7 +9393,5 @@ func TestNativeCommandLogDecisionExecutorRejectsAnonymousWhenDisabled(t *testing
 		Payload:    appendPayload,
 		EnqueuedAt: 3234,
 	})
-	if reply.Err == nil || reply.Err.Retryable || reply.Err.Code != proto.ErrForbidden {
-		t.Fatalf("anonymous reply = %+v, want terminal forbidden when board policy disables anonymity", reply)
-	}
+	requireNativeDecisionTerminalError(t, reply, proto.ErrForbidden, "anonymous reply")
 }

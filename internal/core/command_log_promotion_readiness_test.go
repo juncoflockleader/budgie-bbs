@@ -3,47 +3,46 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+func marshalCoreTestJSON(t *testing.T, label string, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return raw
+}
 
 func TestCommandLogPromotionReadinessReportsReadyAfterDrain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-readiness.db"), WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 	go c.Run(ctx)
 
-	goodPayload, err := json.Marshal(proto.CreateThreadPayload{
+	goodPayload := marshalCoreTestJSON(t, "marshal good payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Readiness applied",
 		Body:  "this should materialize",
 	})
-	if err != nil {
-		t.Fatalf("marshal good payload: %v", err)
-	}
 	if reply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, goodPayload, "readiness-applied"); reply.Err != nil {
 		t.Fatalf("enqueue good command: %+v", reply.Err)
 	}
-	badPayload, err := json.Marshal(proto.CreateThreadPayload{
+	badPayload := marshalCoreTestJSON(t, "marshal bad payload", proto.CreateThreadPayload{
 		Board: "missing",
 		Title: "Readiness terminal",
 		Body:  "this should terminally fail",
 	})
-	if err != nil {
-		t.Fatalf("marshal bad payload: %v", err)
-	}
 	if reply := c.ExecCmd(ctx, alice, proto.CmdCreateThread, badPayload, "readiness-terminal"); reply.Err != nil {
 		t.Fatalf("enqueue bad command: %+v", reply.Err)
 	}
@@ -53,11 +52,9 @@ func TestCommandLogPromotionReadinessReportsReadyAfterDrain(t *testing.T) {
 		Executor:  c,
 		BatchSize: 1,
 	})
-	if results, err := worker.DrainOnce(ctx); err != nil {
-		t.Fatalf("DrainOnce: %v results=%+v", err, results)
-	}
+	drainCommandLogWorkerOnce(t, ctx, worker, "DrainOnce")
 
-	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, CommandLogPromotionReadinessConfig{BatchSize: 1})
+	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, loadmodel.CommandLogPromotionReadinessConfig{BatchSize: 1})
 	if err != nil {
 		t.Fatalf("CheckCommandLogPromotionReadiness: %v", err)
 	}
@@ -79,36 +76,27 @@ func TestCommandLogPromotionReadinessReportsReadyAfterDrain(t *testing.T) {
 func TestCommandLogPromotionReadinessDetectsUncommittedLag(t *testing.T) {
 	ctx := context.Background()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-readiness-lag.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Queued but not committed",
 		Body:  "this command is intentionally left pending",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	if _, err := commandLog.Produce(ctx, CommandLogRecord{
+	produceBrokerCommandLogTestRecord(t, ctx, commandLog, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "readiness-lag",
 		Command:    proto.CmdCreateThread,
 		Payload:    payload,
 		EnqueuedAt: nowMS(),
-	}); err != nil {
-		t.Fatalf("Produce: %v", err)
-	}
+	}, "Produce")
 
-	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, CommandLogPromotionReadinessConfig{BatchSize: 1})
+	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, loadmodel.CommandLogPromotionReadinessConfig{BatchSize: 1})
 	if err != nil {
 		t.Fatalf("CheckCommandLogPromotionReadiness: %v", err)
 	}
@@ -130,40 +118,30 @@ func TestCommandLogPromotionReadinessDetectsUncommittedLag(t *testing.T) {
 func TestCommandLogPromotionReadinessDetectsCommittedMissingMaterialization(t *testing.T) {
 	ctx := context.Background()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-readiness-missing.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("RegisterUser: %v", err)
 	}
-	payload, err := json.Marshal(proto.CreateThreadPayload{
+	payload := marshalCoreTestJSON(t, "marshal payload", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "Committed without materialization",
 		Body:  "this command is intentionally not executed",
 	})
-	if err != nil {
-		t.Fatalf("marshal payload: %v", err)
-	}
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	record, err := commandLog.Produce(ctx, CommandLogRecord{
+	record := produceBrokerCommandLogTestRecord(t, ctx, commandLog, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    alice.ID,
 		CID:        "readiness-missing",
 		Command:    proto.CmdCreateThread,
 		Payload:    payload,
 		EnqueuedAt: nowMS(),
-	})
-	if err != nil {
-		t.Fatalf("Produce: %v", err)
-	}
+	}, "Produce")
 	if err := commandLog.CommitPartition(ctx, partition, record.Offset); err != nil {
 		t.Fatalf("CommitPartition: %v", err)
 	}
 
-	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, CommandLogPromotionReadinessConfig{BatchSize: 1})
+	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, loadmodel.CommandLogPromotionReadinessConfig{BatchSize: 1})
 	if err != nil {
 		t.Fatalf("CheckCommandLogPromotionReadiness: %v", err)
 	}
@@ -178,29 +156,58 @@ func TestCommandLogPromotionReadinessDetectsCommittedMissingMaterialization(t *t
 	}
 }
 
+func TestCommandLogPromotionReadinessReusesOffsetSnapshotForAudit(t *testing.T) {
+	ctx := context.Background()
+	baseLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
+	commandLog := &countingCommandLogOffsetAccess{
+		CommandLog: baseLog,
+		offsets:    baseLog,
+	}
+	c := newCoreTestCore(t)
+
+	partition := LogPartition{Kind: partitionBoard, Key: "general"}
+	record := produceBrokerCommandLogTestRecord(t, ctx, commandLog, CommandLogRecord{
+		Partition:  partition,
+		ActorID:    "usr_readiness_offset_snapshot",
+		CID:        "readiness-offset-snapshot",
+		Command:    proto.CmdCreateThread,
+		Payload:    json.RawMessage(`{}`),
+		EnqueuedAt: nowMS(),
+	}, "Produce")
+	if err := commandLog.CommitPartition(ctx, partition, record.Offset); err != nil {
+		t.Fatalf("CommitPartition: %v", err)
+	}
+
+	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, loadmodel.CommandLogPromotionReadinessConfig{BatchSize: 1})
+	if err != nil {
+		t.Fatalf("CheckCommandLogPromotionReadiness: %v", err)
+	}
+	if report.MaterializationAudit.MissingMaterialization != 1 {
+		t.Fatalf("materialization audit = %+v, want one missing materialization from reused snapshot", report.MaterializationAudit)
+	}
+	_, listOffsetCalls := commandLog.snapshot()
+	if listOffsetCalls != 1 {
+		t.Fatalf("ListCommandPartitionOffsets calls = %d, want one shared snapshot for readiness and audit", listOffsetCalls)
+	}
+}
+
 func TestCommandLogPromotionReadinessFailsWhenPartitionLimitTruncatesCoverage(t *testing.T) {
 	ctx := context.Background()
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-readiness-limit.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	for _, boardID := range []string{"general", "meta"} {
-		if _, err := commandLog.Produce(ctx, CommandLogRecord{
+		produceBrokerCommandLogTestRecord(t, ctx, commandLog, CommandLogRecord{
 			Partition:  LogPartition{Kind: partitionBoard, Key: boardID},
 			ActorID:    "usr_readiness_limit",
 			CID:        "readiness-limit-" + boardID,
 			Command:    proto.CmdCreateThread,
 			Payload:    json.RawMessage(`{}`),
 			EnqueuedAt: nowMS(),
-		}); err != nil {
-			t.Fatalf("Produce(%s): %v", boardID, err)
-		}
+		}, "Produce "+boardID)
 	}
 
-	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, CommandLogPromotionReadinessConfig{PartitionLimit: 1})
+	report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, loadmodel.CommandLogPromotionReadinessConfig{PartitionLimit: 1})
 	if err != nil {
 		t.Fatalf("CheckCommandLogPromotionReadiness: %v", err)
 	}

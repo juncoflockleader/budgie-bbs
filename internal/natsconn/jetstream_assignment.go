@@ -77,22 +77,10 @@ func NewJetStreamCommandPartitionAssigner(ctx context.Context, conn *Conn, optio
 	if conn == nil || conn.nc == nil {
 		return nil, fmt.Errorf("nats command assignment: nil connection")
 	}
-	bucket := strings.TrimSpace(options.Bucket)
-	if bucket == "" {
-		bucket = defaultJetStreamCommandAssignmentBucket
-	}
-	group := strings.TrimSpace(options.Group)
-	if group == "" {
-		group = defaultJetStreamCommandLogStream
-	}
-	wait := options.Wait
-	if wait <= 0 {
-		wait = defaultJetStreamEventLogWait
-	}
-	replicas := options.Replicas
-	if replicas <= 0 {
-		replicas = 1
-	}
+	bucket := JetStreamName(options.Bucket, defaultJetStreamCommandAssignmentBucket)
+	group := JetStreamName(options.Group, defaultJetStreamCommandLogStream)
+	wait := jetStreamWait(options.Wait)
+	replicas := jetStreamReplicas(options.Replicas)
 	js, err := conn.nc.JetStream(nats.MaxWait(wait))
 	if err != nil {
 		return nil, err
@@ -124,10 +112,7 @@ func NewJetStreamCommandPartitionAssigner(ctx context.Context, conn *Conn, optio
 }
 
 func newJetStreamCommandPartitionAssignerWithKV(kv commandAssignmentKV, group string) *JetStreamCommandPartitionAssigner {
-	group = strings.TrimSpace(group)
-	if group == "" {
-		group = defaultJetStreamCommandLogStream
-	}
+	group = JetStreamName(group, defaultJetStreamCommandLogStream)
 	return &JetStreamCommandPartitionAssigner{
 		kv:    kv,
 		key:   commandAssignmentGroupKey(group),
@@ -464,10 +449,7 @@ func normalizeCommandAssignmentMembers(members []string) []string {
 }
 
 func commandAssignmentGroupKey(group string) string {
-	group = strings.TrimSpace(group)
-	if group == "" {
-		group = defaultJetStreamCommandLogStream
-	}
+	group = JetStreamName(group, defaultJetStreamCommandLogStream)
 	return "group." + base64.RawURLEncoding.EncodeToString([]byte(group))
 }
 

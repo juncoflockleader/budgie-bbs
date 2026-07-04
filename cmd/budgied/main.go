@@ -6,31 +6,32 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/mailer"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/natsconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/nntp"
 	"github.com/juncoflockleader/budgie-bbs/internal/ratelimit"
 	"github.com/juncoflockleader/budgie-bbs/internal/redisconn"
+	"github.com/juncoflockleader/budgie-bbs/internal/runconfig"
+	"github.com/juncoflockleader/budgie-bbs/internal/runreport"
 	"github.com/juncoflockleader/budgie-bbs/internal/tracing"
 	"github.com/juncoflockleader/budgie-bbs/internal/tui"
 	"github.com/juncoflockleader/budgie-bbs/internal/wsapi"
@@ -42,7 +43,6 @@ import (
 var buildVersion = "dev"
 
 func main() {
-	kafkaSecurityDefaults := kafkaconn.RuntimeSecurityConfigFromEnv()
 	var (
 		dbPath                              = flag.String("db", "budgie.db", "SQLite database path")
 		storage                             = flag.String("storage", "sqlite", "Storage backend: sqlite or postgres")
@@ -83,22 +83,17 @@ func main() {
 		kafkaConsumerGroup                  = flag.String("kafka-consumer-group", kafkaconn.DefaultWriterConsumerGroup, "Kafka/Redpanda writer consumer group")
 		kafkaCommandPartitions              = flag.Int("kafka-command-partitions", 0, "Kafka/Redpanda command-topic partition count for logical-partition mapping")
 		kafkaEventPartitions                = flag.Int("kafka-event-partitions", 0, "Kafka/Redpanda event-topic partition count for logical event-partition mapping")
-		kafkaTLS                            = flag.Bool("kafka-tls", kafkaSecurityDefaults.TLS, "Enable TLS for Kafka/Redpanda connections (also read from BUDGIE_KAFKA_TLS)")
-		kafkaTLSCAFile                      = flag.String("kafka-tls-ca-file", kafkaSecurityDefaults.TLSCAFile, "Optional PEM CA bundle for Kafka/Redpanda TLS (also read from BUDGIE_KAFKA_TLS_CA_FILE)")
-		kafkaTLSServerName                  = flag.String("kafka-tls-server-name", kafkaSecurityDefaults.TLSServerName, "Optional TLS server name override for Kafka/Redpanda (also read from BUDGIE_KAFKA_TLS_SERVER_NAME)")
-		kafkaSASLMechanism                  = flag.String("kafka-sasl-mechanism", kafkaSecurityDefaults.SASLMechanism, "Kafka/Redpanda SASL mechanism: plain, scram-sha-256, or scram-sha-512 (also read from BUDGIE_KAFKA_SASL_MECHANISM)")
-		kafkaSASLUser                       = flag.String("kafka-sasl-user", kafkaSecurityDefaults.SASLUser, "Kafka/Redpanda SASL user (also read from BUDGIE_KAFKA_SASL_USER)")
-		kafkaSASLPassword                   = flag.String("kafka-sasl-password", kafkaSecurityDefaults.SASLPassword, "Kafka/Redpanda SASL password (also read from BUDGIE_KAFKA_SASL_PASSWORD)")
+		kafkaSecurityFlags                  = kafkaconn.RegisterRuntimeSecurityFlags(flag.CommandLine)
 		writeRegionURL                      = flag.String("write-region-url", "", "Authoritative write-region HTTP base URL for regional nodes; mutating HTTP API requests are proxied there (also read from BUDGIE_WRITE_REGION_URL)")
 		hotThreadSplits                     = flag.String("hot-thread-splits", "", "Comma-separated hot thread reply splits as thread_id=shards; use the same value on gateway and writer nodes")
 		commandLogShadow                    = flag.String("command-log-shadow", "", "Shadow command log backend: off, memory, nats, or kafka/redpanda")
-		commandLogShadowNATSStream          = flag.String("command-log-shadow-nats-stream", "BUDGIE_COMMAND_LOG", "NATS JetStream stream name for -command-log-shadow nats")
+		commandLogShadowNATSStream          = flag.String("command-log-shadow-nats-stream", natsconn.DefaultJetStreamCommandLogStream, "NATS JetStream stream name for -command-log-shadow nats")
 		commandLogShadowNATSReplicas        = flag.Int("command-log-shadow-nats-replicas", 1, "NATS JetStream replica count for -command-log-shadow nats")
 		commandLogAuthoritative             = flag.String("command-log-authoritative", "", "Authoritative command-log submit backend: off, memory, nats, or kafka/redpanda")
-		commandLogAuthoritativeNATSStream   = flag.String("command-log-authoritative-nats-stream", "BUDGIE_COMMAND_LOG", "NATS JetStream stream name for -command-log-authoritative nats")
+		commandLogAuthoritativeNATSStream   = flag.String("command-log-authoritative-nats-stream", natsconn.DefaultJetStreamCommandLogStream, "NATS JetStream stream name for -command-log-authoritative nats")
 		commandLogAuthoritativeNATSReplicas = flag.Int("command-log-authoritative-nats-replicas", 1, "NATS JetStream replica count for -command-log-authoritative nats")
 		commandLogWorker                    = flag.String("command-log-worker", "", "Experimental command-log writer backend: off, memory, nats, or kafka/redpanda for SQL executor")
-		commandLogWorkerNATSStream          = flag.String("command-log-worker-nats-stream", "BUDGIE_COMMAND_LOG", "NATS JetStream stream name for -command-log-worker nats")
+		commandLogWorkerNATSStream          = flag.String("command-log-worker-nats-stream", natsconn.DefaultJetStreamCommandLogStream, "NATS JetStream stream name for -command-log-worker nats")
 		commandLogWorkerNATSReplicas        = flag.Int("command-log-worker-nats-replicas", 1, "NATS JetStream replica count for -command-log-worker nats")
 		commandLogWorkerBatchSize           = flag.Int("command-log-worker-batch-size", 100, "Maximum command-log records fetched per partition drain")
 		commandLogWorkerConcurrency         = flag.Int("command-log-worker-partition-concurrency", 1, "Maximum command-log partitions drained concurrently by this writer")
@@ -112,7 +107,7 @@ func main() {
 		commandLogWorkerAssignBucket        = flag.String("command-log-worker-assignment-bucket", "", "NATS JetStream KV bucket for nats-kv command-log writer ownership")
 		commandLogWorkerID                  = flag.String("command-log-worker-id", defaultCommandLogWorkerID(), "Stable owner id used for command-log partition leases")
 		commandLogWorkerExecutor            = flag.String("command-log-worker-executor", "sql", "Experimental command-log writer executor: sql or native")
-		commandLogWorkerEventNATSStream     = flag.String("command-log-worker-event-nats-stream", "BUDGIE_EVENT_LOG", "NATS JetStream event-log stream name for -command-log-worker-executor native")
+		commandLogWorkerEventNATSStream     = flag.String("command-log-worker-event-nats-stream", natsconn.DefaultJetStreamEventLogStream, "NATS JetStream event-log stream name for -command-log-worker-executor native")
 		commandLogWorkerEventNATSReplicas   = flag.Int("command-log-worker-event-nats-replicas", 1, "NATS JetStream event-log replica count for -command-log-worker-executor native")
 		auditCommandLogMaterialization      = flag.Bool("audit-command-log-materialization", false, "Audit committed command-log offsets against SQL materialization receipts and exit; uses -command-log-worker backend/stream flags")
 		checkCommandLogPromotionReadiness   = flag.Bool("check-command-log-promotion-readiness", false, "Check command-log promotion readiness and exit; requires zero uncommitted lag plus complete SQL materialization audit")
@@ -121,11 +116,11 @@ func main() {
 		eventLogShadowReplayLimit           = flag.Int("event-log-shadow-replay-limit", 100, "Maximum events per partition replay parity window")
 		eventLogShadowPartitionLimit        = flag.Int("event-log-shadow-partition-limit", 100, "Maximum event partitions checked per parity interval")
 		eventLogShadowStartHead             = flag.Bool("event-log-shadow-start-at-head", true, "Seed shadow parity checkpoints at current SQL heads before tail checking")
-		eventLogShadowNATSStream            = flag.String("event-log-shadow-nats-stream", "BUDGIE_EVENT_LOG", "NATS JetStream stream name for -event-log-shadow nats")
+		eventLogShadowNATSStream            = flag.String("event-log-shadow-nats-stream", natsconn.DefaultJetStreamEventLogStream, "NATS JetStream stream name for -event-log-shadow nats")
 		eventLogShadowNATSReplicas          = flag.Int("event-log-shadow-nats-replicas", 1, "NATS JetStream replica count for -event-log-shadow nats")
 		checkEventLogPromotionReadiness     = flag.Bool("check-event-log-promotion-readiness", false, "Check SQL-vs-shadow event-log promotion readiness and exit; uses -event-log-shadow nats|kafka")
 		eventStoreProjection                = flag.String("event-store-projection", "", "Experimental broker event-store projection worker backend: off, nats, or kafka/redpanda")
-		eventStoreProjectionNATSStream      = flag.String("event-store-projection-nats-stream", "BUDGIE_EVENT_LOG", "NATS JetStream stream name for -event-store-projection nats")
+		eventStoreProjectionNATSStream      = flag.String("event-store-projection-nats-stream", natsconn.DefaultJetStreamEventLogStream, "NATS JetStream stream name for -event-store-projection nats")
 		eventStoreProjectionNATSReplicas    = flag.Int("event-store-projection-nats-replicas", 1, "NATS JetStream replica count for -event-store-projection nats")
 		eventStoreProjectionSource          = flag.String("event-store-projection-source", "", "Source name used in event-store projection watermarks; defaults to the projection backend")
 		eventStoreProjectionInterval        = flag.Duration("event-store-projection-interval", 5*time.Second, "Interval between broker event-store projection drains")
@@ -212,21 +207,21 @@ func main() {
 	flag.Parse()
 
 	roles := parseRoles(*roleList)
-	commandWorkerMode := normalizeLogBackend(*commandLogWorker)
-	commandAuthoritativeMode := normalizeLogBackend(*commandLogAuthoritative)
-	commandLogWorkerExecutorMode := normalizeCommandLogWorkerExecutor(*commandLogWorkerExecutor)
-	eventStoreProjectionMode := normalizeEventStoreProjectionMode(*eventStoreProjection)
+	commandWorkerMode := runconfig.NormalizeOptionalLogBackend(*commandLogWorker)
+	commandAuthoritativeMode := runconfig.NormalizeOptionalLogBackend(*commandLogAuthoritative)
+	commandLogWorkerExecutorMode := loadmodel.NormalizeCommandLogExecutor(*commandLogWorkerExecutor)
+	eventStoreProjectionMode := runconfig.NormalizeOptionalLogBackend(*eventStoreProjection)
 	eventStoreProjectionSourceName := strings.TrimSpace(*eventStoreProjectionSource)
 	if eventStoreProjectionSourceName == "" {
 		eventStoreProjectionSourceName = eventStoreProjectionMode
 	}
 	commandLogOneShot := *auditCommandLogMaterialization || *checkCommandLogPromotionReadiness
-	commandLogWorkerOwnershipMode := normalizeCommandLogWorkerOwnership(*commandLogWorkerOwnership)
-	counterStoreMode := normalizeCounterStoreBackend(*counterStoreBackend)
-	presenceStoreMode := normalizePresenceStoreBackend(*presenceStoreBackend)
-	chatStoreMode := normalizeChatStoreBackend(*chatStoreBackend)
-	readCacheMode := normalizeReadCacheBackend(*readCacheBackend)
-	postSearchIndexMode := normalizePostSearchIndexBackend(*postSearchIndexBackend)
+	commandLogWorkerOwnershipMode := runconfig.NormalizeCommandLogWorkerOwnership(*commandLogWorkerOwnership)
+	counterStoreMode := runconfig.NormalizeSQLOrNATSKVBackend(*counterStoreBackend)
+	presenceStoreMode := runconfig.NormalizeSQLOrNATSKVBackend(*presenceStoreBackend)
+	chatStoreMode := runconfig.NormalizeSQLOrNATSKVBackend(*chatStoreBackend)
+	readCacheMode := runconfig.NormalizeReadCacheBackend(*readCacheBackend)
+	postSearchIndexMode := runconfig.NormalizePostSearchIndexBackend(*postSearchIndexBackend)
 	commandLogWorkerGroupMemberIDs := parseCommandLogWorkerGroupMembers(*commandLogWorkerGroupMembers)
 	commandLogWorkerOverrides, parseOverridesErr := parseCommandLogWorkerAssignmentOverrides(*commandLogWorkerAssignmentOverrides)
 	if parseOverridesErr != nil {
@@ -278,44 +273,37 @@ func main() {
 	// Resolve storage backend and DSN (reads env var, handles backwards compat).
 	*storage, *pgDSN = resolveStorage(*storage, *pgDSN)
 	if *natsURL == "" {
-		*natsURL = envOr("BUDGIE_NATS_URL", "")
+		*natsURL = runconfig.EnvOr("BUDGIE_NATS_URL", "")
 	}
 	if *redisURL == "" {
-		*redisURL = envOr("BUDGIE_REDIS_URL", "")
+		*redisURL = runconfig.EnvOr("BUDGIE_REDIS_URL", "")
 	}
 	if *kafkaBrokers == "" {
-		*kafkaBrokers = envOr("BUDGIE_KAFKA_BROKERS", "")
+		*kafkaBrokers = runconfig.EnvOr("BUDGIE_KAFKA_BROKERS", "")
 	}
 	if strings.TrimSpace(*readCacheBackend) == "" {
-		*readCacheBackend = envOr("BUDGIE_READ_CACHE", "")
-		readCacheMode = normalizeReadCacheBackend(*readCacheBackend)
+		*readCacheBackend = runconfig.EnvOr("BUDGIE_READ_CACHE", "")
+		readCacheMode = runconfig.NormalizeReadCacheBackend(*readCacheBackend)
 	}
 	if strings.TrimSpace(*readCachePrefix) == "" {
-		*readCachePrefix = envOr("BUDGIE_READ_CACHE_PREFIX", "budgie")
+		*readCachePrefix = runconfig.EnvOr("BUDGIE_READ_CACHE_PREFIX", "budgie")
 	}
-	kafkaConfig := kafkaconn.RuntimeConfigFromOptions(*kafkaBrokers, *kafkaCommandTopic, *kafkaEventTopic, *kafkaConsumerGroup, kafkaconn.RuntimeSecurityConfig{
-		TLS:           *kafkaTLS,
-		TLSCAFile:     *kafkaTLSCAFile,
-		TLSServerName: *kafkaTLSServerName,
-		SASLMechanism: *kafkaSASLMechanism,
-		SASLUser:      *kafkaSASLUser,
-		SASLPassword:  *kafkaSASLPassword,
-	})
+	kafkaConfig := kafkaconn.RuntimeConfigFromOptions(*kafkaBrokers, *kafkaCommandTopic, *kafkaEventTopic, *kafkaConsumerGroup, kafkaSecurityFlags.Config())
 	kafkaCommandPartitionCount := int32(*kafkaCommandPartitions)
 	kafkaEventPartitionCount := int32(*kafkaEventPartitions)
 	if *writeRegionURL == "" {
-		*writeRegionURL = envOr("BUDGIE_WRITE_REGION_URL", "")
+		*writeRegionURL = runconfig.EnvOr("BUDGIE_WRITE_REGION_URL", "")
 	}
 	if *meiliSearchURL == "" {
-		*meiliSearchURL = envOr("BUDGIE_MEILISEARCH_URL", "")
+		*meiliSearchURL = runconfig.EnvOr("BUDGIE_MEILISEARCH_URL", "")
 	}
 	if *meiliSearchAPIKey == "" {
-		*meiliSearchAPIKey = envOr("BUDGIE_MEILISEARCH_API_KEY", "")
+		*meiliSearchAPIKey = runconfig.EnvOr("BUDGIE_MEILISEARCH_API_KEY", "")
 	}
 
 	// JWT secret: flag, then env. Refuses insecure values; generates an
 	// ephemeral random secret only when none is configured (dev convenience).
-	secret := resolveJWTSecret(envOr2(*jwtSecret, "BUDGIE_JWT_SECRET"))
+	secret := resolveJWTSecret(runconfig.ValueOrEnv(*jwtSecret, "BUDGIE_JWT_SECRET"))
 
 	if *initDB {
 		if *storage != "postgres" || *pgDSN == "" {
@@ -339,7 +327,7 @@ func main() {
 			slog.Error("postgres DSN required for migration", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
 			os.Exit(1)
 		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := runconfig.InterruptTimeoutContext(context.Background(), 0)
 		defer stop()
 		if err := core.MigrateSQLiteToPostgres(ctx, *dbPath, *pgDSN); err != nil {
 			slog.Error("sqlite->postgres migration failed", "err", err)
@@ -350,27 +338,11 @@ func main() {
 	}
 
 	if *checkEventLogPromotionReadiness {
-		var (
-			c   *core.Core
-			err error
-		)
-		if *storage == "postgres" {
-			if *pgDSN == "" {
-				slog.Error("postgres DSN required", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
-				os.Exit(1)
-			}
-			c, err = core.NewPostgres(*pgDSN)
-		} else {
-			c, err = core.New(*dbPath)
-		}
-		if err != nil {
-			slog.Error("core init failed", "err", err)
-			os.Exit(1)
-		}
+		c := openConfiguredCoreOrExit(*storage, *dbPath, *pgDSN)
 		defer c.DB.Close()
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := runconfig.InterruptTimeoutContext(context.Background(), 0)
 		defer stop()
-		readinessBackend := normalizeEventLogPromotionReadinessBackend(*eventLogShadow)
+		readinessBackend := runconfig.NormalizeEventLogPromotionReadinessBackend(*eventLogShadow)
 		store, cleanup, err := openEventLogPromotionReadinessStore(
 			ctx,
 			readinessBackend,
@@ -388,9 +360,7 @@ func main() {
 		}
 		defer cleanup()
 		report, err := c.CheckEventLogPromotionReadiness(ctx, store, *eventLogShadowReplayLimit, *eventLogShadowPartitionLimit)
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if printErr := encoder.Encode(report); printErr != nil {
+		if printErr := runreport.WriteJSON(os.Stdout, report, true); printErr != nil {
 			slog.Error("event-log promotion readiness report failed", "err", printErr)
 			os.Exit(1)
 		}
@@ -443,24 +413,11 @@ func main() {
 			slog.Error("post search index init failed", "backend", postSearchIndexMode, "err", err)
 			os.Exit(1)
 		}
-		var c *core.Core
-		if *storage == "postgres" {
-			if *pgDSN == "" {
-				slog.Error("postgres DSN required", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
-				os.Exit(1)
-			}
-			c, err = core.NewPostgres(*pgDSN, backfillOptions...)
-		} else {
-			c, err = core.New(*dbPath, backfillOptions...)
-		}
-		if err != nil {
-			slog.Error("core init failed", "err", err)
-			os.Exit(1)
-		}
+		c := openConfiguredCoreOrExit(*storage, *dbPath, *pgDSN, backfillOptions...)
 		defer c.DB.Close()
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := runconfig.InterruptTimeoutContext(context.Background(), 0)
 		defer stop()
-		source := normalizeProjectionRebuildSource(*rebuildSource)
+		source := runconfig.NormalizeProjectionRebuildSource(*rebuildSource)
 		var (
 			result      core.DerivedViewBackfillResult
 			backfillErr error
@@ -487,7 +444,7 @@ func main() {
 			requireEventLogPromotionReadiness(ctx, c, store, *eventLogShadowReplayLimit, "derived-view backfill", source)
 			result, backfillErr = c.BackfillDerivedViewsFromEventStore(ctx, store, views, *rebuildSeq)
 		default:
-			slog.Error("unsupported derived-view backfill source", "source", *rebuildSource, "supported", "sql,nats,kafka")
+			slog.Error("unsupported derived-view backfill source", "source", *rebuildSource, "supported", runconfig.SupportedProjectionRebuildSources())
 			os.Exit(1)
 		}
 		if backfillErr != nil {
@@ -503,26 +460,10 @@ func main() {
 	}
 
 	if *rebuild {
-		var (
-			c   *core.Core
-			err error
-		)
-		if *storage == "postgres" {
-			if *pgDSN == "" {
-				slog.Error("postgres DSN required", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
-				os.Exit(1)
-			}
-			c, err = core.NewPostgres(*pgDSN)
-		} else {
-			c, err = core.New(*dbPath)
-		}
-		if err != nil {
-			slog.Error("core init failed", "err", err)
-			os.Exit(1)
-		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		c := openConfiguredCoreOrExit(*storage, *dbPath, *pgDSN)
+		ctx, stop := runconfig.InterruptTimeoutContext(context.Background(), 0)
 		defer stop()
-		source := normalizeProjectionRebuildSource(*rebuildSource)
+		source := runconfig.NormalizeProjectionRebuildSource(*rebuildSource)
 		var rebuildErr error
 		switch source {
 		case "sql":
@@ -546,7 +487,7 @@ func main() {
 			requireEventLogPromotionReadiness(ctx, c, store, *eventLogShadowReplayLimit, "projection rebuild", source)
 			rebuildErr = c.RebuildProjectionsFromEventStore(ctx, store, *rebuildSeq)
 		default:
-			slog.Error("unsupported projection rebuild source", "source", *rebuildSource, "supported", "sql,nats,kafka")
+			slog.Error("unsupported projection rebuild source", "source", *rebuildSource, "supported", runconfig.SupportedProjectionRebuildSources())
 			os.Exit(1)
 		}
 		if rebuildErr != nil {
@@ -567,8 +508,8 @@ func main() {
 		err               error
 		natsBroker        *natsconn.Conn
 		coreOptions       []core.Option
-		commandMode       = normalizeLogBackend(*commandLogShadow)
-		shadowMode        = normalizeLogBackend(*eventLogShadow)
+		commandMode       = runconfig.NormalizeOptionalLogBackend(*commandLogShadow)
+		shadowMode        = runconfig.NormalizeOptionalLogBackend(*eventLogShadow)
 		commandLog        core.CommandLog
 		commandSubmitLog  core.CommandLog
 		commandLogMetrics core.CommandLog
@@ -590,8 +531,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if !isSupportedCommandLogBackend(commandMode) {
-		slog.Error("unsupported command log shadow backend", "backend", *commandLogShadow, "supported", "off,memory,nats,kafka")
+	if !runconfig.IsSupportedOptionalBrokerLogBackend(commandMode) {
+		slog.Error("unsupported command log shadow backend", "backend", *commandLogShadow, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
 	if commandAuthoritativeMode == "kafka" {
@@ -600,8 +541,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if !isSupportedCommandLogBackend(commandAuthoritativeMode) {
-		slog.Error("unsupported authoritative command log backend", "backend", *commandLogAuthoritative, "supported", "off,memory,nats,kafka")
+	if !runconfig.IsSupportedOptionalBrokerLogBackend(commandAuthoritativeMode) {
+		slog.Error("unsupported authoritative command log backend", "backend", *commandLogAuthoritative, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
 	if commandWorkerMode == "kafka" {
@@ -610,16 +551,16 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if !isSupportedCommandLogBackend(commandWorkerMode) {
-		slog.Error("unsupported command log worker backend", "backend", *commandLogWorker, "supported", "off,memory,nats,kafka")
+	if !runconfig.IsSupportedOptionalBrokerLogBackend(commandWorkerMode) {
+		slog.Error("unsupported command log worker backend", "backend", *commandLogWorker, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
-	if !isSupportedCommandLogWorkerOwnership(commandLogWorkerOwnershipMode) {
-		slog.Error("unsupported command log worker ownership", "ownership", *commandLogWorkerOwnership, "supported", "sql-lease,hash-assignment,nats-kv")
+	if !runconfig.IsSupportedCommandLogWorkerOwnership(commandLogWorkerOwnershipMode) {
+		slog.Error("unsupported command log worker ownership", "ownership", *commandLogWorkerOwnership, "supported", runconfig.SupportedCommandLogWorkerOwnershipModes())
 		os.Exit(1)
 	}
-	if !isSupportedCommandLogWorkerExecutor(commandLogWorkerExecutorMode) {
-		slog.Error("unsupported command log worker executor", "executor", *commandLogWorkerExecutor, "supported", "sql,native")
+	if !loadmodel.IsSupportedCommandLogDrainExecutorMode(commandLogWorkerExecutorMode) {
+		slog.Error("unsupported command log worker executor", "executor", *commandLogWorkerExecutor, "supported", runconfig.SupportedCommandLogExecutors())
 		os.Exit(1)
 	}
 	if shadowMode == "kafka" {
@@ -628,28 +569,28 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	if !isSupportedEventLogShadowBackend(shadowMode) {
-		slog.Error("unsupported event log shadow backend", "backend", *eventLogShadow, "supported", "off,memory,nats,kafka")
+	if !runconfig.IsSupportedOptionalBrokerLogBackend(shadowMode) {
+		slog.Error("unsupported event log shadow backend", "backend", *eventLogShadow, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
-	if !isSupportedEventStoreProjectionMode(eventStoreProjectionMode) {
-		slog.Error("unsupported event-store projection backend", "backend", *eventStoreProjection, "supported", "off,nats,kafka")
+	if !runconfig.IsSupportedOptionalNATSKafkaBackend(eventStoreProjectionMode) {
+		slog.Error("unsupported event-store projection backend", "backend", *eventStoreProjection, "supported", runconfig.SupportedOptionalNATSKafkaBackends())
 		os.Exit(1)
 	}
-	if !isSupportedCounterStoreBackend(counterStoreMode) {
-		slog.Error("unsupported counter store backend", "backend", *counterStoreBackend, "supported", "sql,nats-kv")
+	if !runconfig.IsSupportedSQLOrNATSKVBackend(counterStoreMode) {
+		slog.Error("unsupported counter store backend", "backend", *counterStoreBackend, "supported", runconfig.SupportedSQLOrNATSKVBackends())
 		os.Exit(1)
 	}
-	if !isSupportedPresenceStoreBackend(presenceStoreMode) {
-		slog.Error("unsupported presence store backend", "backend", *presenceStoreBackend, "supported", "sql,nats-kv")
+	if !runconfig.IsSupportedSQLOrNATSKVBackend(presenceStoreMode) {
+		slog.Error("unsupported presence store backend", "backend", *presenceStoreBackend, "supported", runconfig.SupportedSQLOrNATSKVBackends())
 		os.Exit(1)
 	}
-	if !isSupportedChatStoreBackend(chatStoreMode) {
-		slog.Error("unsupported chat store backend", "backend", *chatStoreBackend, "supported", "sql,nats-kv")
+	if !runconfig.IsSupportedSQLOrNATSKVBackend(chatStoreMode) {
+		slog.Error("unsupported chat store backend", "backend", *chatStoreBackend, "supported", runconfig.SupportedSQLOrNATSKVBackends())
 		os.Exit(1)
 	}
-	if !isSupportedReadCacheBackend(readCacheMode) {
-		slog.Error("unsupported read cache backend", "backend", *readCacheBackend, "supported", "off,memory,redis")
+	if !runconfig.IsSupportedReadCacheBackend(readCacheMode) {
+		slog.Error("unsupported read cache backend", "backend", *readCacheBackend, "supported", runconfig.SupportedReadCacheBackends())
 		os.Exit(1)
 	}
 	if readCacheMode == "redis" && *redisURL == "" {
@@ -696,8 +637,8 @@ func main() {
 		slog.Error("NATS KV chat store requires a NATS URL", "flag", "-nats", "env", "BUDGIE_NATS_URL")
 		os.Exit(1)
 	}
-	if !isSupportedPostSearchIndexBackend(postSearchIndexMode) {
-		slog.Error("unsupported post search index backend", "backend", *postSearchIndexBackend, "supported", "sql-fts,meilisearch")
+	if !runconfig.IsSupportedPostSearchIndexBackend(postSearchIndexMode) {
+		slog.Error("unsupported post search index backend", "backend", *postSearchIndexBackend, "supported", runconfig.SupportedPostSearchIndexBackends())
 		os.Exit(1)
 	}
 	if postSearchIndexMode == "meilisearch" && strings.TrimSpace(*meiliSearchURL) == "" {
@@ -786,100 +727,100 @@ func main() {
 		slog.Error("archive rankings processor requires the worker role", "roles", *roleList)
 		os.Exit(1)
 	}
-	if (*asyncPostSearch || *postSearchProcessor || postSearchIndexMode != "sql-fts") && containsString(derivedViewWatermarkViews, core.DerivedViewPostSearch) {
+	if (*asyncPostSearch || *postSearchProcessor || postSearchIndexMode != "sql-fts") && slices.Contains(derivedViewWatermarkViews, core.DerivedViewPostSearch) {
 		slog.Error("post search processor ownership cannot use compatibility watermark sync for search.posts",
 			"views", *derivedViewWatermarks,
 			"hint", "remove search.posts from -derived-view-watermarks and run -post-search-processor on a worker node")
 		os.Exit(1)
 	}
-	if *digestSearchProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewDigestSearch) {
+	if *digestSearchProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewDigestSearch) {
 		slog.Error("digest search processor ownership cannot use compatibility watermark sync for search.digest",
 			"views", *derivedViewWatermarks,
 			"hint", "remove search.digest from -derived-view-watermarks and run -digest-search-processor on a worker node")
 		os.Exit(1)
 	}
-	if *communityStatsProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewCommunityStats) {
+	if *communityStatsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewCommunityStats) {
 		slog.Error("community stats processor ownership cannot use compatibility watermark sync for community_stats",
 			"views", *derivedViewWatermarks,
 			"hint", "remove community_stats from -derived-view-watermarks and run -community-stats-processor on a worker node")
 		os.Exit(1)
 	}
-	if *latestFeedProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewLatestFeed) {
+	if *latestFeedProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewLatestFeed) {
 		slog.Error("latest feed processor ownership cannot use compatibility watermark sync for feeds.latest",
 			"views", *derivedViewWatermarks,
 			"hint", "remove feeds.latest from -derived-view-watermarks and run -latest-feed-processor on a worker node")
 		os.Exit(1)
 	}
-	if *residentFeedProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewResidentFeed) {
+	if *residentFeedProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewResidentFeed) {
 		slog.Error("resident feed processor ownership cannot use compatibility watermark sync for feeds.resident",
 			"views", *derivedViewWatermarks,
 			"hint", "remove feeds.resident from -derived-view-watermarks and run -resident-feed-processor on a worker node")
 		os.Exit(1)
 	}
-	if *boardSummariesProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewBoardSummaries) {
+	if *boardSummariesProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewBoardSummaries) {
 		slog.Error("board summaries processor ownership cannot use compatibility watermark sync for summaries.boards",
 			"views", *derivedViewWatermarks,
 			"hint", "remove summaries.boards from -derived-view-watermarks and run -board-summaries-processor on a worker node")
 		os.Exit(1)
 	}
-	if *unreadThreadSummariesProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewUnreadThreads) {
+	if *unreadThreadSummariesProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewUnreadThreads) {
 		slog.Error("unread thread summaries processor ownership cannot use compatibility watermark sync for summaries.unread_threads",
 			"views", *derivedViewWatermarks,
 			"hint", "remove summaries.unread_threads from -derived-view-watermarks and run -unread-thread-summaries-processor on a worker node")
 		os.Exit(1)
 	}
-	if *boardRankingsProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewBoardRankings) {
+	if *boardRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewBoardRankings) {
 		slog.Error("board rankings processor ownership cannot use compatibility watermark sync for rankings.boards",
 			"views", *derivedViewWatermarks,
 			"hint", "remove rankings.boards from -derived-view-watermarks and run -board-rankings-processor on a worker node")
 		os.Exit(1)
 	}
-	if *threadRankingsProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewThreadRankings) {
+	if *threadRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewThreadRankings) {
 		slog.Error("thread rankings processor ownership cannot use compatibility watermark sync for rankings.threads",
 			"views", *derivedViewWatermarks,
 			"hint", "remove rankings.threads from -derived-view-watermarks and run -thread-rankings-processor on a worker node")
 		os.Exit(1)
 	}
-	if *replyRankingsProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewReplyRankings) {
+	if *replyRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewReplyRankings) {
 		slog.Error("reply rankings processor ownership cannot use compatibility watermark sync for rankings.replies",
 			"views", *derivedViewWatermarks,
 			"hint", "remove rankings.replies from -derived-view-watermarks and run -reply-rankings-processor on a worker node")
 		os.Exit(1)
 	}
-	if *userRankingsProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewUserRankings) {
+	if *userRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewUserRankings) {
 		slog.Error("user rankings processor ownership cannot use compatibility watermark sync for rankings.users",
 			"views", *derivedViewWatermarks,
 			"hint", "remove rankings.users from -derived-view-watermarks and run -user-rankings-processor on a worker node")
 		os.Exit(1)
 	}
-	if *blessingRankingsProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewBlessingRankings) {
+	if *blessingRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewBlessingRankings) {
 		slog.Error("blessing rankings processor ownership cannot use compatibility watermark sync for rankings.blessings",
 			"views", *derivedViewWatermarks,
 			"hint", "remove rankings.blessings from -derived-view-watermarks and run -blessing-rankings-processor on a worker node")
 		os.Exit(1)
 	}
-	if *archiveRankingsProcessor && containsString(derivedViewWatermarkViews, core.DerivedViewArchiveRankings) {
+	if *archiveRankingsProcessor && slices.Contains(derivedViewWatermarkViews, core.DerivedViewArchiveRankings) {
 		slog.Error("archive rankings processor ownership cannot use compatibility watermark sync for rankings.archives",
 			"views", *derivedViewWatermarks,
 			"hint", "remove rankings.archives from -derived-view-watermarks and run -archive-rankings-processor on a worker node")
 		os.Exit(1)
 	}
-	if *asyncCommunityStatHistory && containsString(derivedViewWatermarkViews, core.DerivedViewCommunityStatHistory) {
+	if *asyncCommunityStatHistory && slices.Contains(derivedViewWatermarkViews, core.DerivedViewCommunityStatHistory) {
 		slog.Error("community stat history ownership cannot use compatibility watermark sync for community_stat_history",
 			"views", *derivedViewWatermarks,
 			"hint", "remove community_stat_history from -derived-view-watermarks; queued snapshot jobs advance the view watermark")
 		os.Exit(1)
 	}
 	if commandLogOneShot && commandWorkerMode == "" {
-		slog.Error("command-log one-shot check requires a command-log backend", "flag", "-command-log-worker", "supported", supportedCommandLogWorkerBackends())
+		slog.Error("command-log one-shot check requires a command-log backend", "flag", "-command-log-worker", "supported", runconfig.SupportedBrokerLogBackends())
 		os.Exit(1)
 	}
 	if roles["writer"] && commandWorkerMode == "" {
-		slog.Error("writer role requires a command-log worker backend", "flag", "-command-log-worker", "supported", supportedCommandLogWorkerBackends())
+		slog.Error("writer role requires a command-log worker backend", "flag", "-command-log-worker", "supported", runconfig.SupportedBrokerLogBackends())
 		os.Exit(1)
 	}
 	if commandLogWorkerExecutorMode == "native" && commandWorkerMode == "" {
-		slog.Error("native command-log worker executor requires a command-log worker backend", "flag", "-command-log-worker", "supported", supportedNativeCommandLogWorkerBackends())
+		slog.Error("native command-log worker executor requires a command-log worker backend", "flag", "-command-log-worker", "supported", runconfig.SupportedNATSKafkaBackends())
 		os.Exit(1)
 	}
 	if commandLogWorkerExecutorMode == "native" && commandWorkerMode != "nats" && commandWorkerMode != "kafka" {
@@ -912,7 +853,7 @@ func main() {
 			slog.Error("hash-assignment ownership requires group members", "flag", "-command-log-worker-group-members")
 			os.Exit(1)
 		}
-		if !containsString(commandLogWorkerGroupMemberIDs, *commandLogWorkerID) {
+		if !slices.Contains(commandLogWorkerGroupMemberIDs, *commandLogWorkerID) {
 			slog.Error("hash-assignment group members must include this writer id",
 				"ownerID", *commandLogWorkerID,
 				"groupMembers", strings.Join(commandLogWorkerGroupMemberIDs, ","))
@@ -931,7 +872,7 @@ func main() {
 			os.Exit(1)
 		}
 		for partition, ownerID := range commandLogWorkerOverrides {
-			if !containsString(commandLogWorkerGroupMemberIDs, ownerID) {
+			if !slices.Contains(commandLogWorkerGroupMemberIDs, ownerID) {
 				slog.Error("command-log assignment override owner is not in the worker group",
 					"partitionKind", partition.Kind,
 					"partitionKey", partition.Key,
@@ -950,7 +891,7 @@ func main() {
 			slog.Error("nats-kv ownership requires group members", "flag", "-command-log-worker-group-members")
 			os.Exit(1)
 		}
-		if !containsString(commandLogWorkerGroupMemberIDs, *commandLogWorkerID) {
+		if !slices.Contains(commandLogWorkerGroupMemberIDs, *commandLogWorkerID) {
 			slog.Error("nats-kv group members must include this writer id",
 				"ownerID", *commandLogWorkerID,
 				"groupMembers", strings.Join(commandLogWorkerGroupMemberIDs, ","))
@@ -1084,7 +1025,7 @@ func main() {
 		coreOptions = append(coreOptions, core.WithCommandLogShadow(shadowLog))
 		commandLogMetrics = shadowLog
 	} else {
-		slog.Error("unsupported command log shadow backend", "backend", *commandLogShadow, "supported", "off,memory,nats,kafka")
+		slog.Error("unsupported command log shadow backend", "backend", *commandLogShadow, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
 	if commandAuthoritativeMode == "" {
@@ -1120,7 +1061,7 @@ func main() {
 		coreOptions = append(coreOptions, core.WithAuthoritativeCommandLog(commandSubmitLog))
 		commandLogMetrics = commandSubmitLog
 	} else {
-		slog.Error("unsupported authoritative command log backend", "backend", *commandLogAuthoritative, "supported", "off,memory,nats,kafka")
+		slog.Error("unsupported authoritative command log backend", "backend", *commandLogAuthoritative, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
 	if commandWorkerMode == "" {
@@ -1174,7 +1115,7 @@ func main() {
 		}
 		commandLogMetrics = commandLog
 	} else {
-		slog.Error("unsupported command log worker backend", "backend", *commandLogWorker, "supported", "off,memory,nats,kafka")
+		slog.Error("unsupported command log worker backend", "backend", *commandLogWorker, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
 	if shadowMode == "" {
@@ -1224,7 +1165,7 @@ func main() {
 			StartAtHead:    *eventLogShadowStartHead,
 		}))
 	} else {
-		slog.Error("unsupported event log shadow backend", "backend", *eventLogShadow, "supported", "off,memory,nats,kafka")
+		slog.Error("unsupported event log shadow backend", "backend", *eventLogShadow, "supported", runconfig.SupportedOptionalBrokerLogBackends())
 		os.Exit(1)
 	}
 	if eventStoreProjectionMode == "nats" {
@@ -1273,15 +1214,10 @@ func main() {
 				return core.NewNATSBus(natsBroker, nodeID)
 			}, true))
 		}
-		c, err = core.NewPostgres(*pgDSN, coreOptions...)
 	default:
 		slog.Info("starting budgied", "storage", "sqlite", "db", *dbPath)
-		c, err = core.New(*dbPath, coreOptions...)
 	}
-	if err != nil {
-		slog.Error("core init failed", "err", err)
-		os.Exit(1)
-	}
+	c = openConfiguredCoreOrExit(*storage, *dbPath, *pgDSN, coreOptions...)
 	if commandLogIndex != nil {
 		commandLogIndex.BindDB(c.DB)
 	}
@@ -1295,7 +1231,7 @@ func main() {
 		defer cleanup()
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := runconfig.InterruptTimeoutContext(context.Background(), 0)
 	defer stop()
 
 	if *checkCommandLogPromotionReadiness {
@@ -1303,13 +1239,11 @@ func main() {
 			slog.Error("command-log promotion readiness check has no command log", "flag", "-command-log-worker")
 			os.Exit(1)
 		}
-		report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, core.CommandLogPromotionReadinessConfig{
+		report, err := c.CheckCommandLogPromotionReadiness(ctx, commandLog, loadmodel.CommandLogPromotionReadinessConfig{
 			PartitionLimit: *commandLogWorkerLimit,
 			BatchSize:      *commandLogWorkerBatchSize,
 		})
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if printErr := encoder.Encode(report); printErr != nil {
+		if printErr := runreport.WriteJSON(os.Stdout, report, true); printErr != nil {
 			slog.Error("command-log promotion readiness report failed", "err", printErr)
 			os.Exit(1)
 		}
@@ -1338,13 +1272,11 @@ func main() {
 			slog.Error("command-log materialization audit has no command log", "flag", "-command-log-worker")
 			os.Exit(1)
 		}
-		report, err := c.AuditCommandLogMaterialization(ctx, commandLog, core.CommandLogMaterializationAuditConfig{
+		report, err := c.AuditCommandLogMaterialization(ctx, commandLog, loadmodel.CommandLogMaterializationAuditConfig{
 			PartitionLimit: *commandLogWorkerLimit,
 			BatchSize:      *commandLogWorkerBatchSize,
 		})
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		if printErr := encoder.Encode(report); printErr != nil {
+		if printErr := runreport.WriteJSON(os.Stdout, report, true); printErr != nil {
 			slog.Error("command-log materialization audit report failed", "err", printErr)
 			os.Exit(1)
 		}
@@ -1370,14 +1302,14 @@ func main() {
 	// Signup captcha (off unless configured). Native mode reuses the JWT secret
 	// as its HMAC key when no dedicated captcha secret is set, so challenge
 	// hashes verify on any node.
-	capSecret := envOr2(*captchaSecret, "BUDGIE_CAPTCHA_SECRET")
+	capSecret := runconfig.ValueOrEnv(*captchaSecret, "BUDGIE_CAPTCHA_SECRET")
 	if capSecret == "" {
 		capSecret = string(secret)
 	}
 	c.SetCaptcha(core.CaptchaConfig{
-		Mode:      envOr2(*captchaMode, "BUDGIE_CAPTCHA_MODE"),
-		Provider:  envOr2(*captchaProvider, "BUDGIE_CAPTCHA_PROVIDER"),
-		SiteKey:   envOr2(*captchaSiteKey, "BUDGIE_CAPTCHA_SITE_KEY"),
+		Mode:      runconfig.ValueOrEnv(*captchaMode, "BUDGIE_CAPTCHA_MODE"),
+		Provider:  runconfig.ValueOrEnv(*captchaProvider, "BUDGIE_CAPTCHA_PROVIDER"),
+		SiteKey:   runconfig.ValueOrEnv(*captchaSiteKey, "BUDGIE_CAPTCHA_SITE_KEY"),
 		Secret:    capSecret,
 		VerifyURL: *captchaVerifyURL,
 	})
@@ -1385,9 +1317,9 @@ func main() {
 	// Outbound email + verification (off unless a From address is configured).
 	// Default transport is direct-to-MX; an SMTP relay (BUDGIE_SMTP_HOST) takes
 	// over when set, which is also how an ESP is wired in.
-	mailModeResolved := envOr2(*mailMode, "BUDGIE_MAIL_MODE")
-	mailFromResolved := envOr2(*mailFromAddr, "BUDGIE_MAIL_FROM")
-	smtpHostResolved := envOr2(*smtpHost, "BUDGIE_SMTP_HOST")
+	mailModeResolved := runconfig.ValueOrEnv(*mailMode, "BUDGIE_MAIL_MODE")
+	mailFromResolved := runconfig.ValueOrEnv(*mailFromAddr, "BUDGIE_MAIL_FROM")
+	smtpHostResolved := runconfig.ValueOrEnv(*smtpHost, "BUDGIE_SMTP_HOST")
 	if mailModeResolved == "" {
 		switch {
 		case mailFromResolved == "":
@@ -1403,14 +1335,14 @@ func main() {
 		From:     mailFromResolved,
 		Host:     smtpHostResolved,
 		Port:     *smtpPort,
-		Username: envOr2(*smtpUser, "BUDGIE_SMTP_USER"),
-		Password: envOr2(*smtpPassword, "BUDGIE_SMTP_PASSWORD"),
+		Username: runconfig.ValueOrEnv(*smtpUser, "BUDGIE_SMTP_USER"),
+		Password: runconfig.ValueOrEnv(*smtpPassword, "BUDGIE_SMTP_PASSWORD"),
 	})
 	if err != nil {
 		slog.Error("mailer configuration invalid", "err", err)
 		os.Exit(1)
 	}
-	c.SetMailer(mailerInstance, mailFromResolved, *requireEmailVerify, envOr2(*publicURL, "BUDGIE_PUBLIC_URL"))
+	c.SetMailer(mailerInstance, mailFromResolved, *requireEmailVerify, runconfig.ValueOrEnv(*publicURL, "BUDGIE_PUBLIC_URL"))
 	// Classify the backend so verification defaults make sense per environment:
 	//   no mailer        -> verification stays off (nothing can be sent)
 	//   loopback relay   -> mailpit-style dev catcher; surface its web inbox
@@ -1420,7 +1352,7 @@ func main() {
 			slog.Info("email verification requested but no mailer configured; verification disabled (set -mail-from to enable)")
 		}
 	} else {
-		devInbox := envOr2(*mailInboxURL, "BUDGIE_MAIL_INBOX_URL")
+		devInbox := runconfig.ValueOrEnv(*mailInboxURL, "BUDGIE_MAIL_INBOX_URL")
 		loopbackRelay := mailModeResolved == mailer.ModeRelay && isLoopbackHost(smtpHostResolved)
 		if devInbox == "" && loopbackRelay {
 			devInbox = "http://localhost:8025" // mailpit's default web inbox
@@ -1848,7 +1780,7 @@ func main() {
 			slog.Warn("invalid BUDGIE_SITEMAP_INTERVAL; using flag/default", "value", env, "err", err)
 		}
 	}
-	httpSrv.SetSEOConfig(envOr2(*publicURL, "BUDGIE_PUBLIC_URL"), sitemapIv)
+	httpSrv.SetSEOConfig(runconfig.ValueOrEnv(*publicURL, "BUDGIE_PUBLIC_URL"), sitemapIv)
 	mux := http.NewServeMux()
 	writeRegionProxyEnabled := strings.TrimSpace(*writeRegionURL) != ""
 	wsAllowCommands := !writeRegionProxyEnabled || commandAuthoritativeMode != ""
@@ -1960,13 +1892,6 @@ func configureAssetStore(c *core.Core) error {
 	return nil
 }
 
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
 // minJWTSecretLen is the minimum accepted length for a configured JWT/HMAC
 // signing secret. The token signing is HS256, so the secret is the entire
 // security of every session — short or guessable secrets allow token forgery.
@@ -2009,14 +1934,6 @@ func validateConfiguredJWTSecret(s string) error {
 		return fmt.Errorf("secret is %d bytes; need at least %d", len(s), minJWTSecretLen)
 	}
 	return nil
-}
-
-// envOr2 prefers a non-empty flag value, falling back to an env var.
-func envOr2(flagVal, envKey string) string {
-	if flagVal != "" {
-		return flagVal
-	}
-	return os.Getenv(envKey)
 }
 
 // isLoopbackHost reports whether host names the local machine — the marker of a
@@ -2146,28 +2063,12 @@ func parseRoles(list string) map[string]bool {
 	return roles
 }
 
-func normalizeLogBackend(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "off", "none":
-		return ""
-	case "jetstream":
-		return "nats"
-	case "kafka", "redpanda":
-		return "kafka"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
 func validateKafkaCommandLogBackend(mode string, config kafkaconn.RuntimeConfig, partitions int32) error {
 	if mode != "kafka" {
 		return nil
 	}
-	if err := config.ValidateCommandLog(); err != nil {
-		return err
-	}
-	if partitions <= 0 {
-		return fmt.Errorf("kafka command-log backend requires -kafka-command-partitions for logical partition mapping")
+	if err := config.ValidateCommandLogRuntime(partitions); err != nil {
+		return fmt.Errorf("kafka command-log backend requires %w", err)
 	}
 	return nil
 }
@@ -2176,11 +2077,8 @@ func validateKafkaEventShadowBackend(mode string, config kafkaconn.RuntimeConfig
 	if mode != "kafka" {
 		return nil
 	}
-	if err := config.ValidateEventLog(); err != nil {
-		return err
-	}
-	if eventPartitions <= 0 {
-		return fmt.Errorf("kafka event-log shadow requires -kafka-event-partitions for logical event-partition mapping")
+	if err := config.ValidateEventLogRuntime(eventPartitions); err != nil {
+		return fmt.Errorf("kafka event-log shadow requires %w", err)
 	}
 	return nil
 }
@@ -2190,14 +2088,8 @@ func validateKafkaCommandWorkerBackend(mode, executorMode string, config kafkaco
 		return nil
 	}
 	if executorMode == "native" {
-		if err := config.ValidateCommandEventTransaction(); err != nil {
-			return err
-		}
-		if commandPartitions <= 0 {
-			return fmt.Errorf("native Kafka command-log worker requires -kafka-command-partitions for logical command-partition mapping")
-		}
-		if eventPartitions <= 0 {
-			return fmt.Errorf("native Kafka command-log worker requires -kafka-event-partitions for logical event-partition mapping")
+		if err := config.ValidateCommandEventRuntime(commandPartitions, eventPartitions); err != nil {
+			return fmt.Errorf("native Kafka command-log worker requires %w", err)
 		}
 		return nil
 	}
@@ -2208,34 +2100,10 @@ func validateKafkaEventProjectionBackend(mode string, config kafkaconn.RuntimeCo
 	if mode != "kafka" {
 		return nil
 	}
-	if err := config.ValidateEventLog(); err != nil {
-		return err
-	}
-	if eventPartitions <= 0 {
-		return fmt.Errorf("kafka event-store projection requires -kafka-event-partitions for logical event-partition mapping")
+	if err := config.ValidateEventLogRuntime(eventPartitions); err != nil {
+		return fmt.Errorf("kafka event-store projection requires %w", err)
 	}
 	return nil
-}
-
-func normalizeEventLogPromotionReadinessBackend(raw string) string {
-	mode := normalizeLogBackend(raw)
-	if mode == "" {
-		return "nats"
-	}
-	return mode
-}
-
-func normalizeProjectionRebuildSource(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "sql":
-		return "sql"
-	case "nats", "jetstream":
-		return "nats"
-	case "kafka", "redpanda":
-		return "kafka"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
 }
 
 type projectionRebuildEventStoreOptions struct {
@@ -2250,28 +2118,21 @@ type projectionRebuildEventStoreOptions struct {
 }
 
 func openProjectionRebuildEventStore(ctx context.Context, options projectionRebuildEventStoreOptions) (string, core.EventStore, func(), error) {
-	source := normalizeProjectionRebuildSource(options.Source)
+	source := runconfig.NormalizeProjectionRebuildSource(options.Source)
 	switch source {
 	case "nats":
 		if strings.TrimSpace(options.NATSURL) == "" {
 			return "", nil, func() {}, fmt.Errorf("NATS projection rebuild source requires a NATS URL (-nats or BUDGIE_NATS_URL)")
 		}
-		natsBroker, err := natsconn.Dial(options.NATSURL)
-		if err != nil {
-			return "", nil, func() {}, fmt.Errorf("nats connection failed: %w", err)
-		}
-		store, err := natsconn.NewJetStreamEventStore(ctx, natsBroker, natsconn.JetStreamEventLogOptions{
+		store, cleanup, err := natsconn.OpenJetStreamEventStore(ctx, options.NATSURL, natsconn.JetStreamEventLogOptions{
 			Stream:   options.NATSStream,
 			Replicas: options.NATSReplicas,
 			ReadOnly: true,
 		})
 		if err != nil {
-			natsBroker.Close()
 			return "", nil, func() {}, fmt.Errorf("nats projection rebuild source init failed: %w", err)
 		}
-		return source, store, func() {
-			natsBroker.Close()
-		}, nil
+		return source, store, cleanup, nil
 	case "kafka":
 		clientID := strings.TrimSpace(options.ClientID)
 		if clientID == "" {
@@ -2283,37 +2144,30 @@ func openProjectionRebuildEventStore(ctx context.Context, options projectionRebu
 		}
 		return source, store, cleanup, nil
 	default:
-		return "", nil, func() {}, fmt.Errorf("unsupported projection rebuild source %q (supported: sql,nats,kafka)", options.Source)
+		return "", nil, func() {}, fmt.Errorf("unsupported projection rebuild source %q (supported: %s)", options.Source, runconfig.SupportedProjectionRebuildSources())
 	}
 }
 
 func openEventLogPromotionReadinessStore(ctx context.Context, mode, natsURL, natsStream string, natsReplicas int, kafkaConfig kafkaconn.RuntimeConfig, kafkaEventPartitions int32, clientID string, db *sql.DB) (core.EventStore, func(), error) {
-	mode = normalizeEventLogPromotionReadinessBackend(mode)
+	mode = runconfig.NormalizeEventLogPromotionReadinessBackend(mode)
 	switch mode {
 	case "nats":
 		if strings.TrimSpace(natsURL) == "" {
 			return nil, func() {}, fmt.Errorf("event-log promotion readiness requires a NATS URL (-nats or BUDGIE_NATS_URL)")
 		}
-		natsBroker, err := natsconn.Dial(natsURL)
-		if err != nil {
-			return nil, func() {}, fmt.Errorf("nats connection failed: %w", err)
-		}
-		store, err := natsconn.NewJetStreamEventStore(ctx, natsBroker, natsconn.JetStreamEventLogOptions{
+		store, cleanup, err := natsconn.OpenJetStreamEventStore(ctx, natsURL, natsconn.JetStreamEventLogOptions{
 			Stream:   natsStream,
 			Replicas: natsReplicas,
 			ReadOnly: true,
 		})
 		if err != nil {
-			natsBroker.Close()
 			return nil, func() {}, fmt.Errorf("nats event-log promotion source init failed: %w", err)
 		}
-		return store, func() {
-			natsBroker.Close()
-		}, nil
+		return store, cleanup, nil
 	case "kafka":
 		return openKafkaEventProjectionStore(ctx, kafkaConfig, kafkaEventPartitions, clientID, db)
 	default:
-		return nil, func() {}, fmt.Errorf("unsupported event-log promotion readiness backend %q (supported: nats,kafka)", mode)
+		return nil, func() {}, fmt.Errorf("unsupported event-log promotion readiness backend %q (supported: %s)", mode, runconfig.SupportedEventLogPromotionReadinessBackends())
 	}
 }
 
@@ -2324,26 +2178,13 @@ func openKafkaCommandLog(ctx context.Context, config kafkaconn.RuntimeConfig, pa
 	if index == nil {
 		return nil, func() {}, fmt.Errorf("kafka command log requires a command partition index")
 	}
-	runtime := config.Normalize()
-	client, err := kafkaconn.NewCommandLogRuntimeClient(ctx, kafkaconn.CommandLogRuntimeClientOptions{
-		Runtime:  runtime,
-		ClientID: clientID,
-	})
+	log, cleanup, err := kafkaconn.OpenRuntimeCommandLog(ctx, config, clientID, kafkaconn.CommandLogOptions{
+		PartitionCount: partitions,
+		Candidates:     index,
+	}, kafkaconn.FranzCommandLogClientOptions{})
 	if err != nil {
 		return nil, func() {}, err
 	}
-	cleanup := func() {
-		client.CloseAllowingRebalance()
-	}
-	log := kafkaconn.NewCommandLog(
-		kafkaconn.NewFranzCommandLogClient(client, kafkaconn.FranzCommandLogClientOptions{}),
-		kafkaconn.CommandLogOptions{
-			CommandTopic:   runtime.CommandTopic,
-			ConsumerGroup:  runtime.ConsumerGroup,
-			PartitionCount: partitions,
-			Candidates:     index,
-		},
-	)
 	return core.NewIndexedCommandLog(log, index), cleanup, nil
 }
 
@@ -2357,10 +2198,10 @@ func openKafkaNativeCommandLog(ctx context.Context, config kafkaconn.RuntimeConf
 		return nil, nil, func() {}, fmt.Errorf("kafka command log requires a command partition index")
 	}
 	runtime := config.Normalize()
-	commandProducerClient, err := kafkaconn.NewCommandLogProducerRuntimeClient(ctx, kafkaconn.CommandLogProducerRuntimeClientOptions{
-		Runtime:  runtime,
-		ClientID: clientID + "-command-producer",
-	})
+	commandProducerLog, commandProducerCleanup, err := kafkaconn.OpenRuntimeCommandProducerLog(ctx, config, clientID+"-command-producer", kafkaconn.CommandLogOptions{
+		PartitionCount: commandPartitions,
+		Candidates:     index,
+	}, kafkaconn.FranzCommandLogClientOptions{})
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -2369,17 +2210,8 @@ func openKafkaNativeCommandLog(ctx context.Context, config kafkaconn.RuntimeConf
 		if transactionPoolCleanup != nil {
 			transactionPoolCleanup()
 		}
-		commandProducerClient.Close()
+		commandProducerCleanup()
 	}
-	commandProducerLog := kafkaconn.NewCommandLog(
-		kafkaconn.NewFranzCommandLogClient(commandProducerClient, kafkaconn.FranzCommandLogClientOptions{}),
-		kafkaconn.CommandLogOptions{
-			CommandTopic:   runtime.CommandTopic,
-			ConsumerGroup:  runtime.ConsumerGroup,
-			PartitionCount: commandPartitions,
-			Candidates:     index,
-		},
-	)
 	log := core.NewSwitchableCommandLog(commandProducerLog)
 	binder := func(db *sql.DB) (core.CommandEventTransactionStore, error) {
 		if db == nil {
@@ -2425,110 +2257,26 @@ func openKafkaEventProjectionStore(ctx context.Context, config kafkaconn.Runtime
 	if db == nil {
 		return nil, func() {}, fmt.Errorf("kafka event-store projection requires a materialization database")
 	}
-	runtime := config.Normalize()
-	client, err := kafkaconn.NewEventLogRuntimeClient(ctx, kafkaconn.EventLogRuntimeClientOptions{
-		Runtime:  runtime,
-		ClientID: clientID,
-	})
-	if err != nil {
-		return nil, func() {}, err
-	}
-	cleanup := func() {
-		client.Close()
-	}
-	allocator := kafkaconn.NewSQLEventPositionAllocator(db, kafkaconn.SQLEventPositionAllocatorOptions{})
-	store := kafkaconn.NewEventStore(
-		kafkaconn.NewFranzEventLogClient(client, kafkaconn.FranzEventLogClientOptions{}),
-		kafkaconn.EventLogOptions{
-			EventTopic:     runtime.EventTopic,
-			PartitionCount: eventPartitions,
-			Partitions:     allocator,
-			Head:           allocator,
-		},
-	)
-	return store, cleanup, nil
+	return kafkaconn.OpenSQLPositionedRuntimeEventStore(ctx, config, clientID, db, kafkaconn.SQLEventPositionedEventStoreOptions{
+		PartitionCount: eventPartitions,
+	}, kafkaconn.FranzEventLogClientOptions{})
 }
 
 func openKafkaEventShadowStore(ctx context.Context, config kafkaconn.RuntimeConfig, eventPartitions int32, clientID string) (core.EventStore, func(), error) {
 	if err := validateKafkaEventShadowBackend("kafka", config, eventPartitions); err != nil {
 		return nil, func() {}, err
 	}
-	runtime := config.Normalize()
-	client, err := kafkaconn.NewEventLogRuntimeClient(ctx, kafkaconn.EventLogRuntimeClientOptions{
-		Runtime:  runtime,
-		ClientID: clientID,
-	})
-	if err != nil {
-		return nil, func() {}, err
-	}
-	cleanup := func() {
-		client.Close()
-	}
-	store := kafkaconn.NewEventLogShadowStore(client, kafkaconn.EventLogOptions{
-		EventTopic:     runtime.EventTopic,
+	return kafkaconn.OpenRuntimeEventShadowStore(ctx, config, clientID, kafkaconn.EventLogOptions{
 		PartitionCount: eventPartitions,
 	}, kafkaconn.FranzEventLogClientOptions{})
-	return store, cleanup, nil
-}
-
-func isSupportedCommandLogBackend(mode string) bool {
-	return isSupportedLogBackend(mode) || mode == "kafka"
-}
-
-func supportedCommandLogWorkerBackends() string {
-	return "memory,nats,kafka"
-}
-
-func supportedNativeCommandLogWorkerBackends() string {
-	return "nats,kafka"
-}
-
-func isSupportedLogBackend(mode string) bool {
-	return mode == "" || mode == "memory" || mode == "nats"
-}
-
-func isSupportedEventLogShadowBackend(mode string) bool {
-	return isSupportedLogBackend(mode) || mode == "kafka"
-}
-
-func normalizeCommandLogWorkerExecutor(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "sql", "postgres", "postgresql":
-		return "sql"
-	case "native", "broker-native", "event-transaction":
-		return "native"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedCommandLogWorkerExecutor(mode string) bool {
-	return mode == "sql" || mode == "native"
-}
-
-func normalizeEventStoreProjectionMode(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "off", "none":
-		return ""
-	case "jetstream":
-		return "nats"
-	case "redpanda":
-		return "kafka"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedEventStoreProjectionMode(mode string) bool {
-	return mode == "" || mode == "nats" || mode == "kafka"
 }
 
 func validateNativeCommandEventStreams(commandWorkerMode, executorMode, commandStream, eventStream string) error {
 	if commandWorkerMode != "nats" || executorMode != "native" {
 		return nil
 	}
-	commandStream = normalizeNATSStreamName(commandStream, "BUDGIE_COMMAND_LOG")
-	eventStream = normalizeNATSStreamName(eventStream, "BUDGIE_EVENT_LOG")
+	commandStream = natsconn.JetStreamName(commandStream, natsconn.DefaultJetStreamCommandLogStream)
+	eventStream = natsconn.JetStreamName(eventStream, natsconn.DefaultJetStreamEventLogStream)
 	if commandStream == eventStream {
 		return fmt.Errorf("native NATS command-log workers require distinct command and event streams; both resolved to %q", commandStream)
 	}
@@ -2539,106 +2287,19 @@ func validateSameProcessNativeWriterProjectionStreams(roles map[string]bool, com
 	if !roles["writer"] || commandWorkerMode != "nats" || executorMode != "native" || eventProjectionMode != "nats" {
 		return nil
 	}
-	writerEventStream = normalizeNATSStreamName(writerEventStream, "BUDGIE_EVENT_LOG")
-	projectionStream = normalizeNATSStreamName(projectionStream, "BUDGIE_EVENT_LOG")
+	writerEventStream = natsconn.JetStreamName(writerEventStream, natsconn.DefaultJetStreamEventLogStream)
+	projectionStream = natsconn.JetStreamName(projectionStream, natsconn.DefaultJetStreamEventLogStream)
 	if writerEventStream != projectionStream {
 		return fmt.Errorf("same-process native writer/projector must use the same event stream: -command-log-worker-event-nats-stream=%q -event-store-projection-nats-stream=%q", writerEventStream, projectionStream)
 	}
 	return nil
 }
 
-func normalizeNATSStreamName(raw, fallback string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fallback
-	}
-	return raw
-}
-
-func normalizeCommandLogWorkerOwnership(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "sql", "lease", "sql-lease":
-		return "sql-lease"
-	case "hash", "assignment", "hash-assignment":
-		return "hash-assignment"
-	case "nats", "nats-kv", "jetstream", "jetstream-kv":
-		return "nats-kv"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedCommandLogWorkerOwnership(mode string) bool {
-	return mode == "sql-lease" || mode == "hash-assignment" || mode == "nats-kv"
-}
-
-func normalizeCounterStoreBackend(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "sql", "postgres", "postgresql":
-		return "sql"
-	case "nats", "nats-kv", "jetstream", "jetstream-kv":
-		return "nats-kv"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedCounterStoreBackend(mode string) bool {
-	return mode == "sql" || mode == "nats-kv"
-}
-
-func normalizePresenceStoreBackend(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "sql", "postgres", "postgresql":
-		return "sql"
-	case "nats", "nats-kv", "jetstream", "jetstream-kv":
-		return "nats-kv"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedPresenceStoreBackend(mode string) bool {
-	return mode == "sql" || mode == "nats-kv"
-}
-
-func normalizeChatStoreBackend(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "sql", "postgres", "postgresql":
-		return "sql"
-	case "nats", "nats-kv", "jetstream", "jetstream-kv":
-		return "nats-kv"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedChatStoreBackend(mode string) bool {
-	return mode == "sql" || mode == "nats-kv"
-}
-
-func normalizeReadCacheBackend(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "off", "none", "disabled":
-		return ""
-	case "memory", "mem":
-		return "memory"
-	case "redis":
-		return "redis"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedReadCacheBackend(mode string) bool {
-	return mode == "" || mode == "memory" || mode == "redis"
-}
-
 func openReadCache(ctx context.Context, mode, redisURL, prefix string, ttl time.Duration) (core.ReadCache, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, func() {}, err
 	}
-	switch normalizeReadCacheBackend(mode) {
+	switch runconfig.NormalizeReadCacheBackend(mode) {
 	case "":
 		return nil, func() {}, nil
 	case "memory":
@@ -2662,23 +2323,8 @@ func openReadCache(ctx context.Context, mode, redisURL, prefix string, ttl time.
 	}
 }
 
-func normalizePostSearchIndexBackend(raw string) string {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "", "sql", "sql-fts", "sqlite", "postgres", "postgresql":
-		return "sql-fts"
-	case "meili", "meilisearch":
-		return "meilisearch"
-	default:
-		return strings.TrimSpace(strings.ToLower(raw))
-	}
-}
-
-func isSupportedPostSearchIndexBackend(mode string) bool {
-	return mode == "sql-fts" || mode == "meilisearch"
-}
-
 func postSearchIndexOptions(mode, meiliURL, meiliAPIKey, meiliIndex string, taskTimeout, pollInterval time.Duration) ([]core.Option, error) {
-	switch mode {
+	switch runconfig.NormalizePostSearchIndexBackend(mode) {
 	case "", "sql-fts":
 		return nil, nil
 	case "meilisearch":
@@ -2770,17 +2416,32 @@ func parseHotThreadSplits(raw string) (map[string]int, error) {
 	return splits, nil
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
 func hasLocalCommandProducerRole(roles map[string]bool, autoStats, counterCheckpoints bool) bool {
 	return roles["api"] || roles["gateway"] || roles["ssh"] || roles["nntp"] || (roles["worker"] && (autoStats || counterCheckpoints))
+}
+
+func openConfiguredCoreOrExit(storage, dbPath, pgDSN string, options ...core.Option) *core.Core {
+	c, err := openConfiguredCore(storage, dbPath, pgDSN, options...)
+	if err == nil {
+		return c
+	}
+	if storage == "postgres" && pgDSN == "" {
+		slog.Error("postgres DSN required", "flag", "-postgres-dsn", "env", "BUDGIE_POSTGRES_DSN")
+	} else {
+		slog.Error("core init failed", "err", err)
+	}
+	os.Exit(1)
+	return nil
+}
+
+func openConfiguredCore(storage, dbPath, pgDSN string, options ...core.Option) (*core.Core, error) {
+	if storage == "postgres" {
+		if pgDSN == "" {
+			return nil, fmt.Errorf("postgres DSN required")
+		}
+		return core.NewPostgres(pgDSN, options...)
+	}
+	return core.New(dbPath, options...)
 }
 
 func runCommandLogWorker(ctx context.Context, worker *core.CommandLogWorker, backend string, interval time.Duration) {
@@ -2924,7 +2585,7 @@ func roleAddr(enabled bool, addr any) string {
 // (the default), preserving backwards compatibility with -postgres-dsn usage.
 func resolveStorage(storage, pgDSN string) (resolvedStorage, resolvedDSN string) {
 	if pgDSN == "" {
-		pgDSN = envOr("BUDGIE_POSTGRES_DSN", "")
+		pgDSN = runconfig.EnvOr("BUDGIE_POSTGRES_DSN", "")
 	}
 	if pgDSN != "" && storage == "sqlite" {
 		storage = "postgres"

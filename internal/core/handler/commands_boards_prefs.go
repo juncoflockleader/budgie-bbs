@@ -13,8 +13,9 @@ import (
 )
 
 func (h *Handler) setBoardFavorite(actor *User, p proto.SetBoardFavoritePayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeSetBoardFavoritePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
@@ -24,21 +25,22 @@ func (h *Handler) setBoardFavorite(actor *User, p proto.SetBoardFavoritePayload)
 			return errReply
 		}
 	}
-	if err := setBoardFavorite(h.db, actor.ID, p.Board, p.FolderID, p.Position, p.Favorite); err != nil {
+	if err := currentRuntime().SetBoardFavorite(h.db, actor.ID, p.Board, p.FolderID, p.Position, p.Favorite); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
 func (h *Handler) setBoardZap(actor *User, p proto.SetBoardZapPayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeSetBoardZapPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
 	if p.Zapped {
-		settings, err := getBoardSettings(h.db, p.Board)
+		settings, err := currentRuntime().GetBoardSettings(h.db, p.Board)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -46,37 +48,31 @@ func (h *Handler) setBoardZap(actor *User, p proto.SetBoardZapPayload) Reply {
 			return Reply{Err: errDetail(proto.ErrConflict, "board cannot be zapped", false)}
 		}
 	}
-	if err := setBoardZap(h.db, actor.ID, p.Board, p.Zapped); err != nil {
+	if err := currentRuntime().SetBoardZap(h.db, actor.ID, p.Board, p.Zapped); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
 func (h *Handler) createFavoriteFolder(actor *User, p proto.CreateFavoriteFolderPayload) Reply {
-	name := strings.TrimSpace(p.Name)
-	if name == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "name is required", false)}
-	}
-	if len(name) > 80 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder name must be 80 characters or less", false)}
+	p, msg := proto.NormalizeCreateFavoriteFolderPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireFavoriteFolder(actor.ID, p.ParentID); errReply.Err != nil {
 		return errReply
 	}
 	folderID := newID("favfld_")
-	if err := createFavoriteFolder(h.db, actor.ID, folderID, p.ParentID, name, p.Position); err != nil {
+	if err := currentRuntime().CreateFavoriteFolder(h.db, actor.ID, folderID, p.ParentID, p.Name, p.Position); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: folderID}}
 }
 
 func (h *Handler) updateFavoriteFolder(actor *User, p proto.UpdateFavoriteFolderPayload) Reply {
-	if p.Folder == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder is required", false)}
-	}
-	name := strings.TrimSpace(p.Name)
-	if len(name) > 80 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder name must be 80 characters or less", false)}
+	p, msg := proto.NormalizeUpdateFavoriteFolderPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
 		return errReply
@@ -88,32 +84,34 @@ func (h *Handler) updateFavoriteFolder(actor *User, p proto.UpdateFavoriteFolder
 		if errReply := h.requireFavoriteFolder(actor.ID, *p.ParentID); errReply.Err != nil {
 			return errReply
 		}
-		if h.favoriteFolderContains(actor.ID, p.Folder, *p.ParentID) {
+		if contains, err := projections.FavoriteFolderContains(h.db, actor.ID, p.Folder, *p.ParentID); err == nil && contains {
 			return Reply{Err: errDetail(proto.ErrValidationFailed, "folder cannot move under its descendant", false)}
 		}
 	}
-	if err := updateFavoriteFolder(h.db, actor.ID, p.Folder, name, p.ParentID, p.Position); err != nil {
+	if err := currentRuntime().UpdateFavoriteFolder(h.db, actor.ID, p.Folder, p.Name, p.ParentID, p.Position); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Folder}}
 }
 
 func (h *Handler) deleteFavoriteFolder(actor *User, p proto.DeleteFavoriteFolderPayload) Reply {
-	if p.Folder == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "folder is required", false)}
+	p, msg := proto.NormalizeDeleteFavoriteFolderPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
 		return errReply
 	}
-	if err := deleteFavoriteFolder(h.db, actor.ID, p.Folder); err != nil {
+	if err := currentRuntime().DeleteFavoriteFolder(h.db, actor.ID, p.Folder); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Folder}}
 }
 
 func (h *Handler) moveBoardFavorite(actor *User, p proto.MoveBoardFavoritePayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeMoveBoardFavoritePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
@@ -121,13 +119,17 @@ func (h *Handler) moveBoardFavorite(actor *User, p proto.MoveBoardFavoritePayloa
 	if errReply := h.requireFavoriteFolder(actor.ID, p.FolderID); errReply.Err != nil {
 		return errReply
 	}
-	if err := moveBoardFavorite(h.db, actor.ID, p.Board, p.FolderID, p.Position); err != nil {
+	if err := currentRuntime().MoveBoardFavorite(h.db, actor.ID, p.Board, p.FolderID, p.Position); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
 func (h *Handler) importFavoriteTree(actor *User, p proto.ImportFavoriteTreePayload) Reply {
+	p, msg := proto.NormalizeImportFavoriteTreePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
 	replace := true
 	if p.Replace != nil {
 		replace = *p.Replace
@@ -151,15 +153,16 @@ func (h *Handler) importFavoriteTree(actor *User, p proto.ImportFavoriteTreePayl
 			Position: board.Position,
 		})
 	}
-	if err := importFavoriteTree(h.db, actor.ID, tree, replace); err != nil {
+	if err := currentRuntime().ImportFavoriteTree(h.db, actor.ID, tree, replace); err != nil {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, err.Error(), false)}
 	}
 	return Reply{Result: &proto.AckResult{}}
 }
 
 func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeSetBoardSettingsPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
@@ -167,23 +170,10 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 	if !h.actorCanSetBoardSettings(actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
 	}
-	patch := BoardSettingsPatch{
-		AnonymousAllowed:   p.AnonymousAllowed,
-		ReadOnly:           p.ReadOnly,
-		NoReply:            p.NoReply,
-		AttachmentsAllowed: p.AttachmentsAllowed,
-		MailInAllowed:      p.MailInAllowed,
-		RelayEnabled:       p.RelayEnabled,
-		MemberReadMode:     p.MemberReadMode,
-		MemberPostMode:     p.MemberPostMode,
-		StatsExcluded:      p.StatsExcluded,
-		ZapAllowed:         p.ZapAllowed,
-		GuestAccess:        p.GuestAccess,
-	}
-	if err := setBoardSettings(h.db, p.Board, patch); err != nil {
+	if err := currentRuntime().SetBoardSettings(h.db, p.Board, projections.BoardSettingsPatchFromPayload(p)); err != nil {
 		return internalErr(err)
 	}
-	settingLines := boardSettingsAuditLines(p)
+	settingLines := proto.BoardSettingsAuditLines(p)
 	if len(settingLines) > 0 {
 		lines := []string{
 			"Action: board settings changed",
@@ -202,101 +192,45 @@ func (h *Handler) setRecommendedBoard(actor *User, p proto.SetRecommendedBoardPa
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
-	boardID := strings.TrimSpace(p.Board)
-	if boardID == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeSetRecommendedBoardPayload(p)
+	if msg != "" && p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if errReply := h.requireBoard(boardID); errReply.Err != nil {
+	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if p.Position != nil && *p.Position < 0 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "position cannot be negative", false)}
-	}
-	note := strings.TrimSpace(p.Note)
-	if len(note) > 500 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "recommendation note must be 500 characters or less", false)}
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if p.Recommended {
-		if ok, reason, err := h.boardCanBePubliclyRecommended(boardID); err != nil {
+		if ok, reason, err := projections.BoardCanBePubliclyRecommended(h.db, p.Board); err != nil {
 			return internalErr(err)
 		} else if !ok {
 			return Reply{Err: errDetail(proto.ErrValidationFailed, reason, false)}
 		}
 	}
-	if err := setRecommendedBoard(h.db, boardID, note, actor.ID, p.Position, p.Recommended); err != nil {
+	if err := currentRuntime().SetRecommendedBoard(h.db, p.Board, p.Note, actor.ID, p.Position, p.Recommended); err != nil {
 		return internalErr(err)
 	}
-	return Reply{Result: &proto.AckResult{ID: boardID}}
-}
-
-func (h *Handler) boardCanBePubliclyRecommended(boardID string) (bool, string, error) {
-	if generatedSystemBoardIDSet[boardID] {
-		return false, "generated system boards cannot be recommended", nil
-	}
-	var visibility string
-	var memberReadMode, statsExcluded int
-	err := qQueryRow(
-		h.db,
-		`SELECT COALESCE(c.visibility, 'public'),
-		        COALESCE(s.member_read_mode, 0),
-		        COALESCE(s.stats_excluded, 0)
-		   FROM boards b
-		   LEFT JOIN categories c ON c.id=b.id
-		   LEFT JOIN board_settings s ON s.board_id=b.id
-		  WHERE b.id=?`,
-		boardID,
-	).Scan(&visibility, &memberReadMode, &statsExcluded)
-	if err != nil {
-		return false, "", err
-	}
-	if strings.ToLower(strings.TrimSpace(visibility)) != "public" {
-		return false, "only public directory boards can be recommended", nil
-	}
-	if memberReadMode != 0 {
-		return false, "member-read boards cannot be publicly recommended", nil
-	}
-	if statsExcluded != 0 {
-		return false, "stats-excluded boards cannot be publicly recommended", nil
-	}
-	return true, "", nil
-}
-
-var generatedSystemBoardIDSet = map[string]bool{
-	"0announce":       true,
-	"0moderation":     true,
-	"BBSLists":        true,
-	"Blessing":        true,
-	"Filter":          true,
-	"Goodbye":         true,
-	"GiveupNotice":    true,
-	"Recommend":       true,
-	"Registry":        true,
-	"bbsnet":          true,
-	"denypost":        true,
-	"newcomers":       true,
-	"notepad":         true,
-	"reject_registry": true,
-	"sysmail":         true,
-	"syssecurity":     true,
-	"undenypost":      true,
-	"vote":            true,
+	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
 func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayload) Reply {
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
-	if p.Board == "" || p.User == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board and user are required", false)}
+	p, msg := proto.NormalizeSetBoardModeratorPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	userID, userName, errReply := h.resolveUserRef(p.User)
+	user, errReply := ResolveUserRef(h.db, p.User)
 	if errReply.Err != nil {
 		return errReply
 	}
-	if err := setBoardModerator(h.db, p.Board, userID, actor.ID, p.Moderator, p.Position); err != nil {
+	if err := currentRuntime().SetBoardModerator(h.db, p.Board, user.ID, actor.ID, p.Moderator, p.Position); err != nil {
 		return internalErr(err)
 	}
 	action := "moderator removed"
@@ -306,7 +240,7 @@ func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayloa
 	if err := h.ensureSyssecuritySystemPost(actor, "Board "+action+": "+p.Board, []string{
 		"Action: board " + action,
 		"Board: " + p.Board,
-		"User: " + userName,
+		"User: " + user.Name,
 		"Actor: " + actor.Name,
 	}, p.Board); err != nil {
 		return internalErr(err)
@@ -315,63 +249,52 @@ func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayloa
 }
 
 func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Reply {
-	if p.Board == "" || p.User == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board and user are required", false)}
+	p, msg := proto.NormalizeSetBoardMemberPayload(p)
+	if msg != "" && (p.Board == "" || p.User == "") {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
 	canModerateBoard := h.actorCanModerateBoard(actor, p.Board)
 	canManageMembers := h.actorCanManageBoardMembers(actor, p.Board)
-	if !canModerateBoard && !canManageMembers {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board member manager permission required", false)}
+	if failure := proto.CheckBoardMemberManagerPermission(canModerateBoard, canManageMembers); failure != nil {
+		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 	}
-	userID, _, errReply := h.resolveUserRef(p.User)
+	user, errReply := ResolveUserRef(h.db, p.User)
 	if errReply.Err != nil {
 		return errReply
 	}
+	userID := user.ID
 	if !canModerateBoard {
-		if boardMemberPermissionsChanged(p) {
-			return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to change member permissions", false)}
+		if failure := proto.CheckSetBoardMemberPermissionChange(p, canModerateBoard); failure != nil {
+			return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 		}
-		if h.isBoardModerator(userID, p.Board) {
-			return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to manage board moderators", false)}
+		targetIsModerator := boardPermissionAllowed(projections.BoardModeratorExists(h.db, p.Board, userID))
+		if failure := proto.CheckSetBoardMemberTargetPermission(canModerateBoard, targetIsModerator, false); failure != nil {
+			return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 		}
-		privilegedMember, err := h.boardMemberHasDelegatedPermissions(p.Board, userID)
+		privilegedMember, err := projections.BoardMemberHasDelegatedPermissions(h.db, p.Board, userID)
 		if err != nil {
 			return internalErr(err)
 		}
-		if privilegedMember {
-			return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to manage delegated board members", false)}
+		if failure := proto.CheckSetBoardMemberTargetPermission(canModerateBoard, false, privilegedMember); failure != nil {
+			return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 		}
 	}
-	title := strings.TrimSpace(p.Title)
-	if len(title) > 80 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "member title must be 80 characters or less", false)}
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if p.Position != nil && *p.Position < 0 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "member position cannot be negative", false)}
-	}
-	patch := BoardMemberPatch{
-		Title:               title,
-		Position:            p.Position,
-		CanManageMembers:    p.CanManageMembers,
-		CanCurate:           p.CanCurate,
-		CanModeratePosts:    p.CanModeratePosts,
-		CanModerateThreads:  p.CanModerateThreads,
-		CanAnnounce:         p.CanAnnounce,
-		CanManagePolls:      p.CanManagePolls,
-		CanSetBoardSettings: p.CanSetBoardSettings,
-	}
-	if err := setBoardMember(h.db, p.Board, userID, p.Member, patch); err != nil {
+	if err := currentRuntime().SetBoardMember(h.db, p.Board, userID, p.Member, projections.BoardMemberPatchFromPayload(p)); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
 func (h *Handler) setBoardMemberRequirements(actor *User, p proto.SetBoardMemberRequirementsPayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeSetBoardMemberRequirementsPayload(p)
+	if msg != "" && p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
@@ -379,59 +302,27 @@ func (h *Handler) setBoardMemberRequirements(actor *User, p proto.SetBoardMember
 	if !h.actorCanSetBoardSettings(actor, p.Board) {
 		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
 	}
-	for _, field := range []struct {
-		name  string
-		value *int
-	}{
-		{"minLoginCount", p.MinLoginCount},
-		{"minPostCount", p.MinPostCount},
-		{"minTrustLevel", p.MinTrustLevel},
-		{"minScore", p.MinScore},
-		{"minBoardPostCount", p.MinBoardPostCount},
-		{"minBoardOriginalPostCount", p.MinBoardOriginalPostCount},
-		{"minBoardDigestCount", p.MinBoardDigestCount},
-		{"minBoardMarkCount", p.MinBoardMarkCount},
-		{"maxMembers", p.MaxMembers},
-	} {
-		if field.value != nil && *field.value < 0 {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, field.name+" must be non-negative", false)}
-		}
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	patch := BoardMemberRequirementsPatch{
-		MinLoginCount:             p.MinLoginCount,
-		MinPostCount:              p.MinPostCount,
-		MinTrustLevel:             p.MinTrustLevel,
-		MinScore:                  p.MinScore,
-		MinBoardPostCount:         p.MinBoardPostCount,
-		MinBoardOriginalPostCount: p.MinBoardOriginalPostCount,
-		MinBoardDigestCount:       p.MinBoardDigestCount,
-		MinBoardMarkCount:         p.MinBoardMarkCount,
-		MaxMembers:                p.MaxMembers,
-	}
-	if p.ApprovalMode != nil {
-		mode, errReply := normalizeBoardMemberApprovalMode(*p.ApprovalMode)
-		if errReply.Err != nil {
-			return errReply
-		}
-		patch.ApprovalMode = &mode
-	}
-	if err := setBoardMemberRequirements(h.db, p.Board, patch); err != nil {
+	if err := currentRuntime().SetBoardMemberRequirements(h.db, p.Board, projections.BoardMemberRequirementsPatchFromPayload(p)); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
 func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembershipPayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeApplyBoardMembershipPayload(p)
+	if msg != "" && p.Board == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if h.isBoardMember(actor.ID, p.Board) {
+	if boardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
 		return Reply{Err: errDetail(proto.ErrConflict, "already a board member", false)}
 	}
-	status, err := h.latestBoardMembershipApplicationStatus(p.Board, actor.ID)
+	status, err := projections.LatestBoardMemberApplicationStatus(h.db, p.Board, actor.ID)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -441,23 +332,22 @@ func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembership
 	case "blacklisted":
 		return Reply{Err: errDetail(proto.ErrForbidden, "membership application is blocked", false)}
 	}
-	note := strings.TrimSpace(p.Note)
-	if len(note) > 500 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "application note must be 500 characters or less", false)}
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	requirements, err := getBoardMemberRequirements(h.db, p.Board)
+	requirements, err := currentRuntime().GetBoardMemberRequirements(h.db, p.Board)
 	if err != nil {
 		return internalErr(err)
 	}
-	if errReply := h.requireBoardMembershipAdmission(p.Board, actor.ID, requirements); errReply.Err != nil {
+	if errReply := RequireBoardMembershipAdmission(h.db, counterStore(), p.Board, actor.ID, requirements); errReply.Err != nil {
 		return errReply
 	}
 	appID := newID("bmap_")
-	if err := insertBoardMemberApplication(h.db, appID, p.Board, actor.ID, note); err != nil {
+	if err := currentRuntime().InsertBoardMemberApplication(h.db, appID, p.Board, actor.ID, p.Note); err != nil {
 		return internalErr(err)
 	}
 	if requirements != nil && requirements.ApprovalMode == "auto" {
-		if err := reviewBoardMemberApplication(h.db, appID, actor.ID, "approved", "", "auto-approved by board membership rules"); err != nil {
+		if err := currentRuntime().ReviewBoardMemberApplication(h.db, appID, actor.ID, "approved", "", proto.BoardMembershipAutoApprovalNote); err != nil {
 			return internalErr(err)
 		}
 		if err := h.ensureBoardRegistrationSystemPost(actor, appID, "approved", p.Board, actor.ID); err != nil {
@@ -468,81 +358,70 @@ func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembership
 }
 
 func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembershipPayload) Reply {
-	if p.Application == "" || p.Status == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "application and status are required", false)}
+	p, msg := proto.NormalizeReviewBoardMembershipTargetPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	status, errReply := normalizeMemberApplicationStatus(p.Status)
-	if errReply.Err != nil {
-		return errReply
-	}
-	var boardID, userID, currentStatus string
-	err := qQueryRow(h.db, `SELECT board_id, user_id, status FROM board_member_applications WHERE id=?`, p.Application).Scan(&boardID, &userID, &currentStatus)
-	if err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "membership application not found", false)}
-	}
+	app, err := currentRuntime().GetBoardMemberApplication(h.db, p.Application)
 	if err != nil {
 		return internalErr(err)
 	}
-	if currentStatus != "pending" {
+	if app == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "membership application not found", false)}
+	}
+	if app.Status != "pending" {
 		return Reply{Err: errDetail(proto.ErrConflict, "membership application is already reviewed", false)}
 	}
-	canModerateBoard := h.actorCanModerateBoard(actor, boardID)
-	if !canModerateBoard && !h.actorCanManageBoardMembers(actor, boardID) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board member manager permission required", false)}
+	canModerateBoard := h.actorCanModerateBoard(actor, app.BoardID)
+	canManageMembers := h.actorCanManageBoardMembers(actor, app.BoardID)
+	if failure := proto.CheckReviewBoardMembershipPermission(canModerateBoard, canManageMembers, actor.ID, app.UserID, p.Status); failure != nil {
+		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 	}
-	if !canModerateBoard && actor.ID == userID {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to review your own application", false)}
+	p, msg = proto.NormalizeReviewBoardMembershipContent(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if !canModerateBoard && status == "blacklisted" {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board moderator role required to blacklist membership applications", false)}
-	}
-	title := strings.TrimSpace(p.Title)
-	if len(title) > 80 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "member title must be 80 characters or less", false)}
-	}
-	note := strings.TrimSpace(p.Note)
-	if len(note) > 500 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "review note must be 500 characters or less", false)}
-	}
-	if status == "approved" {
-		requirements, err := getBoardMemberRequirements(h.db, boardID)
+	if p.Status == "approved" {
+		requirements, err := currentRuntime().GetBoardMemberRequirements(h.db, app.BoardID)
 		if err != nil {
 			return internalErr(err)
 		}
-		if errReply := h.requireBoardMembershipAdmission(boardID, userID, requirements); errReply.Err != nil {
+		if errReply := RequireBoardMembershipAdmission(h.db, counterStore(), app.BoardID, app.UserID, requirements); errReply.Err != nil {
 			return errReply
 		}
 	}
-	if err := reviewBoardMemberApplication(h.db, p.Application, actor.ID, status, title, note); err != nil {
+	if err := currentRuntime().ReviewBoardMemberApplication(h.db, p.Application, actor.ID, p.Status, p.Title, p.Note); err != nil {
 		return internalErr(err)
 	}
-	if err := h.ensureBoardRegistrationSystemPost(actor, p.Application, status, boardID, userID); err != nil {
+	if err := h.ensureBoardRegistrationSystemPost(actor, p.Application, p.Status, app.BoardID, app.UserID); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Application}}
 }
 
 func (h *Handler) leaveBoardMembership(actor *User, p proto.LeaveBoardMembershipPayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeLeaveBoardMembershipPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if !h.isBoardMember(actor.ID, p.Board) {
+	if !boardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board membership not found", false)}
 	}
-	if err := setBoardMember(h.db, p.Board, actor.ID, false, BoardMemberPatch{}); err != nil {
+	if err := currentRuntime().SetBoardMember(h.db, p.Board, actor.ID, false, BoardMemberPatch{}); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
 func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
-	if p.Post == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	p, msg := proto.NormalizeCuratePostTargetPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	post, err := getPost(h.db, p.Post)
+	post, err := currentRuntime().GetPost(h.db, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -552,21 +431,20 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 	if post.Redacted {
 		return Reply{Err: errDetail(proto.ErrConflict, "cannot curate a redacted post", false)}
 	}
-	thread, err := getThread(h.db, post.Thread)
+	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	kind, errReply := normalizeDigestKind(p.Kind)
-	if errReply.Err != nil {
-		return errReply
+	kind, title, path, note, msg := proto.NormalizeDigestCurationFields(p.Kind, p.Title, p.Path, p.Note)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if !h.actorCanCurateBoardKind(actor, thread.Board, kind) {
-		return Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(kind), false)}
+		return Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(kind), false)}
 	}
-	title := strings.TrimSpace(p.Title)
 	if title == "" {
 		title = fmt.Sprintf("%s #%d", thread.Title, post.CreatedSeq)
 	}
@@ -576,7 +454,7 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	entryID, err := upsertDigestEntryTx(
+	entryID, err := currentRuntime().UpsertDigestEntryTx(
 		tx,
 		newID("dig_"),
 		thread.Board,
@@ -584,8 +462,8 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 		post.ID,
 		kind,
 		title,
-		normalizeDigestPath(p.Path),
-		strings.TrimSpace(p.Note),
+		path,
+		note,
 		actor.ID,
 		ts,
 	)
@@ -599,12 +477,12 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 		TargetID:   post.ID,
 		Kind:       kind,
 		Title:      title,
-		Path:       normalizeDigestPath(p.Path),
-		Note:       strings.TrimSpace(p.Note),
+		Path:       path,
+		Note:       note,
 		CreatedBy:  actor.ID,
 		TS:         ts,
 	}
-	scopes := digestEventScopes(thread.Board)
+	scopes := proto.DigestEventScopes(thread.Board)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryUpserted, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -612,7 +490,7 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestEntryUpserted, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestEntryUpserted, seq, scopes, eventPayload, ts)
 	if kind == "announcement" {
 		if err := h.ensureAnnouncementSystemPost(actor, entryID); err != nil {
 			return internalErr(err)
@@ -627,24 +505,24 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 }
 
 func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
-	if p.Thread == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	p, msg := proto.NormalizeCurateThreadTargetPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	thread, err := getThread(h.db, p.Thread)
+	thread, err := currentRuntime().GetThread(h.db, p.Thread)
 	if err != nil {
 		return internalErr(err)
 	}
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	kind, errReply := normalizeDigestKind(p.Kind)
-	if errReply.Err != nil {
-		return errReply
+	kind, title, path, note, msg := proto.NormalizeDigestCurationFields(p.Kind, p.Title, p.Path, p.Note)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if !h.actorCanCurateBoardKind(actor, thread.Board, kind) {
-		return Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(kind), false)}
+		return Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(kind), false)}
 	}
-	title := strings.TrimSpace(p.Title)
 	if title == "" {
 		title = thread.Title
 	}
@@ -654,7 +532,7 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	entryID, err := upsertDigestEntryTx(
+	entryID, err := currentRuntime().UpsertDigestEntryTx(
 		tx,
 		newID("dig_"),
 		thread.Board,
@@ -662,8 +540,8 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 		thread.ID,
 		kind,
 		title,
-		normalizeDigestPath(p.Path),
-		strings.TrimSpace(p.Note),
+		path,
+		note,
 		actor.ID,
 		ts,
 	)
@@ -677,12 +555,12 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 		TargetID:   thread.ID,
 		Kind:       kind,
 		Title:      title,
-		Path:       normalizeDigestPath(p.Path),
-		Note:       strings.TrimSpace(p.Note),
+		Path:       path,
+		Note:       note,
 		CreatedBy:  actor.ID,
 		TS:         ts,
 	}
-	scopes := digestEventScopes(thread.Board)
+	scopes := proto.DigestEventScopes(thread.Board)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryUpserted, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -690,7 +568,7 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestEntryUpserted, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestEntryUpserted, seq, scopes, eventPayload, ts)
 	if kind == "announcement" {
 		if err := h.ensureAnnouncementSystemPost(actor, entryID); err != nil {
 			return internalErr(err)
@@ -705,8 +583,9 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 }
 
 func (h *Handler) removeDigestEntry(actor *User, p proto.RemoveDigestEntryPayload) Reply {
-	if p.Entry == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "entry is required", false)}
+	p, msg := proto.NormalizeRemoveDigestEntryPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	entry, errReply := h.digestEntryForCuration(actor, p.Entry)
 	if errReply.Err != nil {
@@ -725,10 +604,10 @@ func (h *Handler) removeDigestEntry(actor *User, p proto.RemoveDigestEntryPayloa
 		By:    actor.ID,
 		TS:    ts,
 	}
-	if err := removeDigestEntryFinalTx(tx, p.Entry, eventPayload.Board, eventPayload.Kind, eventPayload.By, eventPayload.TS); err != nil {
+	if err := currentRuntime().RemoveDigestEntryFinalTx(tx, p.Entry, eventPayload.Board, eventPayload.Kind, eventPayload.By, eventPayload.TS); err != nil {
 		return internalErr(err)
 	}
-	scopes := digestEventScopes(entry.BoardID)
+	scopes := proto.DigestEventScopes(entry.BoardID)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryRemoved, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -736,32 +615,34 @@ func (h *Handler) removeDigestEntry(actor *User, p proto.RemoveDigestEntryPayloa
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestEntryRemoved, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestEntryRemoved, seq, scopes, eventPayload, ts)
 	return Reply{Result: &proto.AckResult{ID: entry.ID, Seq: seq}}
 }
 
 func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayload) Reply {
-	if p.Entry == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "entry is required", false)}
+	p, msg := proto.NormalizeUpdateDigestEntryTargetPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	entry, errReply := h.digestEntryForCuration(actor, p.Entry)
 	if errReply.Err != nil {
 		return errReply
 	}
+	p, msg = proto.NormalizeUpdateDigestEntryPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
 	title := entry.Title
 	if p.Title != nil {
-		title = strings.TrimSpace(*p.Title)
-		if title == "" {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, "title is required", false)}
-		}
+		title = *p.Title
 	}
 	path := entry.Path
 	if p.Path != nil {
-		path = normalizeDigestPath(*p.Path)
+		path = *p.Path
 	}
 	note := entry.Note
 	if p.Note != nil {
-		note = strings.TrimSpace(*p.Note)
+		note = *p.Note
 	}
 	ts := nowMS()
 	tx, err := h.db.Begin()
@@ -786,7 +667,7 @@ func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayloa
 			return internalErr(err)
 		}
 	}
-	if err := updateDigestEntryTx(tx, entry.ID, title, path, note, ts); err != nil {
+	if err := currentRuntime().UpdateDigestEntryTx(tx, entry.ID, title, path, note, ts); err != nil {
 		return internalErr(err)
 	}
 	eventPayload := &proto.DigestEntryUpdatedPayload{
@@ -801,7 +682,7 @@ func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayloa
 		By:         actor.ID,
 		TS:         ts,
 	}
-	scopes := digestEventScopes(entry.BoardID)
+	scopes := proto.DigestEventScopes(entry.BoardID)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryUpdated, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -809,13 +690,14 @@ func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayloa
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestEntryUpdated, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestEntryUpdated, seq, scopes, eventPayload, ts)
 	return Reply{Result: &proto.AckResult{ID: entry.ID, Seq: seq}}
 }
 
 func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayload) Reply {
-	if p.Entry == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "entry is required", false)}
+	p, msg := proto.NormalizeSetDigestEntryBodyPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	entry, errReply := h.digestEntryForCuration(actor, p.Entry)
 	if errReply.Err != nil {
@@ -832,7 +714,7 @@ func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayl
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	if err := setDigestEntryBodyTx(tx, entry.ID, body, edited, ts); err != nil {
+	if err := currentRuntime().SetDigestEntryBodyTx(tx, entry.ID, body, edited, ts); err != nil {
 		return internalErr(err)
 	}
 	eventPayload := &proto.DigestEntryBodySetPayload{
@@ -844,7 +726,7 @@ func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayl
 		By:     actor.ID,
 		TS:     ts,
 	}
-	scopes := digestEventScopes(entry.BoardID)
+	scopes := proto.DigestEventScopes(entry.BoardID)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryBodySet, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -852,7 +734,7 @@ func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayl
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestEntryBodySet, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestEntryBodySet, seq, scopes, eventPayload, ts)
 	return Reply{Result: &proto.AckResult{ID: entry.ID, Seq: seq}}
 }
 
@@ -867,7 +749,7 @@ func (h *Handler) createDigestDirectory(actor *User, p proto.CreateDigestDirecto
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	directoryID, err := upsertDigestDirectoryTx(tx, newID("dir_"), boardID, kind, path, actor.ID, ts)
+	directoryID, err := currentRuntime().UpsertDigestDirectoryTx(tx, newID("dir_"), boardID, kind, path, actor.ID, ts)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -879,7 +761,7 @@ func (h *Handler) createDigestDirectory(actor *User, p proto.CreateDigestDirecto
 		CreatedBy: actor.ID,
 		TS:        ts,
 	}
-	scopes := digestEventScopes(boardID)
+	scopes := proto.DigestEventScopes(boardID)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestDirectorySet, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -887,7 +769,7 @@ func (h *Handler) createDigestDirectory(actor *User, p proto.CreateDigestDirecto
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestDirectorySet, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestDirectorySet, seq, scopes, eventPayload, ts)
 	return Reply{Result: &proto.AckResult{ID: directoryID, Seq: seq}}
 }
 
@@ -909,7 +791,7 @@ func (h *Handler) moveDigestPath(actor *User, p proto.MoveDigestPathPayload) Rep
 	}
 	defer tx.Rollback() //nolint
 	eventID := newID("evt_")
-	count, err := moveDigestPathFinalTx(tx, eventID, boardID, kind, fromPath, toPath, actor.ID, ts)
+	count, err := currentRuntime().MoveDigestPathFinalTx(tx, eventID, boardID, kind, fromPath, toPath, actor.ID, ts)
 	if err != nil {
 		if errors.Is(err, projections.ErrDigestPathConflict) {
 			return Reply{Err: errDetail(proto.ErrConflict, "digest path move would overwrite an existing entry", false)}
@@ -925,7 +807,7 @@ func (h *Handler) moveDigestPath(actor *User, p proto.MoveDigestPathPayload) Rep
 		By:       actor.ID,
 		TS:       ts,
 	}
-	scopes := digestEventScopes(boardID)
+	scopes := proto.DigestEventScopes(boardID)
 	seq, err := appendEvent(tx, eventID, proto.EvtDigestPathMoved, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -933,7 +815,7 @@ func (h *Handler) moveDigestPath(actor *User, p proto.MoveDigestPathPayload) Rep
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestPathMoved, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestPathMoved, seq, scopes, eventPayload, ts)
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count), Seq: seq}}
 }
 
@@ -945,11 +827,11 @@ func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Rep
 	if fromPath == toPath {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "destination path must differ from source path", false)}
 	}
-	count, err := countDigestPathEntries(h.db, boardID, kind, fromPath)
+	count, err := currentRuntime().CountDigestPathEntries(h.db, boardID, kind, fromPath)
 	if err != nil {
 		return internalErr(err)
 	}
-	dirCount, err := countDigestPathDirectories(h.db, boardID, kind, fromPath)
+	dirCount, err := currentRuntime().CountDigestPathDirectories(h.db, boardID, kind, fromPath)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -967,7 +849,7 @@ func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Rep
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	count, err = copyDigestPathTx(tx, boardID, kind, fromPath, toPath, actor.ID, ids, dirIDs, ts)
+	count, err = currentRuntime().CopyDigestPathTx(tx, boardID, kind, fromPath, toPath, actor.ID, ids, dirIDs, ts)
 	if err != nil {
 		if errors.Is(err, projections.ErrDigestPathConflict) {
 			return Reply{Err: errDetail(proto.ErrConflict, "digest path copy would overwrite an existing entry", false)}
@@ -985,7 +867,7 @@ func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Rep
 		CreatedBy:    actor.ID,
 		TS:           ts,
 	}
-	scopes := digestEventScopes(boardID)
+	scopes := proto.DigestEventScopes(boardID)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestPathCopied, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -993,7 +875,7 @@ func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Rep
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestPathCopied, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestPathCopied, seq, scopes, eventPayload, ts)
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count), Seq: seq}}
 }
 
@@ -1009,7 +891,7 @@ func (h *Handler) deleteDigestPath(actor *User, p proto.DeleteDigestPathPayload)
 	}
 	defer tx.Rollback() //nolint
 	eventID := newID("evt_")
-	count, err := deleteDigestPathFinalTx(tx, eventID, boardID, kind, path, actor.ID, ts)
+	count, err := currentRuntime().DeleteDigestPathFinalTx(tx, eventID, boardID, kind, path, actor.ID, ts)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1021,7 +903,7 @@ func (h *Handler) deleteDigestPath(actor *User, p proto.DeleteDigestPathPayload)
 		By:    actor.ID,
 		TS:    ts,
 	}
-	scopes := digestEventScopes(boardID)
+	scopes := proto.DigestEventScopes(boardID)
 	seq, err := appendEvent(tx, eventID, proto.EvtDigestPathDeleted, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -1029,93 +911,94 @@ func (h *Handler) deleteDigestPath(actor *User, p proto.DeleteDigestPathPayload)
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.publishDigestEvent(proto.EvtDigestPathDeleted, seq, scopes, eventPayload, ts)
+	h.publishEvent(proto.EvtDigestPathDeleted, seq, scopes, eventPayload, ts)
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count), Seq: seq}}
 }
 
 func (h *Handler) markBoardRead(actor *User, p proto.MarkBoardReadPayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeMarkBoardReadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
-		return errReply
-	}
-	if err := markBoardRead(h.db, actor.ID, p.Board); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: p.Board}}
+	return h.applyReadMarker(p.Board, func() Reply {
+		return h.requireBoard(p.Board)
+	}, func() error {
+		return currentRuntime().MarkBoardRead(h.db, actor.ID, p.Board)
+	})
 }
 
 func (h *Handler) restoreBoardRead(actor *User, p proto.RestoreBoardReadPayload) Reply {
-	if p.Board == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	p, msg := proto.NormalizeRestoreBoardReadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
-		return errReply
-	}
-	if err := restoreBoardRead(h.db, actor.ID, p.Board); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: p.Board}}
+	return h.applyReadMarker(p.Board, func() Reply {
+		return h.requireBoard(p.Board)
+	}, func() error {
+		return currentRuntime().RestoreBoardRead(h.db, actor.ID, p.Board)
+	})
 }
 
 func (h *Handler) markFavoriteFolderRead(actor *User, p proto.MarkFavoriteFolderReadPayload) Reply {
-	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
-		return errReply
-	}
-	if err := markFavoriteFolderRead(h.db, actor.ID, p.Folder); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: p.Folder}}
+	return h.applyReadMarker(p.Folder, func() Reply {
+		return h.requireFavoriteFolder(actor.ID, p.Folder)
+	}, func() error {
+		return currentRuntime().MarkFavoriteFolderRead(h.db, actor.ID, p.Folder)
+	})
 }
 
 func (h *Handler) restoreFavoriteFolderRead(actor *User, p proto.RestoreFavoriteFolderReadPayload) Reply {
-	if errReply := h.requireFavoriteFolder(actor.ID, p.Folder); errReply.Err != nil {
-		return errReply
-	}
-	if err := restoreFavoriteFolderRead(h.db, actor.ID, p.Folder); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: p.Folder}}
+	return h.applyReadMarker(p.Folder, func() Reply {
+		return h.requireFavoriteFolder(actor.ID, p.Folder)
+	}, func() error {
+		return currentRuntime().RestoreFavoriteFolderRead(h.db, actor.ID, p.Folder)
+	})
 }
 
 func (h *Handler) markThreadRead(actor *User, p proto.MarkThreadReadPayload) Reply {
-	if p.Thread == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	p, msg := proto.NormalizeMarkThreadReadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if errReply := h.requireThread(p.Thread); errReply.Err != nil {
-		return errReply
-	}
-	if err := markThreadRead(h.db, actor.ID, p.Thread); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: p.Thread}}
+	return h.applyReadMarker(p.Thread, func() Reply {
+		return h.requireThread(p.Thread)
+	}, func() error {
+		return currentRuntime().MarkThreadRead(h.db, actor.ID, p.Thread)
+	})
 }
 
 func (h *Handler) restoreThreadRead(actor *User, p proto.RestoreThreadReadPayload) Reply {
-	if p.Thread == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
+	p, msg := proto.NormalizeRestoreThreadReadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if errReply := h.requireThread(p.Thread); errReply.Err != nil {
-		return errReply
-	}
-	if err := restoreThreadRead(h.db, actor.ID, p.Thread); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: p.Thread}}
+	return h.applyReadMarker(p.Thread, func() Reply {
+		return h.requireThread(p.Thread)
+	}, func() error {
+		return currentRuntime().RestoreThreadRead(h.db, actor.ID, p.Thread)
+	})
 }
 
 func (h *Handler) markPostRead(actor *User, p proto.MarkPostReadPayload) Reply {
-	if p.Post == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
+	p, msg := proto.NormalizeMarkPostReadPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	if errReply := h.requirePost(p.Post); errReply.Err != nil {
+	return h.applyReadMarker(p.Post, func() Reply {
+		return h.requirePost(p.Post)
+	}, func() error {
+		return currentRuntime().MarkPostRead(h.db, actor.ID, p.Post)
+	})
+}
+
+func (h *Handler) applyReadMarker(targetID string, require func() Reply, update func() error) Reply {
+	if errReply := require(); errReply.Err != nil {
 		return errReply
 	}
-	if err := markPostRead(h.db, actor.ID, p.Post); err != nil {
+	if err := update(); err != nil {
 		return internalErr(err)
 	}
-	return Reply{Result: &proto.AckResult{ID: p.Post}}
+	return Reply{Result: &proto.AckResult{ID: targetID}}
 }
 
 type digestEntryForCommand struct {
@@ -1145,40 +1028,34 @@ func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*digestEn
 		return nil, internalErr(err)
 	}
 	if !h.actorCanCurateBoardKind(actor, entry.BoardID, entry.Kind) {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(entry.Kind), false)}
+		return nil, Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(entry.Kind), false)}
 	}
 	return &entry, Reply{}
 }
 
 func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath, toPath string) (string, string, string, string, Reply) {
-	boardID = strings.TrimSpace(boardID)
-	if boardID == "" {
-		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	boardID, msg := proto.NormalizeDigestPathMutationBoard(boardID)
+	if msg != "" {
+		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if errReply := h.requireBoard(boardID); errReply.Err != nil {
 		return "", "", "", "", errReply
 	}
-	if strings.TrimSpace(kind) == "" {
-		kind = "archive"
-	}
-	normalizedKind, errReply := normalizeDigestKind(kind)
-	if errReply.Err != nil {
-		return "", "", "", "", errReply
+	normalizedKind, msg := proto.NormalizeDigestPathMutationKind(kind)
+	if msg != "" {
+		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	if !h.actorCanCurateBoardKind(actor, boardID, normalizedKind) {
-		return "", "", "", "", Reply{Err: errDetail(proto.ErrForbidden, boardCurationPermissionMessage(normalizedKind), false)}
+		return "", "", "", "", Reply{Err: errDetail(proto.ErrForbidden, proto.DigestCurationPermissionMessage(normalizedKind), false)}
 	}
-	normalizedFrom := normalizeDigestPath(fromPath)
-	if normalizedFrom == "" {
-		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, "source path is required", false)}
+	normalizedFrom, normalizedTo, msg := proto.NormalizeDigestPathMutationPaths(fromPath, toPath)
+	if msg != "" {
+		return "", "", "", "", Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	return boardID, normalizedKind, normalizedFrom, normalizeDigestPath(toPath), Reply{}
+	return boardID, normalizedKind, normalizedFrom, normalizedTo, Reply{}
 }
 
-const announcementSystemBoardID = "0announce"
-const recommendSystemBoardID = "Recommend"
 const StatsSystemBoardID = "BBSLists"
-const statsSystemBoardID = StatsSystemBoardID
 
 type StatsSnapshotPlan struct {
 	MainThreadID    string
@@ -1194,69 +1071,25 @@ type StatsSystemPostPlan struct {
 	Body     string
 }
 
-const registrySystemBoardID = "Registry"
-const rejectRegistrySystemBoardID = "reject_registry"
-const syssecuritySystemBoardID = "syssecurity"
-const blessingSystemBoardID = "Blessing"
-
-type systemNoticeBoard struct {
-	ID          string
-	Name        string
-	Description string
-}
-
 func (h *Handler) publishSystemNotice(actor *User, p proto.PublishSystemNoticePayload) Reply {
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
-	board, ok := normalizeSystemNoticeBoard(p.Board)
-	if !ok {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "notice board must be notepad, GiveupNotice, or bbsnet", false)}
+	p, board, msg := proto.NormalizePublishSystemNoticePayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	title := strings.TrimSpace(p.Title)
-	if title == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "title is required", false)}
-	}
-	if len(title) > 160 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "title must be 160 characters or less", false)}
-	}
-	body := strings.TrimSpace(p.Body)
-	if body == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "body is required", false)}
-	}
-	if len(body) > 20000 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "body must be 20000 characters or less", false)}
-	}
-	source := strings.TrimSpace(p.Source)
-	if len(source) > 160 {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "source must be 160 characters or less", false)}
-	}
-	threadID, seq, err := h.appendSystemNoticePost(actor, board, title, body, source, nowMS())
+	threadID, seq, err := h.appendSystemNoticePost(actor, board, p.Title, p.Body, p.Source, nowMS())
 	if err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
-func normalizeSystemNoticeBoard(raw string) (systemNoticeBoard, bool) {
-	board := strings.TrimSpace(raw)
-	if board == "" || strings.EqualFold(board, "notepad") {
-		return systemNoticeBoard{ID: "notepad", Name: "notepad", Description: "Generated public system notes"}, true
-	}
-	switch strings.ToLower(board) {
-	case "giveupnotice", "giveup_notice":
-		return systemNoticeBoard{ID: "GiveupNotice", Name: "GiveupNotice", Description: "Generated give-up-net notices"}, true
-	case "bbsnet":
-		return systemNoticeBoard{ID: "bbsnet", Name: "bbsnet", Description: "Generated site-hop and network notices"}, true
-	default:
-		return systemNoticeBoard{}, false
-	}
-}
-
-func (h *Handler) appendSystemNoticePost(actor *User, board systemNoticeBoard, title, noticeBody, source string, ts int64) (string, int64, error) {
+func (h *Handler) appendSystemNoticePost(actor *User, board proto.SystemNoticeBoard, title, noticeBody, source string, ts int64) (string, int64, error) {
 	threadID := newID("notice_thr_")
 	postID := newID("notice_pst_")
-	body := formatSystemNoticeBody(board, title, noticeBody, source, actor.Name)
+	body := proto.FormatSystemNoticeBody(board, title, noticeBody, source, actor.Name)
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -1264,113 +1097,38 @@ func (h *Handler) appendSystemNoticePost(actor *User, board systemNoticeBoard, t
 	}
 	defer tx.Rollback() //nolint
 
-	boardCreated := false
-	var boardSeq int64
-	var exists int
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, board.ID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return "", 0, err
-		}
-		boardScopes := []string{"board:" + board.ID}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          board.ID,
-			Name:        board.Name,
-			Description: board.Description,
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return "", 0, err
-		}
-		if err := insertBoard(tx, board.ID, board.Name, board.Description, "", position); err != nil {
-			return "", 0, err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return "", 0, err
-	}
-
-	scopes := []string{"board:" + board.ID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: board.ID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
-	})
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     board.ID,
+		BoardName:   board.Name,
+		Description: board.Description,
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
 	if err != nil {
-		return "", 0, err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return "", 0, err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: board.ID, Author: actor.Name, AuthorID: actor.ID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return "", 0, err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return "", 0, err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return "", 0, err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, board.ID, actor.Name, body); err != nil {
 		return "", 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return "", 0, err
 	}
 
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + board.ID},
-			Payload: &proto.BoardCreatedPayload{ID: board.ID, Name: board.Name, Description: board.Description, By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: board.ID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
-	return threadID, pseq, nil
-}
-
-func formatSystemNoticeBody(board systemNoticeBoard, title, noticeBody, source, actorName string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n", title)
-	fmt.Fprintf(&b, "- Notice board: %s\n", board.Name)
-	fmt.Fprintf(&b, "- Actor: %s\n", actorName)
-	if source != "" {
-		fmt.Fprintf(&b, "- Source: %s\n", source)
-	}
-	b.WriteString("\n")
-	b.WriteString(noticeBody)
-	if !strings.HasSuffix(noticeBody, "\n") {
-		b.WriteByte('\n')
-	}
-	b.WriteString("\nGenerated public system notice.\n")
-	return b.String()
+	h.publishGeneratedEvents(events)
+	return threadID, events[len(events)-1].Seq, nil
 }
 
 func (h *Handler) ensureBlessingSystemPost(actor, target *User, blessingID, message string, ts int64) error {
-	threadID := "blessing_thr_" + blessingID
-	postID := "blessing_pst_" + blessingID
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
-	if err == nil {
-		return nil
-	}
-	if err != sql.ErrNoRows {
+	threadID, postID := proto.BlessingSystemPostIDs(blessingID)
+	exists, err := projections.ThreadExists(h.db, threadID)
+	if err != nil {
 		return err
 	}
+	if exists {
+		return nil
+	}
 
-	title := "Blessing: " + actor.Name + " -> " + target.Name
-	body := formatBlessingSystemBody(actor.Name, target.Name, message)
+	title := proto.BlessingSystemTitle(actor.Name, target.Name)
+	body := proto.FormatBlessingSystemBody(actor.Name, target.Name, message)
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -1378,96 +1136,24 @@ func (h *Handler) ensureBlessingSystemPost(actor, target *User, blessingID, mess
 	}
 	defer tx.Rollback() //nolint
 
-	boardCreated := false
-	var boardSeq int64
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, blessingSystemBoardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return err
-		}
-		boardScopes := []string{"board:" + blessingSystemBoardID}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          blessingSystemBoardID,
-			Name:        "Blessing",
-			Description: "Generated blessing rituals and rankings",
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return err
-		}
-		if err := insertBoard(tx, blessingSystemBoardID, "Blessing", "Generated blessing rituals and rankings", "", position); err != nil {
-			return err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return err
-	}
-
-	scopes := []string{"board:" + blessingSystemBoardID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: blessingSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
-	})
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     proto.BlessingSystemBoardID,
+		BoardName:   proto.BlessingSystemBoardName,
+		Description: proto.BlessingSystemBoardDescription,
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
 	if err != nil {
-		return err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: blessingSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, blessingSystemBoardID, actor.Name, body); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + blessingSystemBoardID},
-			Payload: &proto.BoardCreatedPayload{ID: blessingSystemBoardID, Name: "Blessing", Description: "Generated blessing rituals and rankings", By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: blessingSystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	h.publishGeneratedEvents(events)
 	return nil
-}
-
-func formatBlessingSystemBody(fromName, toName, message string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "# Blessing for %s\n\n", toName)
-	fmt.Fprintf(&b, "- From: %s\n", fromName)
-	fmt.Fprintf(&b, "- To: %s\n\n", toName)
-	if strings.TrimSpace(message) == "" {
-		b.WriteString("A public blessing was sent.\n")
-	} else {
-		b.WriteString(strings.TrimSpace(message))
-		if !strings.HasSuffix(message, "\n") {
-			b.WriteByte('\n')
-		}
-	}
-	b.WriteString("\nGenerated public blessing record.\n")
-	return b.String()
 }
 
 func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshotPayload) Reply {
@@ -1475,9 +1161,9 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
 	ts := nowMS()
-	dateLabel, dateID, errReply := normalizeStatsSnapshotDate(p.Date, ts)
-	if errReply.Err != nil {
-		return errReply
+	dateLabel, dateID, msg := proto.NormalizeStatsSnapshotDate(p.Date, ts)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	threadID, seq, err := h.ensureStatsSnapshotSystemPost(actor, dateLabel, dateID, ts)
 	if err != nil {
@@ -1535,21 +1221,6 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
-func normalizeStatsSnapshotDate(raw string, ts int64) (dateLabel, dateID string, reply Reply) {
-	raw = strings.TrimSpace(raw)
-	var day time.Time
-	var err error
-	if raw == "" {
-		day = time.UnixMilli(ts).UTC()
-	} else {
-		day, err = time.Parse("2006-01-02", raw)
-		if err != nil {
-			return "", "", Reply{Err: errDetail(proto.ErrValidationFailed, "date must be YYYY-MM-DD", false)}
-		}
-	}
-	return day.Format("2006-01-02"), day.Format("20060102"), Reply{}
-}
-
 func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts int64) (*StatsSnapshotPlan, error) {
 	dateLabel = strings.TrimSpace(dateLabel)
 	day, err := time.Parse("2006-01-02", dateLabel)
@@ -1567,7 +1238,7 @@ func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts 
 		Snapshot:     snapshot,
 	}
 	addPost := func(threadID, postID, title string, build func() (string, error)) error {
-		existingSeq, exists, err := h.statsExistingThreadSeq(threadID)
+		existingSeq, exists, err := projections.ThreadLastSeq(h.db, threadID)
 		if err != nil {
 			return err
 		}
@@ -1813,16 +1484,15 @@ func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts 
 	return plan, nil
 }
 
-func (h *Handler) statsExistingThreadSeq(threadID string) (int64, bool, error) {
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == sql.ErrNoRows {
-		return 0, false, nil
-	}
+func (h *Handler) prepareStatsSystemPost(threadID string, ts int64) (int64, bool, error) {
+	existingSeq, exists, err := projections.ThreadLastSeq(h.db, threadID)
 	if err != nil {
 		return 0, false, err
 	}
-	return existingSeq, true, nil
+	if err := currentRuntime().RecordCommunityStatSnapshot(h.db, ts); err != nil {
+		return 0, false, err
+	}
+	return existingSeq, exists, nil
 }
 
 func (h *Handler) planCurrentCommunityStatSnapshot(dateLabel string, ts int64) (projections.CommunityStatHistory, *projections.CommunityStats, error) {
@@ -2105,20 +1775,12 @@ func planCommunityStatHistorySelectSQL() string {
 func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_stats_" + dateID
 	postID := "bbslists_stats_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
@@ -2159,19 +1821,12 @@ func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID s
 func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_countlogins_" + dateID
 	postID := "bbslists_countlogins_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
@@ -2192,19 +1847,12 @@ func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, date
 func (h *Handler) ensureStatsUserActivityRankListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_statguy_" + dateID
 	postID := "bbslists_statguy_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	users, err := projections.ListUserRankings(h.db, 100, 0)
 	if err != nil {
@@ -2217,19 +1865,12 @@ func (h *Handler) ensureStatsUserActivityRankListSystemPost(actor *User, dateLab
 func (h *Handler) ensureStatsBoardOnlineListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_bonline_" + dateID
 	postID := "bbslists_bonline_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
@@ -2246,19 +1887,12 @@ func (h *Handler) ensureStatsBoardOnlineListSystemPost(actor *User, dateLabel, d
 func (h *Handler) ensureStatsOnlineUserRosterSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_uonline_" + dateID
 	postID := "bbslists_uonline_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
@@ -2308,7 +1942,7 @@ func (h *Handler) maskStatsOnlineUserRosterLocations(users []projections.SocialU
 }
 
 func (h *Handler) shouldMaskStatsOnlineUserBoard(boardID string) (bool, error) {
-	if generatedSystemBoardIDSet[boardID] {
+	if projections.IsGeneratedSystemBoardID(boardID) {
 		return true, nil
 	}
 	var memberReadMode, statsExcluded int
@@ -2332,19 +1966,12 @@ func (h *Handler) shouldMaskStatsOnlineUserBoard(boardID string) (bool, error) {
 func (h *Handler) ensureStatsBoardModeratorActivitySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_statbm_" + dateID
 	postID := "bbslists_statbm_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
 	if err != nil {
@@ -2365,19 +1992,12 @@ func (h *Handler) ensureStatsBoardModeratorActivitySystemPost(actor *User, dateL
 func (h *Handler) ensureStatsBoardModeratorHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_bms_" + dateID
 	postID := "bbslists_bms_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	terms, err := projections.ListPublicBoardModeratorTerms(h.db, 100, 0)
 	if err != nil {
@@ -2475,19 +2095,12 @@ func (h *Handler) getStatsBoardModerator(moderator projections.BoardModerator, o
 func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_boardlog_" + dateID
 	postID := "bbslists_boardlog_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
@@ -2508,19 +2121,12 @@ func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLab
 func (h *Handler) ensureStatsBoardRankListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_boardrank_" + dateID
 	postID := "bbslists_boardrank_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
 	if err != nil {
@@ -2539,19 +2145,12 @@ func (h *Handler) ensureStatsBoardRankListSystemPost(actor *User, dateLabel, dat
 func (h *Handler) ensureStatsNewBoardListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_newboards_" + dateID
 	postID := "bbslists_newboards_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	end, err := time.Parse("2006-01-02", dateLabel)
 	if err != nil {
@@ -2570,19 +2169,12 @@ func (h *Handler) ensureStatsNewBoardListSystemPost(actor *User, dateLabel, date
 func (h *Handler) ensureStatsRecommendedBoardListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_rcmdbrd_" + dateID
 	postID := "bbslists_rcmdbrd_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	boards, err := projections.ListRecommendedBoards(h.db, 100, 0)
 	if err != nil {
@@ -2595,19 +2187,12 @@ func (h *Handler) ensureStatsRecommendedBoardListSystemPost(actor *User, dateLab
 func (h *Handler) ensureStatsRecommendedArticleListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_commend_" + dateID
 	postID := "bbslists_commend_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	entries, err := projections.ListPublicRecommendedDigestEntries(h.db, 100, 0)
 	if err != nil {
@@ -2620,19 +2205,12 @@ func (h *Handler) ensureStatsRecommendedArticleListSystemPost(actor *User, dateL
 func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_toplog_" + dateID
 	postID := "bbslists_toplog_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
@@ -2653,19 +2231,12 @@ func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, d
 func (h *Handler) ensureStatsBlessingListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
 	threadID := "bbslists_bless_" + dateID
 	postID := "bbslists_bless_post_" + dateID
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, threadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return threadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	startAt, endAt, err := statsPeriodBounds(dateLabel, dateLabel)
 	if err != nil {
@@ -2746,19 +2317,12 @@ func statsPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
 }
 
 func (h *Handler) ensureStatsPeriodHistorySystemPost(actor *User, spec statsPeriodHistorySpec, ts int64) (string, int64, error) {
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, spec.ThreadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(spec.ThreadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return spec.ThreadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	history, err := projections.ListCommunityStatHistoryRange(h.db, spec.StartDay, spec.EndDay)
 	if err != nil {
@@ -2817,19 +2381,12 @@ func statsHotTopicPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
 }
 
 func (h *Handler) ensureStatsHotTopicPeriodHistorySystemPost(actor *User, spec statsPeriodHistorySpec, ts int64) (string, int64, error) {
-	var existingSeq int64
-	err := qQueryRow(h.db, `SELECT last_seq FROM threads WHERE id=?`, spec.ThreadID).Scan(&existingSeq)
-	if err == nil {
-		if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-			return "", 0, err
-		}
+	existingSeq, exists, err := h.prepareStatsSystemPost(spec.ThreadID, ts)
+	if err != nil {
+		return "", 0, err
+	}
+	if exists {
 		return spec.ThreadID, existingSeq, nil
-	}
-	if err != sql.ErrNoRows {
-		return "", 0, err
-	}
-	if err := recordCommunityStatSnapshot(h.db, ts); err != nil {
-		return "", 0, err
 	}
 	start, end, err := statsPeriodBounds(spec.StartDay, spec.EndDay)
 	if err != nil {
@@ -2866,82 +2423,24 @@ func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, bo
 	}
 	defer tx.Rollback() //nolint
 
-	boardCreated := false
-	var boardSeq int64
-	var exists int
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, statsSystemBoardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return "", 0, err
-		}
-		boardScopes := []string{"board:" + statsSystemBoardID}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          statsSystemBoardID,
-			Name:        "BBSLists",
-			Description: "Generated community rankings and statistics",
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return "", 0, err
-		}
-		if err := insertBoard(tx, statsSystemBoardID, "BBSLists", "Generated community rankings and statistics", "", position); err != nil {
-			return "", 0, err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return "", 0, err
-	}
-
-	authorName := actor.Name
-	authorID := actor.ID
-	scopes := []string{"board:" + statsSystemBoardID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
-	})
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     StatsSystemBoardID,
+		BoardName:   "BBSLists",
+		Description: "Generated community rankings and statistics",
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
 	if err != nil {
-		return "", 0, err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return "", 0, err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return "", 0, err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return "", 0, err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return "", 0, err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, statsSystemBoardID, authorName, body); err != nil {
 		return "", 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return "", 0, err
 	}
 
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + statsSystemBoardID},
-			Payload: &proto.BoardCreatedPayload{ID: statsSystemBoardID, Name: "BBSLists", Description: "Generated community rankings and statistics", By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: statsSystemBoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
-	return threadID, pseq, nil
+	h.publishGeneratedEvents(events)
+	return threadID, events[len(events)-1].Seq, nil
 }
 
 func formatStatsSnapshotBody(dateLabel string, stats *projections.CommunityStats, boards []projections.BoardRanking, threads []projections.ThreadRanking, replies []projections.ReplyRanking, users []projections.UserRanking, archives []projections.ArchiveRanking, blessings []projections.BlessingRanking, history []projections.CommunityStatHistory) string {
@@ -4096,100 +3595,40 @@ func formatStatsDuration(seconds int64) string {
 	return fmt.Sprintf("%dd %dh", days, hours)
 }
 
-type digestMirrorSystemBoard struct {
-	Kind        string
-	BoardID     string
-	Name        string
-	Description string
-	ThreadID    string
-	PostID      string
-	Default     string
-}
-
 func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) error {
-	return h.ensureDigestMirrorSystemPost(actor, entryID, digestMirrorSystemBoard{
-		Kind:        "announcement",
-		BoardID:     announcementSystemBoardID,
-		Name:        "0Announce",
-		Description: "Generated site-wide announcements",
-		ThreadID:    "ann_thr_",
-		PostID:      "ann_pst_",
-		Default:     "Announcement",
-	})
+	mirror, _ := projections.DigestMirrorSystemBoardForKind("announcement")
+	return h.ensureDigestMirrorSystemPost(actor, entryID, mirror)
 }
 
 func (h *Handler) ensureRecommendSystemPost(actor *User, entryID string) error {
-	return h.ensureDigestMirrorSystemPost(actor, entryID, digestMirrorSystemBoard{
-		Kind:        "recommended",
-		BoardID:     recommendSystemBoardID,
-		Name:        "Recommend",
-		Description: "Generated recommended articles and homepage recommendations",
-		ThreadID:    "recommend_thr_",
-		PostID:      "recommend_pst_",
-		Default:     "Recommended article",
-	})
+	mirror, _ := projections.DigestMirrorSystemBoardForKind("recommended")
+	return h.ensureDigestMirrorSystemPost(actor, entryID, mirror)
 }
 
-func (h *Handler) ensureDigestMirrorSystemPost(actor *User, entryID string, mirror digestMirrorSystemBoard) error {
-	export, err := getDigestExport(h.db, entryID)
+func (h *Handler) ensureDigestMirrorSystemPost(actor *User, entryID string, mirror projections.DigestMirrorSystemBoard) error {
+	export, err := currentRuntime().GetDigestExport(h.db, entryID)
 	if err != nil || export == nil {
 		return err
 	}
 	if export.Entry.Kind != mirror.Kind || export.Entry.BoardID == mirror.BoardID {
 		return nil
 	}
-	settings, err := getBoardSettings(h.db, export.Entry.BoardID)
+	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, export.Entry.BoardID)
 	if err != nil {
 		return err
 	}
-	if settings != nil && settings.MemberReadMode {
+	if !emit {
 		return nil
 	}
 
 	threadID := mirror.ThreadID + entryID
 	postID := mirror.PostID + entryID
-	var exists int
-	err = qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
-	if err == nil {
-		return nil
-	}
-	if err != sql.ErrNoRows {
-		return err
-	}
-
-	ts := nowMS()
-	tx, err := h.db.Begin()
+	exists, err := projections.ThreadExists(h.db, threadID)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() //nolint
-
-	boardCreated := false
-	var boardSeq int64
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, mirror.BoardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return err
-		}
-		boardScopes := []string{"board:" + mirror.BoardID}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          mirror.BoardID,
-			Name:        mirror.Name,
-			Description: mirror.Description,
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return err
-		}
-		if err := insertBoard(tx, mirror.BoardID, mirror.Name, mirror.Description, "", position); err != nil {
-			return err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return err
+	if exists {
+		return nil
 	}
 
 	title := strings.TrimSpace(export.Entry.Title)
@@ -4197,101 +3636,68 @@ func (h *Handler) ensureDigestMirrorSystemPost(actor *User, entryID string, mirr
 		title = mirror.Default
 	}
 	body := projections.FormatDigestExportText(export)
-	authorName := actor.Name
-	authorID := actor.ID
-	scopes := []string{"board:" + mirror.BoardID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: mirror.BoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
-	})
+	ts := nowMS()
+	tx, err := h.db.Begin()
 	if err != nil {
 		return err
 	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
+	defer tx.Rollback() //nolint
+
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     mirror.BoardID,
+		BoardName:   mirror.Name,
+		Description: mirror.Description,
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
 	if err != nil {
-		return err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: mirror.BoardID, Author: authorName, AuthorID: authorID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, mirror.BoardID, authorName, body); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + mirror.BoardID},
-			Payload: &proto.BoardCreatedPayload{ID: mirror.BoardID, Name: mirror.Name, Description: mirror.Description, By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: mirror.BoardID, Author: authorName, AuthorID: authorID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	h.publishGeneratedEvents(events)
 	return nil
 }
 
 func (h *Handler) ensureBoardRegistrationSystemPost(actor *User, applicationID, status, boardID, userID string) error {
-	switch status {
-	case "approved", "rejected", "blacklisted":
-	default:
+	boardIDOut, boardDescription, threadID, postID, ok := proto.BoardRegistrationSystemPlan(status, applicationID)
+	if !ok {
 		return nil
 	}
-	settings, err := getBoardSettings(h.db, boardID)
+	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, boardID)
 	if err != nil {
 		return err
 	}
-	if settings != nil && settings.MemberReadMode {
+	if !emit {
 		return nil
 	}
 
-	boardIDOut := registrySystemBoardID
-	boardNameOut := "Registry"
-	boardDescription := "Generated board registration approvals"
-	if status != "approved" {
-		boardIDOut = rejectRegistrySystemBoardID
-		boardNameOut = "reject_registry"
-		boardDescription = "Generated rejected board registrations"
+	exists, err := projections.ThreadExists(h.db, threadID)
+	if err != nil {
+		return err
 	}
-	threadID := "registry_" + status + "_thr_" + applicationID
-	postID := "registry_" + status + "_pst_" + applicationID
-	var exists int
-	err = qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
-	if err == nil {
+	if exists {
 		return nil
 	}
-	if err != sql.ErrNoRows {
-		return err
-	}
 
-	var sourceBoardName string
-	if err := qQueryRow(h.db, `SELECT name FROM boards WHERE id=?`, boardID).Scan(&sourceBoardName); err != nil {
+	sourceBoardName, found, err := projections.BoardName(h.db, boardID)
+	if err != nil {
 		return err
 	}
-	var applicantName string
-	if err := qQueryRow(h.db, `SELECT name FROM users WHERE id=?`, userID).Scan(&applicantName); err != nil {
+	if !found {
+		return sql.ErrNoRows
+	}
+	applicantName, err := projections.UserName(h.db, userID)
+	if err != nil {
 		return err
 	}
 
 	ts := nowMS()
-	title := "Board registration " + status + " " + applicationID
-	body := fmt.Sprintf("# %s\n\n- Application: %s\n- Status: %s\n- Board: %s (%s)\n- Applicant: %s\n- Reviewer: %s\n\nApplication and review notes are kept in the board member manager queue.\n",
-		title, applicationID, status, sourceBoardName, boardID, applicantName, actor.Name)
+	title, body := proto.BoardRegistrationSystemContent(status, applicationID, sourceBoardName, boardID, applicantName, actor.Name)
 
 	tx, err := h.db.Begin()
 	if err != nil {
@@ -4299,107 +3705,37 @@ func (h *Handler) ensureBoardRegistrationSystemPost(actor *User, applicationID, 
 	}
 	defer tx.Rollback() //nolint
 
-	boardCreated := false
-	var boardSeq int64
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, boardIDOut).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return err
-		}
-		boardScopes := []string{"board:" + boardIDOut}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          boardIDOut,
-			Name:        boardNameOut,
-			Description: boardDescription,
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return err
-		}
-		if err := insertBoard(tx, boardIDOut, boardNameOut, boardDescription, "", position); err != nil {
-			return err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return err
-	}
-
-	scopes := []string{"board:" + boardIDOut}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: boardIDOut, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
-	})
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     boardIDOut,
+		BoardName:   boardIDOut,
+		Description: boardDescription,
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
 	if err != nil {
-		return err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: boardIDOut, Author: actor.Name, AuthorID: actor.ID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, boardIDOut, actor.Name, body); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + boardIDOut},
-			Payload: &proto.BoardCreatedPayload{ID: boardIDOut, Name: boardNameOut, Description: boardDescription, By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: boardIDOut, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	h.publishGeneratedEvents(events)
 	return nil
 }
 
 func (h *Handler) ensureSyssecuritySystemPost(actor *User, title string, lines []string, sourceBoardID string) error {
-	if sourceBoardID != "" {
-		settings, err := getBoardSettings(h.db, sourceBoardID)
-		if err != nil {
-			return err
-		}
-		if settings != nil && settings.MemberReadMode {
-			return nil
-		}
+	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, sourceBoardID)
+	if err != nil {
+		return err
+	}
+	if !emit {
+		return nil
 	}
 
-	title = strings.TrimSpace(title)
-	if title == "" {
-		title = "Security notice"
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "# %s\n\n", title)
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fmt.Fprintf(&b, "- %s\n", line)
-	}
-	b.WriteString("\nGenerated security notices omit private notes and article content.\n")
-	body := b.String()
+	title = proto.NormalizeSyssecuritySystemTitle(title)
+	body := proto.FormatSyssecuritySystemBody(title, lines)
 
 	ts := nowMS()
 	threadID := newID("syssecurity_thr_")
@@ -4410,625 +3746,138 @@ func (h *Handler) ensureSyssecuritySystemPost(actor *User, title string, lines [
 	}
 	defer tx.Rollback() //nolint
 
-	boardCreated := false
-	var boardSeq int64
-	var exists int
-	err = qQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, syssecuritySystemBoardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		position, err := boardCategoryPosition(tx, "", nil)
-		if err != nil {
-			return err
-		}
-		boardScopes := []string{"board:" + syssecuritySystemBoardID}
-		boardSeq, err = appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          syssecuritySystemBoardID,
-			Name:        "syssecurity",
-			Description: "Generated security and administration audit log",
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return err
-		}
-		if err := insertBoard(tx, syssecuritySystemBoardID, "syssecurity", "Generated security and administration audit log", "", position); err != nil {
-			return err
-		}
-		boardCreated = true
-	} else if err != nil {
-		return err
-	}
-
-	scopes := []string{"board:" + syssecuritySystemBoardID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: syssecuritySystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts,
-	})
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     proto.SyssecuritySystemBoardID,
+		BoardName:   proto.SyssecuritySystemBoardID,
+		Description: proto.SyssecuritySystemBoardDescription,
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
 	if err != nil {
-		return err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return err
-	}
-	if err := insertThread(tx, &Thread{
-		ID: threadID, Board: syssecuritySystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := insertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return err
-	}
-	if err := bumpThread(tx, threadID, pseq); err != nil {
-		return err
-	}
-	if err := ftsInsertPost(tx, postID, threadID, syssecuritySystemBoardID, actor.Name, body); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	if boardCreated {
-		h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: []string{"board:" + syssecuritySystemBoardID},
-			Payload: &proto.BoardCreatedPayload{ID: syssecuritySystemBoardID, Name: "syssecurity", Description: "Generated security and administration audit log", By: actor.Name, TS: ts}, TS: ts})
-	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-		Payload: &proto.ThreadNewPayload{ID: threadID, Board: syssecuritySystemBoardID, Author: actor.Name, AuthorID: actor.ID, Title: title, TS: ts}, TS: ts})
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-		Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: actor.Name, AuthorID: actor.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts})
+	h.publishGeneratedEvents(events)
 	return nil
 }
 
-func normalizeDigestKind(kind string) (string, Reply) {
-	kind = strings.ToLower(strings.TrimSpace(kind))
-	if kind == "" {
-		kind = "digest"
-	}
-	switch kind {
-	case "digest", "archive", "recommended", "pinned", "announcement":
-		return kind, Reply{}
-	default:
-		return "", Reply{Err: errDetail(proto.ErrValidationFailed, `kind must be "digest", "archive", "recommended", "pinned", or "announcement"`, false)}
-	}
-}
-
-func boardCurationPermissionMessage(kind string) string {
-	if kind == "announcement" {
-		return "board announcement permission required"
-	}
-	return "board curator permission required"
-}
-
-func normalizeDigestPath(path string) string {
-	path = strings.TrimSpace(path)
-	path = strings.Trim(path, "/")
-	if len(path) > 120 {
-		return path[:120]
-	}
-	return path
-}
-
-func digestEventScopes(boardID string) []string {
-	return []string{"board:" + boardID, "digest:" + boardID, "digest:global"}
-}
-
-func (h *Handler) publishDigestEvent(kind proto.EventKind, seq int64, scopes []string, payload any, ts int64) {
-	h.bus.Publish(&proto.Event{Kind: kind, Seq: seq, Scopes: scopes, Payload: payload, TS: ts})
+func boardPermissionAllowed(ok bool, err error) bool {
+	return err == nil && ok
 }
 
 func (h *Handler) actorCanModerateBoard(actor *User, boardID string) bool {
-	if actor == nil {
-		return false
-	}
-	if actor.IsMod() {
-		return true
-	}
-	return h.isBoardModerator(actor.ID, boardID)
+	return boardPermissionAllowed(projections.ActorCanModerateBoard(h.db, actor, boardID))
 }
 
 func (h *Handler) actorCanUseMemberBoard(actor *User, boardID string) bool {
-	if h.actorCanModerateBoard(actor, boardID) {
-		return true
-	}
-	if actor == nil {
-		return false
-	}
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&exists)
-	return err == nil
+	return boardPermissionAllowed(projections.ActorCanUseMemberBoard(h.db, actor, boardID))
 }
 
 func (h *Handler) actorCanManageBoardMembers(actor *User, boardID string) bool {
-	if h.actorCanModerateBoard(actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermission(actor, boardID, "can_manage_members")
+	return boardPermissionAllowed(projections.ActorCanManageBoardMembers(h.db, actor, boardID))
 }
 
 func (h *Handler) actorCanSetBoardSettings(actor *User, boardID string) bool {
-	if h.actorCanModerateBoard(actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermission(actor, boardID, "can_set_board_settings")
+	return boardPermissionAllowed(projections.ActorCanSetBoardSettings(h.db, actor, boardID))
 }
 
 func (h *Handler) actorCanCurateBoard(actor *User, boardID string) bool {
-	if h.actorCanModerateBoard(actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermission(actor, boardID, "can_curate")
-}
-
-func (h *Handler) actorCanAnnounceBoard(actor *User, boardID string) bool {
-	if h.actorCanModerateBoard(actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermission(actor, boardID, "can_announce")
+	return boardPermissionAllowed(projections.ActorCanCurateBoard(h.db, actor, boardID))
 }
 
 func (h *Handler) actorCanModerateBoardThreads(actor *User, boardID string) bool {
-	if h.actorCanModerateBoard(actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermission(actor, boardID, "can_moderate_threads")
+	return boardPermissionAllowed(projections.ActorCanModerateBoardThreads(h.db, actor, boardID))
 }
 
 func (h *Handler) actorCanManageBoardPolls(actor *User, boardID string) bool {
-	if h.actorCanModerateBoard(actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermission(actor, boardID, "can_manage_polls")
+	return boardPermissionAllowed(projections.ActorCanManageBoardPolls(h.db, actor, boardID))
 }
 
 func (h *Handler) actorCanCurateBoardKind(actor *User, boardID, kind string) bool {
-	if kind == "announcement" {
-		return h.actorCanCurateBoard(actor, boardID) || h.actorCanAnnounceBoard(actor, boardID)
-	}
-	return h.actorCanCurateBoard(actor, boardID)
-}
-
-func (h *Handler) actorHasBoardMemberPermission(actor *User, boardID, column string) bool {
-	if actor == nil {
-		return false
-	}
-	switch column {
-	case "can_manage_members", "can_curate", "can_moderate_posts", "can_moderate_threads", "can_announce", "can_manage_polls", "can_set_board_settings":
-	default:
-		return false
-	}
-	var allowed int
-	err := qQueryRow(h.db, `SELECT `+column+` FROM board_members WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&allowed)
-	return err == nil && allowed != 0
-}
-
-func (h *Handler) actorCanModerateBoardTx(tx *sql.Tx, actor *User, boardID string) bool {
-	if actor == nil {
-		return false
-	}
-	if actor.IsMod() {
-		return true
-	}
-	var exists int
-	err := qQueryRow(tx, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&exists)
-	return err == nil
+	return boardPermissionAllowed(projections.ActorCanCurateBoardKind(h.db, actor, boardID, kind))
 }
 
 func (h *Handler) actorCanModerateBoardPostsTx(tx *sql.Tx, actor *User, boardID string) bool {
-	if h.actorCanModerateBoardTx(tx, actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermissionTx(tx, actor, boardID, "can_moderate_posts")
+	return boardPermissionAllowed(projections.ActorCanModerateBoardPosts(tx, actor, boardID))
 }
 
 func (h *Handler) actorCanModerateBoardThreadsTx(tx *sql.Tx, actor *User, boardID string) bool {
-	if h.actorCanModerateBoardTx(tx, actor, boardID) {
-		return true
-	}
-	return h.actorHasBoardMemberPermissionTx(tx, actor, boardID, "can_moderate_threads")
+	return boardPermissionAllowed(projections.ActorCanModerateBoardThreads(tx, actor, boardID))
 }
 
-func (h *Handler) actorHasBoardMemberPermissionTx(tx *sql.Tx, actor *User, boardID, column string) bool {
-	if actor == nil {
-		return false
-	}
-	switch column {
-	case "can_moderate_posts", "can_moderate_threads":
-	default:
-		return false
-	}
-	var allowed int
-	err := qQueryRow(tx, `SELECT `+column+` FROM board_members WHERE board_id=? AND user_id=?`, boardID, actor.ID).Scan(&allowed)
-	return err == nil && allowed != 0
-}
-
-func (h *Handler) isBoardModerator(userID, boardID string) bool {
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM board_moderators WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&exists)
-	return err == nil
-}
-
-func (h *Handler) isBoardMember(userID, boardID string) bool {
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM board_members WHERE board_id=? AND user_id=?`, boardID, userID).Scan(&exists)
-	return err == nil
-}
-
-func (h *Handler) boardMemberHasDelegatedPermissions(boardID, userID string) (bool, error) {
-	var canManageMembers, canCurate, canModeratePosts, canModerateThreads, canAnnounce, canManagePolls, canSetBoardSettings int
-	err := qQueryRow(h.db,
-		`SELECT can_manage_members, can_curate, can_moderate_posts, can_moderate_threads, can_announce, can_manage_polls, can_set_board_settings
-		   FROM board_members WHERE board_id=? AND user_id=?`,
-		boardID, userID,
-	).Scan(&canManageMembers, &canCurate, &canModeratePosts, &canModerateThreads, &canAnnounce, &canManagePolls, &canSetBoardSettings)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return canManageMembers != 0 ||
-		canCurate != 0 ||
-		canModeratePosts != 0 ||
-		canModerateThreads != 0 ||
-		canAnnounce != 0 ||
-		canManagePolls != 0 ||
-		canSetBoardSettings != 0, nil
-}
-
-func (h *Handler) latestBoardMembershipApplicationStatus(boardID, userID string) (string, error) {
-	var status string
-	err := qQueryRow(h.db,
-		`SELECT status FROM board_member_applications
-		  WHERE board_id=? AND user_id=?
-		    AND status IN ('pending', 'blacklisted')
-		  ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, updated_at DESC, created_at DESC LIMIT 1`,
-		boardID, userID,
-	).Scan(&status)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return status, err
-}
-
-func boardMemberPermissionsChanged(p proto.SetBoardMemberPayload) bool {
-	return p.CanManageMembers != nil ||
-		p.CanCurate != nil ||
-		p.CanModeratePosts != nil ||
-		p.CanModerateThreads != nil ||
-		p.CanAnnounce != nil ||
-		p.CanManagePolls != nil ||
-		p.CanSetBoardSettings != nil
-}
-
-func boardSettingsAuditLines(p proto.SetBoardSettingsPayload) []string {
-	fields := []struct {
-		name  string
-		value *bool
-	}{
-		{"anonymousAllowed", p.AnonymousAllowed},
-		{"readOnly", p.ReadOnly},
-		{"noReply", p.NoReply},
-		{"attachmentsAllowed", p.AttachmentsAllowed},
-		{"mailInAllowed", p.MailInAllowed},
-		{"relayEnabled", p.RelayEnabled},
-		{"memberReadMode", p.MemberReadMode},
-		{"memberPostMode", p.MemberPostMode},
-		{"statsExcluded", p.StatsExcluded},
-		{"zapAllowed", p.ZapAllowed},
-	}
-	out := []string{}
-	for _, field := range fields {
-		if field.value == nil {
-			continue
-		}
-		out = append(out, fmt.Sprintf("%s: %t", field.name, *field.value))
-	}
-	if p.GuestAccess != nil {
-		v := projections.NormalizeGuestAccess(*p.GuestAccess)
-		if v == "" {
-			v = "default"
-		}
-		out = append(out, "guestAccess: "+v)
-	}
-	return out
-}
-
-func (h *Handler) requireBoardMembershipAdmission(boardID, userID string, requirements *BoardMemberRequirements) Reply {
+func RequireBoardMembershipAdmission(db *sql.DB, store CounterStore, boardID, userID string, requirements *BoardMemberRequirements) Reply {
 	if requirements == nil {
 		return Reply{}
 	}
-	if requirements.MaxMembers > 0 && !h.isBoardMember(userID, boardID) {
-		var currentMembers int
-		if err := qQueryRow(h.db, `SELECT COUNT(*) FROM board_members WHERE board_id=?`, boardID).Scan(&currentMembers); err != nil {
-			return internalErr(err)
-		}
-		if currentMembers >= requirements.MaxMembers {
-			return Reply{Err: errDetail(proto.ErrConflict, "board membership is full", false)}
-		}
-	}
-	if requirements.MinLoginCount > 0 {
-		loginCount, err := h.userLoginCount(userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		if loginCount < requirements.MinLoginCount {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum login count is %d", requirements.MinLoginCount), false)}
-		}
-	}
-	if requirements.MinPostCount > 0 {
-		postsCreated, err := h.userPostsCreated(userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		if postsCreated < requirements.MinPostCount {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum post count is %d", requirements.MinPostCount), false)}
-		}
+	stats, err := projections.BoardMembershipAdmissionStatsForUser(db, boardID, userID, requirements)
+	if err != nil {
+		return internalErr(err)
 	}
 	if requirements.MinScore > 0 {
-		score, err := h.userReactionScore(userID)
+		score, err := projections.UserReactionScore(db, store, userID)
 		if err != nil {
 			return internalErr(err)
 		}
-		if score < requirements.MinScore {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum score is %d", requirements.MinScore), false)}
-		}
-	}
-	if requirements.MinBoardPostCount > 0 {
-		boardPosts, err := h.userBoardPostCount(boardID, userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		if boardPosts < requirements.MinBoardPostCount {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board post count is %d", requirements.MinBoardPostCount), false)}
-		}
-	}
-	if requirements.MinBoardOriginalPostCount > 0 {
-		boardOriginalPosts, err := h.userBoardOriginalPostCount(boardID, userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		if boardOriginalPosts < requirements.MinBoardOriginalPostCount {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board original post count is %d", requirements.MinBoardOriginalPostCount), false)}
-		}
-	}
-	if requirements.MinBoardDigestCount > 0 {
-		boardDigests, err := h.userBoardDigestCount(boardID, userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		if boardDigests < requirements.MinBoardDigestCount {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board digest count is %d", requirements.MinBoardDigestCount), false)}
-		}
+		stats.ReactionScore = score
 	}
 	if requirements.MinBoardMarkCount > 0 {
-		boardMarks, err := h.userBoardMarkCount(boardID, userID)
+		boardMarks, err := projections.UserBoardMarkCount(db, store, boardID, userID)
 		if err != nil {
 			return internalErr(err)
 		}
-		if boardMarks < requirements.MinBoardMarkCount {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum board mark count is %d", requirements.MinBoardMarkCount), false)}
-		}
+		stats.BoardMarkCount = boardMarks
 	}
-	if requirements.MinTrustLevel > 0 {
-		level, err := userTrustLevel(h.db, userID)
-		if err != nil {
-			return internalErr(err)
-		}
-		if level < requirements.MinTrustLevel {
-			return Reply{Err: errDetail(proto.ErrForbidden, fmt.Sprintf("minimum trust level is %d", requirements.MinTrustLevel), false)}
-		}
+	if failure := projections.CheckBoardMembershipAdmission(requirements, stats); failure != nil {
+		return Reply{Err: errDetail(failure.Code, failure.Message, false)}
 	}
 	return Reply{}
-}
-
-func (h *Handler) userLoginCount(userID string) (int, error) {
-	var loginCount int
-	err := qQueryRow(h.db, `SELECT login_count FROM user_activity WHERE user_id=?`, userID).Scan(&loginCount)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-	return loginCount, err
-}
-
-func (h *Handler) userPostsCreated(userID string) (int, error) {
-	var postsCreated int
-	err := qQueryRow(h.db, `SELECT COUNT(*) FROM posts WHERE author_id=? AND redacted=0`, userID).Scan(&postsCreated)
-	return postsCreated, err
-}
-
-func (h *Handler) userReactionScore(userID string) (int, error) {
-	rows, err := projections.QQuery(h.db, `SELECT id FROM posts WHERE author_id=? AND redacted=0`, userID)
-	if err != nil {
-		return 0, err
-	}
-	return h.sumCounterStoreReactions(rows)
-}
-
-func (h *Handler) userBoardPostCount(boardID, userID string) (int, error) {
-	var count int
-	err := qQueryRow(h.db,
-		`SELECT COUNT(*)
-		   FROM posts p
-		   JOIN threads t ON t.id=p.thread
-		  WHERE t.board=? AND p.author_id=? AND p.redacted=0`,
-		boardID, userID,
-	).Scan(&count)
-	return count, err
-}
-
-func (h *Handler) userBoardOriginalPostCount(boardID, userID string) (int, error) {
-	var count int
-	err := qQueryRow(h.db,
-		`SELECT COUNT(*) FROM threads WHERE board=? AND author_id=?`,
-		boardID, userID,
-	).Scan(&count)
-	return count, err
-}
-
-func (h *Handler) userBoardMarkCount(boardID, userID string) (int, error) {
-	rows, err := projections.QQuery(h.db,
-		`SELECT p.id
-		   FROM posts p
-		   JOIN threads t ON t.id=p.thread
-		  WHERE t.board=? AND p.author_id=? AND p.redacted=0`,
-		boardID, userID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return h.sumCounterStoreReactions(rows)
-}
-
-func (h *Handler) sumCounterStoreReactions(rows *sql.Rows) (int, error) {
-	postIDs := []string{}
-	total := 0
-	for rows.Next() {
-		var postID string
-		if err := rows.Scan(&postID); err != nil {
-			_ = rows.Close()
-			return 0, err
-		}
-		postIDs = append(postIDs, postID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return 0, err
-	}
-	if err := rows.Close(); err != nil {
-		return 0, err
-	}
-	for _, postID := range postIDs {
-		count, err := counterStore().ReactionCount(postID)
-		if err != nil {
-			return 0, err
-		}
-		total += count
-	}
-	return total, nil
-}
-
-func (h *Handler) userBoardDigestCount(boardID, userID string) (int, error) {
-	var count int
-	err := qQueryRow(h.db,
-		`SELECT COUNT(*)
-		   FROM digest_entries d
-		   LEFT JOIN posts p ON d.target_kind='post' AND p.id=d.target_id
-		   LEFT JOIN threads tt ON d.target_kind='thread' AND tt.id=d.target_id
-		  WHERE d.board_id=?
-		    AND (
-		      (d.target_kind='post' AND p.author_id=?)
-		      OR (d.target_kind='thread' AND tt.author_id=?)
-		    )`,
-		boardID, userID, userID,
-	).Scan(&count)
-	return count, err
-}
-
-func normalizeBoardMemberApprovalMode(mode string) (string, Reply) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", "manual":
-		return "manual", Reply{}
-	case "auto", "automatic":
-		return "auto", Reply{}
-	default:
-		return "", Reply{Err: errDetail(proto.ErrValidationFailed, `approvalMode must be "manual" or "auto"`, false)}
-	}
-}
-
-func normalizeMemberApplicationStatus(status string) (string, Reply) {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "approved", "approve":
-		return "approved", Reply{}
-	case "rejected", "reject":
-		return "rejected", Reply{}
-	case "blacklisted", "blacklist":
-		return "blacklisted", Reply{}
-	default:
-		return "", Reply{Err: errDetail(proto.ErrValidationFailed, `status must be "approved", "rejected", or "blacklisted"`, false)}
-	}
-}
-
-func (h *Handler) resolveUserRef(ref string) (string, string, Reply) {
-	var userID, name string
-	err := qQueryRow(h.db, `SELECT id, name FROM users WHERE id=? OR name=?`, ref, ref).Scan(&userID, &name)
-	if err == sql.ErrNoRows {
-		return "", "", Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
-	}
-	if err != nil {
-		return "", "", internalErr(err)
-	}
-	return userID, name, Reply{}
 }
 
 func (h *Handler) requireFavoriteFolder(userID, folderID string) Reply {
-	if folderID == "" {
-		return Reply{}
-	}
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM favorite_folders WHERE user_id=? AND id=?`, userID, folderID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "favorite folder not found", false)}
-	}
+	exists, err := projections.FavoriteFolderExists(h.db, userID, folderID)
 	if err != nil {
 		return internalErr(err)
+	}
+	if !exists {
+		return Reply{Err: errDetail(proto.ErrNotFound, "favorite folder not found", false)}
 	}
 	return Reply{}
 }
 
-func (h *Handler) favoriteFolderContains(userID, ancestorID, folderID string) bool {
-	for folderID != "" {
-		if folderID == ancestorID {
-			return true
-		}
-		var parentID string
-		err := qQueryRow(h.db, `SELECT parent_id FROM favorite_folders WHERE user_id=? AND id=?`, userID, folderID).Scan(&parentID)
-		if err != nil {
-			return false
-		}
-		folderID = parentID
-	}
-	return false
-}
-
 func (h *Handler) requireBoard(boardID string) Reply {
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
-	}
+	exists, err := projections.BoardExists(h.db, boardID)
 	if err != nil {
 		return internalErr(err)
+	}
+	if !exists {
+		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
 	return Reply{}
 }
 
 func (h *Handler) requirePost(postID string) Reply {
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM posts WHERE id=?`, postID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
-	}
+	exists, err := projections.PostExists(h.db, postID)
 	if err != nil {
 		return internalErr(err)
+	}
+	if !exists {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
 	return Reply{}
 }
 
 func (h *Handler) requireThread(threadID string) Reply {
-	var exists int
-	err := qQueryRow(h.db, `SELECT 1 FROM threads WHERE id=?`, threadID).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
-	}
+	exists, err := projections.ThreadExists(h.db, threadID)
 	if err != nil {
 		return internalErr(err)
+	}
+	if !exists {
+		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
 	return Reply{}
 }

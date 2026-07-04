@@ -1,19 +1,23 @@
 package core
 
-import "database/sql"
+import (
+	"database/sql"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+)
 
 type sqlChatStore struct {
 	db *sql.DB
 }
 
 func (s sqlChatStore) InsertChatLine(id, roomID, roomName, userID, userName, body string, ts int64) error {
-	return insertChatLine(s.db, id, roomID, roomName, userID, userName, body, ts)
+	return projections.InsertChatLine(s.db, id, roomID, roomName, userID, userName, body, ts)
 }
 
 func (s sqlChatStore) ListChatRooms() ([]ChatRoom, error) {
-	return listChatRooms(s.db)
+	return projections.ListChatRooms(s.db)
 }
 
 func (s sqlChatStore) ListChatLines(roomID string, limit int) ([]ChatLine, error) {
-	return listChatLines(s.db, roomID, limit)
+	return projections.ListChatLines(s.db, roomID, limit)
 }

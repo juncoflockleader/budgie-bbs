@@ -57,6 +57,28 @@ func qQueryRow(queryable interface {
 	return queryable.QueryRow(rebindPlaceholders(query), args...)
 }
 
+func queryPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('?')
+	}
+	return b.String()
+}
+
+func stringQueryArgs(values []string) []any {
+	args := make([]any, len(values))
+	for i, value := range values {
+		args[i] = value
+	}
+	return args
+}
+
 func execReturningSeq(tx *sql.Tx, query string, args ...any) (int64, error) {
 	query = rebindPlaceholders(query)
 	if currentSQLFlavor == postgresFlavor {

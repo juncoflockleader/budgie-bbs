@@ -1,6 +1,10 @@
 package core
 
-import "database/sql"
+import (
+	"database/sql"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+)
 
 type sqlPresenceStore struct {
 	db *sql.DB
@@ -25,11 +29,11 @@ func (s sqlPresenceStore) SetGuestPresence(sessionID, status, locationLabel, fro
 }
 
 func (s sqlPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
-	return listOnlineUsers(s.db, viewerID, boardID, limit, offset)
+	return projections.ListOnlineUsers(s.db, viewerID, boardID, limit, offset)
 }
 
 func (s sqlPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
-	return listChatOnlineUsers(s.db, viewerID, roomID, limit, offset)
+	return projections.ListChatOnlineUsers(s.db, viewerID, roomID, limit, offset)
 }
 
 func (s sqlPresenceStore) ChatOnlineCounts() (map[string]int, error) {

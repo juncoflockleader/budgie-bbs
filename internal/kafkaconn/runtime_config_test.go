@@ -1,8 +1,8 @@
 package kafkaconn
 
 import (
+	"flag"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -40,6 +40,31 @@ func TestRuntimeSecurityConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestRegisterRuntimeSecurityFlags(t *testing.T) {
+	t.Setenv("BUDGIE_KAFKA_TLS", "1")
+	t.Setenv("BUDGIE_KAFKA_TLS_CA_FILE", "/tmp/env-ca.pem")
+	t.Setenv("BUDGIE_KAFKA_SASL_MECHANISM", "plain")
+	t.Setenv("BUDGIE_KAFKA_SASL_USER", "env-user")
+	t.Setenv("BUDGIE_KAFKA_SASL_PASSWORD", "env-secret")
+
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	securityFlags := RegisterRuntimeSecurityFlags(flags)
+	if err := flags.Parse([]string{
+		"-kafka-tls-ca-file", "/tmp/flag-ca.pem",
+		"-kafka-sasl-user", "flag-user",
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	security := securityFlags.Config()
+	if !security.TLS || security.TLSCAFile != "/tmp/flag-ca.pem" {
+		t.Fatalf("TLS security = %+v, want env TLS and flag CA override", security)
+	}
+	if security.SASLMechanism != "plain" || security.SASLUser != "flag-user" || security.SASLPassword != "env-secret" {
+		t.Fatalf("SASL security = %+v, want mixed env/flag values", security)
+	}
+}
+
 func TestRuntimeConfigValidatesCommandEventTransactionTarget(t *testing.T) {
 	config := RuntimeConfigFromFlags("redpanda:9092", "budgie.commands", "budgie.events", "writers")
 	if err := config.ValidateCommandEventTransaction(); err != nil {
@@ -49,16 +74,38 @@ func TestRuntimeConfigValidatesCommandEventTransactionTarget(t *testing.T) {
 
 func TestRuntimeConfigRequiresBrokers(t *testing.T) {
 	err := RuntimeConfigFromFlags("", "", "", "").ValidateCommandLog()
-	if err == nil || !strings.Contains(err.Error(), "broker list is required") {
-		t.Fatalf("ValidateCommandLog err = %v, want missing broker list", err)
-	}
+	requireErrorContains(t, err, "broker list is required")
 }
 
 func TestRuntimeConfigRequiresDistinctCommandAndEventTopics(t *testing.T) {
 	err := RuntimeConfigFromFlags("redpanda:9092", "budgie.log", "budgie.log", "writers").ValidateCommandEventTransaction()
-	if err == nil || !strings.Contains(err.Error(), "command and event topics must be distinct") {
-		t.Fatalf("ValidateCommandEventTransaction err = %v, want distinct topic error", err)
+	requireErrorContains(t, err, "command and event topics must be distinct")
+}
+
+func TestValidateRuntimePartitions(t *testing.T) {
+	if err := ValidateCommandPartitions(1); err != nil {
+		t.Fatalf("ValidateCommandPartitions positive: %v", err)
 	}
+	requireErrorContains(t, ValidateCommandPartitions(0), "-kafka-command-partitions")
+	if err := ValidateEventPartitions(1); err != nil {
+		t.Fatalf("ValidateEventPartitions positive: %v", err)
+	}
+	requireErrorContains(t, ValidateEventPartitions(0), "-kafka-event-partitions")
+
+	config := RuntimeConfigFromFlags("redpanda:9092", "budgie.commands", "budgie.events", "writers")
+	if err := config.ValidateCommandLogRuntime(32); err != nil {
+		t.Fatalf("ValidateCommandLogRuntime: %v", err)
+	}
+	requireErrorContains(t, config.ValidateCommandLogRuntime(0), "-kafka-command-partitions")
+	if err := config.ValidateEventLogRuntime(32); err != nil {
+		t.Fatalf("ValidateEventLogRuntime: %v", err)
+	}
+	requireErrorContains(t, config.ValidateEventLogRuntime(0), "-kafka-event-partitions")
+	if err := config.ValidateCommandEventRuntime(32, 32); err != nil {
+		t.Fatalf("ValidateCommandEventRuntime: %v", err)
+	}
+	requireErrorContains(t, config.ValidateCommandEventRuntime(32, 0), "-kafka-event-partitions")
+	requireErrorContains(t, RuntimeConfigFromFlags("redpanda:9092", "budgie.log", "budgie.log", "writers").ValidateCommandEventRuntime(32, 32), "command and event topics must be distinct")
 }
 
 func TestRuntimeConfigValidatesKafkaSecurity(t *testing.T) {
@@ -78,24 +125,18 @@ func TestRuntimeConfigValidatesKafkaSecurity(t *testing.T) {
 		SASLUser:     "budgie",
 		SASLPassword: "secret",
 	}).ValidateCommandLog()
-	if err == nil || !strings.Contains(err.Error(), "SASL mechanism is required") {
-		t.Fatalf("ValidateCommandLog with user/pass but no mechanism err = %v, want mechanism error", err)
-	}
+	requireErrorContains(t, err, "SASL mechanism is required")
 
 	err = RuntimeConfigFromOptions("redpanda:9092", "", "", "", RuntimeSecurityConfig{
 		SASLMechanism: "oauthbearer",
 		SASLUser:      "budgie",
 		SASLPassword:  "secret",
 	}).ValidateCommandLog()
-	if err == nil || !strings.Contains(err.Error(), "unsupported SASL mechanism") {
-		t.Fatalf("ValidateCommandLog unsupported mechanism err = %v, want mechanism error", err)
-	}
+	requireErrorContains(t, err, "unsupported SASL mechanism")
 
 	err = RuntimeConfigFromOptions("redpanda:9092", "", "", "", RuntimeSecurityConfig{
 		SASLMechanism: "scram-sha-256",
 		SASLUser:      "budgie",
 	}).ValidateCommandLog()
-	if err == nil || !strings.Contains(err.Error(), "SASL password is required") {
-		t.Fatalf("ValidateCommandLog missing password err = %v, want password error", err)
-	}
+	requireErrorContains(t, err, "SASL password is required")
 }

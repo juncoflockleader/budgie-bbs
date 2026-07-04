@@ -5,52 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 )
-
-type CommandLogMaterializationAuditConfig struct {
-	PartitionLimit    int `json:"partitionLimit"`
-	BatchSize         int `json:"batchSize"`
-	MaxMissingSamples int `json:"maxMissingSamples"`
-}
-
-type CommandLogMaterializationAuditReport struct {
-	Config                 CommandLogMaterializationAuditConfig     `json:"config"`
-	StartedAt              int64                                    `json:"startedAt"`
-	FinishedAt             int64                                    `json:"finishedAt"`
-	Complete               bool                                     `json:"complete"`
-	Partitions             int                                      `json:"partitions"`
-	PartitionLimitExceeded bool                                     `json:"partitionLimitExceeded"`
-	CommittedCommands      int                                      `json:"committedCommands"`
-	AppliedCommands        int                                      `json:"appliedCommands"`
-	TerminalFailures       int                                      `json:"terminalFailures"`
-	MissingMaterialization int                                      `json:"missingMaterialization"`
-	RetryingCommitted      int                                      `json:"retryingCommitted"`
-	MissingRecords         int                                      `json:"missingRecords"`
-	PartitionReports       []CommandLogMaterializationPartition     `json:"partitionReports,omitempty"`
-	MissingSamples         []CommandLogMaterializationMissingSample `json:"missingSamples,omitempty"`
-}
-
-type CommandLogMaterializationPartition struct {
-	PartitionKind          string `json:"partitionKind"`
-	PartitionKey           string `json:"partitionKey"`
-	TailOffset             int64  `json:"tailOffset"`
-	CommittedOffset        int64  `json:"committedOffset"`
-	AppliedCommands        int    `json:"appliedCommands"`
-	TerminalFailures       int    `json:"terminalFailures"`
-	MissingMaterialization int    `json:"missingMaterialization"`
-	RetryingCommitted      int    `json:"retryingCommitted"`
-	MissingRecords         int    `json:"missingRecords"`
-}
-
-type CommandLogMaterializationMissingSample struct {
-	PartitionKind string `json:"partitionKind"`
-	PartitionKey  string `json:"partitionKey"`
-	Offset        int64  `json:"offset"`
-	CommandID     string `json:"commandId,omitempty"`
-	ActorID       string `json:"actorId,omitempty"`
-	Status        string `json:"status"`
-	Detail        string `json:"detail,omitempty"`
-}
 
 type commandLogMaterializationReceipt struct {
 	actorID string
@@ -58,69 +15,56 @@ type commandLogMaterializationReceipt struct {
 	status  string
 }
 
-func DefaultCommandLogMaterializationAuditConfig() CommandLogMaterializationAuditConfig {
-	return CommandLogMaterializationAuditConfig{
-		PartitionLimit:    100,
-		BatchSize:         100,
-		MaxMissingSamples: 10,
+func (c *Core) AuditCommandLogMaterialization(ctx context.Context, commandLog CommandLog, config loadmodel.CommandLogMaterializationAuditConfig) (loadmodel.CommandLogMaterializationAuditReport, error) {
+	report := loadmodel.NewCommandLogMaterializationAuditReport(config, nowMS())
+	if err := c.validateCommandLogMaterializationAudit(ctx, commandLog); err != nil {
+		return commandLogMaterializationAuditError(report, err)
 	}
+	offsets, limited, err := listCommandLogPartitionOffsetsWithLimit(ctx, commandLog, report.Config.PartitionLimit, "command log materialization audit: command log does not expose partition offsets")
+	if err != nil {
+		return commandLogMaterializationAuditError(report, err)
+	}
+	return c.auditCommandLogMaterializationOffsets(ctx, commandLog, report, offsets, limited)
 }
 
-func (c *Core) AuditCommandLogMaterialization(ctx context.Context, commandLog CommandLog, config CommandLogMaterializationAuditConfig) (CommandLogMaterializationAuditReport, error) {
-	report := CommandLogMaterializationAuditReport{
-		Config:    normalizeCommandLogMaterializationAuditConfig(config),
-		StartedAt: nowMS(),
-		Complete:  true,
+func (c *Core) auditCommandLogMaterializationFromOffsets(ctx context.Context, commandLog CommandLog, config loadmodel.CommandLogMaterializationAuditConfig, offsets []CommandPartitionOffset, limited bool) (loadmodel.CommandLogMaterializationAuditReport, error) {
+	report := loadmodel.NewCommandLogMaterializationAuditReport(config, nowMS())
+	if err := c.validateCommandLogMaterializationAudit(ctx, commandLog); err != nil {
+		return commandLogMaterializationAuditError(report, err)
 	}
+	return c.auditCommandLogMaterializationOffsets(ctx, commandLog, report, offsets, limited)
+}
+
+func (c *Core) validateCommandLogMaterializationAudit(ctx context.Context, commandLog CommandLog) error {
 	if err := ctx.Err(); err != nil {
-		report.Complete = false
-		report.FinishedAt = nowMS()
-		return report, err
+		return err
 	}
 	if c == nil || c.DB == nil {
-		report.Complete = false
-		report.FinishedAt = nowMS()
-		return report, fmt.Errorf("command log materialization audit: core is not initialized")
+		return fmt.Errorf("command log materialization audit: core is not initialized")
 	}
 	if commandLog == nil {
-		report.Complete = false
-		report.FinishedAt = nowMS()
-		return report, fmt.Errorf("command log materialization audit: nil command log")
+		return fmt.Errorf("command log materialization audit: nil command log")
 	}
-	lister, ok := commandLog.(CommandPartitionOffsetLister)
-	if !ok {
-		report.Complete = false
-		report.FinishedAt = nowMS()
-		return report, fmt.Errorf("command log materialization audit: command log does not expose partition offsets")
-	}
-	offsets, limited, err := listCommandLogPartitionOffsets(ctx, lister, report.Config.PartitionLimit)
-	if err != nil {
-		report.Complete = false
-		report.FinishedAt = nowMS()
-		return report, err
-	}
-	if limited {
-		report.PartitionLimitExceeded = true
-		report.Complete = false
-	}
-	report.Partitions = len(offsets)
+	return nil
+}
+
+func (c *Core) auditCommandLogMaterializationOffsets(ctx context.Context, commandLog CommandLog, report loadmodel.CommandLogMaterializationAuditReport, offsets []CommandPartitionOffset, limited bool) (loadmodel.CommandLogMaterializationAuditReport, error) {
+	loadmodel.RecordCommandLogMaterializationAuditCoverage(&report, len(offsets), limited)
 	for _, offset := range offsets {
 		partition := offset.Partition.Normalize()
-		partitionReport := CommandLogMaterializationPartition{
+		partitionReport := loadmodel.CommandLogMaterializationPartition{
 			PartitionKind:   partition.Kind,
 			PartitionKey:    partition.Key,
 			TailOffset:      offset.TailOffset,
 			CommittedOffset: offset.CommittedOffset,
 		}
 		if offset.CommittedOffset <= 0 {
-			report.PartitionReports = append(report.PartitionReports, partitionReport)
+			loadmodel.AppendCommandLogMaterializationPartition(&report, partitionReport)
 			continue
 		}
 		receipts, err := c.commandLogMaterializationReceipts(partition, offset.CommittedOffset)
 		if err != nil {
-			report.Complete = false
-			report.FinishedAt = nowMS()
-			return report, err
+			return commandLogMaterializationAuditError(report, err)
 		}
 		after := int64(0)
 		expected := int64(1)
@@ -128,16 +72,11 @@ func (c *Core) AuditCommandLogMaterialization(ctx context.Context, commandLog Co
 			records, err := commandLog.FetchPartition(ctx, partition, after, report.Config.BatchSize)
 			allowCommandLogRebalance(commandLog)
 			if err != nil {
-				report.Complete = false
-				report.FinishedAt = nowMS()
-				return report, err
+				return commandLogMaterializationAuditError(report, err)
 			}
 			if len(records) == 0 {
 				missing := int(offset.CommittedOffset - expected + 1)
-				partitionReport.MissingRecords += missing
-				report.MissingRecords += missing
-				report.Complete = false
-				report.addCommandLogAuditMissingSample(partition, expected, "", "", "missing_record", "committed offset has no command-log record")
+				loadmodel.RecordCommandLogMaterializationMissingRecords(&report, &partitionReport, partition.Kind, partition.Key, expected, missing)
 				break
 			}
 			for _, record := range records {
@@ -148,10 +87,7 @@ func (c *Core) AuditCommandLogMaterialization(ctx context.Context, commandLog Co
 				if expected < record.Offset {
 					if record.SourcePosition.IsZero() {
 						for expected < record.Offset && expected <= offset.CommittedOffset {
-							partitionReport.MissingRecords++
-							report.MissingRecords++
-							report.Complete = false
-							report.addCommandLogAuditMissingSample(partition, expected, "", "", "missing_record", "committed offset has no command-log record")
+							loadmodel.RecordCommandLogMaterializationMissingRecords(&report, &partitionReport, partition.Kind, partition.Key, expected, 1)
 							expected++
 						}
 					} else {
@@ -164,46 +100,38 @@ func (c *Core) AuditCommandLogMaterialization(ctx context.Context, commandLog Co
 				}
 				commandID, err := EffectiveCommandLogCID(record)
 				if err != nil {
-					report.Complete = false
-					report.FinishedAt = nowMS()
-					return report, fmt.Errorf("command log materialization audit: command id: %w", err)
+					return commandLogMaterializationAuditError(report, fmt.Errorf("command log materialization audit: command id: %w", err))
 				}
 				status, ok := auditCommandLogRecordReceiptStatus(record, commandID, receipts[record.Offset])
 				if !ok {
-					status, _, err = c.auditCommandLogRecordMaterialization(record)
+					status, err = c.auditCommandLogRecordMaterialization(record, commandID)
 					if err != nil {
-						report.Complete = false
-						report.FinishedAt = nowMS()
-						return report, err
+						return commandLogMaterializationAuditError(report, err)
 					}
 				}
-				report.CommittedCommands++
 				switch status {
 				case CommandStatusApplied:
-					report.AppliedCommands++
-					partitionReport.AppliedCommands++
+					loadmodel.RecordCommandLogMaterializationApplied(&report, &partitionReport)
 				case CommandStatusFailed:
-					report.TerminalFailures++
-					partitionReport.TerminalFailures++
+					loadmodel.RecordCommandLogMaterializationTerminalFailure(&report, &partitionReport)
 				case CommandStatusRetrying:
-					report.RetryingCommitted++
-					partitionReport.RetryingCommitted++
-					report.Complete = false
-					report.addCommandLogAuditMissingSample(partition, record.Offset, commandID, record.ActorID, status, "committed command still has retrying receipt")
+					loadmodel.RecordCommandLogMaterializationIncomplete(&report, &partitionReport, partition.Kind, partition.Key, record.Offset, commandID, record.ActorID, status, true)
 				default:
-					report.MissingMaterialization++
-					partitionReport.MissingMaterialization++
-					report.Complete = false
-					report.addCommandLogAuditMissingSample(partition, record.Offset, commandID, record.ActorID, status, "committed command has no applied result or terminal failure receipt")
+					loadmodel.RecordCommandLogMaterializationIncomplete(&report, &partitionReport, partition.Kind, partition.Key, record.Offset, commandID, record.ActorID, status, false)
 				}
 				expected = record.Offset + 1
 				after = record.Offset
 			}
 		}
-		report.PartitionReports = append(report.PartitionReports, partitionReport)
+		loadmodel.AppendCommandLogMaterializationPartition(&report, partitionReport)
 	}
-	report.FinishedAt = nowMS()
+	loadmodel.FinishCommandLogMaterializationAuditReport(&report, nowMS())
 	return report, nil
+}
+
+func commandLogMaterializationAuditError(report loadmodel.CommandLogMaterializationAuditReport, err error) (loadmodel.CommandLogMaterializationAuditReport, error) {
+	loadmodel.FailCommandLogMaterializationAuditReport(&report, nowMS())
+	return report, err
 }
 
 func (c *Core) commandLogMaterializationReceipts(partition LogPartition, maxOffset int64) (map[int64]commandLogMaterializationReceipt, error) {
@@ -242,66 +170,10 @@ func auditCommandLogRecordReceiptStatus(record CommandLogRecord, commandID strin
 	return receipt.status, true
 }
 
-func listCommandLogPartitionOffsets(ctx context.Context, lister CommandPartitionOffsetLister, limit int) ([]CommandPartitionOffset, bool, error) {
-	if lister == nil {
-		return nil, false, fmt.Errorf("nil command partition offset lister")
-	}
-	queryLimit := limit
-	if limit > 0 {
-		queryLimit = limit + 1
-	}
-	offsets, err := lister.ListCommandPartitionOffsets(ctx, queryLimit)
-	if err != nil {
-		return nil, false, err
-	}
-	limited := limit > 0 && len(offsets) > limit
-	if limited {
-		offsets = offsets[:limit]
-	}
-	for i := range offsets {
-		offsets[i].Partition = offsets[i].Partition.Normalize()
-	}
-	return offsets, limited, nil
-}
-
-func normalizeCommandLogMaterializationAuditConfig(config CommandLogMaterializationAuditConfig) CommandLogMaterializationAuditConfig {
-	def := DefaultCommandLogMaterializationAuditConfig()
-	if config.PartitionLimit <= 0 {
-		config.PartitionLimit = def.PartitionLimit
-	}
-	if config.BatchSize <= 0 {
-		config.BatchSize = def.BatchSize
-	}
-	if config.MaxMissingSamples <= 0 {
-		config.MaxMissingSamples = def.MaxMissingSamples
-	}
-	return config
-}
-
-func (r *CommandLogMaterializationAuditReport) addCommandLogAuditMissingSample(partition LogPartition, offset int64, commandID, actorID, status, detail string) {
-	if r == nil || r.Config.MaxMissingSamples == 0 || len(r.MissingSamples) >= r.Config.MaxMissingSamples {
-		return
-	}
-	partition = partition.Normalize()
-	r.MissingSamples = append(r.MissingSamples, CommandLogMaterializationMissingSample{
-		PartitionKind: partition.Kind,
-		PartitionKey:  partition.Key,
-		Offset:        offset,
-		CommandID:     commandID,
-		ActorID:       actorID,
-		Status:        status,
-		Detail:        detail,
-	})
-}
-
-func (c *Core) auditCommandLogRecordMaterialization(record CommandLogRecord) (status string, commandID string, err error) {
-	commandID, err = EffectiveCommandLogCID(record)
-	if err != nil {
-		return "", "", fmt.Errorf("command log materialization audit: command id: %w", err)
-	}
+func (c *Core) auditCommandLogRecordMaterialization(record CommandLogRecord, commandID string) (string, error) {
 	partition := record.Partition.Normalize()
 	var applied int
-	err = qQueryRow(c.DB,
+	err := qQueryRow(c.DB,
 		`SELECT 1
 		   FROM processed_commands_v2
 		  WHERE partition_kind=? AND partition_key=? AND actor_id=? AND cid=?`,
@@ -309,17 +181,17 @@ func (c *Core) auditCommandLogRecordMaterialization(record CommandLogRecord) (st
 	).Scan(&applied)
 	switch {
 	case err == nil:
-		return CommandStatusApplied, commandID, nil
+		return CommandStatusApplied, nil
 	case errors.Is(err, sql.ErrNoRows):
 	default:
-		return "", commandID, err
+		return "", err
 	}
 	receiptStatus, _, hasReceipt, err := c.commandLogReceipt(commandID, record.ActorID, partition, record.Offset)
 	if err != nil {
-		return "", commandID, err
+		return "", err
 	}
 	if !hasReceipt {
-		return "missing", commandID, nil
+		return "missing", nil
 	}
-	return receiptStatus, commandID, nil
+	return receiptStatus, nil
 }

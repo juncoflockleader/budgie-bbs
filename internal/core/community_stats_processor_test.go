@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -10,11 +9,7 @@ import (
 )
 
 func TestCommunityStatsProcessorMaterializesAndRefreshesSnapshot(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "community-stats-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -145,7 +140,7 @@ func TestCommunityStatsProcessorMaterializesAndRefreshesSnapshot(t *testing.T) {
 
 func communityStatsSnapshotRows(t *testing.T, c *Core) int {
 	t.Helper()
-	count, err := communityStatsSnapshotRowCount(c.DB)
+	count, err := projections.CommunityStatsSnapshotRowCount(c.DB)
 	if err != nil {
 		t.Fatalf("count community stats snapshot rows: %v", err)
 	}

@@ -20,7 +20,7 @@ func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
 	ts := nowMS()
 
 	// Read before TX.
-	post, err := getPost(h.db, p.Post)
+	post, err := currentRuntime().GetPost(h.db, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -30,7 +30,7 @@ func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
 	if post.Redacted {
 		return Reply{Err: errDetail(proto.ErrConflict, "cannot react to a redacted post", false)}
 	}
-	thread, err := getThread(h.db, post.Thread)
+	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
@@ -80,14 +80,14 @@ func (h *Handler) unreactPost(actor *User, p proto.ReactPostPayload) Reply {
 	}
 	ts := nowMS()
 
-	post, err := getPost(h.db, p.Post)
+	post, err := currentRuntime().GetPost(h.db, p.Post)
 	if err != nil {
 		return internalErr(err)
 	}
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	thread, err := getThread(h.db, post.Thread)
+	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}

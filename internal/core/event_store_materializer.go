@@ -114,7 +114,7 @@ func (w *EventStoreProjectionWorker) MaterializeOnce(ctx context.Context) ([]Eve
 	if w.partitions == nil {
 		return nil, fmt.Errorf("event store projection worker: nil partition lister")
 	}
-	partitions, limited, err := listEventStoreProjectionPartitions(ctx, w.partitions, w.partitionLimit)
+	partitions, limited, err := listEventPartitionsWithLimit(ctx, w.partitions, w.partitionLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -608,7 +608,7 @@ func indexEventStoreProjectionCompatibilityEventsTx(tx *sql.Tx, events []*proto.
 	rows, err = qQuery(tx,
 		`SELECT id, seq, kind, partition_kind, partition_key, partition_offset
 		   FROM events
-		  WHERE id IN (`+eventStoreProjectionCompatibilityPlaceholders(len(ids))+`)`,
+		  WHERE id IN (`+queryPlaceholders(len(ids))+`)`,
 		selectArgs...,
 	)
 	if err != nil {
@@ -760,20 +760,6 @@ func insertEventStoreProjectionCompatibilityScopesTx(tx *sql.Tx, candidates []ev
 	query.WriteString(` ON CONFLICT (seq, scope) DO NOTHING`)
 	_, err := qExec(tx, query.String(), args...)
 	return err
-}
-
-func eventStoreProjectionCompatibilityPlaceholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i := 0; i < n; i++ {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteByte('?')
-	}
-	return b.String()
 }
 
 type hotNativeProjectionThread struct {

@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -18,72 +16,32 @@ type DigestSearchProcessResult struct {
 }
 
 type DigestSearchProcessor struct {
-	Core      *Core
-	BatchSize int
-	Interval  time.Duration
+	periodicProcessor
 }
 
 func NewDigestSearchProcessor(c *Core, interval time.Duration, batchSize int) (*DigestSearchProcessor, error) {
-	if c == nil {
-		return nil, fmt.Errorf("digest search processor: nil core")
+	processor, err := newPeriodicProcessor(c, "digest search", interval, batchSize, func(_ context.Context, c *Core, batchSize int) (processorRunProgress, error) {
+		result, err := c.ProcessDigestSearchOnce(batchSize)
+		return digestSearchRunProgress(result), err
+	})
+	if err != nil {
+		return nil, err
 	}
-	if interval <= 0 {
-		interval = time.Second
-	}
-	if batchSize <= 0 {
-		batchSize = 500
-	}
-	return &DigestSearchProcessor{
-		Core:      c,
-		BatchSize: batchSize,
-		Interval:  interval,
-	}, nil
+	return &DigestSearchProcessor{periodicProcessor: processor}, nil
 }
 
 func (p *DigestSearchProcessor) ProcessOnce() (DigestSearchProcessResult, error) {
 	if p == nil || p.Core == nil {
-		return DigestSearchProcessResult{}, fmt.Errorf("digest search processor: nil core")
+		return DigestSearchProcessResult{}, nilProcessorError("digest search")
 	}
 	return p.Core.ProcessDigestSearchOnce(p.BatchSize)
 }
 
 func (p *DigestSearchProcessor) Run(ctx context.Context) {
-	if p == nil || p.Core == nil {
+	if p == nil {
 		return
 	}
-	drain := func() {
-		for ctx.Err() == nil {
-			result, err := p.ProcessOnce()
-			if err != nil {
-				if ctx.Err() == nil {
-					slog.Warn("digest search processor failed", "err", err)
-				}
-				return
-			}
-			if result.Events > 0 || result.AppliedSeq < result.HeadSeq {
-				slog.Debug("digest search processor advanced",
-					"fromSeq", result.FromSeq,
-					"appliedSeq", result.AppliedSeq,
-					"headSeq", result.HeadSeq,
-					"events", result.Events,
-					"digestChanges", result.DigestChanges)
-			}
-			if result.Events < p.BatchSize || result.AppliedSeq >= result.HeadSeq {
-				return
-			}
-		}
-	}
-	drain()
-	ticker := time.NewTicker(p.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			drain()
-		}
-	}
+	p.periodicProcessor.Run(ctx)
 }
 
 func (c *Core) StartDigestSearchProcessor(ctx context.Context, interval time.Duration, batchSize int) (*DigestSearchProcessor, error) {
@@ -96,36 +54,17 @@ func (c *Core) StartDigestSearchProcessor(ctx context.Context, interval time.Dur
 }
 
 func (c *Core) ProcessDigestSearchOnce(batchSize int) (DigestSearchProcessResult, error) {
-	if batchSize <= 0 {
-		batchSize = 500
-	}
-	fromSeq, found, err := lookupDerivedViewAppliedSeq(c.DB, DerivedViewDigestSearch)
-	if err != nil {
-		return DigestSearchProcessResult{}, err
-	}
-	if !found {
-		fromSeq = 0
-	}
-	head, err := c.Head()
-	if err != nil {
-		return DigestSearchProcessResult{}, err
-	}
+	batch, err := c.replayDerivedViewEventBatch(DerivedViewDigestSearch, batchSize)
 	result := DigestSearchProcessResult{
-		FromSeq:    fromSeq,
-		AppliedSeq: fromSeq,
-		HeadSeq:    head,
+		FromSeq:    batch.FromSeq,
+		AppliedSeq: batch.AppliedSeq,
+		HeadSeq:    batch.HeadSeq,
 	}
-	events, err := c.Replay(fromSeq, nil, batchSize)
 	if err != nil {
 		return result, err
 	}
-	if len(events) == 0 {
-		if !found {
-			if err := c.RecordDerivedViewApplied(DerivedViewDigestSearch, fromSeq); err != nil {
-				return result, err
-			}
-		}
-		return result, nil
+	if len(batch.Events) == 0 {
+		return result, c.finishEmptyDerivedViewEventBatch(batch)
 	}
 
 	tx, err := c.DB.Begin()
@@ -134,7 +73,7 @@ func (c *Core) ProcessDigestSearchOnce(batchSize int) (DigestSearchProcessResult
 	}
 	defer tx.Rollback() //nolint
 
-	for _, evt := range events {
+	for _, evt := range batch.Events {
 		if evt == nil {
 			continue
 		}
@@ -146,13 +85,24 @@ func (c *Core) ProcessDigestSearchOnce(batchSize int) (DigestSearchProcessResult
 			result.AppliedSeq = evt.Seq
 		}
 	}
-	if err := recordDerivedViewAppliedTx(tx, DerivedViewDigestSearch, result.AppliedSeq); err != nil {
+	if err := recordDerivedViewAppliedTx(tx, batch.View, result.AppliedSeq); err != nil {
 		return result, err
 	}
 	if err := tx.Commit(); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+func digestSearchRunProgress(result DigestSearchProcessResult) processorRunProgress {
+	return processorRunProgress{
+		FromSeq:    result.FromSeq,
+		AppliedSeq: result.AppliedSeq,
+		HeadSeq:    result.HeadSeq,
+		Events:     result.Events,
+		Log:        result.Events > 0 || result.AppliedSeq < result.HeadSeq,
+		Extra:      []any{"digestChanges", result.DigestChanges},
+	}
 }
 
 func isDigestSearchEvent(evt *proto.Event) bool {

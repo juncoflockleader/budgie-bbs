@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 // --- Writers / mutators ---
@@ -702,10 +704,8 @@ func TransferUserID(db *sql.DB, userID, newName string) (*User, error) {
 	}
 	defer tx.Rollback() //nolint
 
-	var oldName string
-	if err := QQueryRow(tx, `SELECT name FROM users WHERE id=?`, userID).Scan(&oldName); err == sql.ErrNoRows {
-		return nil, sql.ErrNoRows
-	} else if err != nil {
+	oldName, err := UserName(tx, userID)
+	if err != nil {
 		return nil, err
 	}
 	var existing string
@@ -816,7 +816,7 @@ func CreateFavoriteFolder(db *sql.DB, userID, folderID, parentID, name string, p
 	}
 	defer tx.Rollback()
 
-	targetPosition, err := favoriteFolderTargetPosition(tx, userID, parentID, position)
+	targetPosition, err := FavoriteFolderTargetPosition(tx, userID, parentID, position)
 	if err != nil {
 		return err
 	}
@@ -874,7 +874,7 @@ func UpdateFavoriteFolder(db *sql.DB, userID, folderID, name string, parentID *s
 	if position != nil {
 		targetPosition = *position
 	} else if nextParent != currentParent {
-		targetPosition, err = favoriteFolderTargetPosition(tx, userID, nextParent, nil)
+		targetPosition, err = FavoriteFolderTargetPosition(tx, userID, nextParent, nil)
 		if err != nil {
 			return err
 		}
@@ -948,52 +948,107 @@ func MoveBoardFavorite(db *sql.DB, userID, boardID, folderID string, position *i
 	return SetBoardFavorite(db, userID, boardID, folderID, position, true)
 }
 
-func ImportFavoriteTree(db *sql.DB, userID string, tree *FavoriteTree, replace bool, newID func(string) string) error {
+const (
+	maxFavoriteImportFolders = 200
+	maxFavoriteImportBoards  = 500
+)
+
+type favoriteTreeImportPlan struct {
+	Folders []FavoriteFolder
+	Boards  []FavoriteBoardEntry
+}
+
+func planFavoriteTreeImport(queryable sqlLike, tree *FavoriteTree) (*favoriteTreeImportPlan, error) {
 	if tree == nil {
 		tree = &FavoriteTree{}
 	}
-	if len(tree.Folders) > 200 {
-		return fmt.Errorf("favorite import supports at most 200 folders")
+	if len(tree.Folders) > maxFavoriteImportFolders {
+		return nil, fmt.Errorf("favorite import supports at most 200 folders")
 	}
-	if len(tree.Boards) > 500 {
-		return fmt.Errorf("favorite import supports at most 500 boards")
+	if len(tree.Boards) > maxFavoriteImportBoards {
+		return nil, fmt.Errorf("favorite import supports at most 500 boards")
 	}
 
-	sourceFolderIDs := map[string]bool{}
+	folderIDs := map[string]bool{}
+	folders := make([]FavoriteFolder, 0, len(tree.Folders))
 	for i, folder := range tree.Folders {
-		if folder.ID == "" {
-			return fmt.Errorf("folder %d is missing id", i+1)
-		}
-		if sourceFolderIDs[folder.ID] {
-			return fmt.Errorf("duplicate folder id %q", folder.ID)
-		}
+		folderID := strings.TrimSpace(folder.ID)
+		parentID := strings.TrimSpace(folder.ParentID)
 		name := strings.TrimSpace(folder.Name)
+		if folderID == "" {
+			return nil, fmt.Errorf("folder %d is missing id", i+1)
+		}
+		if folderIDs[folderID] {
+			return nil, fmt.Errorf("duplicate folder id %q", folderID)
+		}
 		if name == "" {
-			return fmt.Errorf("folder %q is missing name", folder.ID)
+			return nil, fmt.Errorf("folder %q is missing name", folderID)
 		}
 		if len(name) > 80 {
-			return fmt.Errorf("folder %q name must be 80 characters or less", folder.ID)
+			return nil, fmt.Errorf("folder %q name must be 80 characters or less", folderID)
 		}
-		sourceFolderIDs[folder.ID] = true
+		folder.ID = folderID
+		folder.ParentID = parentID
+		folder.Name = name
+		folderIDs[folderID] = true
+		folders = append(folders, folder)
 	}
-	for _, folder := range tree.Folders {
-		if folder.ParentID != "" && !sourceFolderIDs[folder.ParentID] {
-			return fmt.Errorf("folder %q references missing parent %q", folder.ID, folder.ParentID)
+	for _, folder := range folders {
+		if folder.ParentID != "" && !folderIDs[folder.ParentID] {
+			return nil, fmt.Errorf("folder %q references missing parent %q", folder.ID, folder.ParentID)
 		}
 	}
+
+	orderedFolderIDs := map[string]bool{}
+	orderedFolders := make([]FavoriteFolder, 0, len(folders))
+	remaining := append([]FavoriteFolder(nil), folders...)
+	for len(remaining) > 0 {
+		progressed := false
+		next := remaining[:0]
+		for _, folder := range remaining {
+			if folder.ParentID != "" && !orderedFolderIDs[folder.ParentID] {
+				next = append(next, folder)
+				continue
+			}
+			orderedFolderIDs[folder.ID] = true
+			orderedFolders = append(orderedFolders, folder)
+			progressed = true
+		}
+		if !progressed {
+			return nil, fmt.Errorf("favorite folder import contains a cycle")
+		}
+		remaining = next
+	}
+
+	boards := make([]FavoriteBoardEntry, 0, len(tree.Boards))
 	for _, board := range tree.Boards {
-		if strings.TrimSpace(board.ID) == "" {
-			return fmt.Errorf("favorite board is missing id")
+		boardID := strings.TrimSpace(board.ID)
+		folderID := strings.TrimSpace(board.FolderID)
+		if boardID == "" {
+			return nil, fmt.Errorf("favorite board is missing id")
 		}
-		if board.FolderID != "" && !sourceFolderIDs[board.FolderID] {
-			return fmt.Errorf("board %q references missing folder %q", board.ID, board.FolderID)
+		if folderID != "" && !folderIDs[folderID] {
+			return nil, fmt.Errorf("board %q references missing folder %q", boardID, folderID)
 		}
-		var exists int
-		if err := QQueryRow(db, `SELECT 1 FROM boards WHERE id=?`, board.ID).Scan(&exists); err == sql.ErrNoRows {
-			return fmt.Errorf("board %q not found", board.ID)
-		} else if err != nil {
-			return err
+		exists, err := BoardExists(queryable, boardID)
+		if err != nil {
+			return nil, err
 		}
+		if !exists {
+			return nil, fmt.Errorf("board %q not found", boardID)
+		}
+		board.ID = boardID
+		board.FolderID = folderID
+		boards = append(boards, board)
+	}
+
+	return &favoriteTreeImportPlan{Folders: orderedFolders, Boards: boards}, nil
+}
+
+func ImportFavoriteTree(db *sql.DB, userID string, tree *FavoriteTree, replace bool, newID func(string) string) error {
+	plan, err := planFavoriteTreeImport(db, tree)
+	if err != nil {
+		return err
 	}
 
 	tx, err := db.Begin()
@@ -1013,39 +1068,24 @@ func ImportFavoriteTree(db *sql.DB, userID string, tree *FavoriteTree, replace b
 
 	now := NowMS()
 	folderIDMap := map[string]string{}
-	remaining := append([]FavoriteFolder(nil), tree.Folders...)
-	for len(remaining) > 0 {
-		progressed := false
-		next := remaining[:0]
-		for _, folder := range remaining {
-			parentID := ""
-			if folder.ParentID != "" {
-				mapped, ok := folderIDMap[folder.ParentID]
-				if !ok {
-					next = append(next, folder)
-					continue
-				}
-				parentID = mapped
-			}
-			id := newID("favfld_")
-			folderIDMap[folder.ID] = id
-			if _, err := QExec(tx,
-				`INSERT INTO favorite_folders (id, user_id, parent_id, name, position, created_at, updated_at)
+	for _, folder := range plan.Folders {
+		parentID := ""
+		if folder.ParentID != "" {
+			parentID = folderIDMap[folder.ParentID]
+		}
+		id := newID("favfld_")
+		folderIDMap[folder.ID] = id
+		if _, err := QExec(tx,
+			`INSERT INTO favorite_folders (id, user_id, parent_id, name, position, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				id, userID, parentID, strings.TrimSpace(folder.Name), folder.Position, now, now,
-			); err != nil {
-				return err
-			}
-			progressed = true
+			id, userID, parentID, folder.Name, folder.Position, now, now,
+		); err != nil {
+			return err
 		}
-		if !progressed {
-			return fmt.Errorf("favorite folder import contains a cycle")
-		}
-		remaining = next
 	}
 
 	seenBoards := map[string]bool{}
-	for _, board := range tree.Boards {
+	for _, board := range plan.Boards {
 		if seenBoards[board.ID] {
 			continue
 		}
@@ -1070,56 +1110,9 @@ func ImportFavoriteTree(db *sql.DB, userID string, tree *FavoriteTree, replace b
 }
 
 func ImportFavoriteTreeTx(tx *sql.Tx, userID string, tree *FavoriteTree, replace bool, importedAt int64) error {
-	if tree == nil {
-		tree = &FavoriteTree{}
-	}
-	if len(tree.Folders) > 200 {
-		return fmt.Errorf("favorite import supports at most 200 folders")
-	}
-	if len(tree.Boards) > 500 {
-		return fmt.Errorf("favorite import supports at most 500 boards")
-	}
-
-	folderIDs := map[string]bool{}
-	for i, folder := range tree.Folders {
-		folderID := strings.TrimSpace(folder.ID)
-		if folderID == "" {
-			return fmt.Errorf("folder %d is missing id", i+1)
-		}
-		if folderIDs[folderID] {
-			return fmt.Errorf("duplicate folder id %q", folderID)
-		}
-		name := strings.TrimSpace(folder.Name)
-		if name == "" {
-			return fmt.Errorf("folder %q is missing name", folderID)
-		}
-		if len(name) > 80 {
-			return fmt.Errorf("folder %q name must be 80 characters or less", folderID)
-		}
-		folderIDs[folderID] = true
-	}
-	for _, folder := range tree.Folders {
-		folderID := strings.TrimSpace(folder.ID)
-		parentID := strings.TrimSpace(folder.ParentID)
-		if parentID != "" && !folderIDs[parentID] {
-			return fmt.Errorf("folder %q references missing parent %q", folderID, parentID)
-		}
-	}
-	for _, board := range tree.Boards {
-		boardID := strings.TrimSpace(board.ID)
-		if boardID == "" {
-			return fmt.Errorf("favorite board is missing id")
-		}
-		folderID := strings.TrimSpace(board.FolderID)
-		if folderID != "" && !folderIDs[folderID] {
-			return fmt.Errorf("board %q references missing folder %q", boardID, folderID)
-		}
-		var exists int
-		if err := QQueryRow(tx, `SELECT 1 FROM boards WHERE id=?`, boardID).Scan(&exists); err == sql.ErrNoRows {
-			return fmt.Errorf("board %q not found", boardID)
-		} else if err != nil {
-			return err
-		}
+	plan, err := planFavoriteTreeImport(tx, tree)
+	if err != nil {
+		return err
 	}
 
 	if replace {
@@ -1131,20 +1124,9 @@ func ImportFavoriteTreeTx(tx *sql.Tx, userID string, tree *FavoriteTree, replace
 		}
 	}
 
-	insertedFolders := map[string]bool{}
-	remaining := append([]FavoriteFolder(nil), tree.Folders...)
-	for len(remaining) > 0 {
-		progressed := false
-		next := remaining[:0]
-		for _, folder := range remaining {
-			folderID := strings.TrimSpace(folder.ID)
-			parentID := strings.TrimSpace(folder.ParentID)
-			if parentID != "" && !insertedFolders[parentID] {
-				next = append(next, folder)
-				continue
-			}
-			if _, err := QExec(tx,
-				`INSERT INTO favorite_folders (id, user_id, parent_id, name, position, created_at, updated_at)
+	for _, folder := range plan.Folders {
+		if _, err := QExec(tx,
+			`INSERT INTO favorite_folders (id, user_id, parent_id, name, position, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(id)
 				 DO UPDATE SET user_id=excluded.user_id,
@@ -1152,26 +1134,18 @@ func ImportFavoriteTreeTx(tx *sql.Tx, userID string, tree *FavoriteTree, replace
 				               name=excluded.name,
 				               position=excluded.position,
 				               updated_at=excluded.updated_at`,
-				folderID, userID, parentID, strings.TrimSpace(folder.Name), folder.Position, importedAt, importedAt,
-			); err != nil {
-				return err
-			}
-			insertedFolders[folderID] = true
-			progressed = true
+			folder.ID, userID, folder.ParentID, folder.Name, folder.Position, importedAt, importedAt,
+		); err != nil {
+			return err
 		}
-		if !progressed {
-			return fmt.Errorf("favorite folder import contains a cycle")
-		}
-		remaining = next
 	}
 
 	seenBoards := map[string]bool{}
-	for _, board := range tree.Boards {
-		boardID := strings.TrimSpace(board.ID)
-		if seenBoards[boardID] {
+	for _, board := range plan.Boards {
+		if seenBoards[board.ID] {
 			continue
 		}
-		seenBoards[boardID] = true
+		seenBoards[board.ID] = true
 		if _, err := QExec(tx,
 			`INSERT INTO board_favorites (user_id, board_id, folder_id, position, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?)
@@ -1179,7 +1153,7 @@ func ImportFavoriteTreeTx(tx *sql.Tx, userID string, tree *FavoriteTree, replace
 			 DO UPDATE SET folder_id=excluded.folder_id,
 			               position=excluded.position,
 			               updated_at=excluded.updated_at`,
-			userID, boardID, strings.TrimSpace(board.FolderID), board.Position, importedAt, importedAt,
+			userID, board.ID, board.FolderID, board.Position, importedAt, importedAt,
 		); err != nil {
 			return err
 		}
@@ -1198,6 +1172,22 @@ func SetBoardSettings(db *sql.DB, boardID string, patch BoardSettingsPatch) erro
 	ApplyBoardSettingsPatch(settings, patch)
 	settings.UpdatedAt = NowMS()
 	return setBoardSettingsFinal(db, *settings)
+}
+
+func BoardSettingsPatchFromPayload(payload proto.SetBoardSettingsPayload) BoardSettingsPatch {
+	return BoardSettingsPatch{
+		AnonymousAllowed:   payload.AnonymousAllowed,
+		ReadOnly:           payload.ReadOnly,
+		NoReply:            payload.NoReply,
+		AttachmentsAllowed: payload.AttachmentsAllowed,
+		MailInAllowed:      payload.MailInAllowed,
+		RelayEnabled:       payload.RelayEnabled,
+		MemberReadMode:     payload.MemberReadMode,
+		MemberPostMode:     payload.MemberPostMode,
+		StatsExcluded:      payload.StatsExcluded,
+		ZapAllowed:         payload.ZapAllowed,
+		GuestAccess:        payload.GuestAccess,
+	}
 }
 
 func ApplyBoardSettingsPatch(settings *BoardSettings, patch BoardSettingsPatch) {
@@ -1243,14 +1233,7 @@ func ApplyBoardSettingsPatch(settings *BoardSettings, patch BoardSettingsPatch) 
 // "hidden", or "public". Any unrecognized value (including "default") maps to ""
 // so callers and storage only ever see the three canonical states.
 func NormalizeGuestAccess(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "hidden":
-		return "hidden"
-	case "public":
-		return "public"
-	default:
-		return ""
-	}
+	return proto.NormalizeBoardGuestAccess(v)
 }
 
 func SetBoardSettingsTx(tx *sql.Tx, settings BoardSettings) error {
@@ -1328,15 +1311,9 @@ func SetRecommendedBoard(db *sql.DB, boardID, note, curatedBy string, position *
 	defer tx.Rollback() //nolint
 
 	pos := 0
-	if recommended && position != nil {
-		pos = *position
-	} else if recommended {
-		err := QQueryRow(tx, `SELECT position FROM recommended_boards WHERE board_id=?`, boardID).Scan(&pos)
-		if err == sql.ErrNoRows {
-			if err := QQueryRow(tx, `SELECT COALESCE(MAX(position), -10) + 10 FROM recommended_boards`).Scan(&pos); err != nil {
-				return err
-			}
-		} else if err != nil {
+	if recommended {
+		pos, err = RecommendedBoardTargetPosition(tx, boardID, position)
+		if err != nil {
 			return err
 		}
 	}
@@ -1379,6 +1356,21 @@ func SetBoardMemberRequirements(db *sql.DB, boardID string, patch BoardMemberReq
 	ApplyBoardMemberRequirementsPatch(req, patch)
 	req.UpdatedAt = NowMS()
 	return setBoardMemberRequirementsFinal(db, *req)
+}
+
+func BoardMemberRequirementsPatchFromPayload(payload proto.SetBoardMemberRequirementsPayload) BoardMemberRequirementsPatch {
+	return BoardMemberRequirementsPatch{
+		MinLoginCount:             payload.MinLoginCount,
+		MinPostCount:              payload.MinPostCount,
+		MinTrustLevel:             payload.MinTrustLevel,
+		MinScore:                  payload.MinScore,
+		MinBoardPostCount:         payload.MinBoardPostCount,
+		MinBoardOriginalPostCount: payload.MinBoardOriginalPostCount,
+		MinBoardDigestCount:       payload.MinBoardDigestCount,
+		MinBoardMarkCount:         payload.MinBoardMarkCount,
+		MaxMembers:                payload.MaxMembers,
+		ApprovalMode:              payload.ApprovalMode,
+	}
 }
 
 func ApplyBoardMemberRequirementsPatch(req *BoardMemberRequirements, patch BoardMemberRequirementsPatch) {
@@ -1476,29 +1468,9 @@ func SetBoardModerator(db *sql.DB, boardID, userID, actorID string, moderator bo
 	defer tx.Rollback() //nolint
 
 	ts := NowMS()
-	targetPosition := 0
-	if moderator {
-		if position != nil {
-			targetPosition = *position
-			if targetPosition < 0 {
-				targetPosition = 0
-			}
-		} else {
-			var currentPosition int
-			err := QQueryRow(tx,
-				`SELECT position FROM board_moderators WHERE board_id=? AND user_id=?`,
-				boardID, userID,
-			).Scan(&currentPosition)
-			if err == nil {
-				targetPosition = currentPosition
-			} else if err == sql.ErrNoRows {
-				if err := QQueryRow(tx, `SELECT COALESCE(MAX(position) + 1, 0) FROM board_moderators WHERE board_id=?`, boardID).Scan(&targetPosition); err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		}
+	targetPosition, err := BoardModeratorEventPosition(tx, boardID, userID, actorID, moderator, position, ts)
+	if err != nil {
+		return err
 	}
 	if err := SetBoardModeratorTx(tx, boardID, userID, actorID, moderator, targetPosition, ts); err != nil {
 		return err
@@ -1639,8 +1611,34 @@ func nextBoardModeratorTermStartedAt(tx *sql.Tx, boardID, userID string, desired
 }
 
 func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch BoardMemberPatch) error {
+	finalMember, err := BoardMemberFinalState(db, boardID, userID, member, patch)
+	if err != nil {
+		return err
+	}
 	if !member {
-		return setBoardMemberFinal(db, boardID, BoardMember{UserID: userID}, false, NowMS())
+		return setBoardMemberFinal(db, boardID, finalMember, false, NowMS())
+	}
+	return setBoardMemberFinal(db, boardID, finalMember, true, NowMS())
+}
+
+func BoardMemberPatchFromPayload(payload proto.SetBoardMemberPayload) BoardMemberPatch {
+	return BoardMemberPatch{
+		Title:               payload.Title,
+		Position:            payload.Position,
+		CanManageMembers:    payload.CanManageMembers,
+		CanCurate:           payload.CanCurate,
+		CanModeratePosts:    payload.CanModeratePosts,
+		CanModerateThreads:  payload.CanModerateThreads,
+		CanAnnounce:         payload.CanAnnounce,
+		CanManagePolls:      payload.CanManagePolls,
+		CanSetBoardSettings: payload.CanSetBoardSettings,
+	}
+}
+
+func BoardMemberFinalState(queryable sqlLike, boardID, userID string, member bool, patch BoardMemberPatch) (BoardMember, error) {
+	finalMember := BoardMember{UserID: userID}
+	if !member {
+		return finalMember, nil
 	}
 	canManageMembers := 0
 	canCurate := 0
@@ -1650,17 +1648,17 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 	canManagePolls := 0
 	canSetBoardSettings := 0
 	position := 0
-	err := QQueryRow(db,
+	err := QQueryRow(queryable,
 		`SELECT can_manage_members, can_curate, can_moderate_posts, can_moderate_threads, can_announce, can_manage_polls, can_set_board_settings, COALESCE(position, 0)
 		   FROM board_members WHERE board_id=? AND user_id=?`,
 		boardID, userID,
 	).Scan(&canManageMembers, &canCurate, &canModeratePosts, &canModerateThreads, &canAnnounce, &canManagePolls, &canSetBoardSettings, &position)
 	if err != nil && err != sql.ErrNoRows {
-		return err
+		return finalMember, err
 	}
 	if err == sql.ErrNoRows {
-		if err := QQueryRow(db, `SELECT COALESCE(MAX(position) + 1, 0) FROM board_members WHERE board_id=?`, boardID).Scan(&position); err != nil {
-			return err
+		if err := QQueryRow(queryable, `SELECT COALESCE(MAX(position) + 1, 0) FROM board_members WHERE board_id=?`, boardID).Scan(&position); err != nil {
+			return finalMember, err
 		}
 	}
 	if patch.Position != nil {
@@ -1701,7 +1699,7 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 	} else if patch.CanSetBoardSettings != nil {
 		canSetBoardSettings = 0
 	}
-	return setBoardMemberFinal(db, boardID, BoardMember{
+	return BoardMember{
 		UserID:              userID,
 		Title:               strings.TrimSpace(patch.Title),
 		Position:            position,
@@ -1712,7 +1710,7 @@ func SetBoardMember(db *sql.DB, boardID, userID string, member bool, patch Board
 		CanAnnounce:         canAnnounce != 0,
 		CanManagePolls:      canManagePolls != 0,
 		CanSetBoardSettings: canSetBoardSettings != 0,
-	}, true, NowMS())
+	}, nil
 }
 
 func SetBoardMemberTx(tx *sql.Tx, boardID string, member BoardMember, active bool, updatedAt int64) error {
@@ -1889,12 +1887,8 @@ func UpsertDigestEntryTx(tx *sql.Tx, id, boardID, targetKind, targetID, kind, ti
 	); err != nil {
 		return "", err
 	}
-	var entryID string
-	if err := QQueryRow(tx,
-		`SELECT id FROM digest_entries
-		  WHERE board_id=? AND target_kind=? AND target_id=? AND kind=? AND path=?`,
-		boardID, targetKind, targetID, kind, path,
-	).Scan(&entryID); err != nil {
+	entryID, err := DigestEntryID(tx, boardID, targetKind, targetID, kind, path)
+	if err != nil {
 		return "", err
 	}
 	return entryID, nil
@@ -2021,19 +2015,15 @@ func UpsertDigestDirectoryTx(tx *sql.Tx, id, boardID, kind, path, createdBy stri
 	); err != nil {
 		return "", err
 	}
-	var directoryID string
-	if err := QQueryRow(tx,
-		`SELECT id FROM digest_directories
-		  WHERE board_id=? AND kind=? AND path=?`,
-		boardID, kind, path,
-	).Scan(&directoryID); err != nil {
+	directoryID, err := DigestDirectoryID(tx, boardID, kind, path)
+	if err != nil {
 		return "", err
 	}
 	return directoryID, nil
 }
 
 func CountDigestPathEntries(db *sql.DB, boardID, kind, path string) (int, error) {
-	entries, err := digestPathEntries(db, boardID, kind, path)
+	entries, err := DigestPathEntries(db, boardID, kind, path)
 	if err != nil {
 		return 0, err
 	}
@@ -2041,14 +2031,14 @@ func CountDigestPathEntries(db *sql.DB, boardID, kind, path string) (int, error)
 }
 
 func CountDigestPathDirectories(db *sql.DB, boardID, kind, path string) (int, error) {
-	dirs, err := digestPathDirectories(db, boardID, kind, path)
+	dirs, err := DigestPathDirectories(db, boardID, kind, path)
 	if err != nil {
 		return 0, err
 	}
 	return len(dirs), nil
 }
 
-type digestPathEntryRow struct {
+type DigestPathEntryRow struct {
 	ID         string
 	BoardID    string
 	TargetKind string
@@ -2064,7 +2054,7 @@ type digestPathEntryRow struct {
 	UpdatedAt  int64
 }
 
-type digestPathDirectoryRow struct {
+type DigestPathDirectoryRow struct {
 	ID        string
 	BoardID   string
 	Kind      string
@@ -2091,11 +2081,11 @@ func MoveDigestPathTx(tx *sql.Tx, boardID, kind, fromPath, toPath string, ts int
 	if ts <= 0 {
 		ts = NowMS()
 	}
-	entries, err := digestPathEntries(tx, boardID, kind, fromPath)
+	entries, err := DigestPathEntries(tx, boardID, kind, fromPath)
 	if err != nil {
 		return 0, err
 	}
-	dirs, err := digestPathDirectories(tx, boardID, kind, fromPath)
+	dirs, err := DigestPathDirectories(tx, boardID, kind, fromPath)
 	if err != nil {
 		return 0, err
 	}
@@ -2109,7 +2099,7 @@ func MoveDigestPathTx(tx *sql.Tx, boardID, kind, fromPath, toPath string, ts int
 	}
 	newPaths := make(map[string]string, len(entries))
 	for _, entry := range entries {
-		newPath := remapDigestPath(entry.Path, fromPath, toPath)
+		newPath := RemapDigestPath(entry.Path, fromPath, toPath)
 		if err := ensureDigestPathAvailable(tx, entry, newPath, movingIDs); err != nil {
 			return 0, err
 		}
@@ -2117,7 +2107,7 @@ func MoveDigestPathTx(tx *sql.Tx, boardID, kind, fromPath, toPath string, ts int
 	}
 	newDirPaths := make(map[string]string, len(dirs))
 	for _, dir := range dirs {
-		newPath := remapDigestPath(dir.Path, fromPath, toPath)
+		newPath := RemapDigestPath(dir.Path, fromPath, toPath)
 		if err := ensureDigestDirectoryAvailable(tx, dir, newPath, movingDirIDs); err != nil {
 			return 0, err
 		}
@@ -2164,11 +2154,11 @@ func CopyDigestPathTx(tx *sql.Tx, boardID, kind, fromPath, toPath, createdBy str
 	if ts <= 0 {
 		ts = NowMS()
 	}
-	entries, err := digestPathEntries(tx, boardID, kind, fromPath)
+	entries, err := DigestPathEntries(tx, boardID, kind, fromPath)
 	if err != nil {
 		return 0, err
 	}
-	dirs, err := digestPathDirectories(tx, boardID, kind, fromPath)
+	dirs, err := DigestPathDirectories(tx, boardID, kind, fromPath)
 	if err != nil {
 		return 0, err
 	}
@@ -2179,19 +2169,19 @@ func CopyDigestPathTx(tx *sql.Tx, boardID, kind, fromPath, toPath, createdBy str
 		return 0, fmt.Errorf("not enough digest directory copy ids")
 	}
 	for _, entry := range entries {
-		newPath := remapDigestPath(entry.Path, fromPath, toPath)
+		newPath := RemapDigestPath(entry.Path, fromPath, toPath)
 		if err := ensureDigestPathAvailable(tx, entry, newPath, nil); err != nil {
 			return 0, err
 		}
 	}
 	for _, dir := range dirs {
-		newPath := remapDigestPath(dir.Path, fromPath, toPath)
+		newPath := RemapDigestPath(dir.Path, fromPath, toPath)
 		if err := ensureDigestDirectoryAvailable(tx, dir, newPath, nil); err != nil {
 			return 0, err
 		}
 	}
 	for i, entry := range entries {
-		newPath := remapDigestPath(entry.Path, fromPath, toPath)
+		newPath := RemapDigestPath(entry.Path, fromPath, toPath)
 		if _, err := QExec(tx,
 			`INSERT INTO digest_entries (
 			    id, board_id, target_kind, target_id, kind, title, path, note,
@@ -2204,7 +2194,7 @@ func CopyDigestPathTx(tx *sql.Tx, boardID, kind, fromPath, toPath, createdBy str
 		}
 	}
 	for i, dir := range dirs {
-		newPath := remapDigestPath(dir.Path, fromPath, toPath)
+		newPath := RemapDigestPath(dir.Path, fromPath, toPath)
 		if _, err := QExec(tx,
 			`INSERT INTO digest_directories (id, board_id, kind, path, created_by, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2230,11 +2220,11 @@ func DeleteDigestPath(db *sql.DB, boardID, kind, path string) (int, error) {
 }
 
 func DeleteDigestPathTx(tx *sql.Tx, boardID, kind, path string) (int, error) {
-	entries, err := digestPathEntries(tx, boardID, kind, path)
+	entries, err := DigestPathEntries(tx, boardID, kind, path)
 	if err != nil {
 		return 0, err
 	}
-	dirs, err := digestPathDirectories(tx, boardID, kind, path)
+	dirs, err := DigestPathDirectories(tx, boardID, kind, path)
 	if err != nil {
 		return 0, err
 	}
@@ -2283,7 +2273,7 @@ func RecordDigestPathMutationTx(tx *sql.Tx, eventID, action, boardID, kind, from
 	return err
 }
 
-func digestPathEntries(db sqlLike, boardID, kind, path string) ([]digestPathEntryRow, error) {
+func DigestPathEntries(db sqlLike, boardID, kind, path string) ([]DigestPathEntryRow, error) {
 	rows, err := QQuery(db,
 		`SELECT id, board_id, target_kind, target_id, kind, title, path, note,
 		        body, body_edited, created_by, created_at, updated_at
@@ -2296,20 +2286,20 @@ func digestPathEntries(db sqlLike, boardID, kind, path string) ([]digestPathEntr
 		return nil, err
 	}
 	defer rows.Close()
-	entries := []digestPathEntryRow{}
+	entries := []DigestPathEntryRow{}
 	for rows.Next() {
-		var entry digestPathEntryRow
+		var entry DigestPathEntryRow
 		if err := rows.Scan(&entry.ID, &entry.BoardID, &entry.TargetKind, &entry.TargetID, &entry.Kind, &entry.Title, &entry.Path, &entry.Note, &entry.Body, &entry.BodyEdited, &entry.CreatedBy, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
 			return nil, err
 		}
-		if digestPathContains(path, entry.Path) {
+		if DigestPathContains(path, entry.Path) {
 			entries = append(entries, entry)
 		}
 	}
 	return entries, rows.Err()
 }
 
-func digestPathDirectories(db sqlLike, boardID, kind, path string) ([]digestPathDirectoryRow, error) {
+func DigestPathDirectories(db sqlLike, boardID, kind, path string) ([]DigestPathDirectoryRow, error) {
 	rows, err := QQuery(db,
 		`SELECT id, board_id, kind, path, created_by, created_at, updated_at
 		   FROM digest_directories
@@ -2321,75 +2311,75 @@ func digestPathDirectories(db sqlLike, boardID, kind, path string) ([]digestPath
 		return nil, err
 	}
 	defer rows.Close()
-	dirs := []digestPathDirectoryRow{}
+	dirs := []DigestPathDirectoryRow{}
 	for rows.Next() {
-		var dir digestPathDirectoryRow
+		var dir DigestPathDirectoryRow
 		if err := rows.Scan(&dir.ID, &dir.BoardID, &dir.Kind, &dir.Path, &dir.CreatedBy, &dir.CreatedAt, &dir.UpdatedAt); err != nil {
 			return nil, err
 		}
-		if digestPathContains(path, dir.Path) {
+		if DigestPathContains(path, dir.Path) {
 			dirs = append(dirs, dir)
 		}
 	}
 	return dirs, rows.Err()
 }
 
-func ensureDigestPathAvailable(db sqlLike, entry digestPathEntryRow, newPath string, ignoredIDs map[string]struct{}) error {
-	var conflictID string
-	err := QQueryRow(
-		db,
-		`SELECT id
-		   FROM digest_entries
-		  WHERE board_id=? AND target_kind=? AND target_id=? AND kind=? AND path=?
-		  LIMIT 1`,
-		entry.BoardID, entry.TargetKind, entry.TargetID, entry.Kind, newPath,
-	).Scan(&conflictID)
-	if err == sql.ErrNoRows {
-		return nil
-	}
+func DigestPathEntryConflictExists(db sqlLike, entry DigestPathEntryRow, newPath string, ignoredIDs map[string]struct{}) (bool, error) {
+	conflictID, found, err := DigestPathEntryConflictID(db, entry.BoardID, entry.TargetKind, entry.TargetID, entry.Kind, newPath)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if !found {
+		return false, nil
 	}
 	if ignoredIDs != nil {
 		if _, ok := ignoredIDs[conflictID]; ok {
-			return nil
+			return false, nil
 		}
+	}
+	return true, nil
+}
+
+func DigestPathDirectoryConflictExists(db sqlLike, dir DigestPathDirectoryRow, newPath string, ignoredIDs map[string]struct{}) (bool, error) {
+	conflictID, found, err := DigestPathDirectoryConflictID(db, dir.BoardID, dir.Kind, newPath)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	if ignoredIDs != nil {
+		if _, ok := ignoredIDs[conflictID]; ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func ensureDigestPathAvailable(db sqlLike, entry DigestPathEntryRow, newPath string, ignoredIDs map[string]struct{}) error {
+	conflict, err := DigestPathEntryConflictExists(db, entry, newPath, ignoredIDs)
+	if err != nil || !conflict {
+		return err
 	}
 	return fmt.Errorf("%w: %s", ErrDigestPathConflict, newPath)
 }
 
-func ensureDigestDirectoryAvailable(db sqlLike, dir digestPathDirectoryRow, newPath string, ignoredIDs map[string]struct{}) error {
-	var conflictID string
-	err := QQueryRow(
-		db,
-		`SELECT id
-		   FROM digest_directories
-		  WHERE board_id=? AND kind=? AND path=?
-		  LIMIT 1`,
-		dir.BoardID, dir.Kind, newPath,
-	).Scan(&conflictID)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
+func ensureDigestDirectoryAvailable(db sqlLike, dir DigestPathDirectoryRow, newPath string, ignoredIDs map[string]struct{}) error {
+	conflict, err := DigestPathDirectoryConflictExists(db, dir, newPath, ignoredIDs)
+	if err != nil || !conflict {
 		return err
-	}
-	if ignoredIDs != nil {
-		if _, ok := ignoredIDs[conflictID]; ok {
-			return nil
-		}
 	}
 	return fmt.Errorf("%w: %s", ErrDigestPathConflict, newPath)
 }
 
-func digestPathContains(parent, child string) bool {
+func DigestPathContains(parent, child string) bool {
 	if parent == "" {
 		return child == ""
 	}
 	return child == parent || strings.HasPrefix(child, parent+"/")
 }
 
-func remapDigestPath(path, fromPath, toPath string) string {
+func RemapDigestPath(path, fromPath, toPath string) string {
 	if path == fromPath {
 		return toPath
 	}
@@ -2971,12 +2961,7 @@ func presenceOnlineAccrualSeconds(previousStatus string, previousLastSeen, ts in
 }
 
 func presenceStatusCountsOnline(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "", "offline", "invisible", "cloak", "cloaked":
-		return false
-	default:
-		return true
-	}
+	return proto.VisiblePresenceStatus(status)
 }
 
 func guestPresenceStatusCountsOnline(status string) bool {
@@ -3215,21 +3200,6 @@ func favoriteTargetPosition(tx *sql.Tx, userID, folderID string, position *int) 
 	err := QQueryRow(tx,
 		`SELECT COALESCE(MAX(position) + 1, 0) FROM board_favorites WHERE user_id=? AND folder_id=?`,
 		userID, folderID,
-	).Scan(&next)
-	return next, err
-}
-
-func favoriteFolderTargetPosition(tx *sql.Tx, userID, parentID string, position *int) (int, error) {
-	if position != nil {
-		if *position < 0 {
-			return 0, nil
-		}
-		return *position, nil
-	}
-	var next int
-	err := QQueryRow(tx,
-		`SELECT COALESCE(MAX(position) + 1, 0) FROM favorite_folders WHERE user_id=? AND parent_id=?`,
-		userID, parentID,
 	).Scan(&next)
 	return next, err
 }

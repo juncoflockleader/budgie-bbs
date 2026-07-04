@@ -210,7 +210,7 @@ func postReactionWakeupEvent(db *sql.DB, kind proto.EventKind, scopes []string, 
 	).Scan(&thread, &user); err != nil {
 		return nil, err
 	}
-	count, err := reactionCount(db, wakeup.Post)
+	count, err := projections.ReactionCount(db, wakeup.Post)
 	if err != nil {
 		return nil, err
 	}

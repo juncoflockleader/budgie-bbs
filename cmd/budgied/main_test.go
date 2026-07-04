@@ -3,13 +3,22 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
+	"github.com/juncoflockleader/budgie-bbs/internal/natsconn"
 )
+
+func requireErrorContains(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want containing %q", err, want)
+	}
+}
 
 func TestResolveWebRootUsesExplicitPath(t *testing.T) {
 	if got := resolveWebRoot("/tmp/custom-web"); got != "/tmp/custom-web" {
@@ -141,91 +150,6 @@ func TestParseRolesAllowsGatewayAndWriter(t *testing.T) {
 	}
 }
 
-func TestNormalizeLogBackend(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", ""},
-		{"off", ""},
-		{" none ", ""},
-		{"memory", "memory"},
-		{"NATS", "nats"},
-		{"jetstream", "nats"},
-		{"Redpanda", "kafka"},
-	}
-	for _, tt := range tests {
-		if got := normalizeLogBackend(tt.in); got != tt.want {
-			t.Fatalf("normalizeLogBackend(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestNormalizeEventLogPromotionReadinessBackend(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", "nats"},
-		{"off", "nats"},
-		{"NATS", "nats"},
-		{"jetstream", "nats"},
-		{"Redpanda", "kafka"},
-		{"kafka", "kafka"},
-	}
-	for _, tt := range tests {
-		if got := normalizeEventLogPromotionReadinessBackend(tt.in); got != tt.want {
-			t.Fatalf("normalizeEventLogPromotionReadinessBackend(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestNormalizeProjectionRebuildSource(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", "sql"},
-		{"SQL", "sql"},
-		{"NATS", "nats"},
-		{"jetstream", "nats"},
-		{"Redpanda", "kafka"},
-		{"kafka", "kafka"},
-		{"unknown", "unknown"},
-	}
-	for _, tt := range tests {
-		if got := normalizeProjectionRebuildSource(tt.in); got != tt.want {
-			t.Fatalf("normalizeProjectionRebuildSource(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestIsSupportedLogBackend(t *testing.T) {
-	for _, mode := range []string{"", "memory", "nats"} {
-		if !isSupportedLogBackend(mode) {
-			t.Fatalf("mode %q should be supported", mode)
-		}
-	}
-	if isSupportedLogBackend("kafka") {
-		t.Fatalf("generic log backend should not accept kafka without a role-specific adapter")
-	}
-	if !isSupportedCommandLogBackend("kafka") {
-		t.Fatalf("command-log kafka should be accepted for SQL-executor wiring")
-	}
-	if !isSupportedEventLogShadowBackend("kafka") {
-		t.Fatalf("event-log shadow kafka should be accepted for Kafka shadow wiring")
-	}
-}
-
-func TestCommandLogWorkerSupportedBackendMessagesIncludeKafka(t *testing.T) {
-	if got := supportedCommandLogWorkerBackends(); got != "memory,nats,kafka" {
-		t.Fatalf("supportedCommandLogWorkerBackends() = %q, want memory,nats,kafka", got)
-	}
-	if got := supportedNativeCommandLogWorkerBackends(); got != "nats,kafka" {
-		t.Fatalf("supportedNativeCommandLogWorkerBackends() = %q, want nats,kafka", got)
-	}
-}
-
 func TestOpenProjectionRebuildEventStoreSupportsKafka(t *testing.T) {
 	c, err := core.New(filepath.Join(t.TempDir(), "rebuild-kafka.db"))
 	if err != nil {
@@ -259,19 +183,13 @@ func TestValidatePendingKafkaBackendsRequireRuntimeConfig(t *testing.T) {
 	if err := validateKafkaCommandLogBackend("nats", kafkaconn.RuntimeConfig{}, 0); err != nil {
 		t.Fatalf("validate nats mode: %v", err)
 	}
-	if err := validateKafkaCommandLogBackend("kafka", kafkaconn.RuntimeConfig{}, 32); err == nil || !strings.Contains(err.Error(), "broker list is required") {
-		t.Fatalf("validate command-log kafka without brokers err = %v, want broker-list error", err)
-	}
+	requireErrorContains(t, validateKafkaCommandLogBackend("kafka", kafkaconn.RuntimeConfig{}, 32), "broker list is required")
 	config := kafkaconn.RuntimeConfigFromFlags("redpanda:9092", "", "", "")
 	if err := validateKafkaCommandLogBackend("kafka", config, 32); err != nil {
 		t.Fatalf("validate command-log kafka with config: %v", err)
 	}
-	if err := validateKafkaCommandLogBackend("kafka", config, 0); err == nil || !strings.Contains(err.Error(), "kafka-command-partitions") {
-		t.Fatalf("validate command-log kafka without partitions err = %v, want partition-count error", err)
-	}
-	if err := validateKafkaEventShadowBackend("kafka", config, 0); err == nil || !strings.Contains(err.Error(), "kafka-event-partitions") {
-		t.Fatalf("validate event-log kafka shadow without partitions err = %v, want event partition error", err)
-	}
+	requireErrorContains(t, validateKafkaCommandLogBackend("kafka", config, 0), "kafka-command-partitions")
+	requireErrorContains(t, validateKafkaEventShadowBackend("kafka", config, 0), "kafka-event-partitions")
 	if err := validateKafkaEventShadowBackend("kafka", config, 32); err != nil {
 		t.Fatalf("validate event-log kafka shadow with partitions: %v", err)
 	}
@@ -279,13 +197,10 @@ func TestValidatePendingKafkaBackendsRequireRuntimeConfig(t *testing.T) {
 
 func TestValidatePendingKafkaNativeWorkerRequiresDistinctTopics(t *testing.T) {
 	config := kafkaconn.RuntimeConfigFromFlags("redpanda:9092", "budgie.log", "budgie.log", "")
-	err := validateKafkaCommandWorkerBackend("kafka", "native", config, 32, 32)
-	if err == nil || !strings.Contains(err.Error(), "command and event topics must be distinct") {
-		t.Fatalf("validate native kafka worker err = %v, want distinct topic error", err)
-	}
-	if err := validateKafkaCommandWorkerBackend("kafka", "native", kafkaconn.RuntimeConfigFromFlags("redpanda:9092", "budgie.commands", "budgie.events", ""), 32, 0); err == nil || !strings.Contains(err.Error(), "kafka-event-partitions") {
-		t.Fatalf("validate native kafka worker without event partitions err = %v, want event partition error", err)
-	}
+	requireErrorContains(t, validateKafkaCommandWorkerBackend("kafka", "native", config, 32, 32), "command and event topics must be distinct")
+	requireErrorContains(t,
+		validateKafkaCommandWorkerBackend("kafka", "native", kafkaconn.RuntimeConfigFromFlags("redpanda:9092", "budgie.commands", "budgie.events", ""), 32, 0),
+		"kafka-event-partitions")
 	if err := validateKafkaCommandWorkerBackend("kafka", "native", kafkaconn.RuntimeConfigFromFlags("redpanda:9092", "budgie.commands", "budgie.events", ""), 32, 32); err != nil {
 		t.Fatalf("validate native kafka worker with distinct topics and partitions: %v", err)
 	}
@@ -349,47 +264,13 @@ func TestOpenKafkaNativeCommandLogBuildsTransactionBinder(t *testing.T) {
 	}
 }
 
-func TestNormalizeEventStoreProjectionMode(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", ""},
-		{"off", ""},
-		{" none ", ""},
-		{"NATS", "nats"},
-		{"jetstream", "nats"},
-		{"Redpanda", "kafka"},
-	}
-	for _, tt := range tests {
-		if got := normalizeEventStoreProjectionMode(tt.in); got != tt.want {
-			t.Fatalf("normalizeEventStoreProjectionMode(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestIsSupportedEventStoreProjectionMode(t *testing.T) {
-	for _, mode := range []string{"", "nats", "kafka"} {
-		if !isSupportedEventStoreProjectionMode(mode) {
-			t.Fatalf("mode %q should be supported", mode)
-		}
-	}
-	if isSupportedEventStoreProjectionMode("memory") {
-		t.Fatalf("memory should not be accepted for broker event-store projection")
-	}
-}
-
 func TestValidateKafkaEventProjectionBackendRequiresConfigAndPartitions(t *testing.T) {
 	if err := validateKafkaEventProjectionBackend("nats", kafkaconn.RuntimeConfig{}, 0); err != nil {
 		t.Fatalf("validate nats projection: %v", err)
 	}
-	if err := validateKafkaEventProjectionBackend("kafka", kafkaconn.RuntimeConfig{}, 32); err == nil || !strings.Contains(err.Error(), "broker list is required") {
-		t.Fatalf("validate kafka projection without brokers err = %v, want broker-list error", err)
-	}
+	requireErrorContains(t, validateKafkaEventProjectionBackend("kafka", kafkaconn.RuntimeConfig{}, 32), "broker list is required")
 	config := kafkaconn.RuntimeConfigFromFlags("redpanda:9092", "budgie.commands", "budgie.events", "")
-	if err := validateKafkaEventProjectionBackend("kafka", config, 0); err == nil || !strings.Contains(err.Error(), "kafka-event-partitions") {
-		t.Fatalf("validate kafka projection without event partitions err = %v, want event partition error", err)
-	}
+	requireErrorContains(t, validateKafkaEventProjectionBackend("kafka", config, 0), "kafka-event-partitions")
 	if err := validateKafkaEventProjectionBackend("kafka", config, 32); err != nil {
 		t.Fatalf("validate kafka projection: %v", err)
 	}
@@ -460,178 +341,39 @@ func TestOpenKafkaEventShadowStoreBuildsBrokerEventStore(t *testing.T) {
 	if store == nil {
 		t.Fatalf("store = nil")
 	}
-	if _, cleanup, err := openKafkaEventShadowStore(
+	_, cleanup, err = openKafkaEventShadowStore(
 		t.Context(),
 		kafkaconn.RuntimeConfigFromFlags("redpanda:9092", "budgie.commands", "budgie.events", "budgie-writers"),
 		0,
 		"event-shadow-a",
-	); err == nil || !strings.Contains(err.Error(), "kafka-event-partitions") {
-		defer cleanup()
-		t.Fatalf("openKafkaEventShadowStore without partitions err = %v, want partition error", err)
-	}
+	)
+	defer cleanup()
+	requireErrorContains(t, err, "kafka-event-partitions")
 }
 
 func TestValidateNativeCommandEventStreams(t *testing.T) {
-	if err := validateNativeCommandEventStreams("nats", "native", "BUDGIE_COMMAND_LOG", "BUDGIE_EVENT_LOG"); err != nil {
+	if err := validateNativeCommandEventStreams("nats", "native", natsconn.DefaultJetStreamCommandLogStream, natsconn.DefaultJetStreamEventLogStream); err != nil {
 		t.Fatalf("validate distinct native command/event streams: %v", err)
 	}
 	if err := validateNativeCommandEventStreams("memory", "native", "SAME", "SAME"); err != nil {
 		t.Fatalf("non-NATS worker should not require distinct streams: %v", err)
 	}
 	err := validateNativeCommandEventStreams("nats", "native", "BUDGIE_LOAD", " BUDGIE_LOAD ")
-	if err == nil || !strings.Contains(err.Error(), "distinct command and event streams") {
-		t.Fatalf("shared native command/event streams err = %v, want distinct-stream error", err)
-	}
+	requireErrorContains(t, err, "distinct command and event streams")
 }
 
 func TestValidateSameProcessNativeWriterProjectionStreams(t *testing.T) {
 	roles := map[string]bool{"writer": true, "worker": true}
-	if err := validateSameProcessNativeWriterProjectionStreams(roles, "nats", "native", "nats", "BUDGIE_EVENT_LOG", " BUDGIE_EVENT_LOG "); err != nil {
+	if err := validateSameProcessNativeWriterProjectionStreams(roles, "nats", "native", "nats", natsconn.DefaultJetStreamEventLogStream, " "+natsconn.DefaultJetStreamEventLogStream+" "); err != nil {
 		t.Fatalf("validate matching writer/projector event stream: %v", err)
 	}
 	err := validateSameProcessNativeWriterProjectionStreams(roles, "nats", "native", "nats", "BUDGIE_EVENT_LOG_WRITER", "BUDGIE_EVENT_LOG_PROJECTOR")
-	if err == nil || !strings.Contains(err.Error(), "same-process native writer/projector") {
-		t.Fatalf("mismatched writer/projector streams err = %v, want mismatch error", err)
-	}
+	requireErrorContains(t, err, "same-process native writer/projector")
 	if err := validateSameProcessNativeWriterProjectionStreams(map[string]bool{"writer": true}, "nats", "native", "", "WRITER_EVENTS", "PROJECTOR_EVENTS"); err != nil {
 		t.Fatalf("split projector nodes should be allowed: %v", err)
 	}
 	if err := validateSameProcessNativeWriterProjectionStreams(map[string]bool{"worker": true}, "", "sql", "nats", "WRITER_EVENTS", "PROJECTOR_EVENTS"); err != nil {
 		t.Fatalf("projector-only nodes should be allowed: %v", err)
-	}
-}
-
-func TestNormalizeCommandLogWorkerExecutor(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", "sql"},
-		{"Postgres", "sql"},
-		{"NATIVE", "native"},
-		{" broker-native ", "native"},
-		{"event-transaction", "native"},
-	}
-	for _, tt := range tests {
-		if got := normalizeCommandLogWorkerExecutor(tt.in); got != tt.want {
-			t.Fatalf("normalizeCommandLogWorkerExecutor(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestIsSupportedCommandLogWorkerExecutor(t *testing.T) {
-	for _, mode := range []string{"sql", "native"} {
-		if !isSupportedCommandLogWorkerExecutor(mode) {
-			t.Fatalf("executor %q should be supported", mode)
-		}
-	}
-	if isSupportedCommandLogWorkerExecutor("wasm") {
-		t.Fatalf("wasm should not be accepted until it is wired explicitly")
-	}
-}
-
-func TestNormalizeCommandLogWorkerOwnership(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", "sql-lease"},
-		{"sql", "sql-lease"},
-		{"lease", "sql-lease"},
-		{"hash", "hash-assignment"},
-		{"assignment", "hash-assignment"},
-		{"NATS", "nats-kv"},
-		{"jetstream-kv", "nats-kv"},
-	}
-	for _, tt := range tests {
-		if got := normalizeCommandLogWorkerOwnership(tt.in); got != tt.want {
-			t.Fatalf("normalizeCommandLogWorkerOwnership(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestIsSupportedCommandLogWorkerOwnership(t *testing.T) {
-	for _, mode := range []string{"sql-lease", "hash-assignment", "nats-kv"} {
-		if !isSupportedCommandLogWorkerOwnership(mode) {
-			t.Fatalf("ownership mode %q should be supported", mode)
-		}
-	}
-	if isSupportedCommandLogWorkerOwnership("etcd") {
-		t.Fatalf("etcd should not be accepted until it is wired explicitly")
-	}
-}
-
-func TestNormalizeSideStoreBackends(t *testing.T) {
-	tests := []struct {
-		name string
-		fn   func(string) string
-	}{
-		{"counter", normalizeCounterStoreBackend},
-		{"presence", normalizePresenceStoreBackend},
-		{"chat", normalizeChatStoreBackend},
-	}
-	for _, tt := range tests {
-		if got := tt.fn(""); got != "sql" {
-			t.Fatalf("%s empty backend = %q, want sql", tt.name, got)
-		}
-		if got := tt.fn(" Postgres "); got != "sql" {
-			t.Fatalf("%s postgres backend = %q, want sql", tt.name, got)
-		}
-		if got := tt.fn("jetstream-kv"); got != "nats-kv" {
-			t.Fatalf("%s jetstream backend = %q, want nats-kv", tt.name, got)
-		}
-	}
-}
-
-func TestIsSupportedSideStoreBackends(t *testing.T) {
-	tests := []struct {
-		name string
-		fn   func(string) bool
-	}{
-		{"counter", isSupportedCounterStoreBackend},
-		{"presence", isSupportedPresenceStoreBackend},
-		{"chat", isSupportedChatStoreBackend},
-	}
-	for _, tt := range tests {
-		for _, mode := range []string{"sql", "nats-kv"} {
-			if !tt.fn(mode) {
-				t.Fatalf("%s backend %q should be supported", tt.name, mode)
-			}
-		}
-		if tt.fn("redis") {
-			t.Fatalf("%s backend redis should not be accepted until it is wired explicitly", tt.name)
-		}
-	}
-}
-
-func TestNormalizeReadCacheBackend(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{"", ""},
-		{"off", ""},
-		{"disabled", ""},
-		{"MEM", "memory"},
-		{" memory ", "memory"},
-		{"Redis", "redis"},
-		{"dragonfly", "dragonfly"},
-	}
-	for _, tt := range tests {
-		if got := normalizeReadCacheBackend(tt.in); got != tt.want {
-			t.Fatalf("normalizeReadCacheBackend(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestIsSupportedReadCacheBackend(t *testing.T) {
-	for _, mode := range []string{"", "memory", "redis"} {
-		if !isSupportedReadCacheBackend(mode) {
-			t.Fatalf("read-cache backend %q should be supported", mode)
-		}
-	}
-	if isSupportedReadCacheBackend("memcached") {
-		t.Fatalf("memcached should not be accepted until it is wired explicitly")
 	}
 }
 
@@ -663,10 +405,9 @@ func TestOpenReadCache(t *testing.T) {
 		t.Fatalf("redis read cache = nil")
 	}
 
-	if _, cleanup, err := openReadCache(t.Context(), "redis", "", "budgie:test", time.Minute); err == nil || !strings.Contains(err.Error(), "URL or address is required") {
-		defer cleanup()
-		t.Fatalf("open redis read cache without URL err = %v, want URL error", err)
-	}
+	_, cleanup, err = openReadCache(t.Context(), "redis", "", "budgie:test", time.Minute)
+	defer cleanup()
+	requireErrorContains(t, err, "URL or address is required")
 }
 
 func TestApplyDerivedViewProcessorSelectionEnablesGroups(t *testing.T) {
@@ -710,7 +451,7 @@ func TestApplyDerivedViewProcessorSelectionEnablesGroups(t *testing.T) {
 		core.DerivedViewBlessingRankings,
 		core.DerivedViewArchiveRankings,
 	} {
-		if !containsString(views, want) {
+		if !slices.Contains(views, want) {
 			t.Fatalf("resolved views %v missing %s", views, want)
 		}
 	}
@@ -732,7 +473,7 @@ func TestApplyDerivedViewProcessorSelectionEnablesCommunityHistory(t *testing.T)
 	if err != nil {
 		t.Fatalf("apply community processors: %v", err)
 	}
-	if !containsString(views, core.DerivedViewCommunityStats) || !containsString(views, core.DerivedViewCommunityStatHistory) {
+	if !slices.Contains(views, core.DerivedViewCommunityStats) || !slices.Contains(views, core.DerivedViewCommunityStatHistory) {
 		t.Fatalf("community processor views = %v, want stats and stat-history", views)
 	}
 	if !communityStats || !asyncCommunityStatHistory {

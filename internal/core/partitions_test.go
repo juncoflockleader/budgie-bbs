@@ -15,11 +15,7 @@ import (
 )
 
 func TestAppendEventStoresAndReplaysPartitionMetadata(t *testing.T) {
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	tx, err := c.DB.Begin()
 	if err != nil {
@@ -118,11 +114,7 @@ func TestAppendEventStoresAndReplaysPartitionMetadata(t *testing.T) {
 }
 
 func TestReplayCursorUsesPartitionOffsetsWithoutScalarSeq(t *testing.T) {
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	appendThreadEvent := func(id, board, title string) {
 		t.Helper()
@@ -334,11 +326,7 @@ func TestHotThreadSplitOptionOverridesPersistedConfig(t *testing.T) {
 func TestHotThreadSplitBlockingLagRequiresAffectedPartitionsToDrain(t *testing.T) {
 	ctx := context.Background()
 	commandLog := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/hot-split-lag.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 
 	actor := &User{ID: "usr_alice"}
 	baseReply := c.ExecCmd(ctx, actor, proto.CmdAppendPost, []byte(`{"thread":"thr_hot","body":"base queued"}`), "cid-base-queued")
@@ -512,11 +500,7 @@ func hasBlockingCommandPartition(offsets []CommandPartitionOffset, partition Log
 
 func TestHotThreadSplitAuthoritativeCommandUsesSplitPartition(t *testing.T) {
 	commandLog := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	c.SetHotThreadSplit("thr_hot", 4)
 
 	reply := c.ExecCmd(context.Background(), &User{ID: "usr_alice"}, proto.CmdAppendPost, []byte(`{"thread":"thr_hot","body":"hello"}`), "cid-hot-reply")
@@ -564,11 +548,7 @@ func TestHotThreadSplitCommandLogValidationAcceptsThreadPartitionFamily(t *testi
 
 func TestHotThreadSplitRepliesRemainReadableInCreatedSeqOrder(t *testing.T) {
 	shadow := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/budgie.db", WithCommandLogShadow(shadow))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithCommandLogShadow(shadow))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -617,11 +597,7 @@ func TestHotThreadSplitAuthoritativeRepliesMergeIntoStableReadPresentation(t *te
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	commandLog := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	go c.Run(ctx)
 
 	alice, err := c.RegisterUser("alice", "pw")
@@ -672,11 +648,7 @@ func TestHotThreadSplitModerationRemainsCausalForTargetPost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	commandLog := NewMemoryCommandLog()
-	c, err := New(t.TempDir()+"/budgie.db", WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	go c.Run(ctx)
 
 	admin, err := c.RegisterUser("admin", "pw")
@@ -886,11 +858,7 @@ func TestPostgresPartitionAdvisoryLockKeyIsDeterministic(t *testing.T) {
 }
 
 func TestEventPartitionOffsetMetrics(t *testing.T) {
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	tx, err := c.DB.Begin()
 	if err != nil {

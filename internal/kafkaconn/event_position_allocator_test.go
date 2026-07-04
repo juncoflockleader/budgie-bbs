@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
@@ -102,9 +101,7 @@ func TestSQLEventPositionAllocatorRollsBackRequestedSequenceMismatch(t *testing.
 	_, err = allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_bad_requested_seq", "general", 99),
 	})
-	if err == nil || !strings.Contains(err.Error(), "does not match next reserved sequence 1") {
-		t.Fatalf("AllocateEventPositions err = %v, want requested sequence mismatch", err)
-	}
+	requireErrorContains(t, err, "does not match next reserved sequence 1")
 	allocations, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_after_bad_request", "general", 0),
 	})
@@ -131,9 +128,7 @@ func TestSQLEventPositionAllocatorDisablesScalarCompatibility(t *testing.T) {
 	_, err = allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_partition_only_requested_seq", "general", 7),
 	})
-	if err == nil || !strings.Contains(err.Error(), "scalar sequence 7 while scalar compatibility allocation is disabled") {
-		t.Fatalf("AllocateEventPositions requested seq err = %v, want scalar-disabled error", err)
-	}
+	requireErrorContains(t, err, "scalar sequence 7 while scalar compatibility allocation is disabled")
 
 	allocations, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_partition_only_general_1", "general", 0),
@@ -151,9 +146,8 @@ func TestSQLEventPositionAllocatorDisablesScalarCompatibility(t *testing.T) {
 	if !sameEventPositionAllocations(allocations, want) {
 		t.Fatalf("partition-only allocations = %+v, want %+v", allocations, want)
 	}
-	if _, err := allocator.Head(ctx); err == nil || !strings.Contains(err.Error(), "scalar head disabled") {
-		t.Fatalf("Head err = %v, want scalar head disabled", err)
-	}
+	_, err = allocator.Head(ctx)
+	requireErrorContains(t, err, "scalar head disabled")
 }
 
 func TestSQLEventPositionAllocatorListsPartitionsAndHead(t *testing.T) {

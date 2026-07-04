@@ -2,18 +2,14 @@ package core
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestBoardRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "board-rankings-processor.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -171,7 +167,7 @@ func boardRankingsBoolPtr(v bool) *bool {
 
 func boardRankingStatsRows(t *testing.T, c *Core) int {
 	t.Helper()
-	count, err := boardRankingStatsRowCount(c.DB)
+	count, err := projections.BoardRankingStatsRowCount(c.DB)
 	if err != nil {
 		t.Fatalf("count board ranking stats rows: %v", err)
 	}

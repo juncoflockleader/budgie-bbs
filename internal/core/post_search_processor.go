@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -20,72 +20,32 @@ type PostSearchProcessResult struct {
 }
 
 type PostSearchProcessor struct {
-	Core      *Core
-	BatchSize int
-	Interval  time.Duration
+	periodicProcessor
 }
 
 func NewPostSearchProcessor(c *Core, interval time.Duration, batchSize int) (*PostSearchProcessor, error) {
-	if c == nil {
-		return nil, fmt.Errorf("post search processor: nil core")
+	processor, err := newPeriodicProcessor(c, "post search", interval, batchSize, func(_ context.Context, c *Core, batchSize int) (processorRunProgress, error) {
+		result, err := c.ProcessPostSearchOnce(batchSize)
+		return postSearchRunProgress(result), err
+	})
+	if err != nil {
+		return nil, err
 	}
-	if interval <= 0 {
-		interval = time.Second
-	}
-	if batchSize <= 0 {
-		batchSize = 500
-	}
-	return &PostSearchProcessor{
-		Core:      c,
-		BatchSize: batchSize,
-		Interval:  interval,
-	}, nil
+	return &PostSearchProcessor{periodicProcessor: processor}, nil
 }
 
 func (p *PostSearchProcessor) ProcessOnce() (PostSearchProcessResult, error) {
 	if p == nil || p.Core == nil {
-		return PostSearchProcessResult{}, fmt.Errorf("post search processor: nil core")
+		return PostSearchProcessResult{}, nilProcessorError("post search")
 	}
 	return p.Core.ProcessPostSearchOnce(p.BatchSize)
 }
 
 func (p *PostSearchProcessor) Run(ctx context.Context) {
-	if p == nil || p.Core == nil {
+	if p == nil {
 		return
 	}
-	drain := func() {
-		for ctx.Err() == nil {
-			result, err := p.ProcessOnce()
-			if err != nil {
-				if ctx.Err() == nil {
-					slog.Warn("post search processor failed", "err", err)
-				}
-				return
-			}
-			if result.Events > 0 || result.AppliedSeq < result.HeadSeq {
-				slog.Debug("post search processor advanced",
-					"fromSeq", result.FromSeq,
-					"appliedSeq", result.AppliedSeq,
-					"headSeq", result.HeadSeq,
-					"events", result.Events,
-					"indexed", result.Indexed)
-			}
-			if result.Events < p.BatchSize || result.AppliedSeq >= result.HeadSeq {
-				return
-			}
-		}
-	}
-	drain()
-	ticker := time.NewTicker(p.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			drain()
-		}
-	}
+	p.periodicProcessor.Run(ctx)
 }
 
 func (c *Core) StartPostSearchProcessor(ctx context.Context, interval time.Duration, batchSize int) (*PostSearchProcessor, error) {
@@ -98,39 +58,20 @@ func (c *Core) StartPostSearchProcessor(ctx context.Context, interval time.Durat
 }
 
 func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, error) {
-	if batchSize <= 0 {
-		batchSize = 500
-	}
 	if c.postSearchIndex != nil {
 		return c.processExternalPostSearchOnce(batchSize)
 	}
-	fromSeq, found, err := lookupDerivedViewAppliedSeq(c.DB, DerivedViewPostSearch)
-	if err != nil {
-		return PostSearchProcessResult{}, err
-	}
-	if !found {
-		fromSeq = 0
-	}
-	head, err := c.Head()
-	if err != nil {
-		return PostSearchProcessResult{}, err
-	}
+	batch, err := c.replayDerivedViewEventBatch(DerivedViewPostSearch, batchSize)
 	result := PostSearchProcessResult{
-		FromSeq:    fromSeq,
-		AppliedSeq: fromSeq,
-		HeadSeq:    head,
+		FromSeq:    batch.FromSeq,
+		AppliedSeq: batch.AppliedSeq,
+		HeadSeq:    batch.HeadSeq,
 	}
-	events, err := c.Replay(fromSeq, nil, batchSize)
 	if err != nil {
 		return result, err
 	}
-	if len(events) == 0 {
-		if !found {
-			if err := c.RecordDerivedViewApplied(DerivedViewPostSearch, fromSeq); err != nil {
-				return result, err
-			}
-		}
-		return result, nil
+	if len(batch.Events) == 0 {
+		return result, c.finishEmptyDerivedViewEventBatch(batch)
 	}
 
 	tx, err := c.DB.Begin()
@@ -139,7 +80,7 @@ func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, er
 	}
 	defer tx.Rollback() //nolint
 
-	for _, evt := range events {
+	for _, evt := range batch.Events {
 		if evt == nil {
 			continue
 		}
@@ -155,7 +96,7 @@ func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, er
 			result.AppliedSeq = evt.Seq
 		}
 	}
-	if err := recordDerivedViewAppliedTx(tx, DerivedViewPostSearch, result.AppliedSeq); err != nil {
+	if err := recordDerivedViewAppliedTx(tx, batch.View, result.AppliedSeq); err != nil {
 		return result, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -164,37 +105,32 @@ func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, er
 	return result, nil
 }
 
+func postSearchRunProgress(result PostSearchProcessResult) processorRunProgress {
+	return processorRunProgress{
+		FromSeq:    result.FromSeq,
+		AppliedSeq: result.AppliedSeq,
+		HeadSeq:    result.HeadSeq,
+		Events:     result.Events,
+		Log:        result.Events > 0 || result.AppliedSeq < result.HeadSeq,
+		Extra:      []any{"indexed", result.Indexed},
+	}
+}
+
 func (c *Core) processExternalPostSearchOnce(batchSize int) (PostSearchProcessResult, error) {
-	fromSeq, found, err := lookupDerivedViewAppliedSeq(c.DB, DerivedViewPostSearch)
-	if err != nil {
-		return PostSearchProcessResult{}, err
-	}
-	if !found {
-		fromSeq = 0
-	}
-	head, err := c.Head()
-	if err != nil {
-		return PostSearchProcessResult{}, err
-	}
+	batch, err := c.replayDerivedViewEventBatch(DerivedViewPostSearch, batchSize)
 	result := PostSearchProcessResult{
-		FromSeq:    fromSeq,
-		AppliedSeq: fromSeq,
-		HeadSeq:    head,
+		FromSeq:    batch.FromSeq,
+		AppliedSeq: batch.AppliedSeq,
+		HeadSeq:    batch.HeadSeq,
 	}
-	events, err := c.Replay(fromSeq, nil, batchSize)
 	if err != nil {
 		return result, err
 	}
-	if len(events) == 0 {
-		if !found {
-			if err := c.RecordDerivedViewApplied(DerivedViewPostSearch, fromSeq); err != nil {
-				return result, err
-			}
-		}
-		return result, nil
+	if len(batch.Events) == 0 {
+		return result, c.finishEmptyDerivedViewEventBatch(batch)
 	}
 
-	for _, evt := range events {
+	for _, evt := range batch.Events {
 		if evt == nil {
 			continue
 		}
@@ -210,7 +146,7 @@ func (c *Core) processExternalPostSearchOnce(batchSize int) (PostSearchProcessRe
 			result.AppliedSeq = evt.Seq
 		}
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewPostSearch, result.AppliedSeq); err != nil {
+	if err := c.RecordDerivedViewApplied(batch.View, result.AppliedSeq); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -287,17 +223,17 @@ func applyPostSearchEvent(tx *sql.Tx, evt *proto.Event) (bool, error) {
 		} else if thread != nil {
 			boardID = thread.Board
 		}
-		if err := ftsInsertPost(tx, payload.ID, payload.Thread, boardID, payload.Author, body); err != nil {
+		if err := projections.FtsInsertPost(tx, payload.ID, payload.Thread, boardID, payload.Author, body); err != nil {
 			return false, err
 		}
 		return true, nil
 	case *proto.PostEditedPayload:
-		if err := ftsUpdatePost(tx, payload.ID, payload.NewBody); err != nil {
+		if err := projections.FtsUpdatePost(tx, payload.ID, payload.NewBody); err != nil {
 			return false, err
 		}
 		return true, nil
 	case *proto.PostRedactedPayload:
-		if err := ftsDeletePost(tx, payload.ID); err != nil {
+		if err := projections.FtsDeletePost(tx, payload.ID); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -307,7 +243,7 @@ func applyPostSearchEvent(tx *sql.Tx, evt *proto.Event) (bool, error) {
 		}
 		return true, nil
 	case *proto.PostPurgedPayload:
-		if err := ftsDeletePost(tx, payload.ID); err != nil {
+		if err := projections.FtsDeletePost(tx, payload.ID); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -327,16 +263,16 @@ func reindexPostSearchFromProjection(tx *sql.Tx, postID string) error {
 		return err
 	}
 	if post == nil || post.Redacted {
-		return ftsDeletePost(tx, postID)
+		return projections.FtsDeletePost(tx, postID)
 	}
 	thread, err := getThreadTx(tx, post.Thread)
 	if err != nil {
 		return err
 	}
 	if thread == nil {
-		return ftsDeletePost(tx, postID)
+		return projections.FtsDeletePost(tx, postID)
 	}
-	return ftsInsertPost(tx, post.ID, post.Thread, thread.Board, post.Author, post.Body)
+	return projections.FtsInsertPost(tx, post.ID, post.Thread, thread.Board, post.Author, post.Body)
 }
 
 func recordDerivedViewAppliedTx(tx *sql.Tx, view string, appliedSeq int64) error {

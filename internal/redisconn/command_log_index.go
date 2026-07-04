@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -56,35 +55,7 @@ func (i *CommandLogPartitionIndex) ListCommandPartitions(ctx context.Context, li
 	if err != nil {
 		return nil, err
 	}
-	partitions := make([]core.LogPartition, 0, len(offsets))
-	for _, offset := range offsets {
-		partitions = append(partitions, offset.Partition.Normalize())
-	}
-	sort.Slice(partitions, func(a, b int) bool {
-		oa := commandPartitionTailOffset(offsets, partitions[a])
-		ob := commandPartitionTailOffset(offsets, partitions[b])
-		if oa == ob {
-			if partitions[a].Kind == partitions[b].Kind {
-				return partitions[a].Key < partitions[b].Key
-			}
-			return partitions[a].Kind < partitions[b].Kind
-		}
-		return oa > ob
-	})
-	if limit > 0 && len(partitions) > limit {
-		partitions = partitions[:limit]
-	}
-	return partitions, nil
-}
-
-func commandPartitionTailOffset(offsets []core.CommandPartitionOffset, partition core.LogPartition) int64 {
-	partition = partition.Normalize()
-	for _, offset := range offsets {
-		if offset.Partition.Normalize() == partition {
-			return offset.TailOffset
-		}
-	}
-	return 0
+	return core.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (i *CommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]core.CommandPartitionOffset, error) {
@@ -108,37 +79,13 @@ func (i *CommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Conte
 	}
 	offsets := make([]core.CommandPartitionOffset, 0, len(seen))
 	for partition := range seen {
-		tail := tails[partition]
-		committed := commits[partition]
-		if tail < 0 {
-			tail = 0
-		}
-		if committed < 0 {
-			committed = 0
-		}
-		if committed > tail {
-			committed = tail
-		}
 		offsets = append(offsets, core.CommandPartitionOffset{
-			Partition:       partition.Normalize(),
-			TailOffset:      tail,
-			CommittedOffset: committed,
-		})
+			Partition:       partition,
+			TailOffset:      tails[partition],
+			CommittedOffset: commits[partition],
+		}.Normalize())
 	}
-	sort.Slice(offsets, func(a, b int) bool {
-		la := offsets[a].TailOffset - offsets[a].CommittedOffset
-		lb := offsets[b].TailOffset - offsets[b].CommittedOffset
-		if la == lb {
-			if offsets[a].TailOffset == offsets[b].TailOffset {
-				if offsets[a].Partition.Kind == offsets[b].Partition.Kind {
-					return offsets[a].Partition.Key < offsets[b].Partition.Key
-				}
-				return offsets[a].Partition.Kind < offsets[b].Partition.Kind
-			}
-			return offsets[a].TailOffset > offsets[b].TailOffset
-		}
-		return la > lb
-	})
+	core.SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

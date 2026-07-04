@@ -1,5 +1,7 @@
 package proto
 
+import "sort"
+
 // EventKind identifies which event type the server emitted.
 type EventKind string
 
@@ -126,6 +128,23 @@ func (e *Event) IsDurable() bool {
 		return true
 	}
 	return false
+}
+
+// SortEventsByReplayOrder orders durable events by compatibility seq, with
+// deterministic partition metadata tie-breakers for partition-aware batches.
+func SortEventsByReplayOrder(events []*Event) {
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].Seq == events[j].Seq {
+			if events[i].PartitionKind == events[j].PartitionKind {
+				if events[i].PartitionKey == events[j].PartitionKey {
+					return events[i].PartitionOffset < events[j].PartitionOffset
+				}
+				return events[i].PartitionKey < events[j].PartitionKey
+			}
+			return events[i].PartitionKind < events[j].PartitionKind
+		}
+		return events[i].Seq < events[j].Seq
+	})
 }
 
 // Durable event payloads.
@@ -376,6 +395,17 @@ type RoleRevokedPayload struct {
 	TS   int64  `json:"ts"`
 }
 
+func RoleChangePayload(kind EventKind, user, role, by string, ts int64) any {
+	switch kind {
+	case EvtRoleGranted:
+		return &RoleGrantedPayload{User: user, Role: role, By: by, TS: ts}
+	case EvtRoleRevoked:
+		return &RoleRevokedPayload{User: user, Role: role, By: by, TS: ts}
+	default:
+		return nil
+	}
+}
+
 type BoardCreatedPayload struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -549,6 +579,22 @@ type MailSentPayload struct {
 	TS          int64               `json:"ts"`
 }
 
+func NewMailSentPayload(id, fromUserID, fromName string, toUserIDs, toNames []string, subject, body, parentID string, saveSent bool, attachments []AttachmentPayload, ts int64) *MailSentPayload {
+	return &MailSentPayload{
+		ID:          id,
+		FromUserID:  fromUserID,
+		From:        fromName,
+		ToUserIDs:   toUserIDs,
+		To:          toNames,
+		Subject:     subject,
+		Body:        body,
+		ParentID:    parentID,
+		SaveSent:    saveSent,
+		Attachments: attachments,
+		TS:          ts,
+	}
+}
+
 type MailAttachmentAddedPayload struct {
 	ID           string `json:"id"`
 	Mail         string `json:"mail"`
@@ -593,6 +639,19 @@ type DirectMessageSentPayload struct {
 	To             string `json:"to"`
 	Body           string `json:"body"`
 	TS             int64  `json:"ts"`
+}
+
+func NewDirectMessageSentPayload(id, fromUserID, fromName, toUserID, toName, body string, ts int64) *DirectMessageSentPayload {
+	return &DirectMessageSentPayload{
+		ID:             id,
+		ConversationID: DirectConversationID(fromUserID, toUserID),
+		FromUserID:     fromUserID,
+		From:           fromName,
+		ToUserID:       toUserID,
+		To:             toName,
+		Body:           body,
+		TS:             ts,
+	}
 }
 
 type DirectMessageReadPayload struct {

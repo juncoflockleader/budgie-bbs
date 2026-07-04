@@ -11,36 +11,14 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 )
-
-func TestSelectKafkaLoadTopicsOnlyReturnsPromotedPrefixes(t *testing.T) {
-	topics, err := selectKafkaLoadTopics([]string{
-		"budgie.commands.load.2",
-		"budgie.events.load.1",
-		"budgie.commands.production",
-		"budgie.commands.load.2",
-		" other.topic ",
-		"",
-	}, "budgie.commands.load.", "budgie.events.load.")
-	if err != nil {
-		t.Fatalf("select load topics: %v", err)
-	}
-	want := []string{"budgie.commands.load.2", "budgie.events.load.1"}
-	if strings.Join(topics, ",") != strings.Join(want, ",") {
-		t.Fatalf("topics = %+v, want %+v", topics, want)
-	}
-
-	if _, err := selectKafkaLoadTopics([]string{"anything"}, "", "budgie.events.load."); err == nil {
-		t.Fatalf("select with empty prefix succeeded, want error")
-	}
-	if _, err := selectKafkaLoadTopics([]string{"anything"}, "budgie.load.", "budgie.load."); err == nil {
-		t.Fatalf("select with shared prefixes succeeded, want error")
-	}
-}
 
 func TestRunKafkaLoadTopicCleanupDryRunDoesNotDelete(t *testing.T) {
 	var listed bool
 	var deleted bool
+	commandTopic := loadmodel.CommandLogLoadKafkaCommandTopicPrefix + "1"
+	eventTopic := loadmodel.CommandLogLoadKafkaEventTopicPrefix + "1"
 	withKafkaCleanupFakes(t,
 		func(_ context.Context, options kafkaconn.TopicListOptions) ([]string, error) {
 			listed = true
@@ -51,7 +29,7 @@ func TestRunKafkaLoadTopicCleanupDryRunDoesNotDelete(t *testing.T) {
 			if !runtime.TLS || runtime.SASLMechanism != "plain" || runtime.SASLUser != "budgie" || runtime.SASLPassword != "secret" {
 				t.Fatalf("list runtime security = %+v, want TLS plus SASL", runtime)
 			}
-			return []string{"budgie.commands.load.1", "budgie.events.load.1", "production.topic"}, nil
+			return []string{commandTopic, eventTopic, "production.topic"}, nil
 		},
 		func(context.Context, kafkaconn.TopicDeletionOptions) error {
 			deleted = true
@@ -60,18 +38,14 @@ func TestRunKafkaLoadTopicCleanupDryRunDoesNotDelete(t *testing.T) {
 	)
 
 	output := captureStdout(t, func() {
-		if err := runKafkaLoadTopicCleanup(context.Background(), kafkaLoadTopicCleanupConfig{
-			Brokers:            "redpanda:9092",
-			CommandTopicPrefix: defaultCommandLoadTopicPrefix,
-			EventTopicPrefix:   defaultEventLoadTopicPrefix,
-			Security: kafkaconn.RuntimeSecurityConfig{
-				TLS:           true,
-				SASLMechanism: "plain",
-				SASLUser:      "budgie",
-				SASLPassword:  "secret",
-			},
-			Timeout: time.Second,
-		}); err != nil {
+		config := defaultKafkaLoadTopicCleanupConfig()
+		config.Security = kafkaconn.RuntimeSecurityConfig{
+			TLS:           true,
+			SASLMechanism: "plain",
+			SASLUser:      "budgie",
+			SASLPassword:  "secret",
+		}
+		if err := runKafkaLoadTopicCleanup(context.Background(), config); err != nil {
 			t.Fatalf("cleanup dry run: %v", err)
 		}
 	})
@@ -80,8 +54,8 @@ func TestRunKafkaLoadTopicCleanupDryRunDoesNotDelete(t *testing.T) {
 	}
 	for _, token := range []string{
 		"disposable Kafka load topics",
-		"budgie.commands.load.1",
-		"budgie.events.load.1",
+		commandTopic,
+		eventTopic,
 		"dry run only; pass --execute",
 	} {
 		if !strings.Contains(output, token) {
@@ -95,9 +69,11 @@ func TestRunKafkaLoadTopicCleanupDryRunDoesNotDelete(t *testing.T) {
 
 func TestRunKafkaLoadTopicCleanupExecuteDeletesLoadTopics(t *testing.T) {
 	var deletedTopics []string
+	commandTopic := loadmodel.CommandLogLoadKafkaCommandTopicPrefix + "1"
+	eventTopic := loadmodel.CommandLogLoadKafkaEventTopicPrefix + "1"
 	withKafkaCleanupFakes(t,
 		func(context.Context, kafkaconn.TopicListOptions) ([]string, error) {
-			return []string{"budgie.events.load.1", "budgie.commands.load.1", "production.topic"}, nil
+			return []string{eventTopic, commandTopic, "production.topic"}, nil
 		},
 		func(_ context.Context, options kafkaconn.TopicDeletionOptions) error {
 			deletedTopics = append([]string(nil), options.Topics...)
@@ -109,17 +85,13 @@ func TestRunKafkaLoadTopicCleanupExecuteDeletesLoadTopics(t *testing.T) {
 	)
 
 	output := captureStdout(t, func() {
-		if err := runKafkaLoadTopicCleanup(context.Background(), kafkaLoadTopicCleanupConfig{
-			Brokers:            "redpanda:9092",
-			CommandTopicPrefix: defaultCommandLoadTopicPrefix,
-			EventTopicPrefix:   defaultEventLoadTopicPrefix,
-			Execute:            true,
-			Timeout:            time.Second,
-		}); err != nil {
+		config := defaultKafkaLoadTopicCleanupConfig()
+		config.Execute = true
+		if err := runKafkaLoadTopicCleanup(context.Background(), config); err != nil {
 			t.Fatalf("cleanup execute: %v", err)
 		}
 	})
-	want := []string{"budgie.commands.load.1", "budgie.events.load.1"}
+	want := []string{commandTopic, eventTopic}
 	if strings.Join(deletedTopics, ",") != strings.Join(want, ",") {
 		t.Fatalf("deleted topics = %+v, want %+v", deletedTopics, want)
 	}
@@ -139,30 +111,30 @@ func TestRunKafkaLoadTopicCleanupSurfacesListErrors(t *testing.T) {
 		},
 	)
 
-	err := runKafkaLoadTopicCleanup(context.Background(), kafkaLoadTopicCleanupConfig{
-		Brokers:            "redpanda:9092",
-		CommandTopicPrefix: defaultCommandLoadTopicPrefix,
-		EventTopicPrefix:   defaultEventLoadTopicPrefix,
-		Timeout:            time.Second,
-	})
+	err := runKafkaLoadTopicCleanup(context.Background(), defaultKafkaLoadTopicCleanupConfig())
 	if err == nil || !strings.Contains(err.Error(), "list failed") {
 		t.Fatalf("cleanup err = %v, want list failure", err)
 	}
 }
 
 func TestValidateKafkaLoadTopicCleanupConfigRejectsInvalidSecurity(t *testing.T) {
-	err := validateKafkaLoadTopicCleanupConfig(kafkaLoadTopicCleanupConfig{
-		Brokers:            "redpanda:9092",
-		CommandTopicPrefix: defaultCommandLoadTopicPrefix,
-		EventTopicPrefix:   defaultEventLoadTopicPrefix,
-		Security: kafkaconn.RuntimeSecurityConfig{
-			SASLMechanism: "plain",
-			SASLUser:      "budgie",
-		},
-		Timeout: time.Second,
-	})
+	config := defaultKafkaLoadTopicCleanupConfig()
+	config.Security = kafkaconn.RuntimeSecurityConfig{
+		SASLMechanism: "plain",
+		SASLUser:      "budgie",
+	}
+	err := validateKafkaLoadTopicCleanupConfig(config)
 	if err == nil || !strings.Contains(err.Error(), "SASL password is required") {
 		t.Fatalf("validate cleanup invalid security err = %v, want SASL password error", err)
+	}
+}
+
+func defaultKafkaLoadTopicCleanupConfig() kafkaLoadTopicCleanupConfig {
+	return kafkaLoadTopicCleanupConfig{
+		Brokers:            "redpanda:9092",
+		CommandTopicPrefix: loadmodel.CommandLogLoadKafkaCommandTopicPrefix,
+		EventTopicPrefix:   loadmodel.CommandLogLoadKafkaEventTopicPrefix,
+		Timeout:            time.Second,
 	}
 }
 

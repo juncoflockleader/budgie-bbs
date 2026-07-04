@@ -1,4 +1,4 @@
-package main
+package loadtest
 
 import (
 	"context"
@@ -30,17 +30,10 @@ func TestIndexedCommandLogTracksProducedPartitionsAndOffsets(t *testing.T) {
 		t.Fatalf("partitions = %+v, want board then thread by tail offset", partitions)
 	}
 
-	offsets, err := log.ListCommandPartitionOffsets(ctx, 0)
-	if err != nil {
-		t.Fatalf("ListCommandPartitionOffsets: %v", err)
-	}
-	want := []core.CommandPartitionOffset{
+	requireCommandPartitionOffsets(t, ctx, log, []core.CommandPartitionOffset{
 		{Partition: board, TailOffset: 2, CommittedOffset: 1},
 		{Partition: thread, TailOffset: 1, CommittedOffset: 0},
-	}
-	if !reflect.DeepEqual(offsets, want) {
-		t.Fatalf("offsets = %+v, want %+v", offsets, want)
-	}
+	})
 }
 
 func TestIndexedCommandLogTracksFetchedTailsForExternalProducers(t *testing.T) {
@@ -58,14 +51,7 @@ func TestIndexedCommandLogTracksFetchedTailsForExternalProducers(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("records = %d, want 2", len(records))
 	}
-	offsets, err := log.ListCommandPartitionOffsets(ctx, 0)
-	if err != nil {
-		t.Fatalf("ListCommandPartitionOffsets: %v", err)
-	}
-	want := []core.CommandPartitionOffset{{Partition: partition, TailOffset: 2, CommittedOffset: 0}}
-	if !reflect.DeepEqual(offsets, want) {
-		t.Fatalf("offsets = %+v, want %+v", offsets, want)
-	}
+	requireCommandPartitionOffsets(t, ctx, log, []core.CommandPartitionOffset{{Partition: partition, TailOffset: 2, CommittedOffset: 0}})
 }
 
 func TestIndexedCommandLogClampsCommittedOffsetToIndexedTail(t *testing.T) {
@@ -77,14 +63,7 @@ func TestIndexedCommandLogClampsCommittedOffsetToIndexedTail(t *testing.T) {
 	if err := log.CommitPartition(ctx, partition, 10); err != nil {
 		t.Fatalf("commit board: %v", err)
 	}
-	offsets, err := log.ListCommandPartitionOffsets(ctx, 0)
-	if err != nil {
-		t.Fatalf("ListCommandPartitionOffsets: %v", err)
-	}
-	want := []core.CommandPartitionOffset{{Partition: partition, TailOffset: 1, CommittedOffset: 1}}
-	if !reflect.DeepEqual(offsets, want) {
-		t.Fatalf("offsets = %+v, want committed offset clamped to tail %+v", offsets, want)
-	}
+	requireCommandPartitionOffsets(t, ctx, log, []core.CommandPartitionOffset{{Partition: partition, TailOffset: 1, CommittedOffset: 1}})
 }
 
 func TestIndexedCommandLogCommittedOffsetUsesLogicalIndex(t *testing.T) {
@@ -134,4 +113,15 @@ func produceIndexedCommandLogRecord(t *testing.T, ctx context.Context, log core.
 		t.Fatalf("produce %s: %v", cid, err)
 	}
 	return record
+}
+
+func requireCommandPartitionOffsets(t *testing.T, ctx context.Context, log *core.IndexedCommandLog, want []core.CommandPartitionOffset) {
+	t.Helper()
+	offsets, err := log.ListCommandPartitionOffsets(ctx, 0)
+	if err != nil {
+		t.Fatalf("ListCommandPartitionOffsets: %v", err)
+	}
+	if !reflect.DeepEqual(offsets, want) {
+		t.Fatalf("offsets = %+v, want %+v", offsets, want)
+	}
 }

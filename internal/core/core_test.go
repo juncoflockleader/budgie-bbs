@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+	"github.com/juncoflockleader/budgie-bbs/internal/runconfig"
 )
 
 // newTestCore creates an isolated test core. By default it uses a temporary
@@ -57,38 +57,28 @@ func newTestCoreWithOptions(t *testing.T, options ...core.Option) (*core.Core, c
 	return c, cancel
 }
 
-var pgTestSchemaSeq atomic.Int64
-
 // newTestCorePostgres provisions a fresh, uniquely-named Postgres schema for one
 // test and returns a Core bound to it via search_path. The schema is dropped on
 // cleanup. Tests run sequentially (no t.Parallel), so the process-global SQL
 // flavor and advisory lock are safe.
 func newTestCorePostgres(t *testing.T, baseDSN string, options ...core.Option) (*core.Core, context.CancelFunc) {
 	t.Helper()
-	schema := fmt.Sprintf("budgie_test_%d_%d", os.Getpid(), pgTestSchemaSeq.Add(1))
 
-	admin, err := sql.Open("postgres", baseDSN)
+	admin, err := core.OpenPostgres(baseDSN)
 	if err != nil {
 		t.Fatalf("open admin postgres: %v", err)
 	}
-	if _, err := admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE"); err != nil {
+	schema, cleanup, err := runconfig.PreparePostgresSchema(context.Background(), admin, "", "budgie_test", false, t.Logf)
+	if err != nil {
 		admin.Close()
-		t.Fatalf("reset schema: %v", err)
-	}
-	if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
-		admin.Close()
-		t.Fatalf("create schema: %v", err)
+		t.Fatalf("prepare schema: %v", err)
 	}
 
-	sep := "?"
-	if strings.Contains(baseDSN, "?") {
-		sep = "&"
-	}
-	perTestDSN := baseDSN + sep + "search_path=" + schema
+	perTestDSN := runconfig.WithSearchPath(baseDSN, schema)
 
 	c, err := core.NewPostgres(perTestDSN, options...)
 	if err != nil {
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		cleanup()
 		admin.Close()
 		t.Fatalf("new postgres core: %v", err)
 	}
@@ -105,7 +95,7 @@ func newTestCorePostgres(t *testing.T, baseDSN string, options ...core.Option) (
 		if c.DB != nil {
 			_ = c.DB.Close()
 		}
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		cleanup()
 		admin.Close()
 	})
 
@@ -121,10 +111,19 @@ func registerAndGetUser(t *testing.T, c *core.Core, name, password string) *core
 	return u
 }
 
+func marshalCoreTestPayload(t *testing.T, payload any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return raw
+}
+
 // exec is a helper that submits a command and fails the test on error.
 func exec(t *testing.T, c *core.Core, actor *core.User, cmd proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
-	raw, _ := json.Marshal(payload)
+	raw := marshalCoreTestPayload(t, payload)
 	reply := c.ExecCmd(context.Background(), actor, cmd, raw, "")
 	if reply.Err != nil {
 		t.Fatalf("command %s failed: %s (%s)", cmd, reply.Err.Message, reply.Err.Code)
@@ -135,7 +134,7 @@ func exec(t *testing.T, c *core.Core, actor *core.User, cmd proto.CommandName, p
 // execExpectErr submits a command and expects it to be rejected with the given code.
 func execExpectErr(t *testing.T, c *core.Core, actor *core.User, cmd proto.CommandName, payload any, expectCode string) {
 	t.Helper()
-	raw, _ := json.Marshal(payload)
+	raw := marshalCoreTestPayload(t, payload)
 	reply := c.ExecCmd(context.Background(), actor, cmd, raw, "")
 	if reply.Err == nil {
 		t.Fatalf("expected command %s to fail with %s but it succeeded", cmd, expectCode)
@@ -1287,7 +1286,7 @@ func TestIdempotency(t *testing.T) {
 
 	alice := registerAndGetUser(t, c, "alice", "pw")
 
-	raw, _ := json.Marshal(proto.CreateThreadPayload{
+	raw := marshalCoreTestPayload(t, proto.CreateThreadPayload{
 		Board: "general", Title: "Idempotent thread", Body: "First post",
 	})
 
@@ -1327,10 +1326,10 @@ func TestIdempotencyIsPartitionScoped(t *testing.T) {
 	})
 
 	const cid = "partition-scoped-cid"
-	generalRaw, _ := json.Marshal(proto.CreateThreadPayload{
+	generalRaw := marshalCoreTestPayload(t, proto.CreateThreadPayload{
 		Board: "general", Title: "General thread", Body: "general body",
 	})
-	lifeRaw, _ := json.Marshal(proto.CreateThreadPayload{
+	lifeRaw := marshalCoreTestPayload(t, proto.CreateThreadPayload{
 		Board: "life", Title: "Life thread", Body: "life body",
 	})
 
@@ -1366,10 +1365,10 @@ func TestIdempotencyConflictStaysWithinPartition(t *testing.T) {
 	alice := registerAndGetUser(t, c, "alice", "pw")
 
 	const cid = "partition-conflict-cid"
-	firstRaw, _ := json.Marshal(proto.CreateThreadPayload{
+	firstRaw := marshalCoreTestPayload(t, proto.CreateThreadPayload{
 		Board: "general", Title: "First title", Body: "first body",
 	})
-	conflictRaw, _ := json.Marshal(proto.CreateThreadPayload{
+	conflictRaw := marshalCoreTestPayload(t, proto.CreateThreadPayload{
 		Board: "general", Title: "Second title", Body: "second body",
 	})
 
@@ -2854,21 +2853,19 @@ func TestStatsPeriodHistorySystemPosts(t *testing.T) {
 	defer cancel()
 
 	admin := registerAndGetUser(t, c, "admin", "pw")
-	// Weekly test uses W23 (2026-06-01 to 2026-06-07, Sunday = 2026-06-07).
-	// W24 (2026-06-08 to 2026-06-14) overlaps with "today" in CI; the snapshot
-	// command calls UpsertCommunityStatHistoryFromCurrent which overwrites the
-	// "today" row, corrupting delta calculations for that week.
+	// Use periods that do not overlap the process current day; publishing a
+	// snapshot upserts today's history row and would skew captured-day counts.
 	insertCommunityStatHistory(t, c.DB, "2026-05-31", 10, 1, 1, 10, 1, 5, 60)
 	insertCommunityStatHistory(t, c.DB, "2026-06-01", 11, 2, 2, 12, 2, 8, 120)
 	insertCommunityStatHistory(t, c.DB, "2026-06-07", 12, 3, 4, 24, 5, 20, 600)
-	insertCommunityStatHistory(t, c.DB, "2026-06-30", 13, 4, 6, 30, 8, 25, 900)
-	insertCommunityStatHistory(t, c.DB, "2026-07-01", 14, 5, 7, 35, 9, 30, 1200)
-	insertCommunityStatHistory(t, c.DB, "2026-07-31", 15, 6, 9, 60, 15, 50, 2400)
+	insertCommunityStatHistory(t, c.DB, "2026-07-31", 13, 4, 6, 30, 8, 25, 900)
+	insertCommunityStatHistory(t, c.DB, "2026-08-01", 14, 5, 7, 35, 9, 30, 1200)
+	insertCommunityStatHistory(t, c.DB, "2026-08-31", 15, 6, 9, 60, 15, 50, 2400)
 	insertCommunityStatHistory(t, c.DB, "2026-12-31", 16, 7, 11, 80, 18, 80, 3000)
 	insertCommunityStatHistory(t, c.DB, "2027-12-31", 20, 9, 20, 175, 35, 159, 7200)
 
 	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-06-07"})
-	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-07-31"})
+	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2026-08-31"})
 	exec(t, c, admin, proto.CmdPublishStatsSnapshot, proto.PublishStatsSnapshotPayload{Date: "2027-12-31"})
 
 	for _, want := range []struct {
@@ -2882,9 +2879,9 @@ func TestStatsPeriodHistorySystemPosts(t *testing.T) {
 			contains: []string{"Period: 2026-06-01 to 2026-06-07", "Days captured: 2", "New posts: 14", "Logins: 15", "Logouts: 8", "Web logins: 15", "Web logouts: 8", "Guest logins: 2", "Guest logouts: 1", "2026-06-07: 24 posts (+12)", "20 logins (+12)", "10 logouts (+6)", "web 20 in (+12)/10 out (+6)", "guests 12 in (+1)/6 out (+1)", "2026-06-01: 12 posts (+2)"},
 		},
 		{
-			threadID: "bbslists_month_202607",
-			title:    "Monthly activity history 2026-07",
-			contains: []string{"Period: 2026-07-01 to 2026-07-31", "Days captured: 2", "New posts: 30", "Logins: 25", "Logouts: 13", "Web logins: 25", "Web logouts: 13", "Guest logins: 2", "Guest logouts: 1", "2026-07-31: 60 posts (+25)"},
+			threadID: "bbslists_month_202608",
+			title:    "Monthly activity history 2026-08",
+			contains: []string{"Period: 2026-08-01 to 2026-08-31", "Days captured: 2", "New posts: 30", "Logins: 25", "Logouts: 13", "Web logins: 25", "Web logouts: 13", "Guest logins: 2", "Guest logouts: 1", "2026-08-31: 60 posts (+25)"},
 		},
 		{
 			threadID: "bbslists_year_2027",
@@ -3348,14 +3345,14 @@ func TestBlessUserCreatesBlessingBoardAndRankings(t *testing.T) {
 	if blessing.ID == "" || blessing.Seq == 0 {
 		t.Fatalf("expected blessing ack, got %+v", blessing)
 	}
-	board, err := c.GetBoard("Blessing")
+	board, err := c.GetBoard(proto.BlessingSystemBoardID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if board == nil || board.Name != "Blessing" {
+	if board == nil || board.Name != proto.BlessingSystemBoardName {
 		t.Fatalf("expected generated Blessing board, got %+v", board)
 	}
-	threads, err := c.ListThreads("Blessing", 10, 0)
+	threads, err := c.ListThreads(proto.BlessingSystemBoardID, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6703,12 +6700,9 @@ func TestPollCreationRespectsTrustLevel(t *testing.T) {
 
 	setTrustLevel(t, c, alice.ID, 2)
 	// Trust level 2 can create a poll in a thread body.
-	raw, err := json.Marshal(proto.CreateThreadPayload{
+	raw := marshalCoreTestPayload(t, proto.CreateThreadPayload{
 		Board: "general", Title: "Allowed poll", Body: threadBody,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	create := c.ExecCmd(context.Background(), alice, proto.CmdCreateThread, raw, "")
 	if create.Err != nil {
 		t.Fatalf("trusted user should create poll thread: %s (%s)", create.Err.Message, create.Err.Code)
@@ -7274,12 +7268,9 @@ func TestPollCreationPreservesBodyAroundMarkup(t *testing.T) {
 	setTrustLevel(t, c, alice.ID, 2)
 
 	threadBody := "before line\n[poll]\nQuestion?\nOption A\nOption B\n[/poll]\nafter line"
-	raw, err := json.Marshal(proto.CreateThreadPayload{
+	raw := marshalCoreTestPayload(t, proto.CreateThreadPayload{
 		Board: "general", Title: "Embedded poll", Body: threadBody,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	reply := c.ExecCmd(context.Background(), alice, proto.CmdCreateThread, raw, "")
 	if reply.Err != nil {
 		t.Fatalf("trusted user should create poll thread: %s (%s)", reply.Err.Message, reply.Err.Code)

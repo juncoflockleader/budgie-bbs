@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 
@@ -163,18 +162,7 @@ func (s *BrokerEventStore) Replay(ctx context.Context, after int64, scopes []str
 			}
 		}
 	}
-	sort.Slice(events, func(i, j int) bool {
-		if events[i].Seq == events[j].Seq {
-			if events[i].PartitionKind == events[j].PartitionKind {
-				if events[i].PartitionKey == events[j].PartitionKey {
-					return events[i].PartitionOffset < events[j].PartitionOffset
-				}
-				return events[i].PartitionKey < events[j].PartitionKey
-			}
-			return events[i].PartitionKind < events[j].PartitionKind
-		}
-		return events[i].Seq < events[j].Seq
-	})
+	proto.SortEventsByReplayOrder(events)
 	if limit > 0 && len(events) > limit {
 		events = events[:limit]
 	}
@@ -502,33 +490,11 @@ func (c *MemoryBrokerEventLogClient) SeedEventPartitionOffset(ctx context.Contex
 }
 
 func (c *MemoryBrokerEventLogClient) ListEventPartitions(ctx context.Context, limit int) ([]LogPartition, error) {
-	if err := ctx.Err(); err != nil {
+	offsets, err := c.ListEventPartitionOffsets(ctx, 0)
+	if err != nil {
 		return nil, err
 	}
-	if c == nil {
-		return nil, fmt.Errorf("memory broker event log: nil receiver")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	partitions := make([]LogPartition, 0, len(c.tails))
-	for partition := range c.tails {
-		partitions = append(partitions, partition.Normalize())
-	}
-	sort.Slice(partitions, func(i, j int) bool {
-		oi := c.tails[partitions[i]]
-		oj := c.tails[partitions[j]]
-		if oi == oj {
-			if partitions[i].Kind == partitions[j].Kind {
-				return partitions[i].Key < partitions[j].Key
-			}
-			return partitions[i].Kind < partitions[j].Kind
-		}
-		return oi > oj
-	})
-	if limit > 0 && len(partitions) > limit {
-		partitions = partitions[:limit]
-	}
-	return partitions, nil
+	return EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
@@ -545,17 +511,9 @@ func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Conte
 		offsets = append(offsets, EventPartitionOffset{
 			Partition:  partition.Normalize(),
 			LastOffset: tail,
-		})
+		}.Normalize())
 	}
-	sort.Slice(offsets, func(i, j int) bool {
-		if offsets[i].LastOffset == offsets[j].LastOffset {
-			if offsets[i].Partition.Kind == offsets[j].Partition.Kind {
-				return offsets[i].Partition.Key < offsets[j].Partition.Key
-			}
-			return offsets[i].Partition.Kind < offsets[j].Partition.Kind
-		}
-		return offsets[i].LastOffset > offsets[j].LastOffset
-	})
+	SortEventPartitionOffsetsByLastOffset(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

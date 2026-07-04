@@ -3,7 +3,6 @@ package natsconn
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
@@ -175,9 +174,7 @@ func TestJetStreamCommandEventTransactionRejectsInvalidBatchBeforeAppend(t *test
 	second := testTransactionBrokerEvent("evt_nats_transaction_conflict", "Second")
 
 	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []core.BrokerEventRecord{first, second})
-	if err == nil || !strings.Contains(err.Error(), "different content") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want duplicate content error", err)
-	}
+	requireErrorContains(t, err, "different content")
 	if got := events.storedCount(); got != 0 {
 		t.Fatalf("stored events = %d, want no append after invalid batch", got)
 	}
@@ -194,9 +191,7 @@ func TestJetStreamCommandEventTransactionRejectsDuplicateEventIDInOneBatchBefore
 	record := testTransactionBrokerEvent("evt_nats_transaction_duplicate", "Duplicate")
 
 	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []core.BrokerEventRecord{record, record})
-	if err == nil || !strings.Contains(err.Error(), `duplicate event id "evt_nats_transaction_duplicate" in one transaction`) {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want duplicate event id failure", err)
-	}
+	requireErrorContains(t, err, `duplicate event id "evt_nats_transaction_duplicate" in one transaction`)
 	if got := events.storedCount(); got != 0 {
 		t.Fatalf("stored events = %d, want no append after duplicate batch", got)
 	}
@@ -214,9 +209,7 @@ func TestJetStreamCommandEventTransactionRejectsMissingTimestampBeforeAppend(t *
 	record.TS = 0
 
 	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []core.BrokerEventRecord{record})
-	if err == nil || !strings.Contains(err.Error(), "event timestamp is required") {
-		t.Fatalf("AppendEventsAndCommitCommand err = %v, want timestamp required error", err)
-	}
+	requireErrorContains(t, err, "event timestamp is required")
 	if got := events.storedCount(); got != 0 {
 		t.Fatalf("stored events = %d, want no append after invalid timestamp", got)
 	}

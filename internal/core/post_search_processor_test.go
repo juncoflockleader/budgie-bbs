@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -13,11 +12,7 @@ import (
 )
 
 func TestAsyncPostSearchProcessorIndexesDurableEvents(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "post-search-processor.db"), WithAsyncPostSearch())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAsyncPostSearch())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -107,11 +102,7 @@ func TestAsyncPostSearchProcessorIndexesDurableEvents(t *testing.T) {
 
 func TestExternalPostSearchIndexProcessesEventsAndBackfills(t *testing.T) {
 	index := newTestPostSearchIndex()
-	c, err := New(filepath.Join(t.TempDir(), "external-post-search.db"), WithAsyncPostSearch(), WithPostSearchIndex(index))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAsyncPostSearch(), WithPostSearchIndex(index))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)

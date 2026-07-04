@@ -2,30 +2,26 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadtest"
+	"github.com/juncoflockleader/budgie-bbs/internal/runconfig"
+	"github.com/juncoflockleader/budgie-bbs/internal/runreport"
+	"github.com/juncoflockleader/budgie-bbs/internal/scalebudget"
 )
-
-var schemaNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func main() {
 	os.Exit(run())
 }
 
 func run() int {
-	defaults := core.DefaultPartitionWriteLoadConfig()
+	defaults := loadtest.DefaultPartitionWriteLoadConfig()
 	var (
-		dsn                 = flag.String("postgres-dsn", envOr("BUDGIE_POSTGRES_DSN", ""), "PostgreSQL DSN for the load target")
+		dsn                 = flag.String("postgres-dsn", runconfig.EnvOr("BUDGIE_POSTGRES_DSN", ""), "PostgreSQL DSN for the load target")
 		schema              = flag.String("schema", "", "Postgres schema to create for the load run; defaults to a unique temporary schema")
 		keepSchema          = flag.Bool("keep-schema", false, "Keep the load schema after the run")
 		boards              = flag.Int("boards", defaults.Boards, "Number of board partitions in the spread workload")
@@ -46,60 +42,37 @@ func run() int {
 		log.Print("postgres DSN required via -postgres-dsn or BUDGIE_POSTGRES_DSN")
 		return 2
 	}
-	schemaName := strings.TrimSpace(*schema)
-	if schemaName == "" {
-		schemaName = fmt.Sprintf("budgie_load_%d_%d", os.Getpid(), time.Now().UnixNano())
-	}
-	if !schemaNamePattern.MatchString(schemaName) {
-		log.Printf("invalid schema %q; use letters, digits, and underscores, starting with a letter or underscore", schemaName)
+	if requestedSchema := strings.TrimSpace(*schema); requestedSchema != "" && !runconfig.ValidSchemaName(requestedSchema) {
+		log.Printf("invalid schema %q; use letters, digits, and underscores, starting with a letter or underscore", requestedSchema)
 		return 2
 	}
-	budgets, err := core.LoadScaleBudgets(*budgetFile)
+	budgets, err := scalebudget.LoadScaleBudgets(*budgetFile)
 	if err != nil {
 		log.Printf("load budget file: %v", err)
 		return 2
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	ctx, cancel := runconfig.InterruptTimeoutContext(context.Background(), *timeout)
 	defer cancel()
 
-	adminDB, err := core.OpenPostgres(*dsn)
+	c, cleanup, err := loadtest.OpenPostgresCore(ctx, loadtest.PostgresCoreConfig{
+		DSN:          *dsn,
+		Schema:       *schema,
+		SchemaPrefix: "budgie_load",
+		KeepSchema:   *keepSchema,
+		Logf:         log.Printf,
+	})
 	if err != nil {
-		log.Printf("open postgres: %v", err)
+		log.Printf("open postgres core: %v", err)
 		return 1
 	}
-	defer adminDB.Close()
-	if _, err := adminDB.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE"); err != nil {
-		log.Printf("drop old schema: %v", err)
-		return 1
-	}
-	if _, err := adminDB.ExecContext(ctx, "CREATE SCHEMA "+schemaName); err != nil {
-		log.Printf("create schema: %v", err)
-		return 1
-	}
-	if !*keepSchema {
-		defer func() {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cleanupCancel()
-			if _, err := adminDB.ExecContext(cleanupCtx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE"); err != nil {
-				log.Printf("cleanup schema %s: %v", schemaName, err)
-			}
-		}()
-	}
-
-	c, err := core.NewPostgres(withSearchPath(*dsn, schemaName))
-	if err != nil {
-		log.Printf("new postgres core: %v", err)
-		return 1
-	}
+	defer cleanup()
 	defer c.DB.Close()
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	go c.Run(runCtx)
 
-	report, err := c.RunPartitionWriteLoad(ctx, core.PartitionWriteLoadConfig{
+	report, err := loadtest.RunPartitionWriteLoad(ctx, c, loadtest.PartitionWriteLoadConfig{
 		Boards:         *boards,
 		WritesPerBoard: *writesPerBoard,
 		Concurrency:    *concurrency,
@@ -107,7 +80,7 @@ func run() int {
 		BoardPrefix:    *boardPrefix,
 		UserName:       *userName,
 	})
-	if printErr := printReport(report, *pretty); printErr != nil {
+	if printErr := runreport.WriteJSON(os.Stdout, report, *pretty); printErr != nil {
 		log.Printf("print report: %v", printErr)
 		return 1
 	}
@@ -123,32 +96,9 @@ func run() int {
 		log.Printf("spread writes/sec %.2f below threshold %.2f", report.SpreadPartitions.WritesPerSec, *minSpreadWritesPerS)
 		return 3
 	}
-	if violations := core.EvaluatePartitionWriteBudget(report, budgets.PostgresWrites); len(violations) > 0 {
-		log.Printf("scale budget violations: %s", core.FormatScaleBudgetViolations(violations))
+	if violations := loadtest.EvaluatePartitionWriteBudget(report, budgets.PostgresWrites); len(violations) > 0 {
+		log.Printf("scale budget violations: %s", scalebudget.FormatScaleBudgetViolations(violations))
 		return 3
 	}
 	return 0
-}
-
-func printReport(report core.PartitionWriteLoadReport, pretty bool) error {
-	encoder := json.NewEncoder(os.Stdout)
-	if pretty {
-		encoder.SetIndent("", "  ")
-	}
-	return encoder.Encode(report)
-}
-
-func withSearchPath(dsn, schema string) string {
-	sep := "?"
-	if strings.Contains(dsn, "?") {
-		sep = "&"
-	}
-	return dsn + sep + "search_path=" + schema
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

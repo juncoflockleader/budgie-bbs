@@ -12,8 +12,6 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-const sysmailSystemBoardID = "sysmail"
-
 type projectionReplayEvent struct {
 	id      string
 	seq     int64
@@ -136,31 +134,31 @@ func rebuildProjectionsInTx(tx *sql.Tx, events []projectionReplayEvent) error {
 	if err := recomputeReactionReceivedActivity(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildCommunityStatsSnapshot(tx); err != nil {
+	if _, err := projections.RebuildCommunityStatsSnapshot(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildBoardSummaryStats(tx); err != nil {
+	if _, err := projections.RebuildBoardSummaryStats(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildUnreadThreadSummaryStats(tx); err != nil {
+	if _, err := projections.RebuildUnreadThreadSummaryStats(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildBoardRankingStats(tx); err != nil {
+	if _, err := projections.RebuildBoardRankingStats(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildThreadRankingStats(tx); err != nil {
+	if _, err := projections.RebuildThreadRankingStats(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildReplyRankingPosts(tx); err != nil {
+	if _, err := projections.RebuildReplyRankingPosts(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildUserRankingStats(tx); err != nil {
+	if _, err := projections.RebuildUserRankingStats(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildBlessingRankingStats(tx); err != nil {
+	if _, err := projections.RebuildBlessingRankingStats(tx); err != nil {
 		return err
 	}
-	if _, err := rebuildArchiveRankingStats(tx); err != nil {
+	if _, err := projections.RebuildArchiveRankingStats(tx); err != nil {
 		return err
 	}
 
@@ -240,7 +238,7 @@ func restoreUnorderedTraffic(tx *sql.Tx, snapshot unorderedTrafficSnapshot) erro
 		if !restoredPostReactionTargetExists(tx, row.postID, row.userID) {
 			continue
 		}
-		if err := upsertReaction(tx, row.postID, row.userID, row.emoji, row.ts); err != nil {
+		if err := projections.UpsertReaction(tx, row.postID, row.userID, row.emoji, row.ts); err != nil {
 			return fmt.Errorf("restore unordered reaction %s/%s: %w", row.postID, row.userID, err)
 		}
 	}
@@ -255,7 +253,7 @@ func restoreUnorderedTraffic(tx *sql.Tx, snapshot unorderedTrafficSnapshot) erro
 		if !restoredUserExists(tx, row.userID) {
 			continue
 		}
-		if err := castVote(tx, pollID, optionID, row.userID, row.ts); err != nil {
+		if err := projections.CastVote(tx, pollID, optionID, row.userID, row.ts); err != nil {
 			return fmt.Errorf("restore unordered poll vote %s/%s: %w", row.pollID, row.userID, err)
 		}
 	}
@@ -402,7 +400,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 				authorID = u
 			}
 		}
-		if err := insertThread(tx, &Thread{
+		if err := projections.InsertThread(tx, &Thread{
 			ID:        evt.ID,
 			Board:     evt.Board,
 			Author:    evt.Author,
@@ -431,7 +429,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		if pollBlock != nil && cleanBody != sourceBody {
 			postBody = cleanBody
 		}
-		if err := insertPost(tx, &Post{
+		if err := projections.InsertPost(tx, &Post{
 			ID:             evt.ID,
 			Thread:         evt.Thread,
 			Author:         evt.Author,
@@ -463,7 +461,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			if filename == "" {
 				continue
 			}
-			if err := insertPostAttachment(tx, attID, evt.ID, filename, strings.TrimSpace(att.ContentType), att.SizeBytes, strings.TrimSpace(att.URL), authorID, evt.TS); err != nil {
+			if err := projections.InsertPostAttachment(tx, attID, evt.ID, filename, strings.TrimSpace(att.ContentType), att.SizeBytes, strings.TrimSpace(att.URL), authorID, evt.TS); err != nil {
 				return err
 			}
 		}
@@ -480,17 +478,17 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 				return err
 			}
 		} else {
-			if _, err := upsertResidentFeedPost(tx, evt.ID); err != nil {
+			if _, err := projections.UpsertResidentFeedPost(tx, evt.ID); err != nil {
 				return err
 			}
-			if _, err := upsertLatestFeedPost(tx, evt.ID); err != nil {
+			if _, err := projections.UpsertLatestFeedPost(tx, evt.ID); err != nil {
 				return err
 			}
 			if loadedThread, err := getThreadTx(tx, evt.Thread); err == nil && loadedThread != nil {
 				boardID = loadedThread.Board
 			}
 		}
-		if err := ftsInsertPost(tx, evt.ID, evt.Thread, boardID, evt.Author, postBody); err != nil {
+		if err := projections.FtsInsertPost(tx, evt.ID, evt.Thread, boardID, evt.Author, postBody); err != nil {
 			return err
 		}
 		if err := appendRelayDeliveryFromProjectedPost(tx, applyCtx, evt, authorID, postBody, boardID, seq); err != nil {
@@ -503,13 +501,13 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			return err
 		}
 	case *proto.PostAttachmentAddedPayload:
-		if err := insertPostAttachment(tx, evt.ID, evt.Post, strings.TrimSpace(evt.Filename), strings.TrimSpace(evt.ContentType), evt.SizeBytes, "", evt.AuthorID, evt.TS); err != nil {
+		if err := projections.InsertPostAttachment(tx, evt.ID, evt.Post, strings.TrimSpace(evt.Filename), strings.TrimSpace(evt.ContentType), evt.SizeBytes, "", evt.AuthorID, evt.TS); err != nil {
 			return err
 		}
 		if stagedBlobID := strings.TrimSpace(evt.StagedBlobID); stagedBlobID != "" {
 			if err := promoteStagedPostAttachmentBlob(tx, stagedBlobID, evt.ID, evt.SizeBytes, strings.TrimSpace(evt.ContentType)); err != nil {
 				if errors.Is(err, projections.ErrStagedAttachmentBlobMissing) {
-					ok, promotedErr := nativePromotedPostAttachmentBlobMatches(tx, evt.ID, evt.SizeBytes, strings.TrimSpace(evt.ContentType))
+					ok, promotedErr := projections.PromotedAttachmentBlobMatches(tx, projections.StagedBlobPostAttachment, evt.ID, evt.SizeBytes, strings.TrimSpace(evt.ContentType))
 					if promotedErr != nil {
 						return promotedErr
 					}
@@ -527,7 +525,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		); err != nil {
 			return err
 		}
-		if err := ftsUpdatePost(tx, evt.ID, evt.NewBody); err != nil {
+		if err := projections.FtsUpdatePost(tx, evt.ID, evt.NewBody); err != nil {
 			return err
 		}
 	case *proto.PostFlagsSetPayload:
@@ -582,7 +580,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 				default:
 					kind = "recycle"
 				}
-				if err := recordPostDeletion(tx, post.ID, post.Thread, thread.Board, deletedByID, deletedByName, evt.Reason, kind, evt.TS, seq); err != nil {
+				if err := projections.RecordPostDeletion(tx, post.ID, post.Thread, thread.Board, deletedByID, deletedByName, evt.Reason, kind, evt.TS, seq); err != nil {
 					return err
 				}
 			}
@@ -593,14 +591,14 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		); err != nil {
 			return err
 		}
-		if _, err := deleteResidentFeedPost(tx, evt.ID); err != nil {
+		if _, err := projections.DeleteResidentFeedPost(tx, evt.ID); err != nil {
 			return err
 		}
-		if _, err := deleteLatestFeedPost(tx, evt.ID); err != nil {
+		if _, err := projections.DeleteLatestFeedPost(tx, evt.ID); err != nil {
 			return err
 		}
 	case *proto.PostRestoredPayload:
-		if err := clearPostDeletion(tx, evt.ID); err != nil {
+		if err := projections.ClearPostDeletion(tx, evt.ID); err != nil {
 			return err
 		}
 		if _, err := qExec(tx,
@@ -609,14 +607,14 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		); err != nil {
 			return err
 		}
-		if _, err := upsertResidentFeedPost(tx, evt.ID); err != nil {
+		if _, err := projections.UpsertResidentFeedPost(tx, evt.ID); err != nil {
 			return err
 		}
-		if _, err := upsertLatestFeedPost(tx, evt.ID); err != nil {
+		if _, err := projections.UpsertLatestFeedPost(tx, evt.ID); err != nil {
 			return err
 		}
 	case *proto.PostDeletionClearedPayload:
-		if err := clearPostDeletion(tx, evt.ID); err != nil {
+		if err := projections.ClearPostDeletion(tx, evt.ID); err != nil {
 			return err
 		}
 	case *proto.PostPurgedPayload:
@@ -626,13 +624,13 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		); err != nil {
 			return err
 		}
-		if err := ftsDeletePost(tx, evt.ID); err != nil {
+		if err := projections.FtsDeletePost(tx, evt.ID); err != nil {
 			return err
 		}
-		if _, err := deleteResidentFeedPost(tx, evt.ID); err != nil {
+		if _, err := projections.DeleteResidentFeedPost(tx, evt.ID); err != nil {
 			return err
 		}
-		if _, err := deleteLatestFeedPost(tx, evt.ID); err != nil {
+		if _, err := projections.DeleteLatestFeedPost(tx, evt.ID); err != nil {
 			return err
 		}
 	case *proto.ThreadTitleSetPayload:
@@ -650,10 +648,10 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		); err != nil {
 			return err
 		}
-		if _, err := moveResidentFeedThread(tx, evt.Thread, evt.ToBoard); err != nil {
+		if _, err := projections.MoveResidentFeedThread(tx, evt.Thread, evt.ToBoard); err != nil {
 			return err
 		}
-		if _, err := moveLatestFeedThread(tx, evt.Thread, evt.ToBoard); err != nil {
+		if _, err := projections.MoveLatestFeedThread(tx, evt.Thread, evt.ToBoard); err != nil {
 			return err
 		}
 	case *proto.UserSanctionedPayload:
@@ -665,7 +663,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		if evt.DurationSec > 0 {
 			expiresAt = evt.TS + evt.DurationSec*1000
 		}
-		if err := insertSanction(tx, buildRebuildID("san", seq), evt.User, evt.Kind, scope, expiresAt, evt.By, evt.Reason, seq); err != nil {
+		if err := projections.InsertSanction(tx, buildRebuildID("san", seq), evt.User, evt.Kind, scope, expiresAt, evt.By, evt.Reason, seq); err != nil {
 			return err
 		}
 	case *proto.UserSanctionClearedPayload:
@@ -673,22 +671,22 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		if scope == "" {
 			scope = "global"
 		}
-		if _, err := clearUserSanctions(tx, evt.User, strings.TrimSpace(evt.Kind), scope); err != nil {
+		if _, err := projections.ClearUserSanctions(tx, evt.User, strings.TrimSpace(evt.Kind), scope); err != nil {
 			return err
 		}
 	case *proto.RoleGrantedPayload:
-		if err := setUserRole(tx, evt.User, evt.Role); err != nil {
+		if err := projections.SetUserRole(tx, evt.User, evt.Role); err != nil {
 			return err
 		}
 	case *proto.RoleRevokedPayload:
-		if err := setUserRole(tx, evt.User, "user"); err != nil {
+		if err := projections.SetUserRole(tx, evt.User, "user"); err != nil {
 			return err
 		}
 	case *proto.BoardCreatedPayload:
 		if err := upsertBoardProjection(tx, evt.ID, evt.Name, evt.Description, evt.ParentID, evt.Position, evt.TS); err != nil {
 			return err
 		}
-		if evt.ID == sysmailSystemBoardID {
+		if evt.ID == proto.SysmailSystemBoardID {
 			if err := ensureSysmailBoardSettingsProjection(tx, evt.TS); err != nil {
 				return err
 			}
@@ -803,7 +801,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			return err
 		}
 	case *proto.MailSentPayload:
-		if err := insertMailMessage(tx, evt.ID, evt.FromUserID, evt.Subject, evt.Body, evt.ParentID, evt.TS, seq); err != nil {
+		if err := projections.InsertMailMessage(tx, evt.ID, evt.FromUserID, evt.Subject, evt.Body, evt.ParentID, evt.TS, seq); err != nil {
 			return err
 		}
 		for i, att := range evt.Attachments {
@@ -815,7 +813,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			if filename == "" {
 				continue
 			}
-			if err := insertMailAttachment(tx, attID, evt.ID, filename, strings.TrimSpace(att.ContentType), att.SizeBytes, strings.TrimSpace(att.URL), evt.FromUserID, evt.TS); err != nil {
+			if err := projections.InsertMailAttachment(tx, attID, evt.ID, filename, strings.TrimSpace(att.ContentType), att.SizeBytes, strings.TrimSpace(att.URL), evt.FromUserID, evt.TS); err != nil {
 				return err
 			}
 		}
@@ -824,23 +822,23 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			if strings.TrimSpace(userID) == "" {
 				continue
 			}
-			if err := insertMailCopy(tx, evt.ID, userID, "recipient", "inbox", false, false, evt.TS); err != nil {
+			if err := projections.InsertMailCopy(tx, evt.ID, userID, "recipient", "inbox", false, false, evt.TS); err != nil {
 				return err
 			}
 		}
 		if evt.SaveSent {
-			if err := insertMailCopy(tx, evt.ID, evt.FromUserID, "sender", "sent", true, false, evt.TS); err != nil {
+			if err := projections.InsertMailCopy(tx, evt.ID, evt.FromUserID, "sender", "sent", true, false, evt.TS); err != nil {
 				return err
 			}
 		}
 	case *proto.MailAttachmentAddedPayload:
-		if err := insertMailAttachment(tx, evt.ID, evt.Mail, strings.TrimSpace(evt.Filename), strings.TrimSpace(evt.ContentType), evt.SizeBytes, "", evt.AuthorID, evt.TS); err != nil {
+		if err := projections.InsertMailAttachment(tx, evt.ID, evt.Mail, strings.TrimSpace(evt.Filename), strings.TrimSpace(evt.ContentType), evt.SizeBytes, "", evt.AuthorID, evt.TS); err != nil {
 			return err
 		}
 		if stagedBlobID := strings.TrimSpace(evt.StagedBlobID); stagedBlobID != "" {
 			if err := promoteStagedMailAttachmentBlob(tx, stagedBlobID, evt.ID, evt.SizeBytes, strings.TrimSpace(evt.ContentType)); err != nil {
 				if errors.Is(err, projections.ErrStagedAttachmentBlobMissing) {
-					ok, promotedErr := nativePromotedMailAttachmentBlobMatches(tx, evt.ID, evt.SizeBytes, strings.TrimSpace(evt.ContentType))
+					ok, promotedErr := projections.PromotedAttachmentBlobMatches(tx, projections.StagedBlobMailAttachment, evt.ID, evt.SizeBytes, strings.TrimSpace(evt.ContentType))
 					if promotedErr != nil {
 						return promotedErr
 					}
@@ -864,7 +862,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			return err
 		}
 	case *proto.DirectMessageSentPayload:
-		if err := insertDirectMessage(tx, evt.ID, evt.ConversationID, evt.FromUserID, evt.ToUserID, evt.Body, evt.TS, seq); err != nil {
+		if err := projections.InsertDirectMessage(tx, evt.ID, evt.ConversationID, evt.FromUserID, evt.ToUserID, evt.Body, evt.TS, seq); err != nil {
 			return err
 		}
 	case *proto.DirectMessageReadPayload:
@@ -884,7 +882,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			return err
 		}
 	case *proto.UserBlessedPayload:
-		if err := insertBlessing(tx, &Blessing{
+		if err := projections.InsertBlessing(tx, &Blessing{
 			ID:         evt.ID,
 			FromUserID: evt.FromUserID,
 			FromName:   evt.From,
@@ -901,35 +899,35 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			return err
 		}
 	case *proto.DigestEntryUpsertedPayload:
-		if _, err := upsertDigestEntryTx(tx, evt.ID, evt.Board, evt.TargetKind, evt.TargetID, evt.Kind, evt.Title, evt.Path, evt.Note, evt.CreatedBy, evt.TS); err != nil {
+		if _, err := projections.UpsertDigestEntryTx(tx, evt.ID, evt.Board, evt.TargetKind, evt.TargetID, evt.Kind, evt.Title, evt.Path, evt.Note, evt.CreatedBy, evt.TS); err != nil {
 			return err
 		}
 	case *proto.DigestEntryUpdatedPayload:
-		if err := updateDigestEntryTx(tx, evt.ID, evt.Title, evt.Path, evt.Note, evt.TS); err != nil {
+		if err := projections.UpdateDigestEntryTx(tx, evt.ID, evt.Title, evt.Path, evt.Note, evt.TS); err != nil {
 			return err
 		}
 	case *proto.DigestEntryBodySetPayload:
-		if err := setDigestEntryBodyTx(tx, evt.ID, evt.Body, evt.Edited, evt.TS); err != nil {
+		if err := projections.SetDigestEntryBodyTx(tx, evt.ID, evt.Body, evt.Edited, evt.TS); err != nil {
 			return err
 		}
 	case *proto.DigestEntryRemovedPayload:
-		if err := removeDigestEntryFinalTx(tx, evt.ID, evt.Board, evt.Kind, evt.By, evt.TS); err != nil {
+		if err := projections.RemoveDigestEntryFinalTx(tx, evt.ID, evt.Board, evt.Kind, evt.By, evt.TS); err != nil {
 			return err
 		}
 	case *proto.DigestDirectorySetPayload:
-		if _, err := upsertDigestDirectoryTx(tx, evt.ID, evt.Board, evt.Kind, evt.Path, evt.CreatedBy, evt.TS); err != nil {
+		if _, err := projections.UpsertDigestDirectoryTx(tx, evt.ID, evt.Board, evt.Kind, evt.Path, evt.CreatedBy, evt.TS); err != nil {
 			return err
 		}
 	case *proto.DigestPathMovedPayload:
-		if _, err := moveDigestPathFinalTx(tx, eventID, evt.Board, evt.Kind, evt.FromPath, evt.ToPath, evt.By, evt.TS); err != nil {
+		if _, err := projections.MoveDigestPathFinalTx(tx, eventID, evt.Board, evt.Kind, evt.FromPath, evt.ToPath, evt.By, evt.TS); err != nil {
 			return err
 		}
 	case *proto.DigestPathCopiedPayload:
-		if _, err := copyDigestPathTx(tx, evt.Board, evt.Kind, evt.FromPath, evt.ToPath, evt.CreatedBy, evt.EntryIDs, evt.DirectoryIDs, evt.TS); err != nil {
+		if _, err := projections.CopyDigestPathTx(tx, evt.Board, evt.Kind, evt.FromPath, evt.ToPath, evt.CreatedBy, evt.EntryIDs, evt.DirectoryIDs, evt.TS); err != nil {
 			return err
 		}
 	case *proto.DigestPathDeletedPayload:
-		if _, err := deleteDigestPathFinalTx(tx, eventID, evt.Board, evt.Kind, evt.Path, evt.By, evt.TS); err != nil {
+		if _, err := projections.DeleteDigestPathFinalTx(tx, eventID, evt.Board, evt.Kind, evt.Path, evt.By, evt.TS); err != nil {
 			return err
 		}
 	case *proto.CommunityStatsSnapshotRecordedPayload:
@@ -974,7 +972,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 				return err
 			}
 		}
-		if err := upsertReaction(tx, evt.PostID, evt.User, evt.Emoji, evt.TS); err != nil {
+		if err := projections.UpsertReaction(tx, evt.PostID, evt.User, evt.Emoji, evt.TS); err != nil {
 			return err
 		}
 		if !existed {
@@ -1004,7 +1002,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 				return err
 			}
 		}
-		if err := deleteReaction(tx, evt.PostID, evt.User); err != nil {
+		if err := projections.DeleteReaction(tx, evt.PostID, evt.User); err != nil {
 			return err
 		}
 		if existed {
@@ -1028,7 +1026,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		if err := ensurePollVoteOption(tx, evt.Poll, evt.Option); err != nil {
 			return err
 		}
-		if err := castVote(tx, evt.Poll, evt.Option, evt.User, evt.TS); err != nil {
+		if err := projections.CastVote(tx, evt.Poll, evt.Option, evt.User, evt.TS); err != nil {
 			return err
 		}
 	case *proto.ContentFilterSetPayload:
@@ -1036,7 +1034,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		if scope == "" {
 			scope = "global"
 		}
-		if err := upsertContentFilter(tx, evt.ID, evt.Pattern, scope, evt.Active, evt.By, evt.TS); err != nil {
+		if err := projections.UpsertContentFilter(tx, evt.ID, evt.Pattern, scope, evt.Active, evt.By, evt.TS); err != nil {
 			return err
 		}
 	case *proto.BoardAutomodRuleSetPayload:
@@ -1044,7 +1042,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			return err
 		}
 	case *proto.BoardAutomodRuleDeletedPayload:
-		if err := deleteBoardAutomodRule(tx, evt.Board, evt.ID); err != nil {
+		if err := projections.DeleteBoardAutomodRule(tx, evt.Board, evt.ID); err != nil {
 			return err
 		}
 	case *proto.BoardAutomodTriggeredPayload:
@@ -1056,11 +1054,11 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		if kind == "" {
 			kind = "post_flag"
 		}
-		if err := insertModerationReview(tx, evt.ReviewID, kind, evt.PostID, "post", evt.Reporter, evt.Reason, evt.TS); err != nil {
+		if err := projections.InsertModerationReview(tx, evt.ReviewID, kind, evt.PostID, "post", evt.Reporter, evt.Reason, evt.TS); err != nil {
 			return err
 		}
 	case *proto.ReviewResolvedPayload:
-		if err := resolveModerationReview(tx, evt.ReviewID, evt.By, evt.Resolution, evt.TS); err != nil {
+		if err := projections.ResolveModerationReview(tx, evt.ReviewID, evt.By, evt.Resolution, evt.TS); err != nil {
 			return err
 		}
 	case *proto.TrustLevelChangedPayload:
@@ -1167,7 +1165,7 @@ func appendRelayDeliveryFromProjectedPost(tx *sql.Tx, applyCtx *projectionApplyC
 		}
 		return err
 	}
-	return insertRelayDelivery(
+	return projections.InsertRelayDelivery(
 		tx,
 		"relay_"+strings.TrimSpace(evt.ID),
 		boardID,
@@ -1259,9 +1257,7 @@ func deletedByProjectionIdentity(tx *sql.Tx, by string) (string, string) {
 	if by == "" {
 		return "", ""
 	}
-	var name string
-	err := qQueryRow(tx, `SELECT name FROM users WHERE id=?`, by).Scan(&name)
-	if err == nil {
+	if name, err := projections.UserName(tx, by); err == nil {
 		return by, strings.TrimSpace(name)
 	}
 	if userID := loadUserIDByName(tx, by); userID != "" {
@@ -1288,7 +1284,7 @@ func ensureSysmailBoardSettingsProjection(tx *sql.Tx, ts int64) error {
 		    member_post_mode=1,
 		    stats_excluded=1,
 		    updated_at=excluded.updated_at`,
-		sysmailSystemBoardID,
+		proto.SysmailSystemBoardID,
 		ts,
 	)
 	return err

@@ -9,6 +9,17 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
+func produceBrokerCommandLogTestRecord(t *testing.T, ctx context.Context, log interface {
+	Produce(context.Context, CommandLogRecord) (CommandLogRecord, error)
+}, record CommandLogRecord, label string) CommandLogRecord {
+	t.Helper()
+	produced, err := log.Produce(ctx, record)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return produced
+}
+
 func TestBrokerCommandSubjectRoundTripEscapesPartitionTokens(t *testing.T) {
 	partition := LogPartition{Kind: "thread.topic", Key: "general/thread:alpha"}
 	subject := BrokerCommandSubject(partition)
@@ -47,39 +58,30 @@ func TestBrokerCommandLogPartitionsAndCommitsAreIndependent(t *testing.T) {
 
 	general := LogPartition{Kind: partitionBoard, Key: "general"}
 	life := LogPartition{Kind: partitionBoard, Key: "life"}
-	first, err := log.Produce(ctx, CommandLogRecord{
+	first := produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 		Partition:  general,
 		ActorID:    "usr_alice",
 		CID:        "cid-1",
 		Command:    proto.CmdCreateThread,
 		Payload:    []byte(`{"board":"general","title":"General"}`),
 		EnqueuedAt: 1000,
-	})
-	if err != nil {
-		t.Fatalf("produce first: %v", err)
-	}
-	second, err := log.Produce(ctx, CommandLogRecord{
+	}, "produce first")
+	second := produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 		Partition:  general,
 		ActorID:    "usr_alice",
 		CID:        "cid-2",
 		Command:    proto.CmdAppendPost,
 		Payload:    []byte(`{"thread":"thr_general","body":"hello"}`),
 		EnqueuedAt: 1001,
-	})
-	if err != nil {
-		t.Fatalf("produce second: %v", err)
-	}
-	other, err := log.Produce(ctx, CommandLogRecord{
+	}, "produce second")
+	other := produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 		Partition:  life,
 		ActorID:    "usr_bob",
 		CID:        "cid-3",
 		Command:    proto.CmdCreateThread,
 		Payload:    []byte(`{"board":"life","title":"Life"}`),
 		EnqueuedAt: 1002,
-	})
-	if err != nil {
-		t.Fatalf("produce other: %v", err)
-	}
+	}, "produce other")
 
 	if first.Offset != 1 || second.Offset != 2 || other.Offset != 1 {
 		t.Fatalf("offsets = general(%d,%d) life(%d), want general(1,2) life(1)", first.Offset, second.Offset, other.Offset)
@@ -101,28 +103,21 @@ func TestBrokerCommandLogPartitionsAndCommitsAreIndependent(t *testing.T) {
 	if err := log.CommitPartition(ctx, general, 2); err != nil {
 		t.Fatalf("commit general: %v", err)
 	}
-	if got, err := log.CommittedOffset(ctx, general); err != nil || got != 2 {
-		t.Fatalf("committed general = %d, %v; want 2, nil", got, err)
-	}
-	if got, err := log.CommittedOffset(ctx, life); err != nil || got != 0 {
-		t.Fatalf("committed life = %d, %v; want 0, nil", got, err)
-	}
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, general, 2, "committed general")
+	requireCommandLogWorkerCommittedOffset(t, ctx, log, life, 0, "committed life")
 }
 
 func TestBrokerCommandLogSynthesizesCIDWhenMissing(t *testing.T) {
 	ctx := context.Background()
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	record, err := log.Produce(ctx, CommandLogRecord{
+	record := produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 		Partition:  partition,
 		ActorID:    "usr_alice",
 		Command:    proto.CmdCreateThread,
 		Payload:    []byte(`{"board":"general","title":"General"}`),
 		EnqueuedAt: 1000,
-	})
-	if err != nil {
-		t.Fatalf("produce: %v", err)
-	}
+	}, "produce")
 	wantCID := SyntheticCommandLogCID(partition, record.Offset)
 	if record.CID != wantCID {
 		t.Fatalf("record cid = %q, want %q", record.CID, wantCID)
@@ -148,14 +143,8 @@ func TestBrokerCommandLogProduceIsIdempotentByCID(t *testing.T) {
 		Payload:    []byte(`{"board":"general","title":"Retry"}`),
 		EnqueuedAt: 1000,
 	}
-	first, err := log.Produce(ctx, record)
-	if err != nil {
-		t.Fatalf("first produce: %v", err)
-	}
-	second, err := log.Produce(ctx, record)
-	if err != nil {
-		t.Fatalf("second produce: %v", err)
-	}
+	first := produceBrokerCommandLogTestRecord(t, ctx, log, record, "first produce")
+	second := produceBrokerCommandLogTestRecord(t, ctx, log, record, "second produce")
 	if second.Offset != first.Offset || second.CID != first.CID {
 		t.Fatalf("second record = %+v, want same receipt offset as first %+v", second, first)
 	}
@@ -168,25 +157,20 @@ func TestBrokerCommandLogProduceIsIdempotentByCID(t *testing.T) {
 	}
 	drift := record
 	drift.EnqueuedAt = 2000
-	if _, err := log.Produce(ctx, drift); err == nil || !strings.Contains(err.Error(), "different content") {
-		t.Fatalf("timestamp drift produce err = %v, want different content error", err)
-	}
+	_, err = log.Produce(ctx, drift)
+	requireErrorContains(t, err, "different content")
 
 	otherActor := record
 	otherActor.ActorID = "usr_bob"
-	third, err := log.Produce(ctx, otherActor)
-	if err != nil {
-		t.Fatalf("produce same cid for different actor: %v", err)
-	}
+	third := produceBrokerCommandLogTestRecord(t, ctx, log, otherActor, "produce same cid for different actor")
 	if third.Offset != 2 {
 		t.Fatalf("third offset = %d, want independent actor-scoped receipt at offset 2", third.Offset)
 	}
 
 	conflict := record
 	conflict.Payload = []byte(`{"board":"general","title":"Changed"}`)
-	if _, err := log.Produce(ctx, conflict); err == nil || !strings.Contains(err.Error(), "different content") {
-		t.Fatalf("conflict produce err = %v, want different content error", err)
-	}
+	_, err = log.Produce(ctx, conflict)
+	requireErrorContains(t, err, "different content")
 }
 
 func TestBrokerCommandLogRequiresEnqueuedAtForExplicitReceipt(t *testing.T) {
@@ -199,9 +183,7 @@ func TestBrokerCommandLogRequiresEnqueuedAtForExplicitReceipt(t *testing.T) {
 		Command:   proto.CmdCreateThread,
 		Payload:   []byte(`{"board":"general","title":"Missing enqueue"}`),
 	})
-	if err == nil || !strings.Contains(err.Error(), "enqueue time is required") {
-		t.Fatalf("produce err = %v, want enqueue time required error", err)
-	}
+	requireErrorContains(t, err, "enqueue time is required")
 }
 
 func TestMemoryBrokerCommandLogClientRequiresEnqueuedAtForExplicitReceipt(t *testing.T) {
@@ -217,9 +199,7 @@ func TestMemoryBrokerCommandLogClientRequiresEnqueuedAtForExplicitReceipt(t *tes
 		PartitionKind: partitionBoard,
 		PartitionKey:  "general",
 	})
-	if err == nil || !strings.Contains(err.Error(), "enqueue time is required") {
-		t.Fatalf("append err = %v, want enqueue time required error", err)
-	}
+	requireErrorContains(t, err, "enqueue time is required")
 	records, fetchErr := NewBrokerCommandLog(client).FetchPartition(ctx, partition, 0, 10)
 	if fetchErr != nil {
 		t.Fatalf("fetch partition: %v", fetchErr)
@@ -233,15 +213,13 @@ func TestBrokerCommandLogListsHotPartitions(t *testing.T) {
 	ctx := context.Background()
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
 	for _, board := range []string{"general", "life", "general"} {
-		if _, err := log.Produce(ctx, CommandLogRecord{
+		produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 			Partition:  LogPartition{Kind: partitionBoard, Key: board},
 			ActorID:    "usr_alice",
 			Command:    proto.CmdCreateThread,
 			Payload:    []byte(`{"board":"` + board + `","title":"` + board + `"}`),
 			EnqueuedAt: 1000,
-		}); err != nil {
-			t.Fatalf("produce %s: %v", board, err)
-		}
+		}, "produce "+board)
 	}
 	partitions, err := log.ListCommandPartitions(ctx, 1)
 	if err != nil {
@@ -258,15 +236,13 @@ func TestCommandPartitionOffsetMetrics(t *testing.T) {
 	general := LogPartition{Kind: partitionBoard, Key: "general"}
 	life := LogPartition{Kind: partitionBoard, Key: "life"}
 	for _, partition := range []LogPartition{general, general, life} {
-		if _, err := log.Produce(ctx, CommandLogRecord{
+		produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 			Partition:  partition,
 			ActorID:    "usr_alice",
 			Command:    proto.CmdCreateThread,
 			Payload:    []byte(`{"board":"` + partition.Key + `","title":"` + partition.Key + `"}`),
 			EnqueuedAt: 1000,
-		}); err != nil {
-			t.Fatalf("produce %s: %v", partition.Key, err)
-		}
+		}, "produce "+partition.Key)
 	}
 	if err := log.CommitPartition(ctx, general, 2); err != nil {
 		t.Fatalf("commit general: %v", err)
@@ -308,30 +284,45 @@ func TestCommandPartitionOffsetMetrics(t *testing.T) {
 	}
 }
 
+func TestCommandPartitionOffsetMetricsNormalizeListedOffsets(t *testing.T) {
+	ctx := context.Background()
+	samples, err := commandPartitionOffsetSamples(ctx, commandPartitionOffsetSliceLister{
+		{Partition: LogPartition{}, TailOffset: 2, CommittedOffset: 5},
+	}, 100)
+	if err != nil {
+		t.Fatalf("command partition offset samples: %v", err)
+	}
+	if got := commandPartitionSample(samples, "budgie_command_partition_tail_offset", partitionGlobal, partitionGlobal); got != 2 {
+		t.Fatalf("normalized global tail metric = %v, want 2", got)
+	}
+	if got := commandPartitionSample(samples, "budgie_command_partition_committed_offset", partitionGlobal, partitionGlobal); got != 2 {
+		t.Fatalf("normalized global committed metric = %v, want clamped 2", got)
+	}
+	if got := commandPartitionSample(samples, "budgie_command_partition_lag", partitionGlobal, partitionGlobal); got != 0 {
+		t.Fatalf("normalized global lag metric = %v, want 0", got)
+	}
+}
+
 func TestCommandPartitionAssignmentMetrics(t *testing.T) {
 	ctx := context.Background()
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
 	assigner := NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b"}, 4)
 	owned := commandPartitionAssignedToForMetrics(t, ctx, assigner, "writer-a")
 	skipped := commandPartitionAssignedToForMetrics(t, ctx, assigner, "writer-b")
-	if _, err := log.Produce(ctx, CommandLogRecord{
+	produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 		Partition:  owned,
 		ActorID:    "usr_alice",
 		Command:    proto.CmdCreateThread,
 		Payload:    []byte(`{"board":"` + owned.Key + `","title":"owned"}`),
 		EnqueuedAt: 1000,
-	}); err != nil {
-		t.Fatalf("produce owned: %v", err)
-	}
-	if _, err := log.Produce(ctx, CommandLogRecord{
+	}, "produce owned")
+	produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 		Partition:  skipped,
 		ActorID:    "usr_alice",
 		Command:    proto.CmdCreateThread,
 		Payload:    []byte(`{"board":"` + skipped.Key + `","title":"skipped"}`),
 		EnqueuedAt: 1000,
-	}); err != nil {
-		t.Fatalf("produce skipped: %v", err)
-	}
+	}, "produce skipped")
 
 	samples, err := commandPartitionAssignmentSamples(ctx, assigner, log, "writer-a", 100)
 	if err != nil {
@@ -363,15 +354,13 @@ func TestHotPartitionReassignmentLetsNewOwnerDrainLag(t *testing.T) {
 	})
 
 	for i := 0; i < 3; i++ {
-		if _, err := log.Produce(ctx, CommandLogRecord{
+		produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
 			Partition:  hot,
 			ActorID:    "usr_alice",
 			Command:    proto.CmdAppendPost,
 			Payload:    []byte(`{"thread":"thr_hot","body":"hot reply"}`),
 			EnqueuedAt: 1000 + int64(i),
-		}); err != nil {
-			t.Fatalf("produce hot command %d: %v", i, err)
-		}
+		}, "produce hot command")
 	}
 
 	before, err := commandPartitionOffsetSamples(ctx, log, 100)
@@ -453,13 +442,12 @@ func TestDecodeBrokerCommandMessageRejectsMetadataMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if _, err := DecodeBrokerCommandMessage(BrokerCommandLogMessage{
+	_, err = DecodeBrokerCommandMessage(BrokerCommandLogMessage{
 		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:    8,
 		Data:      data,
-	}); err == nil || !strings.Contains(err.Error(), "offset metadata mismatch") {
-		t.Fatalf("decode err = %v, want offset metadata mismatch", err)
-	}
+	})
+	requireErrorContains(t, err, "offset metadata mismatch")
 }
 
 func commandPartitionSample(samples []metrics.Sample, name, kind, key string) float64 {
@@ -508,14 +496,13 @@ func commandPartitionAssignedToForMetrics(t *testing.T, ctx context.Context, ass
 func TestBrokerCommandLogRejectsInvalidPayload(t *testing.T) {
 	ctx := context.Background()
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	if _, err := log.Produce(ctx, CommandLogRecord{
+	_, err := log.Produce(ctx, CommandLogRecord{
 		Partition:  LogPartition{Kind: partitionBoard, Key: "general"},
 		Command:    proto.CmdCreateThread,
 		Payload:    []byte(`{invalid-json`),
 		EnqueuedAt: 1000,
-	}); err == nil || !strings.Contains(err.Error(), "valid JSON") {
-		t.Fatalf("produce err = %v, want valid JSON error", err)
-	}
+	})
+	requireErrorContains(t, err, "valid JSON")
 }
 
 func TestCoreCommandLogShadowCapturesSubmittedCommand(t *testing.T) {
@@ -523,11 +510,7 @@ func TestCoreCommandLogShadowCapturesSubmittedCommand(t *testing.T) {
 	defer cancel()
 	commandClient := NewMemoryBrokerCommandLogClient()
 	commandLog := NewBrokerCommandLog(commandClient)
-	c, err := New(t.TempDir()+"/budgie.db", WithCommandLogShadow(commandLog))
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithCommandLogShadow(commandLog))
 	go c.Run(ctx)
 
 	reply := c.ExecCmd(ctx, nil, proto.CommandName("test.unknown"), []byte(`{"hello":"world"}`), "cid-shadow")

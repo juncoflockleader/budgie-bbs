@@ -3,16 +3,16 @@ package core
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestAccumulateCommandLogDrainWorkerResultsKeepsPartialProgress(t *testing.T) {
-	stage := CommandLogDrainStage{}
+	stage := loadmodel.CommandLogDrainStage{}
 	errSamples := map[string]bool{}
 	accumulateCommandLogDrainWorkerResults(&stage, errSamples, []CommandLogWorkerResult{
 		{
@@ -47,7 +47,7 @@ func TestAccumulateCommandLogDrainWorkerResultsKeepsPartialProgress(t *testing.T
 }
 
 func TestAccumulateCommandLogDrainWorkerResultsSamplesFinalizerFailures(t *testing.T) {
-	stage := CommandLogDrainStage{}
+	stage := loadmodel.CommandLogDrainStage{}
 	errSamples := map[string]bool{}
 	accumulateCommandLogDrainWorkerResults(&stage, errSamples, []CommandLogWorkerResult{
 		{
@@ -62,16 +62,12 @@ func TestAccumulateCommandLogDrainWorkerResultsSamplesFinalizerFailures(t *testi
 }
 
 func TestCommandLogDrainLoadRunnerReportsSubmitAndDrain(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "command-log-drain-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunCommandLogDrainLoad(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunCommandLogDrainLoad(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            2,
 		CommandsPerBoard:  2,
 		SubmitConcurrency: 2,
@@ -120,16 +116,12 @@ func TestCommandLogDrainLoadRunnerReportsSubmitAndDrain(t *testing.T) {
 }
 
 func TestCommandLogDrainLoadRunnerKeepsFailedCreateSubmitEvidence(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "command-log-failed-create-submit-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunCommandLogDrainLoadWithCommandLog(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunCommandLogDrainLoadWithCommandLog(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            1,
 		CommandsPerBoard:  2,
 		SubmitConcurrency: 1,
@@ -154,23 +146,13 @@ func TestCommandLogDrainLoadRunnerKeepsFailedCreateSubmitEvidence(t *testing.T) 
 }
 
 func TestCommandLogDrainLoadRunnerKeepsFailedReplySubmitEvidence(t *testing.T) {
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	base := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	c, err := New(filepath.Join(t.TempDir(), "command-log-failed-reply-submit-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	harness := newBrokerCommandEventTestHarness()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            1,
 		CommandsPerBoard:  2,
 		RepliesPerThread:  1,
@@ -181,9 +163,9 @@ func TestCommandLogDrainLoadRunnerKeepsFailedReplySubmitEvidence(t *testing.T) {
 		BoardPrefix:       "cmdlogfailedreply",
 		UserName:          "cmdlog_failed_reply_runner",
 	}, failAppendPostProduceCommandLog{
-		BrokerCommandLog: base,
+		BrokerCommandLog: harness.commandLog,
 		err:              errors.New("synthetic reply produce failure"),
-	}, transactionStore, eventStore)
+	}, harness.transactionStore, harness.eventStore)
 	if err == nil {
 		t.Fatal("RunNativeCommandEventProjectionLoadWithStores succeeded, want reply submit failure")
 	}
@@ -204,16 +186,12 @@ func TestCommandLogDrainLoadRunnerKeepsFailedReplySubmitEvidence(t *testing.T) {
 func TestCommandLogDrainLoadRunnerKeepsFailedCreateDrainEvidence(t *testing.T) {
 	baseLog := NewMemoryCommandLog()
 	commandLog := noFetchCommandLog{CommandLog: baseLog, partitions: baseLog, offsets: baseLog}
-	c, err := New(filepath.Join(t.TempDir(), "command-log-failed-create-drain-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunCommandLogDrainLoadWithCommandLog(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunCommandLogDrainLoadWithCommandLog(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            1,
 		CommandsPerBoard:  1,
 		SubmitConcurrency: 1,
@@ -301,16 +279,12 @@ func (l noFetchCommandLog) ListCommandPartitionOffsets(ctx context.Context, limi
 
 func TestCommandLogDrainLoadRunnerCanSubmitThroughAuthoritativeCommandLog(t *testing.T) {
 	commandLog := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	c, err := New(filepath.Join(t.TempDir(), "command-log-authoritative-drain-load.db"), WithAuthoritativeCommandLog(commandLog))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunAuthoritativeCommandLogDrainLoad(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunAuthoritativeCommandLogDrainLoad(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            2,
 		CommandsPerBoard:  2,
 		SubmitConcurrency: 2,
@@ -347,16 +321,12 @@ func TestCommandLogDrainLoadRunnerCanSubmitThroughAuthoritativeCommandLog(t *tes
 }
 
 func TestCommandLogDrainLoadRunnerCanUseNativeCommandEventProjection(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "command-log-native-drain-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunNativeCommandEventProjectionLoad(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunNativeCommandEventProjectionLoad(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            2,
 		CommandsPerBoard:  2,
 		SubmitConcurrency: 2,
@@ -369,7 +339,7 @@ func TestCommandLogDrainLoadRunnerCanUseNativeCommandEventProjection(t *testing.
 	if err != nil {
 		t.Fatalf("RunNativeCommandEventProjectionLoad: %v", err)
 	}
-	if report.Config.ExecutorMode != CommandLogDrainExecutorNative {
+	if report.Config.ExecutorMode != loadmodel.CommandLogDrainExecutorNative {
 		t.Fatalf("executor mode = %q, want native", report.Config.ExecutorMode)
 	}
 	if report.Submit.Succeeded != 4 || report.Submit.Failed != 0 {
@@ -396,16 +366,12 @@ func TestCommandLogDrainLoadRunnerCanUseNativeCommandEventProjection(t *testing.
 }
 
 func TestCommandLogDrainLoadRunnerCanUseNativeAppendPostProjection(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "command-log-native-append-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunNativeCommandEventProjectionLoad(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunNativeCommandEventProjectionLoad(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            1,
 		CommandsPerBoard:  2,
 		RepliesPerThread:  2,
@@ -420,7 +386,7 @@ func TestCommandLogDrainLoadRunnerCanUseNativeAppendPostProjection(t *testing.T)
 	if err != nil {
 		t.Fatalf("RunNativeCommandEventProjectionLoad replies: %v", err)
 	}
-	if report.Config.ExecutorMode != CommandLogDrainExecutorNative || !report.Config.DirectedReplies {
+	if report.Config.ExecutorMode != loadmodel.CommandLogDrainExecutorNative || !report.Config.DirectedReplies {
 		t.Fatalf("config = %+v, want native directed reply load", report.Config)
 	}
 	if report.TotalCommands != 6 || report.Submit.Succeeded != 6 || report.Drain.Applied != 6 {
@@ -456,28 +422,21 @@ func TestCommandLogDrainLoadRunnerCanUseNativeAppendPostProjection(t *testing.T)
 }
 
 func TestCommandLogDrainLoadRunnerUsesNativeBatchTransactionStore(t *testing.T) {
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
+	harness := newBrokerCommandEventTestHarness()
 	transactionClient := &countingBatchBrokerCommandEventTransactionClient{
-		inner: NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
+		inner: NewMemoryBrokerCommandEventTransactionClient(harness.commandClient, harness.eventClient),
 	}
-	baseCommandLog := NewBrokerCommandLog(commandClient)
 	commandLog := &countingCommandLogOffsetAccess{
-		CommandLog: baseCommandLog,
-		offsets:    baseCommandLog,
+		CommandLog: harness.commandLog,
+		offsets:    harness.commandLog,
 	}
-	eventStore := NewBrokerEventStore(eventClient)
 	transactionStore := NewBrokerCommandEventTransactionStore(transactionClient)
-	c, err := New(filepath.Join(t.TempDir(), "command-log-native-batch-drain-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            2,
 		CommandsPerBoard:  2,
 		RepliesPerThread:  1,
@@ -488,7 +447,7 @@ func TestCommandLogDrainLoadRunnerUsesNativeBatchTransactionStore(t *testing.T) 
 		BodyBytes:         16,
 		BoardPrefix:       "cmdlogbatchdrain",
 		UserName:          "cmdlog_batch_drain_runner",
-	}, commandLog, transactionStore, eventStore)
+	}, commandLog, transactionStore, harness.eventStore)
 	if err != nil {
 		t.Fatalf("RunNativeCommandEventProjectionLoadWithStores batch drain: %v", err)
 	}
@@ -530,26 +489,16 @@ func TestCommandLogDrainLoadRunnerUsesNativeBatchTransactionStore(t *testing.T) 
 }
 
 func TestCommandLogDrainLoadRunnerFailsClosedOnNativeEventProjectionPartitionLimit(t *testing.T) {
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	c, err := New(filepath.Join(t.TempDir(), "command-log-native-projection-limit-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	harness := newBrokerCommandEventTestHarness()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	if err := eventStore.SeedEventPartitionOffset(ctx, LogPartition{Kind: partitionUser, Key: "projection-limit-overflow"}, 1); err != nil {
+	if err := harness.eventStore.SeedEventPartitionOffset(ctx, LogPartition{Kind: partitionUser, Key: "projection-limit-overflow"}, 1); err != nil {
 		t.Fatalf("SeedEventPartitionOffset: %v", err)
 	}
-	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            1,
 		CommandsPerBoard:  1,
 		SubmitConcurrency: 1,
@@ -558,7 +507,7 @@ func TestCommandLogDrainLoadRunnerFailsClosedOnNativeEventProjectionPartitionLim
 		BodyBytes:         16,
 		BoardPrefix:       "cmdlogprojectionlimit",
 		UserName:          "cmdlog_projection_limit_runner",
-	}, commandLog, transactionStore, eventStore)
+	}, harness.commandLog, harness.transactionStore, harness.eventStore)
 	if err == nil {
 		t.Fatalf("RunNativeCommandEventProjectionLoadWithStores succeeded, want partition-limit error")
 	}
@@ -571,26 +520,13 @@ func TestCommandLogDrainLoadRunnerFailsClosedOnNativeEventProjectionPartitionLim
 }
 
 func TestCommandLogDrainLoadRunnerCanUseAuthoritativeNativeSnapshotReplies(t *testing.T) {
-	commandClient := NewMemoryBrokerCommandLogClient()
-	eventClient := NewMemoryBrokerEventLogClient()
-	commandLog := NewBrokerCommandLog(commandClient)
-	eventStore := NewBrokerEventStore(eventClient)
-	transactionStore := NewBrokerCommandEventTransactionStore(
-		NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient),
-	)
-	c, err := New(
-		filepath.Join(t.TempDir(), "command-log-authoritative-native-snapshot-load.db"),
-		WithAuthoritativeCommandLog(commandLog),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	harness := newBrokerCommandEventTestHarness()
+	c := newCoreTestCore(t, WithAuthoritativeCommandLog(harness.commandLog))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunNativeCommandEventProjectionLoadWithStores(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:              2,
 		CommandsPerBoard:    2,
 		RepliesPerThread:    1,
@@ -601,13 +537,13 @@ func TestCommandLogDrainLoadRunnerCanUseAuthoritativeNativeSnapshotReplies(t *te
 		BodyBytes:           32,
 		BoardPrefix:         "cmdlogauthnative",
 		UserName:            "cmdlog_auth_native_runner",
-		AssignmentMode:      CommandLogDrainAssignmentSnapshot,
+		AssignmentMode:      loadmodel.CommandLogDrainAssignmentSnapshot,
 		AuthoritativeSubmit: true,
-	}, commandLog, transactionStore, eventStore)
+	}, harness.commandLog, harness.transactionStore, harness.eventStore)
 	if err != nil {
 		t.Fatalf("RunNativeCommandEventProjectionLoadWithStores authoritative native replies: %v", err)
 	}
-	if report.Config.ExecutorMode != CommandLogDrainExecutorNative || !report.Config.AuthoritativeSubmit || report.Config.AssignmentMode != CommandLogDrainAssignmentSnapshot {
+	if report.Config.ExecutorMode != loadmodel.CommandLogDrainExecutorNative || !report.Config.AuthoritativeSubmit || report.Config.AssignmentMode != loadmodel.CommandLogDrainAssignmentSnapshot {
 		t.Fatalf("config = %+v, want authoritative native snapshot-assignment", report.Config)
 	}
 	if report.TotalCommands != 8 || report.Submit.Succeeded != 8 || report.Submit.Failed != 0 {
@@ -649,11 +585,7 @@ func TestCommandLogDrainLoadRunnerCanUseAuthoritativeNativeSnapshotReplies(t *te
 }
 
 func TestCommandLogDrainLoadRunnerCanUseSnapshotAssignment(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "command-log-snapshot-drain-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
@@ -663,7 +595,7 @@ func TestCommandLogDrainLoadRunnerCanUseSnapshotAssignment(t *testing.T) {
 		offsets:    baseLog,
 	}
 
-	report, err := c.RunCommandLogDrainLoadWithCommandLog(ctx, CommandLogDrainLoadConfig{
+	report, err := c.RunCommandLogDrainLoadWithCommandLog(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            3,
 		CommandsPerBoard:  2,
 		SubmitConcurrency: 3,
@@ -672,12 +604,12 @@ func TestCommandLogDrainLoadRunnerCanUseSnapshotAssignment(t *testing.T) {
 		BodyBytes:         16,
 		BoardPrefix:       "cmdlogsnapshot",
 		UserName:          "cmdlog_snapshot_runner",
-		AssignmentMode:    CommandLogDrainAssignmentSnapshot,
+		AssignmentMode:    loadmodel.CommandLogDrainAssignmentSnapshot,
 	}, commandLog)
 	if err != nil {
 		t.Fatalf("RunCommandLogDrainLoadWithCommandLog snapshot assignment: %v", err)
 	}
-	if report.Config.AssignmentMode != CommandLogDrainAssignmentSnapshot {
+	if report.Config.AssignmentMode != loadmodel.CommandLogDrainAssignmentSnapshot {
 		t.Fatalf("assignment mode = %q, want snapshot", report.Config.AssignmentMode)
 	}
 	if report.Submit.Succeeded != 6 || report.Drain.Applied != 6 || report.MaxPartitionLagAfterDrain != 0 {
@@ -698,7 +630,8 @@ func TestCommandLogDrainLoadSnapshotAssignerListsOnlyLaggingPartitions(t *testin
 	complete := LogPartition{Kind: partitionBoard, Key: "complete"}.Normalize()
 	lagging := LogPartition{Kind: partitionBoard, Key: "lagging"}.Normalize()
 	completeRecord := produceCommandLogWorkerRecord(t, ctx, log, complete, "cid-complete")
-	produceCommandLogWorkerRecord(t, ctx, log, lagging, "cid-lagging")
+	laggingRecord := produceCommandLogWorkerRecord(t, ctx, log, lagging, "cid-lagging")
+	produceCommandLogWorkerRecord(t, ctx, log, lagging, "cid-lagging-next")
 	if err := log.CommitPartition(ctx, complete, completeRecord.Offset); err != nil {
 		t.Fatalf("CommitPartition complete: %v", err)
 	}
@@ -706,8 +639,8 @@ func TestCommandLogDrainLoadSnapshotAssignerListsOnlyLaggingPartitions(t *testin
 	rawAssigner, err := newCommandLogDrainLoadAssigner(ctx, commandLogWithOffsetsOnly{
 		CommandLog: log,
 		offsets:    countingOffsets,
-	}, []string{"writer-a", "writer-b"}, CommandLogDrainLoadConfig{
-		AssignmentMode: CommandLogDrainAssignmentSnapshot,
+	}, []string{"writer-a", "writer-b"}, loadmodel.CommandLogDrainLoadConfig{
+		AssignmentMode: loadmodel.CommandLogDrainAssignmentSnapshot,
 	}, 10)
 	if err != nil {
 		t.Fatalf("newCommandLogDrainLoadAssigner: %v", err)
@@ -720,19 +653,35 @@ func TestCommandLogDrainLoadSnapshotAssignerListsOnlyLaggingPartitions(t *testin
 		t.Fatalf("offset lister calls after assigner creation = %d, want one shared snapshot", countingOffsets.calls)
 	}
 
-	owner := assigner.owner(lagging)
+	owner := assigner.Snapshot().Owners[lagging]
+	if err := log.CommitPartition(ctx, lagging, laggingRecord.Offset); err != nil {
+		t.Fatalf("CommitPartition lagging first record: %v", err)
+	}
+	cursors, err := commandLogDrainLoadMemberPartitionCursors(ctx, commandLogWithOffsetsOnly{
+		CommandLog: log,
+		offsets:    countingOffsets,
+	}, assigner, owner, 10)
+	if err != nil {
+		t.Fatalf("commandLogDrainLoadMemberPartitionCursors: %v", err)
+	}
+	if countingOffsets.calls != 2 {
+		t.Fatalf("offset lister calls after member cursor list = %d, want fresh command-log snapshot after assignment snapshot", countingOffsets.calls)
+	}
+	if len(cursors) != 1 || cursors[0].partition != lagging || cursors[0].committedOffset != laggingRecord.Offset {
+		t.Fatalf("cursors = %+v, want one cursor for lagging partition after committed offset %d", cursors, laggingRecord.Offset)
+	}
 	assignments, err := assigner.ListAssignedCommandPartitions(ctx, owner, 10)
 	if err != nil {
 		t.Fatalf("ListAssignedCommandPartitions: %v", err)
 	}
-	if countingOffsets.calls != 1 {
-		t.Fatalf("offset lister calls after first assignment list = %d, want still one shared snapshot", countingOffsets.calls)
+	if countingOffsets.calls != 2 {
+		t.Fatalf("offset lister calls after first assignment list = %d, want no extra command-log snapshot", countingOffsets.calls)
 	}
 	if _, err := assigner.ListAssignedCommandPartitions(ctx, owner, 10); err != nil {
 		t.Fatalf("second ListAssignedCommandPartitions: %v", err)
 	}
-	if countingOffsets.calls != 1 {
-		t.Fatalf("offset lister calls after second assignment list = %d, want still one shared snapshot", countingOffsets.calls)
+	if countingOffsets.calls != 2 {
+		t.Fatalf("offset lister calls after second assignment list = %d, want still no extra command-log snapshot", countingOffsets.calls)
 	}
 	if len(assignments) != 1 || assignments[0].Partition != lagging {
 		t.Fatalf("assignments = %+v, want only lagging partition %s/%s", assignments, lagging.Kind, lagging.Key)
@@ -774,17 +723,32 @@ func TestCommandLogDrainLoadOffsetSnapshotClampsAndCopiesOffsets(t *testing.T) {
 	}
 }
 
-func TestCommandLogDrainLoadRejectsUnsupportedAssignmentMode(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "command-log-bad-assignment-load.db"))
-	if err != nil {
-		t.Fatalf("New: %v", err)
+func TestCommandLogDrainLoadLaggingPartitionOffsetsNormalizesAndDeduplicates(t *testing.T) {
+	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
+	board := LogPartition{Kind: partitionBoard, Key: "board-a"}.Normalize()
+	got := commandLogDrainLoadLaggingPartitionOffsets([]CommandPartitionOffset{
+		{Partition: LogPartition{}, TailOffset: 3, CommittedOffset: 1},
+		{Partition: LogPartition{Kind: partitionBoard, Key: "board-a"}, TailOffset: 5, CommittedOffset: 5},
+		{Partition: LogPartition{Kind: partitionBoard, Key: "board-a"}, TailOffset: 7, CommittedOffset: 4},
+		{Partition: LogPartition{Kind: partitionBoard, Key: "board-a"}, TailOffset: 9, CommittedOffset: 2},
+		{Partition: LogPartition{Kind: partitionThread, Key: "thread-a"}, TailOffset: -1, CommittedOffset: -2},
+	})
+	want := []CommandPartitionOffset{
+		{Partition: global, TailOffset: 3, CommittedOffset: 1},
+		{Partition: board, TailOffset: 7, CommittedOffset: 4},
 	}
-	defer c.DB.Close()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("lagging offsets = %+v, want %+v", got, want)
+	}
+}
+
+func TestCommandLogDrainLoadRejectsUnsupportedAssignmentMode(t *testing.T) {
+	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 
-	_, err = c.RunCommandLogDrainLoad(ctx, CommandLogDrainLoadConfig{
+	_, err := c.RunCommandLogDrainLoad(ctx, loadmodel.CommandLogDrainLoadConfig{
 		Boards:            1,
 		CommandsPerBoard:  1,
 		SubmitConcurrency: 1,

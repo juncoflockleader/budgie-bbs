@@ -64,12 +64,22 @@ ON CONFLICT (partition_kind, partition_key) DO UPDATE
 		return CommandPartitionClaim{}, false, err
 	}
 
-	claim := CommandPartitionClaim{Partition: partition}
+	var claimOwner string
+	var claimExpiresAt int64
 	if err := c.db.QueryRowContext(ctx, rebindPlaceholders(`
 SELECT owner_id, expires_at
   FROM command_partition_leases
- WHERE partition_kind=? AND partition_key=?`), partition.Kind, partition.Key).Scan(&claim.OwnerID, &claim.ExpiresAt); err != nil {
+ WHERE partition_kind=? AND partition_key=?`), partition.Kind, partition.Key).Scan(&claimOwner, &claimExpiresAt); err != nil {
 		return CommandPartitionClaim{}, false, err
 	}
+	claim := commandPartitionClaimForOwner(partition, claimOwner, claimExpiresAt)
 	return claim, claim.OwnerID == ownerID && claim.ExpiresAt >= expiresAt, nil
+}
+
+func commandPartitionClaimForOwner(partition LogPartition, ownerID string, expiresAt int64) CommandPartitionClaim {
+	return CommandPartitionClaim{
+		Partition: partition.Normalize(),
+		OwnerID:   strings.TrimSpace(ownerID),
+		ExpiresAt: expiresAt,
+	}
 }

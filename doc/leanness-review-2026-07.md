@@ -1,6 +1,6 @@
 # Leanness & Architecture Review (July 2026)
 
-Status: proposed. This document records the findings of a repo-wide leanness
+Status: in progress. This document records the findings of a repo-wide leanness
 review (2026-07-02) and the agreed directions for shrinking the codebase
 without losing capability. Fold completed items into
 [doc/roadmap.md](roadmap.md) and delete their sections here per
@@ -60,6 +60,70 @@ implementation.
 
 - Effort: high (~12 commands to extract). Risk: medium — mitigated by the
   existing parity tests, which become the safety net for the refactor.
+- **Started 2026-07-03:** post body length validation now lives with the
+  command payload model in `internal/proto`; SQL handlers and native
+  create/reply, board-mail, repost, edit/redact/restore/purge-post, post-range,
+  clear-board-junk, board favorite/zap, move-thread, and post-flag payload
+  validation and system-notice decisions share the same cap,
+  thread-title/update and system-notice title validation share the same
+  required/length rule,
+  system-notice source validation and publish-system-notice payload
+  normalization share one rule, post/mail
+  attachment metadata normalization/validation, SQL/native count/staging readers,
+  promoted blob idempotency checks, inline ID stamping, and count limits share helpers,
+  post content-type canonicalization and mail quota size
+  calculation, anonymous post identity, post signature trimming, and quoted
+  reply prefix, repost, article mail-back, system notice, and blessing body
+  formatting plus post-author mail, sysmail, syssecurity, and sanction system body
+  formatting, forward/post-to-board mail bodies, content-filter review body
+  formatting, and poll-result body formatting share helpers,
+  sanction payload normalization, sanction/automod reason normalization, board
+  recommendation payload normalization, and board membership
+  note/application/leave/review-payload normalization share their rules,
+  automod rule create/delete payload normalization plus set/delete target
+  validation, create-board payload validation, content-filter
+  normalization/validation, and command
+  slug validation are shared across SQL/native execution, user-ref lookup,
+  user relationship existence readers, login-watch payload normalization, and
+  presence status/online predicates,
+  mail attachment filename extraction and all-recipient lookup,
+  blessing payload normalization and existence readers,
+  direct-message policy/target normalization/readers, mailbox normalization,
+  mail-group ID/member/deletion lookup, mail-copy
+  projection readers, restore-size/count readers, and quota checks,
+  post/mail range ID normalization, and board-junk ID/thread lookup share one rule,
+  board settings payload, audit-line formatting, guest-access canonicalization,
+  and read-marker payload,
+  board/thread existence/name lookups, poll-by-post lookup,
+  thread root reply guard/post lookup, thread/post read-marker payload,
+  digest curation target/field payload,
+  digest entry maintenance payload, board member title/mode/status,
+  moderator/member payload, delegated-permission change detection and board
+  member permission readers plus board member final-state calculation,
+  requirements-payload normalization, membership admission checks, and
+  counter-backed admission score readers plus membership application lookup
+  and auto-approval note constants, board-member permission-policy checks,
+  moderation
+  review target/resolution payload normalization, moderation audit-log
+  board identity/formatting, content-filter generated-review board
+  identity/IDs, publish-poll-result target normalization, and vote-board
+  result identity/IDs are shared across SQL/native execution,
+  favorite-folder name/payload/state readers and import-favorite-tree structure
+  validation share one rule, favorite-tree import projection paths share one planner,
+  stats snapshot date normalization and stats system-post idempotency prelude,
+  system-notice board normalization, command slug validation messages, and
+  digest kind/path normalization plus digest path mutation board/kind/source
+  path normalization and digest permission/scoping helpers share one rule,
+  mail-group payload normalization plus friend-list aliases,
+  delete-mail-group, attach-post, and
+  attach/update/delete/forward-mail payload normalization plus post-mail-to-board
+  source/target validation, direct-message target/send payload normalization
+  plus conversation ID canonicalization,
+  send-mail content, mail-post-author, and
+  digest-entry mail payload normalization and
+  post/forward/mail-author/digest-mail subject normalization share one rule,
+  and native create/reply
+  decisions now fail closed on overlong bodies before state reads.
 
 ### 2. Pick one broker (biggest strategic fork)
 
@@ -92,8 +156,8 @@ package:
 
 - Memory-backed chat/counter/presence stores — only tests instantiate them;
   production uses SQL or NATS-KV.
-- `partition_write_load.go` + `command_log_drain_load.go` (~2k lines) — used
-  only by `cmd/budgie-commandlog-loadgen`.
+- `command_log_drain_load.go` (~2k lines) — used only by
+  `cmd/budgie-commandlog-loadgen`.
 - One-shot promotion-gate code (`command_log_promotion_readiness.go`,
   `event_log_shadow.go`).
 
@@ -104,9 +168,28 @@ generators inside `internal/core` is not.
 
 - Effort: low (1–2 days). Risk: low.
 - **Partially done 2026-07-02:** memory stores are now test-only fixture
-  files. Remaining: the load-harness files
-  (`partition_write_load.go`, `command_log_drain_load.go`) and one-shot
-  promotion-gate code still live in `internal/core`.
+  files. Gateway fanout and partition-write load/report/budget code now live
+  in `internal/loadtest`, with the loadgen/report-check commands consuming
+  that package. The command-log drain load config/runtime/stage model now lives
+  in `internal/loadmodel`; tooling consumes that package directly, and
+  `internal/core` no longer re-exports those model types. Remaining: the
+  tighter core-coupled `command_log_drain_load.go` runner and one-shot
+  promotion-gate code still live in `internal/core`, though the runner's
+  create/reply submit+drain phase skeleton, sample accounting,
+  authoritative/non-authoritative submit branching, pending-receipt validation,
+  projection-error bookkeeping, native batch pending transaction/failure/result
+  bookkeeping plus pending record envelope/queue helpers and pending-flush
+  workflow, worker assignment/claim result construction, drain-load report
+  finalization, local SQL `IN` helper construction, and one-shot report
+  finalization now share small helpers; the submit worker pool lives in
+  `internal/loadutil`; drain-load
+  config validity, create/reply phase planning, report
+  construction/finalization/phase aggregation, load/drain/projection stage
+  construction, final drain-load report validation, promotion-readiness
+  construction/coverage/finalization plus lag/ready bookkeeping, and
+  materialization-audit
+  construction/coverage/finalization plus missing/incomplete bookkeeping live
+  with the report model in `internal/loadmodel`.
 
 ### 4. Collapse the tooling binaries
 
@@ -121,8 +204,127 @@ invocations only; update `scripts/scripts_test.go` in the same change.
 
 - Effort: low–medium. Risk: low (tooling only, pinned by script tests).
 - **Partially done 2026-07-02:** the four report-check binaries are now
-  `cmd/budgie-report-check` subcommands. Remaining: shared connection/config
-  helpers for budgied/loadgen/preflight, and folding the loadgen/preflight
+  `cmd/budgie-report-check` subcommands. Load/preflight report evidence
+  collection (budget hash + git revision/dirty state) and runtime endpoint
+  redaction/sanitization plus sanitized-endpoint validation now live in
+  `internal/runevidence` instead of being reimplemented by each command;
+  command-log and gateway report-check subcommands share the same
+  flag/budget/report/hash/violation runner;
+  report-check and manifest hashing now reuse the same evidence SHA, report
+  evidence envelope decoding, and evidence violation formatting helpers,
+  bundle manifest target/tool/evidence validation now lives in
+  `internal/runbundle` instead of the command package,
+  budget-hash comparison is enforced through `internal/scalebudget`,
+  command-log and gateway budget checks now use the same report-evidence,
+  endpoint-locality, sensitivity, and budget-path helpers, and command-log,
+  gateway, preflight, and bundle checks now share one evidence type and one
+  no-budget tool/git/clean-tree evidence validator. Report structs now use
+  the shared evidence type directly instead of per-report aliases, and
+  loadgen commands call the shared evidence collector directly. Preflight
+  generation/checking share the same report schema model, and preflight
+  config validation, promoted resource naming, sanitized report generation,
+  report writing, report-check validation, and live Postgres/NATS/Kafka probes now live in
+  `internal/preflightcheck` instead of the command package. Shared
+  env parsing, disposable Postgres
+  schema naming/validation/provisioning, and search-path DSN wiring now live in
+  `internal/runconfig` instead of being copied across `budgied`, loadgen,
+  preflight, and cleanup tools; backend/executor alias normalization,
+  command-log executor and worker-ownership support checks/messages,
+  projection rebuild/promotion source aliases, optional broker backend
+  support checks/messages, side-store SQL/NATS-KV aliases,
+  read-cache and post-search index backend aliases,
+  and preflight/bundle target-list parsing,
+  endpoint-based preflight target inference, and membership checks are shared
+  there too. Kafka TLS/SASL flag
+  registration and topic replication-factor validation are now shared in
+  `internal/kafkaconn` instead of being copied across tool binaries. Shared
+  NATS JetStream open/cleanup helpers now live in `internal/natsconn`, covering
+  command-log loadgen and one-shot `budgied` event-store probes while leaving
+  the main server's long-lived NATS connection explicit; preflight now reuses
+  the same NATS connection/security setup instead of calling `nats.Connect`
+  directly. `budgied` also uses the NATS package's canonical command/event
+  stream defaults instead of local string copies, and JetStream option
+  defaulting, command/event stream config builders, and stream
+  ensure/validation merging are shared across the NATS adapters and preflight
+  tooling.
+  Shared synthetic load body/ID helpers now live in
+  `internal/loadutil`, and repeated pretty-JSON/stdout plus atomic report-file
+  output plus strict/lenient report JSON decoding now go through
+  `internal/runreport`; report-check, bundle manifest, and scale-budget reads
+  use shared helpers instead of local copies, and Postgres
+  integration-test schema setup is shared too. Flag-value-before-env precedence,
+  duration env parsing, and SQL/NATS-KV side-store support checks now share
+  `internal/runconfig`, and Kafka command/event runtime open helpers live in
+  `internal/kafkaconn` so commands no longer rebuild franz clients locally;
+  SQL-positioned Kafka event-store setup is shared there too, covering both
+  scalar-compatible and partition-only event offset modes. Command-log scalar
+  allocator aliases are normalized once in `internal/loadmodel`, so budget
+  checks and loadgen runtime evidence no longer carry separate alias tables;
+  command-log load Postgres schema, NATS stream, and Kafka topic naming now
+  share the same `internal/loadmodel` constants/helpers, including Kafka
+  cleanup topic selection.
+  Kafka command/event runtime-plus-partition validation is also shared in
+  `internal/kafkaconn` and reused by `budgied` and command-log loadgen.
+  Command-log load runtime validation, sanitized runtime reporting, Kafka load
+  topic specs, and scalar compatibility audit attachment now live in
+  `internal/loadtest` instead of the loadgen command package.
+  Command-log load backend opening for memory/NATS/Kafka, Redis-backed
+  partition indexing, native command/event store wiring, and the in-memory
+  command-log partition index also live in `internal/loadtest`; loadtest now
+  reuses core's indexed command-log wrapper instead of carrying a second copy,
+  and command/event-log offset listers, including the NATS command/event
+  clients, share the same core normalization and ordering helpers. Core
+  partition listing paths also share one `LogPartition` ordering helper instead
+  of repeating kind/key comparators at each call site, and cursor/broker replay
+  paths share one proto event replay ordering helper instead of duplicating the
+  seq/partition/offset comparator. Event projection target checks now use the
+  same bounded event-partition-offset lister as the ordering helpers instead of
+  open-coding limit-overflow detection in the load runner, and promotion
+  readiness, projection materialization, and the event replay parity runner
+  share the same bounded event-partition lister. Promotion readiness,
+  materialization audit, drain-load
+  snapshots, and drain-load lag checks also share one bounded
+  command-partition-offset helper, and promotion readiness now passes its
+  already-listed offset snapshot into materialization audit instead of listing
+  the same partitions twice; drain-load member cursors now share one
+  partition-offset-to-cursor helper while still refreshing committed offsets
+  from the command log after snapshot assignment, and worker/drain-load
+  assignment-lister paths share one assignment-to-partition normalization
+  helper plus shared assignment constructors for hash, snapshot, drain-load,
+  and worker fallback paths, while SQL/worker claim paths share one claim
+  constructor, and drain-load cursor/snapshot-assignment paths share one
+  lagging-offset filter; hot-thread split checks,
+  command partition
+  metrics, indexed command-log commit reads, cursor replay/head-cursor reads,
+  event partition metrics, and shadow-at-head seeding now use the same
+  normalized offset readers too, with required command-log offset-lister gates
+  sharing the same wrapper in promotion readiness, materialization audit, and
+  drain-load lag/snapshot paths; command partition lag math now lives on the
+  offset type instead of being recomputed by metrics, split checks, offset
+  sorting, and drain-load filters. Metrics emitters also share partition
+  label/sample helpers for command/event partition offsets and hot-partition
+  candidate signals instead of rebuilding the same `kind`/`key`/`signal` maps
+  and metric metadata at each call site.
+  Load-test core setup, including temp/explicit SQLite fallback and Postgres
+  setup (admin connection, disposable schema, `search_path`, and
+  `core.NewPostgres`), now lives in `internal/loadtest`, and
+  command-log load report/config/runtime/stage model types, scalar allocator
+  normalization, executor/assignment normalization, load-shape counts, and
+  stage aggregation plus capped sample-error collection, partition-scoped drain
+  sample formatting, and shared positive integer config defaulting now live in
+  `internal/loadmodel`; the core runner now takes those model types directly
+  instead of carrying compatibility aliases.
+  Command-log promotion-readiness and materialization-audit report/config
+  models are also consumed from `internal/loadmodel` directly, without core
+  re-export aliases. Internet-scale
+  budget schema/loading/formatting and the command-log budget evaluator now
+  live in `internal/scalebudget`, with command/gateway/partition tooling
+  consuming that package directly instead of importing budget policy through
+  `internal/core`; gateway and partition-write load checks now also share the
+  same scale-budget violation/evidence mapping instead of local helper copies.
+  One-shot tooling commands now share interrupt/timeout
+  context setup and timeout capping through `internal/runconfig`. Remaining:
+  deeper command-log load-harness extraction and folding the loadgen/preflight
   binaries into subcommands if desired.
 
 ### 5. Flatten HTTP handler boilerplate
@@ -247,12 +449,16 @@ with zero edits inside core's domain logic.
 - Define the seam: core exposes narrow ports (command submission, event
   append, projection apply); the broker-native machinery implements them from
   its own package(s) (natural home once F2's log-machinery cut exists).
-- Move the remaining load-harness files out of core
-  (`command_log_drain_load.go`, `partition_write_load.go`,
-  `gateway_fanout_load.go` — ~2.5k lines, the unfinished half of direction 3).
+- Move the remaining load-harness file out of core
+  (`command_log_drain_load.go` — ~2k lines, the unfinished half of direction
+  3). `gateway_fanout_load.go` and `partition_write_load.go` have already
+  moved to `internal/loadtest`.
 - Add a CI-checkable guard for the seam, e.g. a `go list`-based test
   asserting that core's domain packages do not import the internet-scale
   packages, so the isolation cannot silently erode.
+- **Guard added 2026-07-03:** `internal/core` now has a direct-import guard
+  preventing it from reaching back into the extracted load-test, report,
+  preflight, run-config, broker-connector, and budget packages.
 - Payoff either way: if the epic is promoted, shadow/hybrid deletion is
   contained; if it is shelved, removal is one commit; and until then, the
   default single-node build carries the path only as unused wiring.

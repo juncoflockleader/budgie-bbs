@@ -3,31 +3,22 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadtest"
+	"github.com/juncoflockleader/budgie-bbs/internal/runevidence"
+	"github.com/juncoflockleader/budgie-bbs/internal/scalebudget"
 )
 
 func TestGatewayReportCheckPassesPromotedReport(t *testing.T) {
 	budgetPath := writeGatewayReportCheckBudget(t)
 	report := passingGatewayReport()
-	report.Evidence.BudgetSHA256 = fileSHA256(t, budgetPath)
-	reportPath := writeGatewayReportCheckJSON(t, "report.json", report)
+	reportPath := writeGatewayReportWithBudgetHash(t, "report.json", budgetPath, report)
 
-	var stdout, stderr bytes.Buffer
-	code := runGateway([]string{
-		"-report-file", reportPath,
-		"-budget-file", budgetPath,
-	}, strings.NewReader(""), &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run exit = %d, stderr = %s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "satisfies gatewayFanout budget") {
-		t.Fatalf("stdout = %q, want success message", stdout.String())
-	}
+	result := runBudgetReportCheckForTest(t, runGateway, reportPath, budgetPath)
+	requireReportCheckExit(t, result, 0)
+	requireReportCheckOutputContains(t, "stdout", result.Stdout, "satisfies gatewayFanout budget")
 }
 
 func TestGatewayReportCheckPassesReportFromStdin(t *testing.T) {
@@ -39,78 +30,49 @@ func TestGatewayReportCheckPassesReportFromStdin(t *testing.T) {
 		t.Fatalf("marshal report: %v", err)
 	}
 
-	var stdout, stderr bytes.Buffer
-	code := runGateway([]string{
+	result := runReportCheckForTest(t, runGateway, []string{
 		"-report-file", "-",
 		"-budget-file", budgetPath,
-	}, bytes.NewReader(data), &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run exit = %d, stderr = %s", code, stderr.String())
-	}
+	}, bytes.NewReader(data))
+	requireReportCheckExit(t, result, 0)
 }
 
 func TestGatewayReportCheckFailsMissingEvidence(t *testing.T) {
 	budgetPath := writeGatewayReportCheckBudget(t)
 	report := passingGatewayReport()
-	report.Evidence = core.GatewayFanoutLoadEvidence{}
-	reportPath := writeGatewayReportCheckJSON(t, "report.json", report)
+	report.Evidence = runevidence.Evidence{}
+	reportPath := writeReportCheckJSON(t, "report.json", report)
 
-	var stdout, stderr bytes.Buffer
-	code := runGateway([]string{
-		"-report-file", reportPath,
-		"-budget-file", budgetPath,
-	}, strings.NewReader(""), &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("run exit = %d, stderr = %s", code, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "gatewayFanout.evidence.gitRevision") {
-		t.Fatalf("stderr = %q, want evidence violation", stderr.String())
-	}
+	result := runBudgetReportCheckForTest(t, runGateway, reportPath, budgetPath)
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr, "gatewayFanout.evidence.gitRevision")
 }
 
 func TestGatewayReportCheckFailsWrongBudgetEvidence(t *testing.T) {
 	budgetPath := writeGatewayReportCheckBudget(t)
 	report := passingGatewayReport()
 	report.Evidence.BudgetFile = "ops/other-budget.json"
-	report.Evidence.BudgetSHA256 = fileSHA256(t, budgetPath)
-	reportPath := writeGatewayReportCheckJSON(t, "report.json", report)
+	reportPath := writeGatewayReportWithBudgetHash(t, "report.json", budgetPath, report)
 
-	var stdout, stderr bytes.Buffer
-	code := runGateway([]string{
-		"-report-file", reportPath,
-		"-budget-file", budgetPath,
-	}, strings.NewReader(""), &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("run exit = %d, stderr = %s", code, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "gatewayFanout.evidence.budgetFile") {
-		t.Fatalf("stderr = %q, want budget-file evidence violation", stderr.String())
-	}
+	result := runBudgetReportCheckForTest(t, runGateway, reportPath, budgetPath)
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr, "gatewayFanout.evidence.budgetFile")
 }
 
 func TestGatewayReportCheckFailsWrongBudgetHashEvidence(t *testing.T) {
 	budgetPath := writeGatewayReportCheckBudget(t)
 	report := passingGatewayReport()
 	report.Evidence.BudgetSHA256 = strings.Repeat("0", 64)
-	reportPath := writeGatewayReportCheckJSON(t, "report.json", report)
+	reportPath := writeReportCheckJSON(t, "report.json", report)
 
-	var stdout, stderr bytes.Buffer
-	code := runGateway([]string{
-		"-report-file", reportPath,
-		"-budget-file", budgetPath,
-	}, strings.NewReader(""), &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("run exit = %d, stderr = %s", code, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "gatewayFanout.evidence.budgetSha256") {
-		t.Fatalf("stderr = %q, want budget hash evidence violation", stderr.String())
-	}
+	result := runBudgetReportCheckForTest(t, runGateway, reportPath, budgetPath)
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr, "gatewayFanout.evidence.budgetSha256")
 }
 
 func TestGatewayReportCheckFailsUnderBudgetFanout(t *testing.T) {
 	budgetPath := writeGatewayReportCheckBudget(t)
 	report := passingGatewayReport()
-	report.Evidence.BudgetSHA256 = fileSHA256(t, budgetPath)
 	report.PublishDurationMS = 125
 	report.QueueDepthMax = 3
 	report.QueuedDeliveries = 9999
@@ -118,17 +80,11 @@ func TestGatewayReportCheckFailsUnderBudgetFanout(t *testing.T) {
 	report.Subscribers = 99999
 	report.HotScopeSubscribers = 9999
 	report.TargetConnections = 999999
-	reportPath := writeGatewayReportCheckJSON(t, "report.json", report)
+	reportPath := writeGatewayReportWithBudgetHash(t, "report.json", budgetPath, report)
 
-	var stdout, stderr bytes.Buffer
-	code := runGateway([]string{
-		"-report-file", reportPath,
-		"-budget-file", budgetPath,
-	}, strings.NewReader(""), &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("run exit = %d, stderr = %s", code, stderr.String())
-	}
-	for _, want := range []string{
+	result := runBudgetReportCheckForTest(t, runGateway, reportPath, budgetPath)
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr,
 		"gatewayFanout.maxPublishMs",
 		"gatewayFanout.maxIdleDeliveries",
 		"gatewayFanout.maxQueueDepthMax",
@@ -137,36 +93,21 @@ func TestGatewayReportCheckFailsUnderBudgetFanout(t *testing.T) {
 		"gatewayFanout.minHotScopeSubscribers",
 		"gatewayFanout.targetConnections",
 		"gatewayFanout.maxGatewayNodesForTarget",
-	} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Fatalf("stderr = %q, want %s", stderr.String(), want)
-		}
-	}
+	)
 }
 
 func TestGatewayReportCheckRejectsUnknownReportFields(t *testing.T) {
-	reportPath := filepath.Join(t.TempDir(), "report.json")
-	if err := os.WriteFile(reportPath, []byte(`{"config":{},"unexpected":true}`), 0o644); err != nil {
-		t.Fatalf("write report: %v", err)
-	}
+	reportPath := writeReportCheckRaw(t, "report.json", []byte(`{"config":{},"unexpected":true}`))
 	budgetPath := writeGatewayReportCheckBudget(t)
 
-	var stdout, stderr bytes.Buffer
-	code := runGateway([]string{
-		"-report-file", reportPath,
-		"-budget-file", budgetPath,
-	}, strings.NewReader(""), &stdout, &stderr)
-	if code != 2 {
-		t.Fatalf("run exit = %d, stderr = %s", code, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), `unknown field "unexpected"`) {
-		t.Fatalf("stderr = %q, want unknown-field error", stderr.String())
-	}
+	result := runBudgetReportCheckForTest(t, runGateway, reportPath, budgetPath)
+	requireReportCheckExit(t, result, 2)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr, `unknown field "unexpected"`)
 }
 
-func passingGatewayReport() core.GatewayFanoutLoadReport {
-	return core.GatewayFanoutLoadReport{
-		Config: core.GatewayFanoutLoadConfig{
+func passingGatewayReport() loadtest.GatewayFanoutLoadReport {
+	return loadtest.GatewayFanoutLoadReport{
+		Config: loadtest.GatewayFanoutLoadConfig{
 			HotSubscribers:    10000,
 			IdleSubscribers:   90000,
 			BufferSize:        2,
@@ -175,7 +116,7 @@ func passingGatewayReport() core.GatewayFanoutLoadReport {
 			IdleScopePrefix:   "board:idle",
 			TargetConnections: 1000000,
 		},
-		Evidence: core.GatewayFanoutLoadEvidence{
+		Evidence: runevidence.Evidence{
 			Tool:         "budgie-gateway-loadgen",
 			BudgetFile:   "ops/internet-scale-budgets.example.json",
 			BudgetSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -202,8 +143,8 @@ func passingGatewayReport() core.GatewayFanoutLoadReport {
 
 func writeGatewayReportCheckBudget(t *testing.T) string {
 	t.Helper()
-	return writeGatewayReportCheckJSON(t, "budget.json", core.ScaleBudgets{
-		GatewayFanout: &core.GatewayFanoutBudget{
+	return writeReportCheckJSON(t, "budget.json", scalebudget.ScaleBudgets{
+		GatewayFanout: &scalebudget.GatewayFanoutBudget{
 			MaxPublishMS:             100,
 			MaxEstimatedDrops:        20000,
 			MaxIdleDeliveries:        0,
@@ -218,15 +159,8 @@ func writeGatewayReportCheckBudget(t *testing.T) string {
 	})
 }
 
-func writeGatewayReportCheckJSON(t *testing.T, name string, value any) string {
+func writeGatewayReportWithBudgetHash(t *testing.T, name, budgetPath string, report loadtest.GatewayFanoutLoadReport) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), name)
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal %s: %v", name, err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
-	return path
+	report.Evidence.BudgetSHA256 = fileSHA256(t, budgetPath)
+	return writeReportCheckJSON(t, name, report)
 }

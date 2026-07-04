@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
@@ -148,15 +147,10 @@ func TestCommandLogRequiresPartitionCountForPhysicalOperations(t *testing.T) {
 	log := NewCommandLog(&fakeCommandLogClient{}, CommandLogOptions{CommandTopic: "budgie.commands"})
 
 	_, err := log.FetchPartition(ctx, partition, 0, 10)
-	if err == nil || !strings.Contains(err.Error(), "partition count is required") {
-		t.Fatalf("FetchPartition err = %v, want partition count requirement", err)
-	}
-	if err := log.CommitPartition(ctx, partition, 1); err == nil || !strings.Contains(err.Error(), "partition count is required") {
-		t.Fatalf("CommitPartition err = %v, want partition count requirement", err)
-	}
-	if _, err := log.CommittedOffset(ctx, partition); err == nil || !strings.Contains(err.Error(), "partition count is required") {
-		t.Fatalf("CommittedOffset err = %v, want partition count requirement", err)
-	}
+	requireErrorContains(t, err, "partition count is required")
+	requireErrorContains(t, log.CommitPartition(ctx, partition, 1), "partition count is required")
+	_, err = log.CommittedOffset(ctx, partition)
+	requireErrorContains(t, err, "partition count is required")
 }
 
 func TestCommandLogListPartitionsDelegatesCandidates(t *testing.T) {
@@ -179,9 +173,7 @@ func TestCommandLogListPartitionsDelegatesCandidates(t *testing.T) {
 	}
 
 	_, err = NewCommandLog(&fakeCommandLogClient{}, CommandLogOptions{}).ListCommandPartitions(ctx, 5)
-	if err == nil || !strings.Contains(err.Error(), "partition listing requires candidates") {
-		t.Fatalf("ListCommandPartitions without candidates err = %v, want requirement", err)
-	}
+	requireErrorContains(t, err, "partition listing requires candidates")
 }
 
 type fakeCommandLogClient struct {

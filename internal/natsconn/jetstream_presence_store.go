@@ -83,22 +83,10 @@ func NewJetStreamPresenceStore(ctx context.Context, conn *Conn, options JetStrea
 	if conn == nil || conn.nc == nil {
 		return nil, fmt.Errorf("nats presence store: nil connection")
 	}
-	bucket := strings.TrimSpace(options.Bucket)
-	if bucket == "" {
-		bucket = defaultJetStreamPresenceStoreBucket
-	}
-	wait := options.Wait
-	if wait <= 0 {
-		wait = defaultJetStreamEventLogWait
-	}
-	replicas := options.Replicas
-	if replicas <= 0 {
-		replicas = 1
-	}
-	ttl := options.TTL
-	if ttl <= 0 {
-		ttl = defaultJetStreamPresenceStoreTTL
-	}
+	bucket := JetStreamName(options.Bucket, defaultJetStreamPresenceStoreBucket)
+	wait := jetStreamWait(options.Wait)
+	replicas := jetStreamReplicas(options.Replicas)
+	ttl := jetStreamDuration(options.TTL, defaultJetStreamPresenceStoreTTL)
 	js, err := conn.nc.JetStream(nats.MaxWait(wait))
 	if err != nil {
 		return nil, err

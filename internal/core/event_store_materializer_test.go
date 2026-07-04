@@ -2,19 +2,40 @@ package core
 
 import (
 	"context"
-	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
+func newEventStoreProjectionWorkerForTest(t *testing.T, c *Core, store EventStore, source string, batchSize, partitionLimit int) *EventStoreProjectionWorker {
+	t.Helper()
+	worker, err := NewEventStoreProjectionWorker(EventStoreProjectionWorkerConfig{
+		Core:           c,
+		Store:          store,
+		Source:         source,
+		BatchSize:      batchSize,
+		PartitionLimit: partitionLimit,
+	})
+	if err != nil {
+		t.Fatalf("NewEventStoreProjectionWorker: %v", err)
+	}
+	return worker
+}
+
+func drainEventStoreProjectionWorkerOnce(t *testing.T, ctx context.Context, worker *EventStoreProjectionWorker, label string) []EventStorePartitionMaterializationResult {
+	t.Helper()
+	results, err := worker.DrainOnce(ctx)
+	if err != nil {
+		t.Fatalf("%s: %v", label, err)
+	}
+	return results
+}
+
 func TestMaterializeEventStorePartitionFailsClosedOnOffsetGap(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	client := NewMemoryBrokerEventLogClient()
@@ -22,7 +43,7 @@ func TestMaterializeEventStorePartitionFailsClosedOnOffsetGap(t *testing.T) {
 	if err := store.SeedEventPartitionOffset(ctx, partition, 3); err != nil {
 		t.Fatalf("seed event partition: %v", err)
 	}
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_gap_thread",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -35,19 +56,15 @@ func TestMaterializeEventStorePartitionFailsClosedOnOffsetGap(t *testing.T) {
 			TS:       1234,
 		},
 		TS: 1234,
-	}); err != nil {
-		t.Fatalf("append broker event: %v", err)
-	}
+	}, "append broker event")
 
-	_, err = c.MaterializeEventStorePartition(ctx, store, EventStorePartitionMaterializationConfig{
+	_, err := c.MaterializeEventStorePartition(ctx, store, EventStorePartitionMaterializationConfig{
 		Source:    "gap-test",
 		Partition: partition,
 		Limit:     10,
 	})
-	if err == nil || !strings.Contains(err.Error(), "offset gap") {
-		t.Fatalf("materialize err = %v, want offset gap", err)
-	}
-	thread, err := getThread(c.DB, "thr_gap_thread")
+	requireErrorContains(t, err, "offset gap")
+	thread, err := projections.GetThread(c.DB, "thr_gap_thread")
 	if err != nil {
 		t.Fatalf("get thread: %v", err)
 	}
@@ -58,11 +75,7 @@ func TestMaterializeEventStorePartitionFailsClosedOnOffsetGap(t *testing.T) {
 
 func TestSeedEventStoreProjectionWatermarksFromExistingPartitionOffsets(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	if _, err := qExec(c.DB,
@@ -76,7 +89,7 @@ func TestSeedEventStoreProjectionWatermarksFromExistingPartitionOffsets(t *testi
 	if err := store.SeedEventPartitionOffset(ctx, partition, 1); err != nil {
 		t.Fatalf("seed broker event partition: %v", err)
 	}
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_seeded_thread",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -89,9 +102,7 @@ func TestSeedEventStoreProjectionWatermarksFromExistingPartitionOffsets(t *testi
 			TS:       1234,
 		},
 		TS: 1234,
-	}); err != nil {
-		t.Fatalf("append broker event: %v", err)
-	}
+	}, "append broker event")
 
 	seeded, err := c.seedEventStoreProjectionWatermarksFromEventPartitionOffsets(ctx, "seed-test")
 	if err != nil {
@@ -111,7 +122,7 @@ func TestSeedEventStoreProjectionWatermarksFromExistingPartitionOffsets(t *testi
 	if result.StartedOffset != 1 || result.LastOffset != 2 || result.Applied != 1 {
 		t.Fatalf("result = %+v, want seeded offset 1 then applied offset 2", result)
 	}
-	thread, err := getThread(c.DB, "thr_seeded_thread")
+	thread, err := projections.GetThread(c.DB, "thr_seeded_thread")
 	if err != nil {
 		t.Fatalf("get thread: %v", err)
 	}
@@ -121,11 +132,7 @@ func TestSeedEventStoreProjectionWatermarksFromExistingPartitionOffsets(t *testi
 }
 
 func TestRecordPostActivityFromEventComputesTrustInline(t *testing.T) {
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
@@ -180,14 +187,10 @@ func TestRecordPostActivityFromEventComputesTrustInline(t *testing.T) {
 
 func TestEventStoreProjectionWorkerDrainsBrokerPartitionsToSQLProjections(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	store := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_worker_thread",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -200,10 +203,8 @@ func TestEventStoreProjectionWorkerDrainsBrokerPartitionsToSQLProjections(t *tes
 			TS:       1234,
 		},
 		TS: 1234,
-	}); err != nil {
-		t.Fatalf("append thread event: %v", err)
-	}
-	if _, err := store.Append(ctx, EventAppend{
+	}, "append thread event")
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_worker_post",
 		Kind:   proto.EvtPostAppended,
 		Scopes: []string{"board:general", "thread:thr_worker_thread"},
@@ -218,35 +219,21 @@ func TestEventStoreProjectionWorkerDrainsBrokerPartitionsToSQLProjections(t *tes
 			TS:          1235,
 		},
 		TS: 1235,
-	}); err != nil {
-		t.Fatalf("append post event: %v", err)
-	}
+	}, "append post event")
 
-	worker, err := NewEventStoreProjectionWorker(EventStoreProjectionWorkerConfig{
-		Core:           c,
-		Store:          store,
-		Source:         "worker-test",
-		BatchSize:      1,
-		PartitionLimit: 10,
-	})
-	if err != nil {
-		t.Fatalf("NewEventStoreProjectionWorker: %v", err)
-	}
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("DrainOnce: %v", err)
-	}
+	worker := newEventStoreProjectionWorkerForTest(t, c, store, "worker-test", 1, 10)
+	results := drainEventStoreProjectionWorkerOnce(t, ctx, worker, "DrainOnce")
 	if got := eventStoreProjectionAppliedTotal(results); got != 2 {
 		t.Fatalf("applied total = %d results=%+v, want two projected broker events", got, results)
 	}
-	thread, err := getThread(c.DB, "thr_worker_thread")
+	thread, err := projections.GetThread(c.DB, "thr_worker_thread")
 	if err != nil {
 		t.Fatalf("get thread: %v", err)
 	}
 	if thread == nil || thread.Title != "Worker thread" || thread.PostCount != 1 || thread.LastSeq != 2 {
 		t.Fatalf("thread = %+v, want materialized thread with one post", thread)
 	}
-	post, err := getPost(c.DB, "pst_worker_post")
+	post, err := projections.GetPost(c.DB, "pst_worker_post")
 	if err != nil {
 		t.Fatalf("get post: %v", err)
 	}
@@ -254,10 +241,7 @@ func TestEventStoreProjectionWorkerDrainsBrokerPartitionsToSQLProjections(t *tes
 		t.Fatalf("post = %+v, want materialized broker post", post)
 	}
 
-	second, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("second DrainOnce: %v", err)
-	}
+	second := drainEventStoreProjectionWorkerOnce(t, ctx, worker, "second DrainOnce")
 	if got := eventStoreProjectionAppliedTotal(second); got != 0 {
 		t.Fatalf("second applied total = %d results=%+v, want checkpointed no-op", got, second)
 	}
@@ -265,14 +249,10 @@ func TestEventStoreProjectionWorkerDrainsBrokerPartitionsToSQLProjections(t *tes
 
 func TestEventStoreProjectionWorkerIndexesPartitionOnlyCompatibilityEvents(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	store := NewBrokerEventStore(&partitionOnlyBrokerEventLogClient{inner: NewMemoryBrokerEventLogClient()})
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_partition_only_thread",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -285,10 +265,8 @@ func TestEventStoreProjectionWorkerIndexesPartitionOnlyCompatibilityEvents(t *te
 			TS:       1234,
 		},
 		TS: 1234,
-	}); err != nil {
-		t.Fatalf("append thread event: %v", err)
-	}
-	if _, err := store.Append(ctx, EventAppend{
+	}, "append thread event")
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_partition_only_post",
 		Kind:   proto.EvtPostAppended,
 		Scopes: []string{"board:general", "thread:thr_partition_only_thread"},
@@ -303,24 +281,10 @@ func TestEventStoreProjectionWorkerIndexesPartitionOnlyCompatibilityEvents(t *te
 			TS:          1235,
 		},
 		TS: 1235,
-	}); err != nil {
-		t.Fatalf("append post event: %v", err)
-	}
+	}, "append post event")
 
-	worker, err := NewEventStoreProjectionWorker(EventStoreProjectionWorkerConfig{
-		Core:           c,
-		Store:          store,
-		Source:         "partition-only-test",
-		BatchSize:      10,
-		PartitionLimit: 10,
-	})
-	if err != nil {
-		t.Fatalf("NewEventStoreProjectionWorker: %v", err)
-	}
-	results, err := worker.DrainOnce(ctx)
-	if err != nil {
-		t.Fatalf("DrainOnce: %v", err)
-	}
+	worker := newEventStoreProjectionWorkerForTest(t, c, store, "partition-only-test", 10, 10)
+	results := drainEventStoreProjectionWorkerOnce(t, ctx, worker, "DrainOnce")
 	if got := eventStoreProjectionAppliedTotal(results); got != 2 {
 		t.Fatalf("applied total = %d results=%+v, want two projected broker events", got, results)
 	}
@@ -345,7 +309,7 @@ func TestEventStoreProjectionWorkerIndexesPartitionOnlyCompatibilityEvents(t *te
 		offsets[0].LastOffset != 2 {
 		t.Fatalf("compatibility partition offsets = %+v, want board/general tail 2", offsets)
 	}
-	thread, err := getThread(c.DB, "thr_partition_only_thread")
+	thread, err := projections.GetThread(c.DB, "thr_partition_only_thread")
 	if err != nil {
 		t.Fatalf("get thread: %v", err)
 	}
@@ -356,18 +320,14 @@ func TestEventStoreProjectionWorkerIndexesPartitionOnlyCompatibilityEvents(t *te
 
 func TestCommandLogDrainEventProjectionWaitsForSourcePartitionOffsets(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	client := &shortBatchBrokerEventLogClient{
 		inner: NewMemoryBrokerEventLogClient(),
 		max:   1,
 	}
 	store := NewBrokerEventStore(client)
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_short_thread",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -380,10 +340,8 @@ func TestCommandLogDrainEventProjectionWaitsForSourcePartitionOffsets(t *testing
 			TS:       1234,
 		},
 		TS: 1234,
-	}); err != nil {
-		t.Fatalf("append thread event: %v", err)
-	}
-	if _, err := store.Append(ctx, EventAppend{
+	}, "append thread event")
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_short_post",
 		Kind:   proto.EvtPostAppended,
 		Scopes: []string{"board:general", "thread:thr_short_thread"},
@@ -398,15 +356,13 @@ func TestCommandLogDrainEventProjectionWaitsForSourcePartitionOffsets(t *testing
 			TS:          1235,
 		},
 		TS: 1235,
-	}); err != nil {
-		t.Fatalf("append post event: %v", err)
-	}
+	}, "append post event")
 
-	stage, err := c.projectCommandLogDrainLoadEvents(ctx, store, CommandLogDrainLoadConfig{
+	stage, err := c.projectCommandLogDrainLoadEvents(ctx, store, loadmodel.CommandLogDrainLoadConfig{
 		Boards:           1,
 		CommandsPerBoard: 1,
 		BatchSize:        10,
-		ExecutorMode:     CommandLogDrainExecutorNative,
+		ExecutorMode:     loadmodel.CommandLogDrainExecutorNative,
 	})
 	if err != nil {
 		t.Fatalf("projectCommandLogDrainLoadEvents: %v", err)
@@ -414,7 +370,7 @@ func TestCommandLogDrainEventProjectionWaitsForSourcePartitionOffsets(t *testing
 	if stage.AppliedEvents != 2 {
 		t.Fatalf("applied events = %d stage=%+v, want both short-read events", stage.AppliedEvents, stage)
 	}
-	post, err := getPost(c.DB, "pst_short_post")
+	post, err := projections.GetPost(c.DB, "pst_short_post")
 	if err != nil {
 		t.Fatalf("get post: %v", err)
 	}
@@ -425,14 +381,10 @@ func TestCommandLogDrainEventProjectionWaitsForSourcePartitionOffsets(t *testing
 
 func TestEventStoreProjectionWorkerFailsClosedOnPartitionLimit(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 
 	store := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_limit_general",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -445,10 +397,8 @@ func TestEventStoreProjectionWorkerFailsClosedOnPartitionLimit(t *testing.T) {
 			TS:       1234,
 		},
 		TS: 1234,
-	}); err != nil {
-		t.Fatalf("append general event: %v", err)
-	}
-	if _, err := store.Append(ctx, EventAppend{
+	}, "append general event")
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_limit_other",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:other"},
@@ -461,29 +411,16 @@ func TestEventStoreProjectionWorkerFailsClosedOnPartitionLimit(t *testing.T) {
 			TS:       1235,
 		},
 		TS: 1235,
-	}); err != nil {
-		t.Fatalf("append other event: %v", err)
-	}
+	}, "append other event")
 
-	worker, err := NewEventStoreProjectionWorker(EventStoreProjectionWorkerConfig{
-		Core:           c,
-		Store:          store,
-		Source:         "limit-test",
-		BatchSize:      10,
-		PartitionLimit: 1,
-	})
-	if err != nil {
-		t.Fatalf("NewEventStoreProjectionWorker: %v", err)
-	}
+	worker := newEventStoreProjectionWorkerForTest(t, c, store, "limit-test", 10, 1)
 	results, err := worker.MaterializeOnce(ctx)
-	if err == nil || !strings.Contains(err.Error(), "partition limit") {
-		t.Fatalf("MaterializeOnce err = %v, want partition limit failure", err)
-	}
+	requireErrorContains(t, err, "partition limit")
 	if len(results) != 0 {
 		t.Fatalf("results = %+v, want no partial projection batches", results)
 	}
 	for _, id := range []string{"thr_limit_general", "thr_limit_other"} {
-		thread, err := getThread(c.DB, id)
+		thread, err := projections.GetThread(c.DB, id)
 		if err != nil {
 			t.Fatalf("get thread %s: %v", id, err)
 		}
@@ -563,11 +500,7 @@ func (c *partitionOnlyBrokerEventLogClient) ListEventPartitionOffsets(ctx contex
 
 func TestMaterializeEventStorePartitionEnqueuesPostCommittedSideEffects(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(t.TempDir() + "/budgie.db")
-	if err != nil {
-		t.Fatalf("new core: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t)
 	alice, err := c.RegisterUser("alice", "pw")
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
@@ -578,7 +511,7 @@ func TestMaterializeEventStorePartitionEnqueuesPostCommittedSideEffects(t *testi
 	}
 
 	store := NewBrokerEventStore(NewMemoryBrokerEventLogClient())
-	if _, err := store.Append(ctx, EventAppend{
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_side_effect_thread",
 		Kind:   proto.EvtThreadNew,
 		Scopes: []string{"board:general"},
@@ -591,10 +524,8 @@ func TestMaterializeEventStorePartitionEnqueuesPostCommittedSideEffects(t *testi
 			TS:       1234,
 		},
 		TS: 1234,
-	}); err != nil {
-		t.Fatalf("append thread event: %v", err)
-	}
-	if _, err := store.Append(ctx, EventAppend{
+	}, "append thread event")
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_side_effect_root",
 		Kind:   proto.EvtPostAppended,
 		Scopes: []string{"board:general", "thread:thr_side_effect_thread"},
@@ -609,10 +540,8 @@ func TestMaterializeEventStorePartitionEnqueuesPostCommittedSideEffects(t *testi
 			TS:          1235,
 		},
 		TS: 1235,
-	}); err != nil {
-		t.Fatalf("append root post event: %v", err)
-	}
-	if _, err := store.Append(ctx, EventAppend{
+	}, "append root post event")
+	appendCoreTestEvent(t, ctx, store, EventAppend{
 		ID:     "evt_side_effect_reply",
 		Kind:   proto.EvtPostAppended,
 		Scopes: []string{"board:general", "thread:thr_side_effect_thread"},
@@ -628,9 +557,7 @@ func TestMaterializeEventStorePartitionEnqueuesPostCommittedSideEffects(t *testi
 			TS:          1236,
 		},
 		TS: 1236,
-	}); err != nil {
-		t.Fatalf("append reply post event: %v", err)
-	}
+	}, "append reply post event")
 
 	result, err := c.MaterializeEventStorePartition(ctx, store, EventStorePartitionMaterializationConfig{
 		Source:    "side-effect-test",

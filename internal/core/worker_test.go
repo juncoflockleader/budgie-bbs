@@ -2,11 +2,11 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/runconfig"
 
 	_ "github.com/lib/pq"
 )
@@ -85,28 +85,19 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 // via search_path; the schema is dropped on cleanup.
 func withSchema(t *testing.T, baseDSN, prefix string) string {
 	t.Helper()
-	schema := fmt.Sprintf("%s_%d", prefix, os.Getpid())
-
 	admin, err := OpenPostgres(baseDSN)
 	if err != nil {
 		t.Fatalf("open admin: %v", err)
 	}
-	if _, err := admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE"); err != nil {
+	schema, cleanup, err := runconfig.PreparePostgresSchema(context.Background(), admin, "", prefix, false, t.Logf)
+	if err != nil {
 		admin.Close()
-		t.Fatalf("reset schema: %v", err)
-	}
-	if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
-		admin.Close()
-		t.Fatalf("create schema: %v", err)
+		t.Fatalf("prepare schema: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
+		cleanup()
 		admin.Close()
 	})
 
-	sep := "?"
-	if strings.Contains(baseDSN, "?") {
-		sep = "&"
-	}
-	return baseDSN + sep + "search_path=" + schema
+	return runconfig.WithSearchPath(baseDSN, schema)
 }

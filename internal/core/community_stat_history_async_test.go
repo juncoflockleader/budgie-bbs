@@ -1,17 +1,12 @@
 package core
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 func TestAsyncCommunityStatHistorySnapshotsUseCoalescedOutbox(t *testing.T) {
-	c, err := New(filepath.Join(t.TempDir(), "community-stat-history.db"), WithAsyncCommunityStatHistory())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer c.DB.Close()
+	c := newCoreTestCore(t, WithAsyncCommunityStatHistory())
 
 	if _, err := c.RegisterUser("alice", "pw"); err != nil {
 		t.Fatalf("register user: %v", err)

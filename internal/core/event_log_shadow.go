@@ -64,22 +64,7 @@ func (b *eventLogShadowBus) mirror(evt *proto.Event) {
 		})
 		return
 	}
-	shadow, err := b.shadow.Append(context.Background(), eventAppendFromEvent(primary))
-	if err != nil {
-		recordEventParityIssue(b.reporter, EventParityIssue{
-			Kind:          EventParityAppendError,
-			Event:         primary.Kind,
-			Partition:     logPartitionFromEvent(primary),
-			PrimarySeq:    primary.Seq,
-			PrimaryOffset: primary.PartitionOffset,
-			Message:       "shadow append failed",
-			Err:           err.Error(),
-		})
-		return
-	}
-	if issue, ok := compareEventParity(primary, shadow); ok {
-		recordEventParityIssue(b.reporter, issue)
-	}
+	appendEventLogShadow(context.Background(), b.shadow, b.reporter, primary)
 }
 
 func fetchEventBySeq(ctx context.Context, store EventStore, seq int64) (*proto.Event, error) {
@@ -121,7 +106,7 @@ func seedShadowParityAtHead(ctx context.Context, primary *SQLEventStore, shadow 
 	if primary == nil || runner == nil {
 		return nil
 	}
-	offsets, err := primary.ListEventPartitionOffsets(ctx, limit)
+	offsets, _, err := listEventPartitionOffsets(ctx, primary, limit)
 	if err != nil {
 		return err
 	}

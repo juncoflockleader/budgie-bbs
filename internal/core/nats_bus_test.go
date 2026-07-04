@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -13,6 +14,29 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+func marshalNATSBusEventEnvelope(t *testing.T, node string, scopes []string, event proto.EventKind, seq int64, payload any, ts int64) []byte {
+	t.Helper()
+	body, err := json.Marshal(proto.OutboundMessage{
+		Kind:    "event",
+		Event:   event,
+		Seq:     seq,
+		Payload: payload,
+		TS:      ts,
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	raw, err := json.Marshal(natsEnvelope{
+		Node:   node,
+		Scopes: scopes,
+		Body:   body,
+	})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	return raw
+}
 
 func TestNATSBusPublishSendsOneEnvelopeAndLocalEvent(t *testing.T) {
 	conn := &fakeNATSConn{}
@@ -54,7 +78,7 @@ func TestNATSBusPublishSendsOneEnvelopeAndLocalEvent(t *testing.T) {
 		natsSubjectForScope("board:general"),
 		natsSubjectForScope("thread:thr_1"),
 	}
-	if got := conn.publishedSubjects(); !equalStringSlices(got, wantSubjects) {
+	if got := conn.publishedSubjects(); !slices.Equal(sortStrings(got), sortStrings(wantSubjects)) {
 		t.Fatalf("subjects = %#v, want %#v", got, wantSubjects)
 	}
 	var env natsEnvelope
@@ -89,24 +113,7 @@ func TestNATSBusOnRemotePublishesTypedLocalEvent(t *testing.T) {
 		ContentType: "markup",
 		TS:          1000,
 	}
-	body, err := json.Marshal(proto.OutboundMessage{
-		Kind:    "event",
-		Event:   proto.EvtPostAppended,
-		Seq:     42,
-		Payload: payload,
-		TS:      1000,
-	})
-	if err != nil {
-		t.Fatalf("marshal body: %v", err)
-	}
-	raw, err := json.Marshal(natsEnvelope{
-		Node:   "node_a",
-		Scopes: []string{"board:general", "thread:thr_1"},
-		Body:   body,
-	})
-	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
-	}
+	raw := marshalNATSBusEventEnvelope(t, "node_a", []string{"board:general", "thread:thr_1"}, proto.EvtPostAppended, 42, payload, 1000)
 
 	bus.onRemote(raw)
 
@@ -136,24 +143,8 @@ func TestNATSBusOnRemoteSkipsSelfAndDoesNotRepublish(t *testing.T) {
 	sub := bus.Subscribe([]string{"thread:thr_1"})
 	defer bus.Unsubscribe(sub)
 
-	body, err := json.Marshal(proto.OutboundMessage{
-		Kind:    "event",
-		Event:   proto.EvtPostAppended,
-		Seq:     42,
-		Payload: &proto.PostAppendedPayload{ID: "pst_1", Thread: "thr_1", Author: "alice", Body: "hello", ContentType: "markup", TS: 1000},
-		TS:      1000,
-	})
-	if err != nil {
-		t.Fatalf("marshal body: %v", err)
-	}
-	raw, err := json.Marshal(natsEnvelope{
-		Node:   "node_a",
-		Scopes: []string{"thread:thr_1"},
-		Body:   body,
-	})
-	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
-	}
+	raw := marshalNATSBusEventEnvelope(t, "node_a", []string{"thread:thr_1"}, proto.EvtPostAppended, 42,
+		&proto.PostAppendedPayload{ID: "pst_1", Thread: "thr_1", Author: "alice", Body: "hello", ContentType: "markup", TS: 1000}, 1000)
 
 	bus.onRemote(raw)
 
@@ -172,24 +163,8 @@ func TestNATSBusOnRemoteDeduplicatesMultiScopeDeliveries(t *testing.T) {
 	sub := bus.Subscribe([]string{"board:general", "thread:thr_1"})
 	defer bus.Unsubscribe(sub)
 
-	body, err := json.Marshal(proto.OutboundMessage{
-		Kind:    "event",
-		Event:   proto.EvtPostAppended,
-		Seq:     42,
-		Payload: &proto.PostAppendedPayload{ID: "pst_1", Thread: "thr_1", Author: "alice", Body: "hello", ContentType: "markup", TS: 1000},
-		TS:      1000,
-	})
-	if err != nil {
-		t.Fatalf("marshal body: %v", err)
-	}
-	raw, err := json.Marshal(natsEnvelope{
-		Node:   "node_a",
-		Scopes: []string{"board:general", "thread:thr_1"},
-		Body:   body,
-	})
-	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
-	}
+	raw := marshalNATSBusEventEnvelope(t, "node_a", []string{"board:general", "thread:thr_1"}, proto.EvtPostAppended, 42,
+		&proto.PostAppendedPayload{ID: "pst_1", Thread: "thr_1", Author: "alice", Body: "hello", ContentType: "markup", TS: 1000}, 1000)
 
 	bus.onRemote(raw)
 	bus.onRemote(raw)
@@ -250,18 +225,18 @@ func TestNATSBusStartTracksLocalScopeUnion(t *testing.T) {
 
 	subA := bus.Subscribe([]string{"thread:thr_1", "board:general"})
 	want := []string{natsSubjectForScope("board:general"), natsSubjectForScope("thread:thr_1")}
-	if got := conn.subscribedSubjects(); !equalStringSlices(got, want) {
+	if got := conn.subscribedSubjects(); !slices.Equal(sortStrings(got), sortStrings(want)) {
 		t.Fatalf("subscribed subjects after subA = %#v, want %#v", got, want)
 	}
 
 	subB := bus.Subscribe([]string{"thread:thr_1"})
-	if got := conn.subscribedSubjects(); !equalStringSlices(got, want) {
+	if got := conn.subscribedSubjects(); !slices.Equal(sortStrings(got), sortStrings(want)) {
 		t.Fatalf("duplicate scope should not add upstream subscription: got %#v want %#v", got, want)
 	}
 
 	bus.AddScopes(subB, []string{"chat:lobby"})
 	want = []string{natsSubjectForScope("board:general"), natsSubjectForScope("chat:lobby"), natsSubjectForScope("thread:thr_1")}
-	if got := conn.subscribedSubjects(); !equalStringSlices(got, want) {
+	if got := conn.subscribedSubjects(); !slices.Equal(sortStrings(got), sortStrings(want)) {
 		t.Fatalf("subscribed subjects after chat add = %#v, want %#v", got, want)
 	}
 
@@ -283,7 +258,7 @@ func TestNATSBusStartTracksLocalScopeUnion(t *testing.T) {
 
 	conn.resetUnsubscribed()
 	subC := bus.Subscribe([]string{"presence:global"})
-	if got := conn.subscribedSubjects(); !sliceContains(got, natsSubjectForScope("presence:global")) {
+	if got := conn.subscribedSubjects(); !slices.Contains(got, natsSubjectForScope("presence:global")) {
 		t.Fatalf("presence scope was not subscribed: %#v", got)
 	}
 	bus.Unsubscribe(subC)
@@ -331,14 +306,11 @@ func TestNATSOutageKeepsDurableReplayAuthoritative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register alice: %v", err)
 	}
-	raw, err := json.Marshal(proto.CreateThreadPayload{
+	raw := marshalCoreTestJSON(t, "marshal create thread", proto.CreateThreadPayload{
 		Board: "general",
 		Title: "nats outage replay",
 		Body:  "durable replay repairs missing live fanout",
 	})
-	if err != nil {
-		t.Fatalf("marshal create thread: %v", err)
-	}
 
 	failuresBefore := metrics.RemotePublishFailures.Value()
 	reply := writer.ExecCmd(ctx, alice, proto.CmdCreateThread, raw, "cid-nats-outage")
@@ -449,29 +421,6 @@ func (c *fakeNATSConn) resetUnsubscribed() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.unsubs = map[string]int{}
-}
-
-func equalStringSlices(got, want []string) bool {
-	got = sortStrings(got)
-	want = sortStrings(want)
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func sliceContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func sortStrings(in []string) []string {

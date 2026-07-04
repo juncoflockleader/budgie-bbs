@@ -473,6 +473,55 @@ type DigestExport struct {
 	Body  string      `json:"body"`
 }
 
+const (
+	DigestMirrorAnnouncementBoardID = "0announce"
+	DigestMirrorRecommendedBoardID  = "Recommend"
+)
+
+type DigestMirrorSystemBoard struct {
+	Kind        string
+	BoardID     string
+	Name        string
+	Description string
+	ThreadID    string
+	PostID      string
+	Default     string
+}
+
+func DigestMirrorSystemBoardForKind(kind string) (DigestMirrorSystemBoard, bool) {
+	switch kind {
+	case "announcement":
+		return DigestMirrorSystemBoard{
+			Kind:        "announcement",
+			BoardID:     DigestMirrorAnnouncementBoardID,
+			Name:        "0Announce",
+			Description: "Generated site-wide announcements",
+			ThreadID:    "ann_thr_",
+			PostID:      "ann_pst_",
+			Default:     "Announcement",
+		}, true
+	case "recommended":
+		return DigestMirrorSystemBoard{
+			Kind:        "recommended",
+			BoardID:     DigestMirrorRecommendedBoardID,
+			Name:        "Recommend",
+			Description: "Generated recommended articles and homepage recommendations",
+			ThreadID:    "recommend_thr_",
+			PostID:      "recommend_pst_",
+			Default:     "Recommended article",
+		}, true
+	default:
+		return DigestMirrorSystemBoard{}, false
+	}
+}
+
+type DigestEntryRemoval struct {
+	ID        string
+	BoardID   string
+	Kind      string
+	RemovedBy string
+}
+
 type MailItem struct {
 	ID          string           `json:"id"`
 	FromUserID  string           `json:"fromUserId"`
@@ -526,6 +575,17 @@ type MailAttachment struct {
 	Stored      bool   `json:"stored"`
 	CreatedBy   string `json:"createdBy,omitempty"`
 	CreatedAt   int64  `json:"createdAt"`
+}
+
+func MailAttachmentFilenames(attachments []MailAttachment) []string {
+	if len(attachments) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		names = append(names, attachment.Filename)
+	}
+	return names
 }
 
 type MailGroupMember struct {
@@ -897,6 +957,14 @@ type ModerationReview struct {
 	Actor      string `json:"actor,omitempty"`
 	CreatedAt  int64  `json:"createdAt"`
 	UpdatedAt  int64  `json:"updatedAt"`
+}
+
+type ModerationReviewLogTarget struct {
+	PostID   string
+	ThreadID string
+	BoardID  string
+	Status   string
+	Public   bool
 }
 
 type UserSanction struct {

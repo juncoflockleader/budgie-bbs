@@ -1,7 +1,6 @@
 package core
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -111,9 +110,7 @@ func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.position.ValidateForRecord(record)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("ValidateForRecord err = %v, want %q", err, tt.want)
-			}
+			requireErrorContains(t, err, tt.want)
 		})
 	}
 }
@@ -133,7 +130,5 @@ func TestCommandLogCommitPositionValidatesSourceEvidence(t *testing.T) {
 		},
 	}
 	err := position.Validate()
-	if err == nil || !strings.Contains(err.Error(), "does not match record partition") {
-		t.Fatalf("Validate err = %v, want source partition failure", err)
-	}
+	requireErrorContains(t, err, "does not match record partition")
 }

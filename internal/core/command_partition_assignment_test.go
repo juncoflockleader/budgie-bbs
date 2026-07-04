@@ -174,6 +174,37 @@ func TestSnapshotCommandPartitionAssignerListsOwnedPartitionsAndFailsClosed(t *t
 	}
 }
 
+func TestCommandPartitionAssignmentPartitionsNormalizesAndDedupes(t *testing.T) {
+	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
+	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
+	got := commandPartitionAssignmentPartitions([]CommandPartitionAssignment{
+		{Partition: general, OwnerID: "writer-a"},
+		{Partition: general, OwnerID: "writer-a"},
+		{Partition: LogPartition{}, OwnerID: "writer-a"},
+	})
+	want := []LogPartition{general, global}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commandPartitionAssignmentPartitions = %+v, want %+v", got, want)
+	}
+}
+
+func TestCommandPartitionAssignmentsForOwnerNormalizesOwnerAndPartitions(t *testing.T) {
+	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
+	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
+	single := commandPartitionAssignmentForOwner(LogPartition{}, " writer-b ", 43)
+	if want := (CommandPartitionAssignment{Partition: global, OwnerID: "writer-b", Generation: 43}); single != want {
+		t.Fatalf("commandPartitionAssignmentForOwner = %+v, want %+v", single, want)
+	}
+	got := commandPartitionAssignmentsForOwner([]LogPartition{general, LogPartition{}}, " writer-a ", 42)
+	want := []CommandPartitionAssignment{
+		{Partition: general, OwnerID: "writer-a", Generation: 42},
+		{Partition: global, OwnerID: "writer-a", Generation: 42},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("commandPartitionAssignmentsForOwner = %+v, want %+v", got, want)
+	}
+}
+
 func TestSnapshotCommandPartitionAssignerIgnoresStaleGenerations(t *testing.T) {
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}

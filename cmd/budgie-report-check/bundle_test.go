@@ -1,81 +1,54 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/runbundle"
+	"github.com/juncoflockleader/budgie-bbs/internal/runevidence"
 )
 
 func TestRunAcceptsConsistentBundleEvidence(t *testing.T) {
 	dir := t.TempDir()
-	preflight := writeBundleEvidenceReport(t, dir, "preflight.json", reportEvidence{
-		Tool:        "budgie-internet-scale-preflight",
-		GitRevision: "abc123",
-	})
-	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", reportEvidence{
-		Tool:        "budgie-gateway-loadgen",
-		GitRevision: "abc123",
-	})
-	kafka := writeBundleEvidenceReport(t, dir, "kafka.json", reportEvidence{
-		Tool:        "budgie-commandlog-loadgen",
-		GitRevision: "abc123",
-	})
+	preflight := writeCleanBundleEvidenceReport(t, dir, "preflight")
+	gateway := writeCleanBundleEvidenceReport(t, dir, "gateway")
+	kafka := writeCleanBundleEvidenceReport(t, dir, "kafka")
 
-	var stdout, stderr bytes.Buffer
-	code := runBundle([]string{
+	result := runBundleForTest(t, []string{
 		"-preflight-report", preflight,
 		"-gateway-report", gateway,
 		"-kafka-report", kafka,
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run exit = %d, want success\nstderr:\n%s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "internet-scale report bundle has consistent evidence metadata") {
-		t.Fatalf("stdout missing success line:\n%s", stdout.String())
-	}
+	})
+	requireReportCheckExit(t, result, 0)
+	requireReportCheckOutputContains(t, "stdout", result.Stdout, "internet-scale report bundle has consistent evidence metadata")
 }
 
 func TestRunWritesBundleManifest(t *testing.T) {
 	dir := t.TempDir()
-	preflight := writeBundleEvidenceReport(t, dir, "preflight.json", reportEvidence{
-		Tool:        "budgie-internet-scale-preflight",
-		GitRevision: "abc123",
-	})
-	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", reportEvidence{
-		Tool:        "budgie-gateway-loadgen",
-		GitRevision: "abc123",
-	})
-	kafka := writeBundleEvidenceReport(t, dir, "kafka.json", reportEvidence{
-		Tool:        "budgie-commandlog-loadgen",
-		GitRevision: "abc123",
-	})
+	preflight := writeCleanBundleEvidenceReport(t, dir, "preflight")
+	gateway := writeCleanBundleEvidenceReport(t, dir, "gateway")
+	kafka := writeCleanBundleEvidenceReport(t, dir, "kafka")
 	manifestPath := filepath.Join(dir, "nested", "bundle-manifest.json")
 
-	var stdout, stderr bytes.Buffer
-	code := runBundle([]string{
+	result := runBundleForTest(t, []string{
 		"-preflight-report", preflight,
 		"-gateway-report", gateway,
 		"-kafka-report", kafka,
 		"-manifest-file", manifestPath,
 		"-targets", "kafka,gateway",
 		"-remote-staging",
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run exit = %d, want success\nstderr:\n%s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "archived internet-scale bundle manifest at "+manifestPath) {
-		t.Fatalf("stdout missing manifest path:\n%s", stdout.String())
-	}
+	})
+	requireReportCheckExit(t, result, 0)
+	requireReportCheckOutputContains(t, "stdout", result.Stdout, "archived internet-scale bundle manifest at "+manifestPath)
 
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
-	var manifest bundleManifest
+	var manifest runbundle.Manifest
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatalf("decode manifest: %v", err)
 	}
@@ -122,205 +95,131 @@ func TestRunWritesBundleManifest(t *testing.T) {
 
 func TestRunVerifiesBundleManifest(t *testing.T) {
 	dir := t.TempDir()
-	preflight := writeBundleEvidenceReport(t, dir, "preflight.json", reportEvidence{
-		Tool:        "budgie-internet-scale-preflight",
-		GitRevision: "abc123",
-	})
-	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", reportEvidence{
-		Tool:        "budgie-gateway-loadgen",
-		GitRevision: "abc123",
-	})
-	kafka := writeBundleEvidenceReport(t, dir, "kafka.json", reportEvidence{
-		Tool:        "budgie-commandlog-loadgen",
-		GitRevision: "abc123",
-	})
+	preflight := writeCleanBundleEvidenceReport(t, dir, "preflight")
+	gateway := writeCleanBundleEvidenceReport(t, dir, "gateway")
+	kafka := writeCleanBundleEvidenceReport(t, dir, "kafka")
 	manifestPath := filepath.Join(dir, "bundle-manifest.json")
 
-	var stdout, stderr bytes.Buffer
-	code := runBundle([]string{
+	result := runBundleForTest(t, []string{
 		"-preflight-report", preflight,
 		"-gateway-report", gateway,
 		"-kafka-report", kafka,
 		"-manifest-file", manifestPath,
 		"-targets", "gateway,kafka",
 		"-remote-staging",
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("write manifest exit = %d, want success\nstderr:\n%s", code, stderr.String())
-	}
+	})
+	requireReportCheckExit(t, result, 0)
 
-	stdout.Reset()
-	stderr.Reset()
-	code = runBundle([]string{
+	result = runBundleForTest(t, []string{
 		"-verify-manifest", manifestPath,
 		"-targets", "gateway,kafka",
 		"-remote-staging",
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("verify manifest exit = %d, want success\nstderr:\n%s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "internet-scale bundle manifest verified at "+manifestPath) {
-		t.Fatalf("stdout missing verify success:\n%s", stdout.String())
-	}
+	})
+	requireReportCheckExit(t, result, 0)
+	requireReportCheckOutputContains(t, "stdout", result.Stdout, "internet-scale bundle manifest verified at "+manifestPath)
 }
 
 func TestRunRejectsManifestHashMismatch(t *testing.T) {
 	dir := t.TempDir()
-	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", reportEvidence{
-		Tool:        "budgie-gateway-loadgen",
-		GitRevision: "abc123",
-	})
-	kafka := writeBundleEvidenceReport(t, dir, "kafka.json", reportEvidence{
-		Tool:        "budgie-commandlog-loadgen",
-		GitRevision: "abc123",
-	})
+	gateway := writeCleanBundleEvidenceReport(t, dir, "gateway")
+	kafka := writeCleanBundleEvidenceReport(t, dir, "kafka")
 	manifestPath := filepath.Join(dir, "bundle-manifest.json")
 
-	var stdout, stderr bytes.Buffer
-	code := runBundle([]string{
+	result := runBundleForTest(t, []string{
 		"-gateway-report", gateway,
 		"-kafka-report", kafka,
 		"-manifest-file", manifestPath,
 		"-targets", "gateway,kafka",
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("write manifest exit = %d, want success\nstderr:\n%s", code, stderr.String())
-	}
-	overwriteIndentedBundleEvidenceReport(t, gateway, reportEvidence{
-		Tool:        "budgie-gateway-loadgen",
-		GitRevision: "abc123",
 	})
+	requireReportCheckExit(t, result, 0)
+	writeReportCheckJSONFile(t, gateway, runevidence.ReportEnvelope{Evidence: bundleEvidence("gateway", "abc123")}, true)
 
-	stdout.Reset()
-	stderr.Reset()
-	code = runBundle([]string{
+	result = runBundleForTest(t, []string{
 		"-verify-manifest", manifestPath,
 		"-targets", "gateway,kafka",
-	}, &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("verify manifest exit = %d, want violation\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "reports[0].sha256") ||
-		!strings.Contains(stderr.String(), "want") {
-		t.Fatalf("stderr missing hash mismatch:\n%s", stderr.String())
-	}
+	})
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr, "reports[0].sha256", "want")
 }
 
 func TestRunRejectsManifestScopeMismatch(t *testing.T) {
 	dir := t.TempDir()
-	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", reportEvidence{
-		Tool:        "budgie-gateway-loadgen",
-		GitRevision: "abc123",
-	})
-	kafka := writeBundleEvidenceReport(t, dir, "kafka.json", reportEvidence{
-		Tool:        "budgie-commandlog-loadgen",
-		GitRevision: "abc123",
-	})
+	gateway := writeCleanBundleEvidenceReport(t, dir, "gateway")
+	kafka := writeCleanBundleEvidenceReport(t, dir, "kafka")
 	manifestPath := filepath.Join(dir, "bundle-manifest.json")
 
-	var stdout, stderr bytes.Buffer
-	code := runBundle([]string{
+	result := runBundleForTest(t, []string{
 		"-gateway-report", gateway,
 		"-kafka-report", kafka,
 		"-manifest-file", manifestPath,
 		"-targets", "gateway,kafka",
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("write manifest exit = %d, want success\nstderr:\n%s", code, stderr.String())
-	}
+	})
+	requireReportCheckExit(t, result, 0)
 
-	stdout.Reset()
-	stderr.Reset()
-	code = runBundle([]string{
+	result = runBundleForTest(t, []string{
 		"-verify-manifest", manifestPath,
 		"-targets", "gateway,nats",
-	}, &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("verify manifest exit = %d, want violation\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "targets") ||
-		!strings.Contains(stderr.String(), "gateway,nats") {
-		t.Fatalf("stderr missing target mismatch:\n%s", stderr.String())
-	}
+	})
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr, "targets", "gateway,nats")
 }
 
 func TestRunRejectsMixedGitRevisions(t *testing.T) {
 	dir := t.TempDir()
-	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", reportEvidence{
-		Tool:        "budgie-gateway-loadgen",
-		GitRevision: "abc123",
-	})
-	nats := writeBundleEvidenceReport(t, dir, "nats.json", reportEvidence{
-		Tool:        "budgie-commandlog-loadgen",
-		GitRevision: "def456",
-	})
+	gateway := writeCleanBundleEvidenceReport(t, dir, "gateway")
+	nats := writeBundleEvidenceReport(t, dir, "nats.json", bundleEvidence("nats", "def456"))
 
-	var stdout, stderr bytes.Buffer
-	code := runBundle([]string{
+	result := runBundleForTest(t, []string{
 		"-gateway-report", gateway,
 		"-nats-report", nats,
-	}, &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("run exit = %d, want violation\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "nats.evidence.gitRevision") ||
-		!strings.Contains(stderr.String(), "abc123") ||
-		!strings.Contains(stderr.String(), "def456") {
-		t.Fatalf("stderr missing revision mismatch:\n%s", stderr.String())
-	}
+	})
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr, "nats.evidence.gitRevision", "abc123", "def456")
 }
 
 func TestRunRejectsWrongToolOrDirtyEvidence(t *testing.T) {
 	dir := t.TempDir()
-	preflight := writeBundleEvidenceReport(t, dir, "preflight.json", reportEvidence{
+	preflight := writeBundleEvidenceReport(t, dir, "preflight.json", runevidence.Evidence{
 		Tool:        "budgie-commandlog-loadgen",
 		GitRevision: "abc123",
 	})
-	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", reportEvidence{
+	gateway := writeBundleEvidenceReport(t, dir, "gateway.json", runevidence.Evidence{
 		Tool:        "budgie-gateway-loadgen",
 		GitRevision: "abc123",
 		GitModified: true,
 	})
 
-	var stdout, stderr bytes.Buffer
-	code := runBundle([]string{
+	result := runBundleForTest(t, []string{
 		"-preflight-report", preflight,
 		"-gateway-report", gateway,
-	}, &stdout, &stderr)
-	if code != 3 {
-		t.Fatalf("run exit = %d, want violation\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
-	}
-	for _, token := range []string{
+	})
+	requireReportCheckExit(t, result, 3)
+	requireReportCheckOutputContains(t, "stderr", result.Stderr,
 		"preflight.evidence.tool",
 		"budgie-internet-scale-preflight",
 		"gateway.evidence.gitModified",
-	} {
-		if !strings.Contains(stderr.String(), token) {
-			t.Fatalf("stderr missing %q:\n%s", token, stderr.String())
-		}
-	}
+	)
 }
 
-func writeBundleEvidenceReport(t *testing.T, dir, name string, evidence reportEvidence) string {
+func writeBundleEvidenceReport(t *testing.T, dir, name string, evidence runevidence.Evidence) string {
 	t.Helper()
-	data, err := json.Marshal(evidenceEnvelope{Evidence: evidence})
-	if err != nil {
-		t.Fatalf("marshal report: %v", err)
-	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write report: %v", err)
-	}
-	return path
+	return writeReportCheckJSONInDir(t, dir, name, runevidence.ReportEnvelope{Evidence: evidence}, false)
 }
 
-func overwriteIndentedBundleEvidenceReport(t *testing.T, path string, evidence reportEvidence) {
+func writeCleanBundleEvidenceReport(t *testing.T, dir, label string) string {
 	t.Helper()
-	data, err := json.MarshalIndent(evidenceEnvelope{Evidence: evidence}, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal report: %v", err)
+	return writeBundleEvidenceReport(t, dir, label+".json", bundleEvidence(label, "abc123"))
+}
+
+func bundleEvidence(label, revision string) runevidence.Evidence {
+	tool := ""
+	switch label {
+	case "preflight":
+		tool = "budgie-internet-scale-preflight"
+	case "gateway":
+		tool = "budgie-gateway-loadgen"
+	case "nats", "kafka":
+		tool = "budgie-commandlog-loadgen"
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("rewrite report: %v", err)
-	}
+	return runevidence.Evidence{Tool: tool, GitRevision: revision}
 }

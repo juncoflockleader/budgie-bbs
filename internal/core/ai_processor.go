@@ -36,15 +36,13 @@ func defaultAIGenerate(ctx context.Context, rt *BoardAIRuntime, system, prompt s
 // bot, generates and posts a reply as that bot. LLM calls are slow, so this runs
 // off the command path with a small batch.
 type AIProcessor struct {
-	core      *Core
-	BatchSize int
-	Interval  time.Duration
-	Generate  aiGenerateFunc
+	periodicProcessor
+	Generate aiGenerateFunc
 }
 
 func NewAIProcessor(c *Core, interval time.Duration, batchSize int) (*AIProcessor, error) {
 	if c == nil {
-		return nil, fmt.Errorf("ai processor: nil core")
+		return nil, nilProcessorError("ai")
 	}
 	if interval <= 0 {
 		interval = 10 * time.Second
@@ -52,7 +50,16 @@ func NewAIProcessor(c *Core, interval time.Duration, batchSize int) (*AIProcesso
 	if batchSize <= 0 {
 		batchSize = 5
 	}
-	return &AIProcessor{core: c, BatchSize: batchSize, Interval: interval, Generate: defaultAIGenerate}, nil
+	processor := &AIProcessor{Generate: defaultAIGenerate}
+	periodic, err := newPeriodicProcessor(c, "ai responder", interval, batchSize, func(ctx context.Context, _ *Core, _ int) (processorRunProgress, error) {
+		result, err := processor.ProcessOnce(ctx)
+		return aiRunProgress(result), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	processor.periodicProcessor = periodic
+	return processor, nil
 }
 
 // StartAIResponderProcessor launches the AI responder in the background.
@@ -66,31 +73,10 @@ func (c *Core) StartAIResponderProcessor(ctx context.Context, interval time.Dura
 }
 
 func (p *AIProcessor) Run(ctx context.Context) {
-	drain := func() {
-		for ctx.Err() == nil {
-			res, err := p.ProcessOnce(ctx)
-			if err != nil {
-				if ctx.Err() == nil {
-					slog.Warn("ai responder processor failed", "err", err)
-				}
-				return
-			}
-			if res.Events < p.BatchSize || res.AppliedSeq >= res.HeadSeq {
-				return
-			}
-		}
+	if p == nil {
+		return
 	}
-	drain()
-	ticker := time.NewTicker(p.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			drain()
-		}
-	}
+	p.periodicProcessor.Run(ctx)
 }
 
 // AIProcessResult reports a single drain pass.
@@ -102,12 +88,26 @@ type AIProcessResult struct {
 	Replied    int
 }
 
+func aiRunProgress(result AIProcessResult) processorRunProgress {
+	return processorRunProgress{
+		FromSeq:    result.FromSeq,
+		AppliedSeq: result.AppliedSeq,
+		HeadSeq:    result.HeadSeq,
+		Events:     result.Events,
+		Log:        result.Events > 0 || result.AppliedSeq < result.HeadSeq,
+		Extra:      []any{"replied", result.Replied},
+	}
+}
+
 // ProcessOnce advances the responder watermark by one batch, replying via the
 // bot where a board's config calls for it. The watermark always advances past
 // processed events (even when no reply is made or generation fails) so a single
 // bad post never stalls the stream and a later re-enable doesn't replay history.
 func (p *AIProcessor) ProcessOnce(ctx context.Context) (AIProcessResult, error) {
-	c := p.core
+	if p == nil || p.Core == nil {
+		return AIProcessResult{}, nilProcessorError("ai responder")
+	}
+	c := p.Core
 	fromSeq, _, err := lookupDerivedViewAppliedSeq(c.DB, aiResponderView)
 	if err != nil {
 		return AIProcessResult{}, err
@@ -158,7 +158,7 @@ func (p *AIProcessor) ProcessOnce(ctx context.Context) (AIProcessResult, error) 
 // maybeReply evaluates one post against its board's AI config and, when it
 // qualifies, generates and posts a reply as the bot. Returns true if it replied.
 func (p *AIProcessor) maybeReply(ctx context.Context, post *proto.PostAppendedPayload) bool {
-	c := p.core
+	c := p.Core
 	if strings.TrimSpace(post.AuthorID) == "" {
 		return false // anonymous/system posts have no triggering author
 	}
@@ -248,7 +248,7 @@ func (p *AIProcessor) buildPrompt(rt *BoardAIRuntime, botName string, thread *Th
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Thread title: %s\n\nRecent messages:\n", thread.Title)
-	posts, _ := p.core.ListPosts(thread.ID, 12, 0)
+	posts, _ := p.Core.ListPosts(thread.ID, 12, 0)
 	for _, post := range posts {
 		body := strings.TrimSpace(post.Body)
 		if body == "" {

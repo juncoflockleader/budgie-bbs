@@ -137,6 +137,24 @@ type CommandLogWorkerResult struct {
 	RetryableFailure     *proto.ErrorDetail
 }
 
+func commandLogWorkerAssignmentResult(partition LogPartition, assignment CommandPartitionAssignment, assigned bool) CommandLogWorkerResult {
+	return CommandLogWorkerResult{
+		Partition:            partition.Normalize(),
+		Assigned:             assigned,
+		AssignmentOwnerID:    assignment.OwnerID,
+		AssignmentGeneration: assignment.Generation,
+	}
+}
+
+func commandLogWorkerClaimedAssignmentResult(partition LogPartition, assignment CommandPartitionAssignment, ownerID string, committedOffset int64) CommandLogWorkerResult {
+	result := commandLogWorkerAssignmentResult(partition, assignment, true)
+	result.Claimed = true
+	result.ClaimOwnerID = ownerID
+	result.StartedOffset = committedOffset
+	result.LastOffset = committedOffset
+	return result
+}
+
 func NewCommandLogWorker(config CommandLogWorkerConfig) *CommandLogWorker {
 	partitions := config.Partitions
 	if partitions == nil {
@@ -342,27 +360,17 @@ func (w *CommandLogWorker) drainListedPartition(ctx context.Context, partition L
 		return CommandLogWorkerResult{Partition: partition}, err
 	}
 	if !assigned {
-		return CommandLogWorkerResult{
-			Partition:            partition,
-			Assigned:             false,
-			AssignmentOwnerID:    assignment.OwnerID,
-			AssignmentGeneration: assignment.Generation,
-		}, nil
+		return commandLogWorkerAssignmentResult(partition, assignment, false), nil
 	}
 	claim, acquired, err := w.claimPartition(ctx, partition)
 	if err != nil {
 		return CommandLogWorkerResult{Partition: partition}, err
 	}
 	if !acquired {
-		return CommandLogWorkerResult{
-			Partition:            partition,
-			Assigned:             true,
-			AssignmentOwnerID:    assignment.OwnerID,
-			AssignmentGeneration: assignment.Generation,
-			Claimed:              false,
-			ClaimOwnerID:         claim.OwnerID,
-			ClaimExpiresAt:       claim.ExpiresAt,
-		}, nil
+		result := commandLogWorkerAssignmentResult(partition, assignment, true)
+		result.ClaimOwnerID = claim.OwnerID
+		result.ClaimExpiresAt = claim.ExpiresAt
+		return result, nil
 	}
 	result, err := w.drainPartition(ctx, partition)
 	if !result.AssignmentLost {
@@ -397,17 +405,7 @@ func (w *CommandLogWorker) listDrainPartitions(ctx context.Context) ([]LogPartit
 		if err != nil {
 			return nil, err
 		}
-		seen := map[LogPartition]bool{}
-		partitions := make([]LogPartition, 0, len(assignments))
-		for _, assignment := range assignments {
-			partition := assignment.Partition.Normalize()
-			if seen[partition] {
-				continue
-			}
-			seen[partition] = true
-			partitions = append(partitions, partition)
-		}
-		return partitions, nil
+		return commandPartitionAssignmentPartitions(assignments), nil
 	}
 	if w.partitions == nil {
 		return nil, fmt.Errorf("command log worker: nil partition lister")
@@ -433,10 +431,7 @@ func (w *CommandLogWorker) Run(ctx context.Context) {
 }
 
 func (w *CommandLogWorker) claimPartition(ctx context.Context, partition LogPartition) (CommandPartitionClaim, bool, error) {
-	claim := CommandPartitionClaim{
-		Partition: partition,
-		OwnerID:   w.ownerID,
-	}
+	claim := commandPartitionClaimForOwner(partition, w.ownerID, 0)
 	if w.claims == nil {
 		return claim, true, nil
 	}
@@ -444,11 +439,7 @@ func (w *CommandLogWorker) claimPartition(ctx context.Context, partition LogPart
 }
 
 func (w *CommandLogWorker) assignPartition(ctx context.Context, partition LogPartition) (CommandPartitionAssignment, bool, error) {
-	assignment := CommandPartitionAssignment{
-		Partition:  partition.Normalize(),
-		OwnerID:    w.ownerID,
-		Generation: 1,
-	}
+	assignment := commandPartitionAssignmentForOwner(partition, w.ownerID, 1)
 	if w.assignments == nil {
 		return assignment, true, nil
 	}
