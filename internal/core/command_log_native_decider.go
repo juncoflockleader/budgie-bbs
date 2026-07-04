@@ -16,6 +16,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	corehandler "github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/statsplan"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -2620,7 +2621,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishStatsSnapshot(ctx contex
 		HeadSeq:             plan.Snapshot.HeadSeq,
 	}, ts)}
 	if len(plan.Posts) > 0 {
-		exists, err := projections.BoardExists(e.core.DB, corehandler.StatsSystemBoardID)
+		exists, err := projections.BoardExists(e.core.DB, statsplan.SystemBoardID)
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
@@ -2630,15 +2631,15 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishStatsSnapshot(ctx contex
 				return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 			}
 			events = append(events, nativeGeneratedBoardCreatedEvent(record, actor, nativeGeneratedSystemPostSpec{
-				BoardID:     corehandler.StatsSystemBoardID,
-				BoardName:   "BBSLists",
-				Description: "Generated community rankings and statistics",
+				BoardID:     statsplan.SystemBoardID,
+				BoardName:   statsplan.SystemBoardName,
+				Description: statsplan.SystemBoardDescription,
 			}, position, ts, len(events)))
 		}
 	}
 	for _, post := range plan.Posts {
 		generatedEvents, errDetail := nativeGeneratedSystemPostEvents(e.core.DB, record, actor, nativeGeneratedSystemPostSpec{
-			BoardID:   corehandler.StatsSystemBoardID,
+			BoardID:   statsplan.SystemBoardID,
 			ThreadID:  post.ThreadID,
 			PostID:    post.PostID,
 			Title:     post.Title,

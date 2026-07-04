@@ -10,6 +10,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/statsplan"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -1056,22 +1057,6 @@ func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath
 	return boardID, normalizedKind, normalizedFrom, normalizedTo, Reply{}
 }
 
-const StatsSystemBoardID = "BBSLists"
-
-type StatsSnapshotPlan struct {
-	MainThreadID    string
-	MainExistingSeq int64
-	Snapshot        projections.CommunityStatHistory
-	Posts           []StatsSystemPostPlan
-}
-
-type StatsSystemPostPlan struct {
-	ThreadID string
-	PostID   string
-	Title    string
-	Body     string
-}
-
 func (h *Handler) publishSystemNotice(actor *User, p proto.PublishSystemNoticePayload) Reply {
 	if !actor.IsAdmin() {
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
@@ -1222,7 +1207,7 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
-func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts int64) (*StatsSnapshotPlan, error) {
+func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts int64) (*statsplan.SnapshotPlan, error) {
 	dateLabel = strings.TrimSpace(dateLabel)
 	day, err := time.Parse("2006-01-02", dateLabel)
 	if err != nil {
@@ -1234,7 +1219,7 @@ func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts 
 	if err != nil {
 		return nil, err
 	}
-	plan := &StatsSnapshotPlan{
+	plan := &statsplan.SnapshotPlan{
 		MainThreadID: "bbslists_stats_" + dateID,
 		Snapshot:     snapshot,
 	}
@@ -1253,7 +1238,7 @@ func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts 
 		if err != nil {
 			return err
 		}
-		plan.Posts = append(plan.Posts, StatsSystemPostPlan{
+		plan.Posts = append(plan.Posts, statsplan.SystemPostPlan{
 			ThreadID: threadID,
 			PostID:   postID,
 			Title:    title,
@@ -2425,9 +2410,9 @@ func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, bo
 	defer tx.Rollback() //nolint
 
 	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
-		BoardID:     StatsSystemBoardID,
-		BoardName:   "BBSLists",
-		Description: "Generated community rankings and statistics",
+		BoardID:     statsplan.SystemBoardID,
+		BoardName:   statsplan.SystemBoardName,
+		Description: statsplan.SystemBoardDescription,
 		ThreadID:    threadID,
 		PostID:      postID,
 		Title:       title,
