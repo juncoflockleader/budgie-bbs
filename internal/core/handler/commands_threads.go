@@ -448,8 +448,8 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 		if userID == "" || userID == senderID {
 			return
 		}
-		if existing, ok := recipients[userID]; ok && notificationKindPriority(existing) >= notificationKindPriority(kind) {
-			return
+		if existing, ok := recipients[userID]; ok {
+			kind = commandrules.PreferredPostNotificationKind(existing, kind)
 		}
 		recipients[userID] = kind
 	}
@@ -482,14 +482,14 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 		if recipient == nil {
 			continue
 		}
-		canReceive, err := userCanReceivePostNotificationTx(tx, recipient, thread.Board, settings)
+		canReceive, err := commandrules.UserCanReceivePostNotification(tx, recipient, thread.Board, settings)
 		if err != nil {
 			return err
 		}
 		if !canReceive {
 			continue
 		}
-		level, err := threadPrefLevelTx(tx, recipient.ID, thread.ID)
+		level, err := commandrules.ThreadPrefLevel(tx, recipient.ID, thread.ID)
 		if err != nil {
 			return err
 		}
@@ -508,38 +508,6 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 		}
 	}
 	return nil
-}
-
-func notificationKindPriority(kind string) int {
-	switch kind {
-	case "mention":
-		return 3
-	case "reply":
-		return 2
-	case "watched":
-		return 1
-	default:
-		return 0
-	}
-}
-
-func threadPrefLevelTx(tx *sql.Tx, userID, threadID string) (string, error) {
-	var level string
-	err := qQueryRow(tx, `SELECT level FROM thread_prefs WHERE user_id=? AND thread_id=?`, userID, threadID).Scan(&level)
-	if err == sql.ErrNoRows {
-		return "normal", nil
-	}
-	return level, err
-}
-
-func userCanReceivePostNotificationTx(tx *sql.Tx, user *User, boardID string, settings *BoardSettings) (bool, error) {
-	if user == nil {
-		return false, nil
-	}
-	if settings == nil || !settings.MemberReadMode {
-		return true, nil
-	}
-	return projections.ActorCanUseMemberBoard(tx, user, boardID)
 }
 
 func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
