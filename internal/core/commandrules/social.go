@@ -91,3 +91,34 @@ func ValidateBlessUserMutation(queryable Queryable, actor *projections.User, tar
 	}
 	return target, nil
 }
+
+func ResolveDirectMessageRecipient(queryable Queryable, actor *projections.User, ref string) (*projections.User, *proto.ErrorDetail) {
+	if actor == nil {
+		return nil, newErrDetail(proto.ErrForbidden, "authentication required", false)
+	}
+	target, err := projections.FindUserRef(queryable, ref)
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if target == nil {
+		return nil, newErrDetail(proto.ErrNotFound, "recipient not found", false)
+	}
+	if target.ID == actor.ID {
+		return target, nil
+	}
+	ignored, err := projections.UserRelationshipExists(queryable, target.ID, actor.ID, "ignore")
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if ignored {
+		return nil, newErrDetail(proto.ErrForbidden, "recipient does not accept messages from this user", false)
+	}
+	allowed, err := projections.DirectMessageAllowed(queryable, target.ID, actor.ID)
+	if err != nil {
+		return nil, internalErr(err)
+	}
+	if !allowed {
+		return nil, newErrDetail(proto.ErrForbidden, "recipient only accepts messages from friends", false)
+	}
+	return target, nil
+}

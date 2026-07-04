@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -649,9 +650,9 @@ func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayloa
 	}
 	defer tx.Rollback()
 
-	target, reply := ResolveDirectMessageRecipient(tx, actor, p.To)
-	if reply.Err != nil {
-		return reply
+	target, errDetail := commandrules.ResolveDirectMessageRecipient(tx, actor, p.To)
+	if errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	id := newID("dm_")
 	scopes, payload := commandevents.DirectMessageSent(id, actor.ID, actor.Name, target.ID, target.Name, p.Body, ts)
@@ -774,37 +775,6 @@ func ResolveMailRecipients(queryable sqlQueryable, actor *User, refs []string, m
 		return nil, Reply{Err: errDetail(proto.ErrValidationFailed, "at least one recipient is required", false)}
 	}
 	return recipients, Reply{}
-}
-
-func ResolveDirectMessageRecipient(queryable sqlQueryable, actor *User, ref string) (*User, Reply) {
-	if actor == nil {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
-	}
-	target, err := projections.FindUserRef(queryable, ref)
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	if target == nil {
-		return nil, Reply{Err: errDetail(proto.ErrNotFound, "recipient not found", false)}
-	}
-	if target.ID == actor.ID {
-		return target, Reply{}
-	}
-	ignored, err := projections.UserRelationshipExists(queryable, target.ID, actor.ID, "ignore")
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	if ignored {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, "recipient does not accept messages from this user", false)}
-	}
-	allowed, err := projections.DirectMessageAllowed(queryable, target.ID, actor.ID)
-	if err != nil {
-		return nil, internalErr(err)
-	}
-	if !allowed {
-		return nil, Reply{Err: errDetail(proto.ErrForbidden, "recipient only accepts messages from friends", false)}
-	}
-	return target, Reply{}
 }
 
 func EnsureMailQuota(queryable sqlQueryable, copyCounts map[string]int, addedPerCopy int64) Reply {

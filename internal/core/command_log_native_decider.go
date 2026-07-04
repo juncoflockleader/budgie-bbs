@@ -3649,9 +3649,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSendDirectMessage(ctx context.C
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
-	target, reply := corehandler.ResolveDirectMessageRecipient(e.core.DB, actor, targetRef)
-	if reply.Err != nil {
-		return nativeCommandDecision{}, reply.Err
+	target, errDetail := commandrules.ResolveDirectMessageRecipient(e.core.DB, actor, targetRef)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	messageID := stableCommandLogDecisionID("dm_", record, 0)
