@@ -902,8 +902,8 @@ func (h *Handler) markBoardRead(actor *User, p proto.MarkBoardReadPayload) Reply
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	return h.applyReadMarker(p.Board, func() Reply {
-		return h.requireBoard(p.Board)
+	return h.applyReadMarker(p.Board, func() *proto.ErrorDetail {
+		return commandrules.RequireBoard(h.db, p.Board)
 	}, func() error {
 		return currentRuntime().MarkBoardRead(h.db, actor.ID, p.Board)
 	})
@@ -914,24 +914,24 @@ func (h *Handler) restoreBoardRead(actor *User, p proto.RestoreBoardReadPayload)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	return h.applyReadMarker(p.Board, func() Reply {
-		return h.requireBoard(p.Board)
+	return h.applyReadMarker(p.Board, func() *proto.ErrorDetail {
+		return commandrules.RequireBoard(h.db, p.Board)
 	}, func() error {
 		return currentRuntime().RestoreBoardRead(h.db, actor.ID, p.Board)
 	})
 }
 
 func (h *Handler) markFavoriteFolderRead(actor *User, p proto.MarkFavoriteFolderReadPayload) Reply {
-	return h.applyReadMarker(p.Folder, func() Reply {
-		return h.requireFavoriteFolder(actor.ID, p.Folder)
+	return h.applyReadMarker(p.Folder, func() *proto.ErrorDetail {
+		return commandrules.RequireFavoriteFolder(h.db, actor.ID, p.Folder)
 	}, func() error {
 		return currentRuntime().MarkFavoriteFolderRead(h.db, actor.ID, p.Folder)
 	})
 }
 
 func (h *Handler) restoreFavoriteFolderRead(actor *User, p proto.RestoreFavoriteFolderReadPayload) Reply {
-	return h.applyReadMarker(p.Folder, func() Reply {
-		return h.requireFavoriteFolder(actor.ID, p.Folder)
+	return h.applyReadMarker(p.Folder, func() *proto.ErrorDetail {
+		return commandrules.RequireFavoriteFolder(h.db, actor.ID, p.Folder)
 	}, func() error {
 		return currentRuntime().RestoreFavoriteFolderRead(h.db, actor.ID, p.Folder)
 	})
@@ -942,8 +942,8 @@ func (h *Handler) markThreadRead(actor *User, p proto.MarkThreadReadPayload) Rep
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	return h.applyReadMarker(p.Thread, func() Reply {
-		return h.requireThread(p.Thread)
+	return h.applyReadMarker(p.Thread, func() *proto.ErrorDetail {
+		return commandrules.RequireThread(h.db, p.Thread)
 	}, func() error {
 		return currentRuntime().MarkThreadRead(h.db, actor.ID, p.Thread)
 	})
@@ -954,8 +954,8 @@ func (h *Handler) restoreThreadRead(actor *User, p proto.RestoreThreadReadPayloa
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	return h.applyReadMarker(p.Thread, func() Reply {
-		return h.requireThread(p.Thread)
+	return h.applyReadMarker(p.Thread, func() *proto.ErrorDetail {
+		return commandrules.RequireThread(h.db, p.Thread)
 	}, func() error {
 		return currentRuntime().RestoreThreadRead(h.db, actor.ID, p.Thread)
 	})
@@ -966,21 +966,15 @@ func (h *Handler) markPostRead(actor *User, p proto.MarkPostReadPayload) Reply {
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	return h.applyReadMarker(p.Post, func() Reply {
-		return h.requirePost(p.Post)
+	return h.applyReadMarker(p.Post, func() *proto.ErrorDetail {
+		return commandrules.RequirePost(h.db, p.Post)
 	}, func() error {
 		return currentRuntime().MarkPostRead(h.db, actor.ID, p.Post)
 	})
 }
 
-func (h *Handler) applyReadMarker(targetID string, require func() Reply, update func() error) Reply {
-	if errReply := require(); errReply.Err != nil {
-		return errReply
-	}
-	if err := update(); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: targetID}}
+func (h *Handler) applyReadMarker(targetID string, require func() *proto.ErrorDetail, update func() error) Reply {
+	return replyFromCommandResult(commandrules.ApplyReadMarker(targetID, require, update))
 }
 
 type digestEntryForCommand struct {
