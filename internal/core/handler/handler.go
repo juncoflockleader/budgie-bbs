@@ -9,7 +9,9 @@ import (
 	"hash/fnv"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -160,33 +162,9 @@ type CounterUserIdentity = counterstore.UserIdentity
 type CounterReactionIdentity = counterstore.ReactionIdentity
 type CounterPollVoteIdentity = counterstore.PollVoteIdentity
 
-// PresenceStore owns high-volume session roster updates. SQL remains the
-// default store, but command handlers use this boundary so active/idle presence
-// can move to a TTL or broker-backed side store without joining the ordered log.
-type PresenceStore interface {
-	SetUserPresence(userID, sessionID, status, mode, boardID, threadID, locationLabel, fromHost string, ts int64) error
-	SetGuestPresence(sessionID, status, locationLabel, fromHost string, ts int64) error
-	ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]SocialUser, error)
-	ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]SocialUser, error)
-	ChatOnlineCounts() (map[string]int, error)
-	Stats() (PresenceStats, error)
-}
-
-type PresenceStats struct {
-	OnlineUsers       int
-	OnlineGuests      int
-	TotalGuestLogins  int
-	TotalGuestLogouts int
-}
-
-// ChatStore owns high-volume unordered chat history. SQL remains the default
-// bounded-history store, but handlers depend on this boundary so live chat can
-// move to a broker or KV-backed side store without entering the ordered log.
-type ChatStore interface {
-	InsertChatLine(id, roomID, roomName, userID, userName, body string, ts int64) error
-	ListChatRooms() ([]ChatRoom, error)
-	ListChatLines(roomID string, limit int) ([]ChatLine, error)
-}
+type PresenceStore = presencestore.Store
+type PresenceStats = presencestore.Stats
+type ChatStore = chatstore.Store
 
 type User = projections.User
 type Thread = projections.Thread
