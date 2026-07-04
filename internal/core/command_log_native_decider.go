@@ -3682,13 +3682,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMarkDirectMessageRead(ctx conte
 		return nativeDecisionAckEvents(messageID, nil), nil
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes := proto.DirectMessageEventScopes(message.FromUserID, message.ToUserID)
-	event := nativeEvent(record, 0, proto.EvtDirectMessageRead, scopes, &proto.DirectMessageReadPayload{
-		MessageID: messageID,
-		UserID:    actor.ID,
-		ReadAt:    ts,
-		TS:        ts,
-	}, ts)
+	scopes, eventPayload := corehandler.DirectMessageReadEvent(messageID, actor.ID, message.FromUserID, message.ToUserID, ts)
+	event := nativeEvent(record, 0, proto.EvtDirectMessageRead, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(messageID, event), nil
 }
 
@@ -3718,14 +3713,8 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteDirectMessage(ctx context
 		return nativeDecisionAckEvents(messageID, nil), nil
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes := proto.DirectMessageEventScopes(message.FromUserID, message.ToUserID)
-	event := nativeEvent(record, 0, proto.EvtDirectMessageDeleted, scopes, &proto.DirectMessageDeletedPayload{
-		MessageID:        messageID,
-		UserID:           actor.ID,
-		SenderDeleted:    deleteSenderCopy,
-		RecipientDeleted: deleteRecipientCopy,
-		TS:               ts,
-	}, ts)
+	scopes, eventPayload := corehandler.DirectMessageDeletedEvent(messageID, actor.ID, message.FromUserID, message.ToUserID, deleteSenderCopy, deleteRecipientCopy, ts)
+	event := nativeEvent(record, 0, proto.EvtDirectMessageDeleted, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(messageID, event), nil
 }
 
@@ -3784,14 +3773,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetUserRelationship(ctx context
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtUserRelationshipSet, []string{"user:" + actor.ID, "user:" + target.ID}, &proto.UserRelationshipSetPayload{
-		UserID:       actor.ID,
-		TargetUserID: target.ID,
-		Kind:         payload.Kind,
-		Active:       payload.Active,
-		Note:         payload.Note,
-		TS:           ts,
-	}, ts)
+	scopes, eventPayload := corehandler.UserRelationshipSetEvent(actor, target, payload.Kind, payload.Note, payload.Active, ts)
+	event := nativeEvent(record, 0, proto.EvtUserRelationshipSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(target.ID, event), nil
 }
 
@@ -3829,13 +3812,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetLoginWatch(ctx context.Conte
 			TS:     ts,
 		}, ts))
 	}
-	events = append(events, nativeEvent(record, len(events), proto.EvtUserRelationshipSet, []string{"user:" + actor.ID, "user:" + target.ID}, &proto.UserRelationshipSetPayload{
-		UserID:       actor.ID,
-		TargetUserID: target.ID,
-		Kind:         corehandler.LoginWatchRelationshipKind,
-		Active:       relationshipActive,
-		TS:           ts,
-	}, ts))
+	scopes, eventPayload := corehandler.UserRelationshipSetEvent(actor, target, corehandler.LoginWatchRelationshipKind, "", relationshipActive, ts)
+	events = append(events, nativeEvent(record, len(events), proto.EvtUserRelationshipSet, scopes, eventPayload, ts))
 	return nativeDecisionAckEvents(target.ID, events), nil
 }
 

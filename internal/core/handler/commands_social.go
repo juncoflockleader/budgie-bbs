@@ -58,6 +58,11 @@ func ValidateLoginWatchMutation(queryable sqlQueryable, actor *User, targetRef s
 	return target, online, Reply{}
 }
 
+func UserRelationshipSetEvent(actor, target *User, kind, note string, active bool, ts int64) ([]string, *proto.UserRelationshipSetPayload) {
+	payload := &proto.UserRelationshipSetPayload{UserID: actor.ID, TargetUserID: target.ID, Kind: kind, Active: active, Note: note, TS: ts}
+	return []string{"user:" + actor.ID, "user:" + target.ID}, payload
+}
+
 func (h *Handler) setUserRelationship(actor *User, p proto.SetUserRelationshipPayload) Reply {
 	p, msg := proto.NormalizeSetUserRelationshipPayload(p)
 	if msg != "" {

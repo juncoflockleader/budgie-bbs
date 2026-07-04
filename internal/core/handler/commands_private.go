@@ -674,6 +674,20 @@ func DirectMessageSentEvent(actor, target *User, messageID, body string, ts int6
 		proto.NewDirectMessageSentPayload(messageID, actor.ID, actor.Name, target.ID, target.Name, body, ts)
 }
 
+func DirectMessageReadEvent(messageID, userID, fromUserID, toUserID string, ts int64) ([]string, *proto.DirectMessageReadPayload) {
+	payload := &proto.DirectMessageReadPayload{MessageID: messageID, UserID: userID, ReadAt: ts, TS: ts}
+	return proto.DirectMessageEventScopes(fromUserID, toUserID), payload
+}
+
+func DirectMessageDeletedEvent(
+	messageID, userID, fromUserID, toUserID string,
+	senderDeleted, recipientDeleted bool,
+	ts int64,
+) ([]string, *proto.DirectMessageDeletedPayload) {
+	payload := &proto.DirectMessageDeletedPayload{MessageID: messageID, UserID: userID, SenderDeleted: senderDeleted, RecipientDeleted: recipientDeleted, TS: ts}
+	return proto.DirectMessageEventScopes(fromUserID, toUserID), payload
+}
+
 func (h *Handler) setDirectMessageSettings(actor *User, p proto.SetDirectMessageSettingsPayload) Reply {
 	policy, msg := proto.NormalizeDirectMessagePolicy(p.Policy)
 	if msg != "" {
