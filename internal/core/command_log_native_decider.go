@@ -540,37 +540,21 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 	effectiveReplyTo := ""
 	var quoteSource *Post
 	var mailBackTarget *Post
+	var parent *Post
 	if payload.ReplyTo != "" {
-		parent, err := projections.GetPost(e.core.DB, payload.ReplyTo)
+		parent, err = projections.GetPost(e.core.DB, payload.ReplyTo)
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
-		if parent == nil {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "replyTo post not found", false)
-		}
-		if parent.Thread != thread.ID {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "replyTo post belongs to another thread", false)
-		}
-		if payload.QuotePost {
-			if parent.Redacted {
-				return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "cannot quote a redacted post", false)
-			}
-			quoteSource = parent
-		}
-		if parent.NoReply && !canModerateThread {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "article is not accepting replies", false)
-		}
-		if parent.MailBack {
-			mailBackTarget = parent
-		}
-		effectiveReplyTo = parent.ID
-		if parent.ReplyTo != "" {
-			effectiveReplyTo = parent.ReplyTo
-		}
-	} else {
-		if payload.QuotePost {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "replyTo is required for quoted replies", false)
-		}
+	}
+	replyPlan, errDetail := commandrules.PlanReplyTarget(payload.ReplyTo, parent, thread.ID, payload.QuotePost, canModerateThread)
+	if errDetail != nil {
+		return nativeCommandDecision{}, errDetail
+	}
+	effectiveReplyTo = replyPlan.EffectiveReplyTo
+	quoteSource = replyPlan.QuoteSource
+	mailBackTarget = replyPlan.MailBackTarget
+	if replyPlan.NeedsRootMailBack {
 		if rootReplyGuards.MailBack {
 			root, err := projections.ThreadRootPost(e.core.DB, thread.ID)
 			if err != nil {

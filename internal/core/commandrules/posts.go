@@ -96,6 +96,49 @@ func RequireMemberBoardReadAccessStrict(queryable Queryable, actor *projections.
 	})
 }
 
+type ReplyTargetPlan struct {
+	EffectiveReplyTo  string
+	QuoteSource       *projections.Post
+	MailBackTarget    *projections.Post
+	ReplyNotifyTarget *projections.Post
+	NeedsRootMailBack bool
+}
+
+func PlanReplyTarget(replyTo string, parent *projections.Post, threadID string, quotePost bool, canModerateThread bool) (ReplyTargetPlan, *proto.ErrorDetail) {
+	if replyTo == "" {
+		if quotePost {
+			return ReplyTargetPlan{}, newErrDetail(proto.ErrValidationFailed, "replyTo is required for quoted replies", false)
+		}
+		return ReplyTargetPlan{NeedsRootMailBack: true}, nil
+	}
+	if parent == nil {
+		return ReplyTargetPlan{}, newErrDetail(proto.ErrNotFound, "replyTo post not found", false)
+	}
+	if parent.Thread != threadID {
+		return ReplyTargetPlan{}, newErrDetail(proto.ErrValidationFailed, "replyTo post belongs to another thread", false)
+	}
+	plan := ReplyTargetPlan{
+		EffectiveReplyTo:  parent.ID,
+		ReplyNotifyTarget: parent,
+	}
+	if quotePost {
+		if parent.Redacted {
+			return ReplyTargetPlan{}, newErrDetail(proto.ErrConflict, "cannot quote a redacted post", false)
+		}
+		plan.QuoteSource = parent
+	}
+	if parent.NoReply && !canModerateThread {
+		return ReplyTargetPlan{}, newErrDetail(proto.ErrForbidden, "article is not accepting replies", false)
+	}
+	if parent.MailBack {
+		plan.MailBackTarget = parent
+	}
+	if parent.ReplyTo != "" {
+		plan.EffectiveReplyTo = parent.ReplyTo
+	}
+	return plan, nil
+}
+
 func requireMemberBoardReadAccess(settings *projections.BoardSettings, message string, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
 	if !boardRequiresReadMembership(settings) {
 		return nil

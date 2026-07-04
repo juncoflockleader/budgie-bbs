@@ -259,39 +259,22 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	var mailBackTarget *Post
 	var quoteSource *Post
 	var replyNotifyTarget *Post
-	// Threading depth cap: max 1 level. If replyTo is itself a reply, flatten.
+	var parent *Post
 	if p.ReplyTo != "" {
-		parent, err := currentRuntime().GetPost(h.db, p.ReplyTo)
+		parent, err = currentRuntime().GetPost(h.db, p.ReplyTo)
 		if err != nil {
 			return internalErr(err)
 		}
-		if parent == nil {
-			return Reply{Err: errDetail(proto.ErrNotFound, "replyTo post not found", false)}
-		}
-		if parent.Thread != thread.ID {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, "replyTo post belongs to another thread", false)}
-		}
-		if p.QuotePost {
-			if parent.Redacted {
-				return Reply{Err: errDetail(proto.ErrConflict, "cannot quote a redacted post", false)}
-			}
-			quoteSource = parent
-		}
-		if parent.NoReply && !canModerateThread {
-			return Reply{Err: errDetail(proto.ErrForbidden, "article is not accepting replies", false)}
-		}
-		replyNotifyTarget = parent
-		if parent.MailBack {
-			mailBackTarget = parent
-		}
-		if parent.ReplyTo != "" {
-			// Already depth-1 reply — flatten to grandparent.
-			p.ReplyTo = parent.ReplyTo
-		}
-	} else {
-		if p.QuotePost {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, "replyTo is required for quoted replies", false)}
-		}
+	}
+	replyPlan, ruleErr := commandrules.PlanReplyTarget(p.ReplyTo, parent, thread.ID, p.QuotePost, canModerateThread)
+	if ruleErr != nil {
+		return Reply{Err: ruleErr}
+	}
+	p.ReplyTo = replyPlan.EffectiveReplyTo
+	mailBackTarget = replyPlan.MailBackTarget
+	quoteSource = replyPlan.QuoteSource
+	replyNotifyTarget = replyPlan.ReplyNotifyTarget
+	if replyPlan.NeedsRootMailBack {
 		root, err := projections.ThreadRootPost(h.db, thread.ID)
 		if err != nil {
 			return internalErr(err)
