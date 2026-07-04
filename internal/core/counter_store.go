@@ -3,7 +3,7 @@ package core
 import (
 	"database/sql"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core/handler"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
@@ -89,7 +89,7 @@ func (s sqlCounterStore) UserCounterIdentity(userID string) (CounterUserIdentity
 	return identity, nil
 }
 
-func (s sqlCounterStore) BeginMutation() (handler.CounterMutation, error) {
+func (s sqlCounterStore) BeginMutation() (counterstore.Mutation, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err

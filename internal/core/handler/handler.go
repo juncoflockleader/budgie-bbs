@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -153,49 +154,11 @@ type Bus interface {
 	Publish(evt *proto.Event)
 }
 
-// CounterStore owns high-fanout unordered counters and identity markers. The
-// default implementation is SQL-backed, but command handlers only depend on
-// this boundary so internet-scale counter shards can replace it independently.
-type CounterStore interface {
-	UserReacted(postID, userID string) (bool, error)
-	ReactionCount(postID string) (int, error)
-	PollOptionVoteCount(pollID, optionID string) (int, error)
-	PollVote(pollID, userID string) (string, bool, error)
-	UserCounterIdentity(userID string) (CounterUserIdentity, error)
-	BeginMutation() (CounterMutation, error)
-}
-
-type CounterUserIdentity struct {
-	Reactions []CounterReactionIdentity
-	PollVotes []CounterPollVoteIdentity
-}
-
-type CounterReactionIdentity struct {
-	PostID string
-	UserID string
-	Emoji  string
-	TS     int64
-}
-
-type CounterPollVoteIdentity struct {
-	PollID   string
-	OptionID string
-	UserID   string
-	TS       int64
-}
-
-type CounterMutation interface {
-	UpsertReaction(postID, userID, emoji string, ts int64) error
-	DeleteReaction(postID, userID string) error
-	ReactionCount(postID string) (int, error)
-	CastVote(pollID, optionID, userID string, ts int64) error
-	DeletePollVote(pollID, userID string) error
-	RecordReactionReceived(postAuthorID string) error
-	RecordReactionRemoved(postAuthorID string) error
-	ClearReactionReceived(userID string) error
-	Commit() error
-	Rollback() error
-}
+type CounterStore = counterstore.Store
+type CounterMutation = counterstore.Mutation
+type CounterUserIdentity = counterstore.UserIdentity
+type CounterReactionIdentity = counterstore.ReactionIdentity
+type CounterPollVoteIdentity = counterstore.PollVoteIdentity
 
 // PresenceStore owns high-volume session roster updates. SQL remains the
 // default store, but command handlers use this boundary so active/idle presence

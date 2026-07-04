@@ -3,6 +3,7 @@ package core
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
@@ -10,11 +11,11 @@ import (
 type Handler = handler.Handler
 type Reply = handler.Reply
 type CommandPartition = handler.CommandPartition
-type CounterStore = handler.CounterStore
-type CounterMutation = handler.CounterMutation
-type CounterUserIdentity = handler.CounterUserIdentity
-type CounterReactionIdentity = handler.CounterReactionIdentity
-type CounterPollVoteIdentity = handler.CounterPollVoteIdentity
+type CounterStore = counterstore.Store
+type CounterMutation = counterstore.Mutation
+type CounterUserIdentity = counterstore.UserIdentity
+type CounterReactionIdentity = counterstore.ReactionIdentity
+type CounterPollVoteIdentity = counterstore.PollVoteIdentity
 type PresenceStore = handler.PresenceStore
 type PresenceStats = handler.PresenceStats
 type ChatStore = handler.ChatStore
