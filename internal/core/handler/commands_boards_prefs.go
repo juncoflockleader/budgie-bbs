@@ -1147,64 +1147,29 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
 	}
 	ts := nowMS()
-	dateLabel, dateID, msg := proto.NormalizeStatsSnapshotDate(p.Date, ts)
+	dateLabel, _, msg := proto.NormalizeStatsSnapshotDate(p.Date, ts)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
-	threadID, seq, err := h.ensureStatsSnapshotSystemPost(actor, dateLabel, dateID, ts)
+	plan, err := PlanStatsSnapshotSystemPosts(h.db, actor, dateLabel, ts)
 	if err != nil {
 		return internalErr(err)
 	}
-	if _, _, err := h.ensureStatsLoginHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
+	if err := currentRuntime().RecordCommunityStatSnapshot(h.db, ts); err != nil {
 		return internalErr(err)
 	}
-	if _, _, err := h.ensureStatsUserActivityRankListSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
+
+	seq := plan.MainExistingSeq
+	for _, post := range plan.Posts {
+		_, postSeq, err := h.ensureStatsSystemPost(actor, post.ThreadID, post.PostID, post.Title, post.Body, ts)
+		if err != nil {
+			return internalErr(err)
+		}
+		if post.ThreadID == plan.MainThreadID {
+			seq = postSeq
+		}
 	}
-	if _, _, err := h.ensureStatsBoardOnlineListSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsOnlineUserRosterSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsBoardModeratorActivitySystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsBoardModeratorHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsBoardActivityHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsBoardRankListSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsNewBoardListSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsRecommendedBoardListSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsRecommendedArticleListSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsHotTopicHistorySystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	if _, _, err := h.ensureStatsBlessingListSystemPost(actor, dateLabel, dateID, ts); err != nil {
-		return internalErr(err)
-	}
-	day, err := time.Parse("2006-01-02", dateLabel)
-	if err != nil {
-		return internalErr(err)
-	}
-	if err := h.ensureStatsPeriodHistorySystemPosts(actor, day, ts); err != nil {
-		return internalErr(err)
-	}
-	if err := h.ensureStatsHotTopicPeriodHistorySystemPosts(actor, day, ts); err != nil {
-		return internalErr(err)
-	}
-	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
+	return Reply{Result: &proto.AckResult{ID: plan.MainThreadID, Seq: seq}}
 }
 
 func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts int64) (*statsplan.SnapshotPlan, error) {
@@ -1470,17 +1435,6 @@ func PlanStatsSnapshotSystemPosts(db *sql.DB, actor *User, dateLabel string, ts 
 	return plan, nil
 }
 
-func (h *Handler) prepareStatsSystemPost(threadID string, ts int64) (int64, bool, error) {
-	existingSeq, exists, err := projections.ThreadLastSeq(h.db, threadID)
-	if err != nil {
-		return 0, false, err
-	}
-	if err := currentRuntime().RecordCommunityStatSnapshot(h.db, ts); err != nil {
-		return 0, false, err
-	}
-	return existingSeq, exists, nil
-}
-
 func (h *Handler) planCurrentCommunityStatSnapshot(dateLabel string, ts int64) (projections.CommunityStatHistory, *projections.CommunityStats, error) {
 	stats, err := projections.GetCommunityStats(h.db)
 	if err != nil {
@@ -1566,7 +1520,7 @@ func (h *Handler) planCommunityStatHistoryRecent(current projections.CommunitySt
 	if err != nil {
 		return nil, err
 	}
-	history = mergePlanCommunityStatHistory(history, current, true)
+	history = appendPlanCommunityStatHistoryIfMissing(history, current, true)
 	sort.Slice(history, func(i, j int) bool { return history[i].Day > history[j].Day })
 	if len(history) > fetchLimit {
 		history = history[:fetchLimit]
@@ -1594,7 +1548,7 @@ func (h *Handler) planCommunityStatHistoryRange(current projections.CommunitySta
 		return nil, err
 	}
 	if current.Day >= startDay && current.Day <= endDay {
-		history = mergePlanCommunityStatHistory(history, current, true)
+		history = appendPlanCommunityStatHistoryIfMissing(history, current, true)
 	}
 	sort.Slice(history, func(i, j int) bool { return history[i].Day > history[j].Day })
 	previous, exists, err := h.planCommunityStatHistoryPrevious(startDay)
@@ -1636,13 +1590,12 @@ func (h *Handler) planCommunityStatHistoryPrevious(startDay string) (projections
 	return history, true, nil
 }
 
-func mergePlanCommunityStatHistory(history []projections.CommunityStatHistory, current projections.CommunityStatHistory, include bool) []projections.CommunityStatHistory {
+func appendPlanCommunityStatHistoryIfMissing(history []projections.CommunityStatHistory, current projections.CommunityStatHistory, include bool) []projections.CommunityStatHistory {
 	if !include {
 		return history
 	}
 	for i := range history {
 		if history[i].Day == current.Day {
-			history[i] = mergeCurrentCommunityStatSnapshot(history[i], current)
 			return history
 		}
 	}
@@ -1758,143 +1711,6 @@ func planCommunityStatHistorySelectSQL() string {
 		   FROM community_stat_history`
 }
 
-func (h *Handler) ensureStatsSnapshotSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_stats_" + dateID
-	postID := "bbslists_stats_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	stats, err := projections.GetCommunityStats(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	boards, err := projections.ListBoardRankings(h.db, "", false, 5, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	threads, err := projections.ListThreadRankings(h.db, "", false, "", 5, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	replies, err := projections.ListReplyRankings(h.db, "", false, 5, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	users, err := projections.ListUserRankings(h.db, 5, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	archives, err := projections.ListArchiveRankings(h.db, "", false, "", 5, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	blessings, err := projections.ListBlessingRankings(h.db, 5, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	history, err := projections.ListCommunityStatHistory(h.db, 7, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsSnapshotBody(dateLabel, stats, boards, threads, replies, users, archives, blessings, history)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Community stats "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsLoginHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_countlogins_" + dateID
-	postID := "bbslists_countlogins_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	stats, err := projections.GetCommunityStats(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	history, err := projections.ListCommunityStatHistory(h.db, 30, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	hourly, err := projections.ListLoginHourlyStats(h.db, dateLabel)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsLoginHistoryBody(dateLabel, stats, history, hourly)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Login count history "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsUserActivityRankListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_statguy_" + dateID
-	postID := "bbslists_statguy_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	users, err := projections.ListUserRankings(h.db, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsUserActivityRankListBody(dateLabel, users)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "User activity rankings "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsBoardOnlineListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_bonline_" + dateID
-	postID := "bbslists_bonline_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	stats, err := projections.GetCommunityStats(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsBoardOnlineListBody(dateLabel, stats, boards)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Board online occupancy "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsOnlineUserRosterSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_uonline_" + dateID
-	postID := "bbslists_uonline_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	stats, err := projections.GetCommunityStats(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	users, err := projections.ListOnlineUsers(h.db, "", "", 200, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	if err := h.maskStatsOnlineUserRosterLocations(users); err != nil {
-		return "", 0, err
-	}
-	body := formatStatsOnlineUserRosterBody(dateLabel, stats, users)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Online user roster "+dateLabel, body, ts)
-}
-
 func (h *Handler) maskStatsOnlineUserRosterLocations(users []projections.SocialUser) error {
 	masked := make(map[string]bool)
 	for i := range users {
@@ -1947,50 +1763,6 @@ func (h *Handler) shouldMaskStatsOnlineUserBoard(boardID string) (bool, error) {
 		return false, err
 	}
 	return memberReadMode != 0 || statsExcluded != 0, nil
-}
-
-func (h *Handler) ensureStatsBoardModeratorActivitySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_statbm_" + dateID
-	postID := "bbslists_statbm_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	onlineUsers, err := projections.ListOnlineUsers(h.db, "", "", 200, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	activity, err := h.listStatsBoardModeratorActivity(boards, onlineUsers)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsBoardModeratorActivityBody(dateLabel, activity)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Board moderator activity "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsBoardModeratorHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_bms_" + dateID
-	postID := "bbslists_bms_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	terms, err := projections.ListPublicBoardModeratorTerms(h.db, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsBoardModeratorHistoryBody(dateLabel, terms)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Board moderator tenure history "+dateLabel, body, ts)
 }
 
 type statsBoardModeratorActivity struct {
@@ -2078,168 +1850,6 @@ func (h *Handler) getStatsBoardModerator(moderator projections.BoardModerator, o
 	return stat, nil
 }
 
-func (h *Handler) ensureStatsBoardActivityHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_boardlog_" + dateID
-	postID := "bbslists_boardlog_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	stats, err := projections.GetCommunityStats(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	boards, err := projections.ListBoardRankings(h.db, "", false, 30, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	history, err := projections.ListCommunityStatHistory(h.db, 30, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsBoardActivityHistoryBody(dateLabel, stats, boards, history)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Board activity history "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsBoardRankListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_boardrank_" + dateID
-	postID := "bbslists_boardrank_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	boards, err := projections.ListBoardRankings(h.db, "", false, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	activeBoards := boards[:0]
-	for _, board := range boards {
-		if board.PostCount > 0 || board.ThreadCount > 0 || board.OnlineUsers > 0 {
-			activeBoards = append(activeBoards, board)
-		}
-	}
-	body := formatStatsBoardRankListBody(dateLabel, activeBoards)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Board popularity list "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsNewBoardListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_newboards_" + dateID
-	postID := "bbslists_newboards_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	end, err := time.Parse("2006-01-02", dateLabel)
-	if err != nil {
-		return "", 0, err
-	}
-	endAt := end.UTC().AddDate(0, 0, 1).Add(-time.Millisecond).UnixMilli()
-	startAt := end.UTC().AddDate(0, 0, -29).UnixMilli()
-	boards, err := projections.ListRecentPublicBoards(h.db, startAt, endAt, 100)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsNewBoardListBody(dateLabel, boards, startAt, endAt)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "New board list "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsRecommendedBoardListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_rcmdbrd_" + dateID
-	postID := "bbslists_rcmdbrd_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	boards, err := projections.ListRecommendedBoards(h.db, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsRecommendedBoardListBody(dateLabel, boards)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Recommended board list "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsRecommendedArticleListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_commend_" + dateID
-	postID := "bbslists_commend_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	entries, err := projections.ListPublicRecommendedDigestEntries(h.db, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsRecommendedArticleListBody(dateLabel, entries)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Recommended article list "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsHotTopicHistorySystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_toplog_" + dateID
-	postID := "bbslists_toplog_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	stats, err := projections.GetCommunityStats(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	threads, err := projections.ListThreadRankings(h.db, "", false, "", 30, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	categories, err := projections.ListCategories(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsHotTopicHistoryBody(dateLabel, stats, threads, categories)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Hot topic history "+dateLabel, body, ts)
-}
-
-func (h *Handler) ensureStatsBlessingListSystemPost(actor *User, dateLabel, dateID string, ts int64) (string, int64, error) {
-	threadID := "bbslists_bless_" + dateID
-	postID := "bbslists_bless_post_" + dateID
-	existingSeq, exists, err := h.prepareStatsSystemPost(threadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return threadID, existingSeq, nil
-	}
-	startAt, endAt, err := statsPeriodBounds(dateLabel, dateLabel)
-	if err != nil {
-		return "", 0, err
-	}
-	rankings, err := projections.ListBlessingRankingsRange(h.db, startAt, endAt, 10, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	recent, err := projections.ListBlessingsRange(h.db, startAt, endAt, 10, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsBlessingListBody(dateLabel, rankings, recent, startAt, endAt)
-	return h.ensureStatsSystemPost(actor, threadID, postID, "Daily blessing list "+dateLabel, body, ts)
-}
-
 type statsPeriodHistorySpec struct {
 	ThreadID string
 	PostID   string
@@ -2247,15 +1857,6 @@ type statsPeriodHistorySpec struct {
 	Label    string
 	StartDay string
 	EndDay   string
-}
-
-func (h *Handler) ensureStatsPeriodHistorySystemPosts(actor *User, day time.Time, ts int64) error {
-	for _, spec := range statsPeriodHistorySpecs(day) {
-		if _, _, err := h.ensureStatsPeriodHistorySystemPost(actor, spec, ts); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func statsPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
@@ -2302,31 +1903,6 @@ func statsPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
 	return out
 }
 
-func (h *Handler) ensureStatsPeriodHistorySystemPost(actor *User, spec statsPeriodHistorySpec, ts int64) (string, int64, error) {
-	existingSeq, exists, err := h.prepareStatsSystemPost(spec.ThreadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return spec.ThreadID, existingSeq, nil
-	}
-	history, err := projections.ListCommunityStatHistoryRange(h.db, spec.StartDay, spec.EndDay)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsPeriodHistoryBody(spec, history)
-	return h.ensureStatsSystemPost(actor, spec.ThreadID, spec.PostID, spec.Title, body, ts)
-}
-
-func (h *Handler) ensureStatsHotTopicPeriodHistorySystemPosts(actor *User, day time.Time, ts int64) error {
-	for _, spec := range statsHotTopicPeriodHistorySpecs(day) {
-		if _, _, err := h.ensureStatsHotTopicPeriodHistorySystemPost(actor, spec, ts); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func statsHotTopicPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
 	out := []statsPeriodHistorySpec{}
 	for _, spec := range statsPeriodHistorySpecs(day) {
@@ -2364,30 +1940,6 @@ func statsHotTopicPeriodHistorySpecs(day time.Time) []statsPeriodHistorySpec {
 		}
 	}
 	return out
-}
-
-func (h *Handler) ensureStatsHotTopicPeriodHistorySystemPost(actor *User, spec statsPeriodHistorySpec, ts int64) (string, int64, error) {
-	existingSeq, exists, err := h.prepareStatsSystemPost(spec.ThreadID, ts)
-	if err != nil {
-		return "", 0, err
-	}
-	if exists {
-		return spec.ThreadID, existingSeq, nil
-	}
-	start, end, err := statsPeriodBounds(spec.StartDay, spec.EndDay)
-	if err != nil {
-		return "", 0, err
-	}
-	threads, err := projections.ListThreadRankingsRange(h.db, "", false, "", start, end, 100, 0)
-	if err != nil {
-		return "", 0, err
-	}
-	categories, err := projections.ListCategories(h.db)
-	if err != nil {
-		return "", 0, err
-	}
-	body := formatStatsHotTopicPeriodHistoryBody(spec, threads, categories)
-	return h.ensureStatsSystemPost(actor, spec.ThreadID, spec.PostID, spec.Title, body, ts)
 }
 
 func statsPeriodBounds(startDay, endDay string) (int64, int64, error) {
