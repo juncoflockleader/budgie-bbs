@@ -29,6 +29,24 @@ func ApproveUser(db *sql.DB, userID string) error {
 	return err
 }
 
+func UpdatePassword(db *sql.DB, userID, passwordHash string, changedAtSeconds int64) error {
+	_, err := sqlstore.Exec(db, `UPDATE users SET password=?, password_changed_at=? WHERE id=?`, passwordHash, changedAtSeconds, userID)
+	return err
+}
+
+func RevokeSessions(db *sql.DB, userID string, validAfterSeconds int64) error {
+	_, err := sqlstore.Exec(db, `UPDATE users SET sessions_valid_after=? WHERE id=?`, validAfterSeconds, userID)
+	return err
+}
+
+func DeactivateTx(tx *sql.Tx, userID, reason string, ts int64) error {
+	_, err := sqlstore.Exec(tx,
+		`UPDATE users SET deactivated_at=?, deactivated_by=?, deactivated_reason=? WHERE id=? AND deactivated_at=0`,
+		ts, userID, reason, userID,
+	)
+	return err
+}
+
 func RegistrationStateTx(tx *sql.Tx) (int, bool, error) {
 	var userCount int
 	if err := sqlstore.QueryRow(tx, `SELECT COUNT(*) FROM users`).Scan(&userCount); err != nil {

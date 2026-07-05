@@ -1219,7 +1219,7 @@ func (c *Core) ChangePassword(userID, currentPassword, newPassword string) error
 	}
 	// Record the change time (unix seconds) so existing session tokens, which
 	// carry an `iat`, are invalidated (session revocation on password change).
-	if _, err := qExec(c.DB, `UPDATE users SET password=?, password_changed_at=? WHERE id=?`, string(hash), nowMS()/1000, userID); err != nil {
+	if err := accountstore.UpdatePassword(c.DB, userID, string(hash), nowMS()/1000); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
 	return nil
@@ -1231,7 +1231,7 @@ func (c *Core) ChangePassword(userID, currentPassword, newPassword string) error
 // this cutoff. Stateless JWTs give per-user (every-device) granularity, enforced
 // cluster-wide via the shared column.
 func (c *Core) RevokeUserSessions(userID string) error {
-	if _, err := qExec(c.DB, `UPDATE users SET sessions_valid_after=? WHERE id=?`, nowMS()/1000, userID); err != nil {
+	if err := accountstore.RevokeSessions(c.DB, userID, nowMS()/1000); err != nil {
 		return fmt.Errorf("revoke sessions: %w", err)
 	}
 	return nil
@@ -1259,10 +1259,7 @@ func (c *Core) DeactivateAccount(userID, password, reason string) error {
 	}
 	defer tx.Rollback() //nolint
 
-	if _, err := qExec(tx,
-		`UPDATE users SET deactivated_at=?, deactivated_by=?, deactivated_reason=? WHERE id=? AND deactivated_at=0`,
-		ts, userID, reason, userID,
-	); err != nil {
+	if err := accountstore.DeactivateTx(tx, userID, reason, ts); err != nil {
 		return err
 	}
 	events, err := c.appendAccountLifecycleRecordTx(tx, accountmodel.GoodbyeLifecycleRecord(accountLifecycleUser(u)), ts)
