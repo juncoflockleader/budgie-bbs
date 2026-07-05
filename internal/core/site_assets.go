@@ -4,24 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
-	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 )
 
-// validSiteAssets are the admin-uploadable site images, served publicly at
-// GET /api/v1/site/asset/<name> (or via the configured CDN base).
-var validSiteAssets = map[string]bool{"logo": true, "banner": true}
-
 // ValidSiteAsset reports whether name is an uploadable site asset slot.
-func ValidSiteAsset(name string) bool { return validSiteAssets[strings.TrimSpace(name)] }
-
-// siteAssetKey is the versioned object key used in the external store; the
-// version makes it cache-immutable for a CDN.
-func siteAssetKey(name string, version int64) string {
-	return fmt.Sprintf("site/%s-%d.png", name, version)
-}
+func ValidSiteAsset(name string) bool { return sitemodel.ValidAsset(name) }
 
 // SetAssetStore installs an external object store (e.g. S3/R2) for site-asset
 // bytes. Call once at startup before serving; nil keeps bytes in the DB.
@@ -39,8 +28,8 @@ func (c *Core) AssetPublicBaseURL() string {
 // SetSiteAsset stores (or replaces) an uploaded site image. Bytes go to the
 // external store under a versioned key when configured, else into the DB.
 func (c *Core) SetSiteAsset(name, contentType string, data []byte) error {
-	name = strings.TrimSpace(name)
-	if !validSiteAssets[name] {
+	name = sitemodel.NormalizeAssetName(name)
+	if !sitemodel.ValidAsset(name) {
 		return errors.New("unknown site asset")
 	}
 	if len(data) == 0 {
@@ -51,7 +40,7 @@ func (c *Core) SetSiteAsset(name, contentType string, data []byte) error {
 	if c.assetStore != nil {
 		var oldVersion int64
 		_ = qQueryRow(c.DB, `SELECT updated_at FROM site_assets WHERE name=?`, name).Scan(&oldVersion)
-		if err := c.assetStore.Put(context.Background(), siteAssetKey(name, version), contentType, data); err != nil {
+		if err := c.assetStore.Put(context.Background(), sitemodel.AssetObjectKey(name, version), contentType, data); err != nil {
 			return err
 		}
 		if _, err := qExec(c.DB,
@@ -64,7 +53,7 @@ func (c *Core) SetSiteAsset(name, contentType string, data []byte) error {
 			return err
 		}
 		if oldVersion > 0 && oldVersion != version {
-			_ = c.assetStore.Delete(context.Background(), siteAssetKey(name, oldVersion)) // best effort
+			_ = c.assetStore.Delete(context.Background(), sitemodel.AssetObjectKey(name, oldVersion)) // best effort
 		}
 		return nil
 	}
@@ -82,8 +71,8 @@ func (c *Core) SetSiteAsset(name, contentType string, data []byte) error {
 // SiteAsset returns an asset's bytes for the app-served path, or sql.ErrNoRows
 // if unset. When bytes live in the external store they are fetched from it.
 func (c *Core) SiteAsset(name string) (data []byte, contentType string, updatedAt int64, err error) {
-	name = strings.TrimSpace(name)
-	if !validSiteAssets[name] {
+	name = sitemodel.NormalizeAssetName(name)
+	if !sitemodel.ValidAsset(name) {
 		return nil, "", 0, sql.ErrNoRows
 	}
 	var raw []byte
@@ -96,7 +85,7 @@ func (c *Core) SiteAsset(name string) (data []byte, contentType string, updatedA
 		return raw, contentType, updatedAt, nil
 	}
 	if c.assetStore != nil {
-		b, ct, gerr := c.assetStore.Get(context.Background(), siteAssetKey(name, updatedAt))
+		b, ct, gerr := c.assetStore.Get(context.Background(), sitemodel.AssetObjectKey(name, updatedAt))
 		if errors.Is(gerr, assetstore.ErrNotFound) {
 			return nil, "", 0, sql.ErrNoRows
 		}
@@ -113,11 +102,11 @@ func (c *Core) SiteAsset(name string) (data []byte, contentType string, updatedA
 
 // DeleteSiteAsset clears an uploaded asset (reverting to the glyph/no-banner).
 func (c *Core) DeleteSiteAsset(name string) error {
-	name = strings.TrimSpace(name)
+	name = sitemodel.NormalizeAssetName(name)
 	var version int64
 	_ = qQueryRow(c.DB, `SELECT updated_at FROM site_assets WHERE name=?`, name).Scan(&version)
 	if c.assetStore != nil && version > 0 {
-		_ = c.assetStore.Delete(context.Background(), siteAssetKey(name, version)) // best effort
+		_ = c.assetStore.Delete(context.Background(), sitemodel.AssetObjectKey(name, version)) // best effort
 	}
 	_, err := qExec(c.DB, `DELETE FROM site_assets WHERE name=?`, name)
 	return err
@@ -126,10 +115,7 @@ func (c *Core) DeleteSiteAsset(name string) error {
 // SiteAssetVersions returns each asset slot's version (updated_at ms), 0 when
 // unset. Surfaced to the web so it can build cache-busting / CDN URLs.
 func (c *Core) SiteAssetVersions() map[string]int64 {
-	out := make(map[string]int64, len(validSiteAssets))
-	for name := range validSiteAssets {
-		out[name] = 0
-	}
+	out := sitemodel.EmptyAssetVersions()
 	rows, err := c.DB.Query(`SELECT name, updated_at FROM site_assets`)
 	if err != nil {
 		return out
@@ -139,8 +125,9 @@ func (c *Core) SiteAssetVersions() map[string]int64 {
 		var n string
 		var v int64
 		if rows.Scan(&n, &v) == nil {
-			if _, ok := out[n]; ok {
-				out[n] = v
+			name := sitemodel.NormalizeAssetName(n)
+			if sitemodel.ValidAsset(name) {
+				out[name] = v
 			}
 		}
 	}
