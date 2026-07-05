@@ -19,8 +19,8 @@ func (h *Handler) revokeRole(actor *User, p proto.RevokeRolePayload) Reply {
 }
 
 func (h *Handler) changeRole(actor *User, userID, role string, kind proto.EventKind, action, storedRole string) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	ts := nowMS()
 
@@ -360,8 +360,8 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 }
 
 func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	p = proto.NormalizeContentFilterPayload(p)
 	filterID := p.ID
@@ -476,8 +476,8 @@ func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, syste
 }
 
 func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	p, msg := proto.NormalizeCreateBoardPayload(p)
 	if msg != "" {
@@ -526,8 +526,8 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 }
 
 func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	p, msg := proto.NormalizePurgePostPayload(p)
 	if msg != "" {

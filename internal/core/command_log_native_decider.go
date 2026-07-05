@@ -306,8 +306,8 @@ func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionAdminForPartition(r
 	if errDetail != nil {
 		return nil, errDetail
 	}
-	if !actor.IsAdmin() {
-		return nil, nativeDecisionErr(proto.ErrForbidden, "admin role required", false)
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return nil, errDetail
 	}
 	return actor, nil
 }

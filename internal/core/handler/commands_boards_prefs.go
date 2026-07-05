@@ -171,8 +171,8 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 }
 
 func (h *Handler) setRecommendedBoard(actor *User, p proto.SetRecommendedBoardPayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	p, msg := proto.NormalizeSetRecommendedBoardPayload(p)
 	if msg != "" && p.Board == "" {
@@ -198,8 +198,8 @@ func (h *Handler) setRecommendedBoard(actor *User, p proto.SetRecommendedBoardPa
 }
 
 func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	p, msg := proto.NormalizeSetBoardModeratorPayload(p)
 	if msg != "" {
@@ -980,8 +980,8 @@ func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath
 }
 
 func (h *Handler) publishSystemNotice(actor *User, p proto.PublishSystemNoticePayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	p, board, msg := proto.NormalizePublishSystemNoticePayload(p)
 	if msg != "" {
@@ -1065,8 +1065,8 @@ func (h *Handler) ensureBlessingSystemPost(actor, target *User, blessingID, mess
 }
 
 func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshotPayload) Reply {
-	if !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "admin role required", false)}
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	ts := nowMS()
 	dateLabel, _, msg := proto.NormalizeStatsSnapshotDate(p.Date, ts)
