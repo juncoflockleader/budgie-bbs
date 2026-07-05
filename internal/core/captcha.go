@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/captcha"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/captchamodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/captchastore"
 )
 
 var (
@@ -62,35 +62,25 @@ func (c *Core) CaptchaPolicy() captchamodel.Policy {
 	return captchamodel.PolicyForConfig(c.captcha.cfg)
 }
 
-// CaptchaChallenge is a freshly issued native challenge.
-type CaptchaChallenge struct {
-	ID        string `json:"id"`
-	SVG       string `json:"svg"`
-	ExpiresAt int64  `json:"expiresAt"`
-}
-
 // IssueCaptchaChallenge mints a native distorted-text challenge, persists its
 // hashed answer with an expiry, and returns the challenge id + SVG. Only valid
 // in native mode.
-func (c *Core) IssueCaptchaChallenge() (*CaptchaChallenge, error) {
+func (c *Core) IssueCaptchaChallenge() (*captchamodel.Challenge, error) {
 	if c.captchaMode() != captchamodel.ModeNative {
 		return nil, errors.New("native captcha not enabled")
 	}
 	now := nowMS()
 	// Opportunistically prune expired challenges to bound table growth.
-	_, _ = qExec(c.DB, `DELETE FROM captcha_challenges WHERE expires_at < ?`, now)
+	_ = captchastore.PruneExpired(c.DB, now)
 
 	code := captcha.RandomCode(5)
 	id := newID("cap_")
 	hash := captcha.HashAnswer(c.captcha.cfg.Secret, id, code)
 	exp := now + c.captcha.cfg.TTL.Milliseconds()
-	if _, err := qExec(c.DB,
-		`INSERT INTO captcha_challenges (id, answer_hash, created_at, expires_at) VALUES (?,?,?,?)`,
-		id, hash, now, exp,
-	); err != nil {
+	if err := captchastore.InsertChallenge(c.DB, id, hash, now, exp); err != nil {
 		return nil, err
 	}
-	return &CaptchaChallenge{ID: id, SVG: captcha.RenderSVG(code), ExpiresAt: exp}, nil
+	return &captchamodel.Challenge{ID: id, SVG: captcha.RenderSVG(code), ExpiresAt: exp}, nil
 }
 
 // VerifyCaptcha enforces the configured captcha. It is a no-op when captcha is
@@ -121,32 +111,20 @@ func (c *Core) verifyNativeCaptcha(sub captchamodel.Submission) error {
 	if strings.TrimSpace(sub.ChallengeID) == "" {
 		return ErrCaptchaRequired
 	}
-	var hash string
-	var exp int64
-	err := qQueryRow(c.DB,
-		`SELECT answer_hash, expires_at FROM captcha_challenges WHERE id=?`,
-		sub.ChallengeID,
-	).Scan(&hash, &exp)
-	if err == sql.ErrNoRows {
-		return ErrCaptchaFailed
-	}
+	challenge, claimed, err := captchastore.ClaimChallenge(c.DB, sub.ChallengeID)
 	if err != nil {
 		return err
 	}
 	// Single-use: atomically claim the challenge. Exactly one concurrent request
 	// deletes the row; any replay of the same solved challenge gets 0 rows
 	// affected and fails, so one solved captcha authorizes only one signup.
-	res, err := qExec(c.DB, `DELETE FROM captcha_challenges WHERE id=?`, sub.ChallengeID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if !claimed {
 		return ErrCaptchaFailed
 	}
-	if exp < nowMS() {
+	if challenge.ExpiresAt < nowMS() {
 		return ErrCaptchaFailed
 	}
-	if !captcha.AnswerMatches(c.captcha.cfg.Secret, sub.ChallengeID, sub.Answer, hash) {
+	if !captcha.AnswerMatches(c.captcha.cfg.Secret, sub.ChallengeID, sub.Answer, challenge.AnswerHash) {
 		return ErrCaptchaFailed
 	}
 	return nil

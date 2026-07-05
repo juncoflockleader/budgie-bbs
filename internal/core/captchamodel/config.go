@@ -40,6 +40,13 @@ type Submission struct {
 	RemoteIP    string
 }
 
+// Challenge is a freshly issued native captcha challenge.
+type Challenge struct {
+	ID        string `json:"id"`
+	SVG       string `json:"svg"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
 func NormalizeConfig(cfg Config) Config {
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
 	if cfg.Mode == "" {
