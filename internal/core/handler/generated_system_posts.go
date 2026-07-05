@@ -19,7 +19,7 @@ type generatedSystemPostSpec struct {
 	AfterEnsureBoard func() error
 }
 
-func (h *Handler) appendGeneratedSystemPostTx(tx *sql.Tx, actor *User, spec generatedSystemPostSpec, ts int64) ([]*proto.Event, error) {
+func (h *Handler) appendGeneratedSystemPostTx(tx *sql.Tx, actor *projections.User, spec generatedSystemPostSpec, ts int64) ([]*proto.Event, error) {
 	out := []*proto.Event{}
 	exists, err := projections.BoardExists(tx, spec.BoardID)
 	if err != nil {

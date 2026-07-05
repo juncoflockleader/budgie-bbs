@@ -3,10 +3,11 @@ package handler
 import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-func (h *Handler) setUserRelationship(actor *User, p proto.SetUserRelationshipPayload) Reply {
+func (h *Handler) setUserRelationship(actor *projections.User, p proto.SetUserRelationshipPayload) Reply {
 	p, msg := proto.NormalizeSetUserRelationshipPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -32,7 +33,7 @@ func (h *Handler) setUserRelationship(actor *User, p proto.SetUserRelationshipPa
 	return Reply{Result: &proto.AckResult{ID: target.ID}}
 }
 
-func (h *Handler) setLoginWatch(actor *User, p proto.SetLoginWatchPayload) Reply {
+func (h *Handler) setLoginWatch(actor *projections.User, p proto.SetLoginWatchPayload) Reply {
 	p, msg := proto.NormalizeSetLoginWatchPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -74,7 +75,7 @@ func (h *Handler) setLoginWatch(actor *User, p proto.SetLoginWatchPayload) Reply
 	return Reply{Result: &proto.AckResult{ID: target.ID}}
 }
 
-func (h *Handler) blessUser(actor *User, p proto.BlessUserPayload) Reply {
+func (h *Handler) blessUser(actor *projections.User, p proto.BlessUserPayload) Reply {
 	p, msg := proto.NormalizeBlessUserPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -121,7 +122,7 @@ func (h *Handler) blessUser(actor *User, p proto.BlessUserPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: blessingID, Seq: seq}}
 }
 
-func (h *Handler) notifyLoginWatchers(actor *User, ts int64) error {
+func (h *Handler) notifyLoginWatchers(actor *projections.User, ts int64) error {
 	watcherIDs, err := currentRuntime().ListLoginWatchers(h.db, actor.ID)
 	if err != nil {
 		return err

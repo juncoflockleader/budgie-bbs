@@ -11,7 +11,7 @@ import (
 
 // ── Modern moderation review queue ──────────────────────────────────────────
 
-func (h *Handler) flagPost(actor *User, p proto.FlagPostPayload) Reply {
+func (h *Handler) flagPost(actor *projections.User, p proto.FlagPostPayload) Reply {
 	p, msg := proto.NormalizeFlagPostPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -70,7 +70,7 @@ func (h *Handler) flagPost(actor *User, p proto.FlagPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: reviewID, Seq: seq}}
 }
 
-func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply {
+func (h *Handler) resolveReview(actor *projections.User, p proto.ResolveReviewPayload) Reply {
 	if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -120,7 +120,7 @@ func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply
 	return Reply{Result: &proto.AckResult{ID: p.Review, Seq: seq}}
 }
 
-func (h *Handler) appendModerationSystemPostTx(tx *sql.Tx, actor *User, action, reviewID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
+func (h *Handler) appendModerationSystemPostTx(tx *sql.Tx, actor *projections.User, action, reviewID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
 	threadIDOut, postIDOut := proto.ModerationSystemPostIDs(action, reviewID)
 	exists, err := projections.ThreadExists(tx, threadIDOut)
 	if err != nil {
@@ -143,7 +143,7 @@ func (h *Handler) appendModerationSystemPostTx(tx *sql.Tx, actor *User, action, 
 	}, ts)
 }
 
-func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *User, publicAuthor string, filter *ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64) (*proto.Event, []*proto.Event, error) {
+func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *projections.User, publicAuthor string, filter *ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64) (*proto.Event, []*proto.Event, error) {
 	if filter == nil {
 		return nil, nil, nil
 	}
@@ -171,7 +171,7 @@ func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *User, publicAut
 	return evt, generated, nil
 }
 
-func (h *Handler) appendFilterSystemPostTx(tx *sql.Tx, actor *User, publicAuthor string, filter *ContentFilter, reviewID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
+func (h *Handler) appendFilterSystemPostTx(tx *sql.Tx, actor *projections.User, publicAuthor string, filter *ContentFilter, reviewID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
 	threadIDOut, postIDOut := proto.ContentFilterReviewPostIDs(reviewID)
 	exists, err := projections.ThreadExists(tx, threadIDOut)
 	if err != nil {
