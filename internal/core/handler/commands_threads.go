@@ -803,13 +803,10 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if !settings.AttachmentsAllowed && !canModerateBoard {
 		return Reply{Err: errDetail(proto.ErrForbidden, "attachments are not enabled for this board", false)}
 	}
-	isAuthor := post.AuthorID == actor.ID
-	if post.AuthorID == "" {
-		isAuthor = post.Author == actor.Name
-	}
-	withinWindow := time.Now().UnixMilli()-post.CreatedAt < editWindowDur.Milliseconds()
+	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
+	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), post.CreatedAt, editWindowDur.Milliseconds())
 	if !canModerateBoard && !(isAuthor && withinWindow) {
-		return Reply{Err: errDetail(proto.ErrEditWindowExpired, "edit window has expired", false)}
+		return Reply{Err: commandrules.AuthorEditWindowExpiredError()}
 	}
 	count, err := projections.PostAttachmentCount(h.db, p.Post)
 	if err != nil {
@@ -894,13 +891,10 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrConflict, "cannot edit a redacted post", false)}
 	}
 
-	isAuthor := post.AuthorID == actor.ID
-	if post.AuthorID == "" {
-		isAuthor = post.Author == actor.Name
-	}
-	withinWindow := time.Now().UnixMilli()-post.CreatedAt < editWindowDur.Milliseconds()
+	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
+	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), post.CreatedAt, editWindowDur.Milliseconds())
 	if !actor.IsMod() && !(isAuthor && withinWindow) {
-		return Reply{Err: errDetail(proto.ErrEditWindowExpired, "edit window has expired", false)}
+		return Reply{Err: commandrules.AuthorEditWindowExpiredError()}
 	}
 
 	thread, err := currentRuntime().GetThreadTx(tx, post.Thread)
@@ -1042,11 +1036,8 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrConflict, "post is already redacted", false)}
 	}
 
-	isAuthor := post.AuthorID == actor.ID
-	if post.AuthorID == "" {
-		isAuthor = post.Author == actor.Name
-	}
-	withinWindow := time.Now().UnixMilli()-post.CreatedAt < editWindowDur.Milliseconds()
+	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
+	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), post.CreatedAt, editWindowDur.Milliseconds())
 	thread, err := currentRuntime().GetThreadTx(tx, post.Thread)
 	if err != nil || thread == nil {
 		return internalErr(err)
@@ -1343,17 +1334,14 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 	}
 
 	canModerateThread := commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board)
-	isAuthor := thread.AuthorID == actor.ID
-	if thread.AuthorID == "" {
-		isAuthor = thread.Author == actor.Name
-	}
-	withinWindow := time.Now().UnixMilli()-thread.CreatedAt < editWindowDur.Milliseconds()
+	isAuthor := commandrules.ActorAuthoredBy(actor, thread.AuthorID, thread.Author)
+	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), thread.CreatedAt, editWindowDur.Milliseconds())
 	if !canModerateThread {
 		if !isAuthor {
 			return Reply{Err: errDetail(proto.ErrForbidden, "thread author or board thread moderation permission required", false)}
 		}
 		if !withinWindow {
-			return Reply{Err: errDetail(proto.ErrEditWindowExpired, "edit window has expired", false)}
+			return Reply{Err: commandrules.AuthorEditWindowExpiredError()}
 		}
 	}
 

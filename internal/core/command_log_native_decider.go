@@ -959,12 +959,10 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachPost(ctx context.Context,
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "attachments are not enabled for this board", false)
 	}
 	ts := nativeCommandTimestamp(record)
-	isAuthor := post.AuthorID == actor.ID
-	if post.AuthorID == "" {
-		isAuthor = post.Author == actor.Name
-	}
-	if !isAuthor || ts-post.CreatedAt >= nativeAuthorEditWindow.Milliseconds() {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrEditWindowExpired, "edit window has expired", false)
+	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
+	withinWindow := commandrules.WithinAuthorEditWindow(ts, post.CreatedAt, nativeAuthorEditWindow.Milliseconds())
+	if !isAuthor || !withinWindow {
+		return nativeCommandDecision{}, commandrules.AuthorEditWindowExpiredError()
 	}
 	count, err := projections.PostAttachmentCount(e.core.DB, post.ID)
 	if err != nil {
@@ -1031,12 +1029,10 @@ func (e *CommandLogNativeDecisionExecutor) decideEditPost(ctx context.Context, r
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "thread not found", false)
 	}
 	ts := nativeCommandTimestamp(record)
-	isAuthor := post.AuthorID == actor.ID
-	if post.AuthorID == "" {
-		isAuthor = post.Author == actor.Name
-	}
-	if !actor.IsMod() && (!isAuthor || ts-post.CreatedAt >= nativeAuthorEditWindow.Milliseconds()) {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrEditWindowExpired, "edit window has expired", false)
+	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
+	withinWindow := commandrules.WithinAuthorEditWindow(ts, post.CreatedAt, nativeAuthorEditWindow.Milliseconds())
+	if !actor.IsMod() && (!isAuthor || !withinWindow) {
+		return nativeCommandDecision{}, commandrules.AuthorEditWindowExpiredError()
 	}
 
 	event := nativeEvent(record, 0, proto.EvtPostEdited, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostEditedPayload{
@@ -1176,8 +1172,9 @@ func (e *CommandLogNativeDecisionExecutor) decideRedactPost(ctx context.Context,
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
 	ts := nativeCommandTimestamp(record)
-	isAuthor := post.AuthorID != "" && post.AuthorID == actor.ID
-	if !canModeratePosts && !(isAuthor && ts-post.CreatedAt < nativeAuthorEditWindow.Milliseconds()) {
+	isAuthor := commandrules.ActorAuthoredByID(actor, post.AuthorID)
+	withinWindow := commandrules.WithinAuthorEditWindow(ts, post.CreatedAt, nativeAuthorEditWindow.Milliseconds())
+	if !canModeratePosts && !(isAuthor && withinWindow) {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "insufficient permissions to redact this post", false)
 	}
 	event := nativeEvent(record, 0, proto.EvtPostRedacted, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRedactedPayload{
@@ -1393,17 +1390,14 @@ func (e *CommandLogNativeDecisionExecutor) decideSetThreadTitle(ctx context.Cont
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	isAuthor := thread.AuthorID == actor.ID
-	if thread.AuthorID == "" {
-		isAuthor = thread.Author == actor.Name
-	}
+	isAuthor := commandrules.ActorAuthoredBy(actor, thread.AuthorID, thread.Author)
 	ts := nativeCommandTimestamp(record)
 	if !canModerateThread {
 		if !isAuthor {
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread author or board thread moderation permission required", false)
 		}
-		if ts-thread.CreatedAt >= nativeAuthorEditWindow.Milliseconds() {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrEditWindowExpired, "edit window has expired", false)
+		if !commandrules.WithinAuthorEditWindow(ts, thread.CreatedAt, nativeAuthorEditWindow.Milliseconds()) {
+			return nativeCommandDecision{}, commandrules.AuthorEditWindowExpiredError()
 		}
 	}
 	event := nativeEvent(record, 0, proto.EvtThreadTitleSet, []string{"board:" + thread.Board, "thread:" + thread.ID}, &proto.ThreadTitleSetPayload{

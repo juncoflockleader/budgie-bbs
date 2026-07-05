@@ -32,6 +32,28 @@ func NormalizePostAttachments(input []proto.AttachmentPayload, allowed bool, can
 	return proto.WithAttachmentIDs(attachments, idFor), nil
 }
 
+func ActorAuthoredBy(actor *projections.User, authorID, authorName string) bool {
+	if actor == nil {
+		return false
+	}
+	if authorID != "" {
+		return authorID == actor.ID
+	}
+	return authorName == actor.Name
+}
+
+func ActorAuthoredByID(actor *projections.User, authorID string) bool {
+	return actor != nil && authorID != "" && authorID == actor.ID
+}
+
+func WithinAuthorEditWindow(nowMS, createdAt, windowMS int64) bool {
+	return nowMS-createdAt < windowMS
+}
+
+func AuthorEditWindowExpiredError() *proto.ErrorDetail {
+	return newErrDetail(proto.ErrEditWindowExpired, "edit window has expired", false)
+}
+
 func boardRequiresPostingMembership(settings *projections.BoardSettings) bool {
 	return settings != nil && (settings.MemberReadMode || settings.MemberPostMode)
 }
