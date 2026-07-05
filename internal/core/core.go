@@ -23,6 +23,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
@@ -46,11 +47,6 @@ var (
 	ErrDeactivationIncomplete = errors.New("password required to deactivate account")
 	ErrAccountDeleteForbidden = errors.New("account deletion forbidden")
 	ErrLastAdminDeletion      = errors.New("cannot delete the last admin")
-)
-
-const (
-	deletedUserID          = "usr_deleted"
-	deletedUserDisplayName = "[deleted]"
 )
 
 // Core is the central server object. Transports embed or reference it.
@@ -1334,7 +1330,7 @@ func (c *Core) DeleteUser(actorID, targetUserID, reason string) error {
 	if actorID == targetUserID {
 		return fmt.Errorf("%w: cannot delete your own account", ErrAccountDeleteForbidden)
 	}
-	if targetUserID == deletedUserID {
+	if targetUserID == accountmodel.DeletedUserID {
 		return fmt.Errorf("%w: cannot delete account tombstone", ErrAccountDeleteForbidden)
 	}
 	reason = accountmodel.NormalizeAccountClosureReason(reason)
@@ -1345,14 +1341,14 @@ func (c *Core) DeleteUser(actorID, targetUserID, reason string) error {
 	}
 	defer tx.Rollback() //nolint
 
-	actor, err := getUserByIDTx(tx, actorID)
+	actor, err := accountstore.UserByIDTx(tx, actorID)
 	if err != nil {
 		return err
 	}
 	if actor == nil || !actor.IsAdmin() {
 		return fmt.Errorf("%w: admin role required", ErrAccountDeleteForbidden)
 	}
-	target, err := getUserByIDTx(tx, targetUserID)
+	target, err := accountstore.UserByIDTx(tx, targetUserID)
 	if err != nil {
 		return err
 	}
@@ -1360,8 +1356,8 @@ func (c *Core) DeleteUser(actorID, targetUserID, reason string) error {
 		return sql.ErrNoRows
 	}
 	if target.Role == "admin" {
-		var adminCount int
-		if err := qQueryRow(tx, `SELECT COUNT(*) FROM users WHERE role='admin' AND id<>?`, targetUserID).Scan(&adminCount); err != nil {
+		adminCount, err := accountstore.OtherAdminCountTx(tx, targetUserID)
+		if err != nil {
 			return err
 		}
 		if adminCount == 0 {
@@ -1374,7 +1370,7 @@ func (c *Core) DeleteUser(actorID, targetUserID, reason string) error {
 		return err
 	}
 	ts := nowMS()
-	if err := ensureDeletedUserTx(tx, actorID, ts); err != nil {
+	if err := accountstore.EnsureDeletedUserTx(tx, actorID, ts); err != nil {
 		return err
 	}
 	if isSQLCounterStore(c.counterStore) {
@@ -1382,10 +1378,10 @@ func (c *Core) DeleteUser(actorID, targetUserID, reason string) error {
 			return err
 		}
 	}
-	if err := purgeUserTx(tx, actorID, target, ts); err != nil {
+	if err := accountstore.PurgeUserTx(tx, actorID, target, ts); err != nil {
 		return err
 	}
-	if _, err := qExec(tx, `DELETE FROM users WHERE id=?`, targetUserID); err != nil {
+	if err := accountstore.DeleteUserTx(tx, targetUserID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1501,130 +1497,6 @@ func (c *Core) cleanupDeletedUserCounterIdentity(userID string, identity counter
 	return mutation.Commit()
 }
 
-func getUserByIDTx(tx *sql.Tx, id string) (*projections.User, error) {
-	u := &projections.User{}
-	err := qQueryRow(tx, `SELECT id, name, role, password, created,
-	        COALESCE(NULLIF(registration_status,''), 'approved'), COALESCE(reviewed_at,0), COALESCE(reviewed_by,''), COALESCE(review_reason,''),
-	        COALESCE(deactivated_at,0), COALESCE(deactivated_by,''), COALESCE(deactivated_reason,'')
-	    FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.Name, &u.Role, &u.Password, &u.Created,
-			&u.RegistrationStatus, &u.ReviewedAt, &u.ReviewedBy, &u.ReviewReason,
-			&u.DeactivatedAt, &u.DeactivatedBy, &u.DeactivatedReason)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return u, err
-}
-
-func ensureDeletedUserTx(tx *sql.Tx, actorID string, ts int64) error {
-	var exists int
-	if err := qQueryRow(tx, `SELECT 1 FROM users WHERE id=?`, deletedUserID).Scan(&exists); err == nil {
-		return nil
-	} else if err != sql.ErrNoRows {
-		return err
-	}
-	name := "deleted-user"
-	for i := 0; i < 10; i++ {
-		candidate := name
-		if i > 0 {
-			candidate = fmt.Sprintf("deleted-user-%d", i)
-		}
-		var conflictingID string
-		err := qQueryRow(tx, `SELECT id FROM users WHERE name=?`, candidate).Scan(&conflictingID)
-		if err == sql.ErrNoRows {
-			name = candidate
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if conflictingID == deletedUserID {
-			name = candidate
-			break
-		}
-	}
-	if _, err := qExec(tx,
-		`INSERT INTO users (id, name, role, password, created, registration_status, reviewed_at, reviewed_by, review_reason, deactivated_at, deactivated_by, deactivated_reason)
-		 VALUES (?, ?, 'user', '', ?, 'rejected', ?, ?, 'system tombstone account', ?, ?, 'system tombstone account')`,
-		deletedUserID, name, ts, ts, actorID, ts, actorID,
-	); err != nil {
-		return err
-	}
-	_, err := qExec(tx,
-		`INSERT OR IGNORE INTO user_profiles (user_id, display_name, updated_at) VALUES (?, ?, ?)`,
-		deletedUserID, deletedUserDisplayName, ts,
-	)
-	return err
-}
-
-func purgeUserTx(tx *sql.Tx, actorID string, target *projections.User, ts int64) error {
-	targetID := target.ID
-	oldName := target.Name
-	cleanup := []struct {
-		query string
-		args  []any
-	}{
-		{`UPDATE posts_fts SET author=? WHERE post_id IN (SELECT id FROM posts WHERE author_id=?)`, []any{deletedUserDisplayName, targetID}},
-		{`UPDATE threads SET author=?, author_id=? WHERE author_id=?`, []any{deletedUserDisplayName, deletedUserID, targetID}},
-		{`UPDATE posts SET author=?, author_id=?, signature='' WHERE author_id=?`, []any{deletedUserDisplayName, deletedUserID, targetID}},
-		{`UPDATE relay_deliveries SET author_id=?, author_name=? WHERE author_id=?`, []any{deletedUserID, deletedUserDisplayName, targetID}},
-		{`UPDATE post_attachments SET created_by=? WHERE created_by=?`, []any{deletedUserID, targetID}},
-		{`UPDATE mail_attachments SET created_by=? WHERE created_by=?`, []any{deletedUserID, targetID}},
-		{`UPDATE digest_entries SET created_by=?, updated_at=? WHERE created_by=?`, []any{actorID, ts, targetID}},
-		{`UPDATE digest_directories SET created_by=?, updated_at=? WHERE created_by=?`, []any{actorID, ts, targetID}},
-		{`UPDATE users SET reviewed_by='' WHERE reviewed_by=?`, []any{targetID}},
-		{`UPDATE account_registration_settings SET updated_at=? WHERE id='default' AND updated_at=0`, []any{ts}},
-		{`UPDATE password_recovery_requests SET reviewer_id='', review_note='' WHERE reviewer_id=?`, []any{targetID}},
-		{`UPDATE board_member_applications SET reviewer_id='', review_note='' WHERE reviewer_id=?`, []any{targetID}},
-		{`UPDATE user_sanctions SET by=? WHERE by=?`, []any{deletedUserID, targetID}},
-		{`UPDATE moderation_reviews SET actor=? WHERE actor=? OR actor=?`, []any{deletedUserDisplayName, targetID, oldName}},
-		{`UPDATE notifications SET actor=? WHERE actor=?`, []any{deletedUserDisplayName, oldName}},
-		{`DELETE FROM mail_messages WHERE from_user_id=?`, []any{targetID}},
-		{`DELETE FROM direct_messages WHERE from_user_id=? OR to_user_id=?`, []any{targetID, targetID}},
-		{`DELETE FROM moderation_reviews WHERE reporter=?`, []any{targetID}},
-		{`DELETE FROM post_reactions WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM poll_votes WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM thread_prefs WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM notifications WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM cursors WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM auth_pubkeys WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_sanctions WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM processed_commands WHERE actor_id=?`, []any{targetID}},
-		{`DELETE FROM processed_commands_v2 WHERE actor_id=?`, []any{targetID}},
-		{`DELETE FROM command_log_receipts WHERE actor_id=?`, []any{targetID}},
-		{`DELETE FROM user_activity WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM mail_copies WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM mail_messages WHERE id NOT IN (SELECT DISTINCT message_id FROM mail_copies)`, nil},
-		{`DELETE FROM mail_group_members WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM mail_groups WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM password_recovery_requests WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM favorite_folders WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM board_favorites WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM board_moderators WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM board_members WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM board_member_applications WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM direct_message_settings WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_relationships WHERE user_id=? OR target_user_id=?`, []any{targetID, targetID}},
-		{`DELETE FROM user_presence WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_presence_sessions WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM board_read_markers WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM thread_read_markers WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_private_profiles WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_personal_files WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_signatures WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_signature_settings WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_login_acl_rules WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_login_acl_settings WHERE user_id=?`, []any{targetID}},
-		{`DELETE FROM user_profiles WHERE user_id=?`, []any{targetID}},
-	}
-	for _, step := range cleanup {
-		if _, err := qExec(tx, step.query, step.args...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (c *Core) RecordLogin(userID string) error {
 	return projections.RecordLogin(c.DB, userID)
 }
@@ -1712,7 +1584,7 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.Up
 	}
 	defer tx.Rollback() //nolint
 
-	actor, err := getUserByIDTx(tx, actorID)
+	actor, err := accountstore.UserByIDTx(tx, actorID)
 	if err != nil {
 		return nil, err
 	}
