@@ -307,6 +307,28 @@ func PostPurged(postID, threadID, boardID, by, reason string, ts int64) ([]strin
 	}
 }
 
+func PostReacted(postID, threadID, boardID, user, emoji string, reactionCount int, ts int64) ([]string, *proto.PostReactedPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostReactedPayload{
+		PostID:        postID,
+		Thread:        threadID,
+		User:          user,
+		Emoji:         emoji,
+		ReactionCount: reactionCount,
+		TS:            ts,
+	}
+}
+
+func PostUnreacted(postID, threadID, boardID, user, emoji string, reactionCount int, ts int64) ([]string, *proto.PostUnreactedPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostUnreactedPayload{
+		PostID:        postID,
+		Thread:        threadID,
+		User:          user,
+		Emoji:         emoji,
+		ReactionCount: reactionCount,
+		TS:            ts,
+	}
+}
+
 type DigestEntryUpsertedSpec proto.DigestEntryUpsertedPayload
 
 func DigestEntryUpserted(spec DigestEntryUpsertedSpec) ([]string, *proto.DigestEntryUpsertedPayload) {

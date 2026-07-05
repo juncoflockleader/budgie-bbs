@@ -303,6 +303,22 @@ func TestPostUpdateEvents(t *testing.T) {
 	}
 }
 
+func TestPostReactionEvents(t *testing.T) {
+	scopes, reacted := PostReacted("post_1", "thread_1", "general", "alice", "heart", 3, 1234)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if reacted.PostID != "post_1" || reacted.Thread != "thread_1" || reacted.User != "alice" ||
+		reacted.Emoji != "heart" || reacted.ReactionCount != 3 || reacted.TS != 1234 {
+		t.Fatalf("PostReacted payload = %+v", reacted)
+	}
+
+	scopes, unreacted := PostUnreacted("post_1", "thread_1", "general", "alice", "heart", 2, 1235)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if unreacted.PostID != "post_1" || unreacted.Thread != "thread_1" || unreacted.User != "alice" ||
+		unreacted.Emoji != "heart" || unreacted.ReactionCount != 2 || unreacted.TS != 1235 {
+		t.Fatalf("PostUnreacted payload = %+v", unreacted)
+	}
+}
+
 func TestDigestEvents(t *testing.T) {
 	scopes, upserted := DigestEntryUpserted(DigestEntryUpsertedSpec{
 		ID: "dig_1", Board: "general", TargetKind: "post", TargetID: "post_1",

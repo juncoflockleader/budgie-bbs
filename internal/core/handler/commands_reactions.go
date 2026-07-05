@@ -3,6 +3,7 @@ package handler
 import (
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -68,8 +69,8 @@ func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostReacted, Scopes: scopes,
-		Payload: &proto.PostReactedPayload{PostID: post.ID, Thread: post.Thread, User: actor.Name, Emoji: emoji, ReactionCount: count, TS: ts}, TS: ts})
+	scopes, eventPayload := commandevents.PostReacted(post.ID, post.Thread, thread.Board, actor.Name, emoji, count, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostReacted, Scopes: scopes, Payload: eventPayload, TS: ts})
 	pgNotifyEphemeral(h.db, string(proto.EvtPostReacted), eventwakeup.EncodePostReaction(post.ID, actor.ID, emoji, ts), strings.Join(scopes, ","))
 
 	return Reply{Result: &proto.AckResult{ID: post.ID}}
@@ -133,8 +134,8 @@ func (h *Handler) unreactPost(actor *User, p proto.ReactPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostUnreacted, Scopes: scopes,
-		Payload: &proto.PostUnreactedPayload{PostID: post.ID, Thread: post.Thread, User: actor.Name, Emoji: emoji, ReactionCount: count, TS: ts}, TS: ts})
+	scopes, eventPayload := commandevents.PostUnreacted(post.ID, post.Thread, thread.Board, actor.Name, emoji, count, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostUnreacted, Scopes: scopes, Payload: eventPayload, TS: ts})
 	pgNotifyEphemeral(h.db, string(proto.EvtPostUnreacted), eventwakeup.EncodePostReaction(post.ID, actor.ID, emoji, ts), strings.Join(scopes, ","))
 
 	return Reply{Result: &proto.AckResult{ID: post.ID}}
