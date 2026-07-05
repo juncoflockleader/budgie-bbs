@@ -35,3 +35,43 @@ func TestLaggingCommandPartitionOffsetsNormalizesAndDeduplicates(t *testing.T) {
 		t.Fatalf("lagging offsets = %+v, want %+v", got, want)
 	}
 }
+
+func TestEventProjectionTargetOffsets(t *testing.T) {
+	global := Partition{Kind: PartitionGlobal, Key: PartitionGlobal}.Normalize()
+	board := Partition{Kind: PartitionBoard, Key: "board-a"}.Normalize()
+	thread := Partition{Kind: PartitionThread, Key: "thread-a"}.Normalize()
+
+	got := EventProjectionTargetOffsets([]Partition{
+		{},
+		board,
+		thread,
+	}, []EventPartitionOffset{
+		{Partition: board, LastOffset: 3},
+		{Partition: board, LastOffset: 9},
+		{Partition: Partition{Kind: PartitionUser, Key: "ignored"}, LastOffset: 7},
+		{Partition: Partition{}, LastOffset: -4},
+	})
+	want := map[Partition]int64{
+		global: 0,
+		board:  9,
+		thread: 0,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("EventProjectionTargetOffsets = %+v, want %+v", got, want)
+	}
+}
+
+func TestPartitionOffsetsReached(t *testing.T) {
+	board := Partition{Kind: PartitionBoard, Key: "board-a"}.Normalize()
+	thread := Partition{Kind: PartitionThread, Key: "thread-a"}.Normalize()
+
+	if !PartitionOffsetsReached(map[Partition]int64{board: 9, Partition{}: 1}, map[Partition]int64{board: 9, thread: 0, Partition{}: 1}) {
+		t.Fatal("PartitionOffsetsReached returned false for reached positive targets and zero target")
+	}
+	if PartitionOffsetsReached(map[Partition]int64{board: 8}, map[Partition]int64{board: 9}) {
+		t.Fatal("PartitionOffsetsReached returned true before target offset")
+	}
+	if PartitionOffsetsReached(map[Partition]int64{}, map[Partition]int64{board: 1}) {
+		t.Fatal("PartitionOffsetsReached returned true with missing positive target")
+	}
+}

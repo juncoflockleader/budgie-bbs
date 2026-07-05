@@ -186,3 +186,46 @@ func SortEventPartitionOffsetsByLastOffset(offsets []EventPartitionOffset) {
 		return offsets[i].LastOffset > offsets[j].LastOffset
 	})
 }
+
+func EventProjectionTargetOffsets(partitions []Partition, offsets []EventPartitionOffset) map[Partition]int64 {
+	partitionsByKey := make(map[Partition]bool, len(partitions))
+	for _, partition := range partitions {
+		partitionsByKey[partition.Normalize()] = true
+	}
+	targets := make(map[Partition]int64, len(partitions))
+	for _, offset := range offsets {
+		offset = offset.Normalize()
+		if !partitionsByKey[offset.Partition] {
+			continue
+		}
+		if offset.LastOffset > targets[offset.Partition] {
+			targets[offset.Partition] = offset.LastOffset
+		}
+	}
+	for _, partition := range partitions {
+		partition = partition.Normalize()
+		if _, ok := targets[partition]; !ok {
+			targets[partition] = 0
+		}
+	}
+	return targets
+}
+
+func PartitionOffsetsReached(offsets, targets map[Partition]int64) bool {
+	normalizedOffsets := make(map[Partition]int64, len(offsets))
+	for partition, offset := range offsets {
+		partition = partition.Normalize()
+		if offset > normalizedOffsets[partition] {
+			normalizedOffsets[partition] = offset
+		}
+	}
+	for partition, targetOffset := range targets {
+		if targetOffset <= 0 {
+			continue
+		}
+		if normalizedOffsets[partition.Normalize()] < targetOffset {
+			return false
+		}
+	}
+	return true
+}

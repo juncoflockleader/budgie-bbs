@@ -974,15 +974,7 @@ func commandLogDrainLoadEventProjectionTargetsReached(results []EventStorePartit
 	for _, result := range results {
 		offsets[result.Partition.Normalize()] = result.LastOffset
 	}
-	for partition, targetOffset := range targets {
-		if targetOffset <= 0 {
-			continue
-		}
-		if offsets[partition.Normalize()] < targetOffset {
-			return false
-		}
-	}
-	return true
+	return logmodel.PartitionOffsetsReached(offsets, targets)
 }
 
 func eventStoreProjectionTargetOffsets(ctx context.Context, eventStore EventStore, partitions []LogPartition, limit int) (map[LogPartition]int64, bool, error) {
@@ -997,27 +989,7 @@ func eventStoreProjectionTargetOffsets(ctx context.Context, eventStore EventStor
 	if limited {
 		return nil, false, fmt.Errorf("event projection partition offset limit %d did not cover every broker event partition", limit)
 	}
-	partitionsByKey := make(map[LogPartition]bool, len(partitions))
-	for _, partition := range partitions {
-		partitionsByKey[partition.Normalize()] = true
-	}
-	targets := make(map[LogPartition]int64, len(partitions))
-	for _, offset := range offsets {
-		partition := offset.Partition.Normalize()
-		if !partitionsByKey[partition] {
-			continue
-		}
-		if offset.LastOffset > targets[partition] {
-			targets[partition] = offset.LastOffset
-		}
-	}
-	for _, partition := range partitions {
-		partition = partition.Normalize()
-		if _, ok := targets[partition]; !ok {
-			targets[partition] = 0
-		}
-	}
-	return targets, true, nil
+	return logmodel.EventProjectionTargetOffsets(partitions, offsets), true, nil
 }
 
 func (c *Core) commandLogDrainLoadThreadTargets(boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) ([]commandLogDrainLoadThreadTarget, error) {
