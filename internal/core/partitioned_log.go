@@ -746,7 +746,7 @@ func (s *MemoryEventStore) Append(ctx context.Context, event EventAppend) (*prot
 		Kind:            event.Kind,
 		Seq:             seq,
 		Payload:         payload,
-		TS:              eventAppendTS(event.TS),
+		TS:              logmodel.EventAppendTimestamp(event.TS, nowMS()),
 		PartitionKind:   partition.Kind,
 		PartitionKey:    partition.Key,
 		PartitionOffset: offset,

@@ -73,7 +73,7 @@ func (s *BrokerEventStore) Append(ctx context.Context, event EventAppend) (*prot
 		CompatibilitySeq: event.CompatibilitySeq,
 		Scopes:           append([]string(nil), event.Scopes...),
 		Payload:          append([]byte(nil), payload...),
-		TS:               eventAppendTS(event.TS),
+		TS:               logmodel.EventAppendTimestamp(event.TS, nowMS()),
 		PartitionKind:    partition.Kind,
 		PartitionKey:     partition.Key,
 		PartitionOffset:  event.PartitionOffset,
@@ -241,13 +241,6 @@ func DecodeBrokerEventMessage(msg BrokerEventLogMessage) (*proto.Event, error) {
 		PartitionOffset: record.PartitionOffset,
 		Scopes:          append([]string(nil), record.Scopes...),
 	}, nil
-}
-
-func eventAppendTS(ts int64) int64 {
-	if ts > 0 {
-		return ts
-	}
-	return nowMS()
 }
 
 func BrokerEventSubject(partition LogPartition) string {

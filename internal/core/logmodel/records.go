@@ -42,6 +42,13 @@ type EventAppend struct {
 	TS               int64
 }
 
+func EventAppendTimestamp(ts, fallback int64) int64 {
+	if ts > 0 {
+		return ts
+	}
+	return fallback
+}
+
 // CommandEventTransaction is the broker-native write unit for IS4: a writer
 // consumes one command-log record, decides zero or more durable events, appends
 // those events, and advances the consumed command offset through one transaction
