@@ -246,13 +246,8 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 			return Reply{Err: errDetail}
 		}
 	} else {
-		if _, found, err := projections.BoardName(tx, scope); err != nil {
-			return internalErr(err)
-		} else if !found {
-			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
-		}
-		if !commandrules.ActorCanModerateBoardPosts(tx, actor, scope) {
-			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
+		if errDetail := commandrules.RequireBoardSanctionScopePermission(tx, actor, scope); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 	}
 
@@ -317,13 +312,8 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 			return Reply{Err: errDetail}
 		}
 	} else {
-		if _, found, err := projections.BoardName(tx, scope); err != nil {
-			return internalErr(err)
-		} else if !found {
-			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
-		}
-		if !commandrules.ActorCanModerateBoardPosts(tx, actor, scope) {
-			return Reply{Err: errDetail(proto.ErrForbidden, "you do not moderate this board", false)}
+		if errDetail := commandrules.RequireBoardSanctionScopePermission(tx, actor, scope); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 	}
 

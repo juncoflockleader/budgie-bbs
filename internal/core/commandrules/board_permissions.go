@@ -58,3 +58,15 @@ func ActorCanCurateBoardKind(queryable Queryable, actor *projections.User, board
 func ActorCanModerateBoardPosts(queryable Queryable, actor *projections.User, boardID string) bool {
 	return BoardPermissionAllowed(projections.ActorCanModerateBoardPosts(queryable, actor, boardID))
 }
+
+func RequireBoardSanctionScopePermission(queryable Queryable, actor *projections.User, boardID string) *proto.ErrorDetail {
+	if _, found, err := projections.BoardName(queryable, boardID); err != nil {
+		return internalErr(err)
+	} else if !found {
+		return newErrDetail(proto.ErrNotFound, "board not found for scope", false)
+	}
+	if !ActorCanModerateBoardPosts(queryable, actor, boardID) {
+		return newErrDetail(proto.ErrForbidden, "you do not moderate this board", false)
+	}
+	return nil
+}
