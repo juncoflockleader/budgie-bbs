@@ -2,10 +2,9 @@ package core
 
 import (
 	"database/sql"
-	"regexp"
 	"strings"
-	"unicode/utf8"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -28,7 +27,6 @@ func evaluateBoardAutomod(db *sql.DB, boardID, text, authorID string) (*projecti
 	if err != nil || len(rules) == 0 {
 		return nil, err
 	}
-	lower := strings.ToLower(text)
 	accountAgeHours := -1.0 // computed lazily, once
 	for i := range rules {
 		r := &rules[i]
@@ -36,30 +34,14 @@ func evaluateBoardAutomod(db *sql.DB, boardID, text, authorID string) (*projecti
 			continue
 		}
 		matched := false
-		switch r.MatchType {
-		case "keyword":
-			needle := strings.ToLower(strings.TrimSpace(r.Pattern))
-			matched = needle != "" && strings.Contains(lower, needle)
-		case "regex":
-			// Defense-in-depth against ReDoS-style CPU exhaustion: skip patterns
-			// that compile to an oversized program (validation rejects these on
-			// write, but a rule may predate that check), and bound the input fed
-			// to the matcher so per-evaluation cost stays small regardless.
-			if proto.AutomodRegexWithinComplexityLimit(r.Pattern) {
-				if re, err := regexp.Compile(r.Pattern); err == nil {
-					matched = re.MatchString(automodRegexInput(text))
-				}
-			}
-		case "repeated_text":
-			matched = maxConsecutiveRun(text) >= r.Threshold
-		case "link_count":
-			matched = countLinks(text) >= r.Threshold
-		case "account_age":
+		if contentMatch, handled := commandrules.AutomodContentRuleMatches(r.MatchType, r.Pattern, r.Threshold, text); handled {
+			matched = contentMatch
+		} else if r.MatchType == "account_age" {
 			if accountAgeHours < 0 {
 				accountAgeHours = automodAccountAgeHours(db, authorID)
 			}
 			matched = accountAgeHours >= 0 && accountAgeHours < float64(r.Threshold)
-		case "rate_threshold":
+		} else if r.MatchType == "rate_threshold" {
 			if r.Threshold >= 1 && r.WindowSec >= 1 && strings.TrimSpace(authorID) != "" {
 				since := nowMS() - int64(r.WindowSec)*1000
 				matched = automodRecentPostCount(db, boardID, authorID, since) >= r.Threshold
@@ -83,15 +65,6 @@ func evaluateBoardAutomodForHandler(db *sql.DB, boardID, text, authorID string) 
 	return true, rule.ID, rule.MatchType, rule.Action, rule.Reason, rule.DurationSec, nil
 }
 
-// automodReason builds the audit reason recorded for an automod action.
-func automodReason(reason, ruleID string) string {
-	reason = strings.TrimSpace(reason)
-	if reason != "" {
-		return "Automod: " + reason
-	}
-	return "Automod rule " + ruleID
-}
-
 // nativeAutomodEvents evaluates automod rules for a just-decided post/thread and
 // returns the action's events for the native command-log path. Projection
 // side-effects are applied downstream when these events are committed.
@@ -103,7 +76,7 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 	if rule == nil {
 		return nil, nil
 	}
-	reason := automodReason(rule.Reason, rule.ID)
+	reason := commandrules.AutomodReason(rule.Reason, rule.ID)
 	by := automodActorID
 	var events []EventAppend
 	idx := startIndex
@@ -158,53 +131,6 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 		idx++
 	}
 	return events, nil
-}
-
-// maxConsecutiveRun returns the length of the longest run of the same
-// non-whitespace rune (a simple "repeated text" / flooding signal).
-func maxConsecutiveRun(text string) int {
-	best, run := 0, 0
-	var prev rune = -1
-	for _, c := range text {
-		switch {
-		case c == prev && c != ' ' && c != '\n' && c != '\t':
-			run++
-		default:
-			run = 1
-			prev = c
-		}
-		if run > best {
-			best = run
-		}
-	}
-	if utf8.RuneCountInString(text) == 0 {
-		return 0
-	}
-	return best
-}
-
-// maxAutomodRegexInputBytes bounds how much post text a user regex runs against.
-// Combined with the program-size cap at validation, this keeps any single
-// automod regex evaluation cheap even on very large posts.
-const maxAutomodRegexInputBytes = 16 << 10 // 16 KiB
-
-// automodRegexInput returns text truncated (on a UTF-8 boundary) to the input
-// cap used for regex matching.
-func automodRegexInput(text string) string {
-	if len(text) <= maxAutomodRegexInputBytes {
-		return text
-	}
-	b := text[:maxAutomodRegexInputBytes]
-	for len(b) > 0 && !utf8.ValidString(b) {
-		b = b[:len(b)-1]
-	}
-	return b
-}
-
-var automodLinkRe = regexp.MustCompile(`(?i)https?://`)
-
-func countLinks(text string) int {
-	return len(automodLinkRe.FindAllStringIndex(text, -1))
 }
 
 // automodRecentPostCount counts a user's posts on a board since the given time

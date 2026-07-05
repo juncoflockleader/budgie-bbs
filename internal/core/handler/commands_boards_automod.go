@@ -2,22 +2,12 @@ package handler
 
 import (
 	"database/sql"
-	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 const automodSystemActor = "automod"
-
-// automodReasonFor builds the audit reason recorded for an automod action.
-func automodReasonFor(reason, ruleID string) string {
-	reason = strings.TrimSpace(reason)
-	if reason != "" {
-		return "Automod: " + reason
-	}
-	return "Automod rule " + ruleID
-}
 
 // applyAutomodActionTx applies a matched automod rule's action(s) inside the
 // post/thread-creation transaction, returning the generated events to publish

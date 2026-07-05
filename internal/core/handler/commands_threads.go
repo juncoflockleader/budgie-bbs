@@ -145,7 +145,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 	var automodEvents []*proto.Event
 	if automodMatched {
-		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
+		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, commandrules.AutomodReason(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -346,7 +346,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 	var automodEvents []*proto.Event
 	if automodMatched {
-		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, p.Thread, thread.Board, ts)
+		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, commandrules.AutomodReason(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, p.Thread, thread.Board, ts)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -629,7 +629,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	}
 	var automodEvents []*proto.Event
 	if automodMatched {
-		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, automodReasonFor(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
+		automodEvents, err = h.applyAutomodActionTx(tx, automodRuleID, automodMatchType, automodAction, commandrules.AutomodReason(automodRuleReason, automodRuleID), automodDuration, actor.ID, postID, threadID, p.Board, ts)
 		if err != nil {
 			return internalErr(err)
 		}
