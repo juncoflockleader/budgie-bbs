@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
-	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 const (
@@ -17,20 +16,8 @@ const (
 	brokerCommandCommitPrefix  = "budgie.commandcommit"
 )
 
-// BrokerCommandRecord is the broker-native representation of one gateway
-// command. Offset is logical Budgie command-log state for one partition; broker
-// stream offsets remain implementation details.
-type BrokerCommandRecord struct {
-	Version       int               `json:"v"`
-	ActorID       string            `json:"actorId,omitempty"`
-	CID           string            `json:"cid,omitempty"`
-	Command       proto.CommandName `json:"command"`
-	Payload       json.RawMessage   `json:"payload"`
-	EnqueuedAt    int64             `json:"enqueuedAt"`
-	PartitionKind string            `json:"partitionKind"`
-	PartitionKey  string            `json:"partitionKey"`
-	Offset        int64             `json:"offset"`
-}
+// BrokerCommandRecord is an alias for the durable broker command record model.
+type BrokerCommandRecord = logmodel.BrokerCommandRecord
 
 type BrokerCommandLogMessage struct {
 	Partition LogPartition
@@ -295,7 +282,7 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 			if err != nil {
 				return BrokerCommandLogMessage{}, err
 			}
-			if !sameBrokerCommandIdentity(existingRecord, record) {
+			if !logmodel.SameBrokerCommandRecordIdentity(existingRecord, record) {
 				return BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: duplicate command receipt %q has different content", record.CID)
 			}
 			return cloneBrokerCommandLogMessage(existing), nil
@@ -422,16 +409,6 @@ func cloneBrokerCommandLogMessage(msg BrokerCommandLogMessage) BrokerCommandLogM
 	msg.Partition = msg.Partition.Normalize()
 	msg.Data = append([]byte(nil), msg.Data...)
 	return msg
-}
-
-func sameBrokerCommandIdentity(existing, requested BrokerCommandRecord) bool {
-	return existing.ActorID == requested.ActorID &&
-		existing.CID == requested.CID &&
-		existing.Command == requested.Command &&
-		existing.EnqueuedAt == requested.EnqueuedAt &&
-		existing.PartitionKind == requested.PartitionKind &&
-		existing.PartitionKey == requested.PartitionKey &&
-		string(existing.Payload) == string(requested.Payload)
 }
 
 func BrokerCommandMessageID(partition LogPartition, actorID, cid string) string {

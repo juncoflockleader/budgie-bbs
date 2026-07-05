@@ -19,12 +19,37 @@ type CommandLogRecord struct {
 	EnqueuedAt     int64
 }
 
+// BrokerCommandRecord is the broker-native representation of one gateway
+// command. Offset is logical Budgie command-log state for one partition; broker
+// stream offsets remain implementation details.
+type BrokerCommandRecord struct {
+	Version       int               `json:"v"`
+	ActorID       string            `json:"actorId,omitempty"`
+	CID           string            `json:"cid,omitempty"`
+	Command       proto.CommandName `json:"command"`
+	Payload       json.RawMessage   `json:"payload"`
+	EnqueuedAt    int64             `json:"enqueuedAt"`
+	PartitionKind string            `json:"partitionKind"`
+	PartitionKey  string            `json:"partitionKey"`
+	Offset        int64             `json:"offset"`
+}
+
 func SameCommandLogRecordIdentity(existing, requested CommandLogRecord) bool {
 	return existing.Partition.Normalize() == requested.Partition.Normalize() &&
 		existing.ActorID == requested.ActorID &&
 		existing.CID == requested.CID &&
 		existing.Command == requested.Command &&
 		existing.EnqueuedAt == requested.EnqueuedAt &&
+		string(existing.Payload) == string(requested.Payload)
+}
+
+func SameBrokerCommandRecordIdentity(existing, requested BrokerCommandRecord) bool {
+	return existing.ActorID == requested.ActorID &&
+		existing.CID == requested.CID &&
+		existing.Command == requested.Command &&
+		existing.EnqueuedAt == requested.EnqueuedAt &&
+		existing.PartitionKind == requested.PartitionKind &&
+		existing.PartitionKey == requested.PartitionKey &&
 		string(existing.Payload) == string(requested.Payload)
 }
 
@@ -40,6 +65,44 @@ type EventAppend struct {
 	CompatibilitySeq int64
 	PartitionOffset  int64
 	TS               int64
+}
+
+// BrokerEventRecord is the broker-native representation of one durable event.
+// PartitionOffset is logical Budgie state, not necessarily the broker's stream
+// sequence. This lets shadow/parity compare against SQL partition offsets while
+// each broker remains free to expose its own physical offsets.
+type BrokerEventRecord struct {
+	Version          int             `json:"v"`
+	ID               string          `json:"id,omitempty"`
+	Kind             proto.EventKind `json:"event"`
+	CompatibilitySeq int64           `json:"seq,omitempty"`
+	Scopes           []string        `json:"scopes,omitempty"`
+	Payload          json.RawMessage `json:"payload"`
+	TS               int64           `json:"ts"`
+	PartitionKind    string          `json:"partitionKind"`
+	PartitionKey     string          `json:"partitionKey"`
+	PartitionOffset  int64           `json:"partitionOffset"`
+}
+
+func SameBrokerEventRecordIdentity(existing, requested BrokerEventRecord) bool {
+	if existing.ID != requested.ID ||
+		existing.Kind != requested.Kind ||
+		existing.CompatibilitySeq != requested.CompatibilitySeq ||
+		existing.TS != requested.TS ||
+		existing.PartitionKind != requested.PartitionKind ||
+		existing.PartitionKey != requested.PartitionKey ||
+		string(existing.Payload) != string(requested.Payload) {
+		return false
+	}
+	if len(existing.Scopes) != len(requested.Scopes) {
+		return false
+	}
+	for i := range existing.Scopes {
+		if existing.Scopes[i] != requested.Scopes[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // CommandEventTransaction is the broker-native write unit for IS4: a writer

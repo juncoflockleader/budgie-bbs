@@ -15,22 +15,8 @@ const (
 	brokerEventSubjectPrefix = "budgie.eventlog"
 )
 
-// BrokerEventRecord is the broker-native representation of one durable event.
-// PartitionOffset is logical Budgie state, not necessarily the broker's stream
-// sequence. This lets shadow/parity compare against SQL partition offsets while
-// each broker remains free to expose its own physical offsets.
-type BrokerEventRecord struct {
-	Version          int             `json:"v"`
-	ID               string          `json:"id,omitempty"`
-	Kind             proto.EventKind `json:"event"`
-	CompatibilitySeq int64           `json:"seq,omitempty"`
-	Scopes           []string        `json:"scopes,omitempty"`
-	Payload          json.RawMessage `json:"payload"`
-	TS               int64           `json:"ts"`
-	PartitionKind    string          `json:"partitionKind"`
-	PartitionKey     string          `json:"partitionKey"`
-	PartitionOffset  int64           `json:"partitionOffset"`
-}
+// BrokerEventRecord is an alias for the durable broker event record model.
+type BrokerEventRecord = logmodel.BrokerEventRecord
 
 // BrokerEventLogMessage is a physical broker message plus its logical event
 // offset. StreamSeq is optional broker metadata used only for scalar diagnostics.
@@ -368,7 +354,7 @@ func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition 
 			if err != nil {
 				return BrokerEventLogMessage{}, err
 			}
-			if !sameBrokerEventIdentity(existingRecord, record) {
+			if !logmodel.SameBrokerEventRecordIdentity(existingRecord, record) {
 				return BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: duplicate event id %q has different content", record.ID)
 			}
 			return cloneBrokerEventLogMessage(existing), nil
@@ -494,25 +480,4 @@ func cloneBrokerEventLogMessage(msg BrokerEventLogMessage) BrokerEventLogMessage
 	msg.Partition = msg.Partition.Normalize()
 	msg.Data = append([]byte(nil), msg.Data...)
 	return msg
-}
-
-func sameBrokerEventIdentity(existing, requested BrokerEventRecord) bool {
-	if existing.ID != requested.ID ||
-		existing.Kind != requested.Kind ||
-		existing.CompatibilitySeq != requested.CompatibilitySeq ||
-		existing.TS != requested.TS ||
-		existing.PartitionKind != requested.PartitionKind ||
-		existing.PartitionKey != requested.PartitionKey ||
-		string(existing.Payload) != string(requested.Payload) {
-		return false
-	}
-	if len(existing.Scopes) != len(requested.Scopes) {
-		return false
-	}
-	for i := range existing.Scopes {
-		if existing.Scopes[i] != requested.Scopes[i] {
-			return false
-		}
-	}
-	return true
 }

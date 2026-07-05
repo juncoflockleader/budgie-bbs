@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -329,7 +330,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Con
 			return CommandEventTransactionResult{}, err
 		}
 		if existing, ok := seenIDs[record.ID]; ok {
-			if !sameBrokerEventIdentity(existing, record) {
+			if !logmodel.SameBrokerEventRecordIdentity(existing, record) {
 				return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: duplicate event id %q has different content", record.ID)
 			}
 			return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: duplicate event id %q in one transaction", record.ID)
@@ -411,7 +412,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 				return nil, err
 			}
 			if existing, ok := seenIDs[record.ID]; ok {
-				if !sameBrokerEventIdentity(existing, record) {
+				if !logmodel.SameBrokerEventRecordIdentity(existing, record) {
 					return nil, fmt.Errorf("broker command event transaction store: duplicate event id %q has different content", record.ID)
 				}
 				return nil, fmt.Errorf("broker command event transaction store: duplicate event id %q in one transaction batch", record.ID)
@@ -504,10 +505,10 @@ func validateBrokerCommandEventTransactionMessages(records []BrokerEventRecord, 
 
 func sameBrokerEventTransactionResultIdentity(returned, expected BrokerEventRecord) bool {
 	if expected.CompatibilitySeq > 0 {
-		return sameBrokerEventIdentity(returned, expected)
+		return logmodel.SameBrokerEventRecordIdentity(returned, expected)
 	}
 	expected.CompatibilitySeq = returned.CompatibilitySeq
-	return sameBrokerEventIdentity(returned, expected)
+	return logmodel.SameBrokerEventRecordIdentity(returned, expected)
 }
 
 func brokerEventTransactionRecord(event EventAppend) (BrokerEventRecord, error) {
@@ -624,14 +625,14 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 			if err != nil {
 				return BrokerCommandEventTransactionBatchResult{}, err
 			}
-			if !sameBrokerEventIdentity(existingRecord, record) {
+			if !logmodel.SameBrokerEventRecordIdentity(existingRecord, record) {
 				return BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("memory broker command event transaction: duplicate event id %q has different content", record.ID)
 			}
 			pending = append(pending, memoryPendingBrokerEvent{message: cloneBrokerEventLogMessage(existing)})
 			continue
 		}
 		if existing, ok := pendingByID[record.ID]; ok {
-			if !sameBrokerEventIdentity(existing.record, record) {
+			if !logmodel.SameBrokerEventRecordIdentity(existing.record, record) {
 				return BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("memory broker command event transaction: duplicate event id %q has different content", record.ID)
 			}
 			return BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("memory broker command event transaction: duplicate event id %q in one transaction", record.ID)
