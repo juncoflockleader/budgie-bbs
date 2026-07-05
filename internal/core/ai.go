@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
@@ -46,7 +47,7 @@ func (c *Core) BoardAIRuntime(boardID string) (*BoardAIRuntime, error) {
 }
 
 // BoardAIBotName returns the reserved username for a board's AI bot.
-func BoardAIBotName(boardID string) string { return boardID + reservedAINameSuffix }
+func BoardAIBotName(boardID string) string { return accountmodel.BoardAIBotName(boardID) }
 
 // EnsureBoardAIBot creates (or finds) the board's AI bot account, forces it
 // approved, makes it a board member so it can post even in member-post boards,
