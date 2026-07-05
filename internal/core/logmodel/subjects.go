@@ -2,6 +2,7 @@ package logmodel
 
 import (
 	"encoding/base64"
+	"sort"
 	"strings"
 )
 
@@ -44,4 +45,22 @@ func DecodeSubjectToken(value string) (string, error) {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+func NormalizeScopes(scopes []string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, raw := range scopes {
+		scope := strings.TrimSpace(raw)
+		if scope == "" {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		out = append(out, scope)
+	}
+	sort.Strings(out)
+	return out
 }

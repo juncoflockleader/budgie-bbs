@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
-	"sort"
-	"strings"
 	"sync"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
@@ -327,21 +325,7 @@ func (b *NATSBus) rememberRemote(key string) bool {
 }
 
 func normalizedScopes(scopes []string) []string {
-	seen := map[string]struct{}{}
-	out := []string{}
-	for _, raw := range scopes {
-		scope := strings.TrimSpace(raw)
-		if scope == "" {
-			continue
-		}
-		if _, ok := seen[scope]; ok {
-			continue
-		}
-		seen[scope] = struct{}{}
-		out = append(out, scope)
-	}
-	sort.Strings(out)
-	return out
+	return logmodel.NormalizeScopes(scopes)
 }
 
 func natsSubjectsForScopes(scopes []string) []string {
