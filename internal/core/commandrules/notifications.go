@@ -3,14 +3,12 @@ package commandrules
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/notificationmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 func PreferredPostNotificationKind(existing, candidate string) string {
-	if postNotificationKindPriority(existing) >= postNotificationKindPriority(candidate) {
-		return existing
-	}
-	return candidate
+	return notificationmodel.PreferredPostKind(existing, candidate)
 }
 
 func ThreadPrefLevel(queryable Queryable, userID, threadID string) (string, error) {
@@ -24,23 +22,15 @@ func ThreadPrefLevel(queryable Queryable, userID, threadID string) (string, erro
 
 func UserCanReceivePostNotification(queryable Queryable, user *projections.User, boardID string, settings *projections.BoardSettings) (bool, error) {
 	if user == nil {
-		return false, nil
+		return notificationmodel.CanReceiveBoardPost(false, false, false), nil
 	}
-	if settings == nil || !settings.MemberReadMode {
-		return true, nil
+	memberReadMode := settings != nil && settings.MemberReadMode
+	if !memberReadMode {
+		return notificationmodel.CanReceiveBoardPost(true, false, false), nil
 	}
-	return projections.ActorCanUseMemberBoard(queryable, user, boardID)
-}
-
-func postNotificationKindPriority(kind string) int {
-	switch kind {
-	case "mention":
-		return 3
-	case "reply":
-		return 2
-	case "watched":
-		return 1
-	default:
-		return 0
+	canUseMemberBoard, err := projections.ActorCanUseMemberBoard(queryable, user, boardID)
+	if err != nil {
+		return false, err
 	}
+	return notificationmodel.CanReceiveBoardPost(true, true, canUseMemberBoard), nil
 }
