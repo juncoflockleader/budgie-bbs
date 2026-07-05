@@ -1711,7 +1711,34 @@ func (c *Core) ListCategoriesForUser(viewer *User) ([]Category, error) {
 	if err != nil {
 		return nil, err
 	}
-	return categorymodel.FilterVisible(categories, viewer), nil
+	if viewer != nil && viewer.IsAdmin() {
+		return categories, nil
+	}
+	out := make([]Category, 0, len(categories))
+	for _, category := range categories {
+		if categorymodel.VisibleToUser(categoryModelCategory(category), categoryModelViewer(viewer)) {
+			out = append(out, category)
+		}
+	}
+	return out, nil
+}
+
+func categoryModelViewer(viewer *User) *categorymodel.Viewer {
+	if viewer == nil {
+		return nil
+	}
+	return &categorymodel.Viewer{Role: viewer.Role}
+}
+
+func categoryModelCategory(category Category) categorymodel.Category {
+	return categorymodel.Category{
+		ID:          category.ID,
+		Name:        category.Name,
+		Description: category.Description,
+		ParentID:    category.ParentID,
+		Position:    category.Position,
+		Visibility:  category.Visibility,
+	}
 }
 
 func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) (*Category, error) {
@@ -1741,7 +1768,7 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) 
 		return nil, sql.ErrNoRows
 	}
 
-	plan, err := categorymodel.PlanUpdate(*category, patch)
+	plan, err := categorymodel.PlanUpdate(categoryModelCategory(*category), patch)
 	if err != nil {
 		return nil, err
 	}

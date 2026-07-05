@@ -3,8 +3,6 @@ package categorymodel
 import (
 	"fmt"
 	"strings"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 const (
@@ -12,6 +10,18 @@ const (
 	VisibilityStaff  = "staff"
 	VisibilityHidden = "hidden"
 )
+
+type Viewer struct {
+	Role string
+}
+
+func (v Viewer) IsAdmin() bool {
+	return v.Role == "admin"
+}
+
+func (v Viewer) IsMod() bool {
+	return v.Role == "moderator" || v.Role == "admin"
+}
 
 func NormalizeVisibility(raw string) (string, error) {
 	visibility := strings.TrimSpace(strings.ToLower(raw))
@@ -26,7 +36,7 @@ func NormalizeVisibility(raw string) (string, error) {
 	}
 }
 
-func VisibleToUser(category projections.Category, viewer *projections.User) bool {
+func VisibleToUser(category Category, viewer *Viewer) bool {
 	if viewer != nil && viewer.IsAdmin() {
 		return true
 	}
@@ -44,11 +54,11 @@ func VisibleToUser(category projections.Category, viewer *projections.User) bool
 	}
 }
 
-func FilterVisible(categories []projections.Category, viewer *projections.User) []projections.Category {
+func FilterVisible(categories []Category, viewer *Viewer) []Category {
 	if viewer != nil && viewer.IsAdmin() {
 		return categories
 	}
-	out := make([]projections.Category, 0, len(categories))
+	out := make([]Category, 0, len(categories))
 	for _, category := range categories {
 		if VisibleToUser(category, viewer) {
 			out = append(out, category)

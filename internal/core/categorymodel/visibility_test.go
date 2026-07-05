@@ -1,10 +1,6 @@
 package categorymodel
 
-import (
-	"testing"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
-)
+import "testing"
 
 func TestNormalizeVisibility(t *testing.T) {
 	tests := []struct {
@@ -36,7 +32,7 @@ func TestNormalizeVisibility(t *testing.T) {
 }
 
 func TestFilterVisible(t *testing.T) {
-	categories := []projections.Category{
+	categories := []Category{
 		{ID: "public", Visibility: ""},
 		{ID: "staff", Visibility: "staff"},
 		{ID: "hidden", Visibility: "hidden"},
@@ -45,17 +41,17 @@ func TestFilterVisible(t *testing.T) {
 	if got := visibleIDs(FilterVisible(categories, nil)); len(got) != 1 || got[0] != "public" {
 		t.Fatalf("guest visible categories = %v, want [public]", got)
 	}
-	mod := &projections.User{ID: "usr_mod", Role: "moderator"}
+	mod := &Viewer{Role: "moderator"}
 	if got := visibleIDs(FilterVisible(categories, mod)); len(got) != 2 || got[0] != "public" || got[1] != "staff" {
 		t.Fatalf("moderator visible categories = %v, want [public staff]", got)
 	}
-	admin := &projections.User{ID: "usr_admin", Role: "admin"}
+	admin := &Viewer{Role: "admin"}
 	if got := visibleIDs(FilterVisible(categories, admin)); len(got) != len(categories) {
 		t.Fatalf("admin visible categories = %v, want all categories", got)
 	}
 }
 
-func visibleIDs(categories []projections.Category) []string {
+func visibleIDs(categories []Category) []string {
 	ids := make([]string, 0, len(categories))
 	for _, category := range categories {
 		ids = append(ids, category.ID)

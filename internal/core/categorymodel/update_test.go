@@ -1,13 +1,9 @@
 package categorymodel
 
-import (
-	"testing"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
-)
+import "testing"
 
 func TestPlanUpdateNormalizesPatch(t *testing.T) {
-	category := projections.Category{
+	category := Category{
 		ID:          "sports",
 		Name:        "Sports",
 		Description: "Sports",
@@ -34,7 +30,7 @@ func TestPlanUpdateNormalizesPatch(t *testing.T) {
 }
 
 func TestPlanUpdateRejectsInvalidPatch(t *testing.T) {
-	category := projections.Category{ID: "sports", Name: "Sports", ParentID: "general"}
+	category := Category{ID: "sports", Name: "Sports", ParentID: "general"}
 	blankName := " "
 	if _, err := PlanUpdate(category, UpdatePatch{Name: &blankName}); err == nil {
 		t.Fatalf("PlanUpdate accepted blank name")

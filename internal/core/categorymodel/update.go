@@ -3,9 +3,16 @@ package categorymodel
 import (
 	"fmt"
 	"strings"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
+
+type Category struct {
+	ID          string
+	Name        string
+	Description string
+	ParentID    string
+	Position    int
+	Visibility  string
+}
 
 type UpdatePatch struct {
 	Name        *string
@@ -24,7 +31,7 @@ type UpdatePlan struct {
 	ParentChanged bool
 }
 
-func PlanUpdate(category projections.Category, patch UpdatePatch) (UpdatePlan, error) {
+func PlanUpdate(category Category, patch UpdatePatch) (UpdatePlan, error) {
 	plan := UpdatePlan{
 		Name:        category.Name,
 		Description: category.Description,
