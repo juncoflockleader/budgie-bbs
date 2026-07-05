@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/statsplan"
@@ -452,7 +453,7 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestEntryUpsertedPayload{
+	scopes, eventPayload := commandevents.DigestEntryUpserted(commandevents.DigestEntryUpsertedSpec{
 		ID:         entryID,
 		Board:      thread.Board,
 		TargetKind: "post",
@@ -463,8 +464,7 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 		Note:       note,
 		CreatedBy:  actor.ID,
 		TS:         ts,
-	}
-	scopes := proto.DigestEventScopes(thread.Board)
+	})
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryUpserted, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -530,7 +530,7 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestEntryUpsertedPayload{
+	scopes, eventPayload := commandevents.DigestEntryUpserted(commandevents.DigestEntryUpsertedSpec{
 		ID:         entryID,
 		Board:      thread.Board,
 		TargetKind: "thread",
@@ -541,8 +541,7 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 		Note:       note,
 		CreatedBy:  actor.ID,
 		TS:         ts,
-	}
-	scopes := proto.DigestEventScopes(thread.Board)
+	})
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryUpserted, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -579,17 +578,10 @@ func (h *Handler) removeDigestEntry(actor *User, p proto.RemoveDigestEntryPayloa
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	eventPayload := &proto.DigestEntryRemovedPayload{
-		ID:    entry.ID,
-		Board: entry.BoardID,
-		Kind:  entry.Kind,
-		By:    actor.ID,
-		TS:    ts,
-	}
+	scopes, eventPayload := commandevents.DigestEntryRemoved(entry.ID, entry.BoardID, entry.Kind, actor.ID, ts)
 	if err := currentRuntime().RemoveDigestEntryFinalTx(tx, p.Entry, eventPayload.Board, eventPayload.Kind, eventPayload.By, eventPayload.TS); err != nil {
 		return internalErr(err)
 	}
-	scopes := proto.DigestEventScopes(entry.BoardID)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryRemoved, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -638,7 +630,7 @@ func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayloa
 	if err := currentRuntime().UpdateDigestEntryTx(tx, entry.ID, title, path, note, ts); err != nil {
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestEntryUpdatedPayload{
+	scopes, eventPayload := commandevents.DigestEntryUpdated(commandevents.DigestEntryUpdatedSpec{
 		ID:         entry.ID,
 		Board:      entry.BoardID,
 		TargetKind: entry.TargetKind,
@@ -649,8 +641,7 @@ func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayloa
 		Note:       note,
 		By:         actor.ID,
 		TS:         ts,
-	}
-	scopes := proto.DigestEventScopes(entry.BoardID)
+	})
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryUpdated, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -685,16 +676,7 @@ func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayl
 	if err := currentRuntime().SetDigestEntryBodyTx(tx, entry.ID, body, edited, ts); err != nil {
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestEntryBodySetPayload{
-		ID:     entry.ID,
-		Board:  entry.BoardID,
-		Kind:   entry.Kind,
-		Body:   body,
-		Edited: edited,
-		By:     actor.ID,
-		TS:     ts,
-	}
-	scopes := proto.DigestEventScopes(entry.BoardID)
+	scopes, eventPayload := commandevents.DigestEntryBodySet(entry.ID, entry.BoardID, entry.Kind, body, edited, actor.ID, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestEntryBodySet, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -721,15 +703,7 @@ func (h *Handler) createDigestDirectory(actor *User, p proto.CreateDigestDirecto
 	if err != nil {
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestDirectorySetPayload{
-		ID:        directoryID,
-		Board:     boardID,
-		Kind:      kind,
-		Path:      path,
-		CreatedBy: actor.ID,
-		TS:        ts,
-	}
-	scopes := proto.DigestEventScopes(boardID)
+	scopes, eventPayload := commandevents.DigestDirectorySet(directoryID, boardID, kind, path, actor.ID, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestDirectorySet, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -766,16 +740,7 @@ func (h *Handler) moveDigestPath(actor *User, p proto.MoveDigestPathPayload) Rep
 		}
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestPathMovedPayload{
-		Board:    boardID,
-		Kind:     kind,
-		FromPath: fromPath,
-		ToPath:   toPath,
-		Count:    count,
-		By:       actor.ID,
-		TS:       ts,
-	}
-	scopes := proto.DigestEventScopes(boardID)
+	scopes, eventPayload := commandevents.DigestPathMoved(boardID, kind, fromPath, toPath, count, actor.ID, ts)
 	seq, err := appendEvent(tx, eventID, proto.EvtDigestPathMoved, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -824,18 +789,7 @@ func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Rep
 		}
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestPathCopiedPayload{
-		Board:        boardID,
-		Kind:         kind,
-		FromPath:     fromPath,
-		ToPath:       toPath,
-		EntryIDs:     ids,
-		DirectoryIDs: dirIDs,
-		Count:        count,
-		CreatedBy:    actor.ID,
-		TS:           ts,
-	}
-	scopes := proto.DigestEventScopes(boardID)
+	scopes, eventPayload := commandevents.DigestPathCopied(boardID, kind, fromPath, toPath, ids, dirIDs, count, actor.ID, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtDigestPathCopied, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -863,15 +817,7 @@ func (h *Handler) deleteDigestPath(actor *User, p proto.DeleteDigestPathPayload)
 	if err != nil {
 		return internalErr(err)
 	}
-	eventPayload := &proto.DigestPathDeletedPayload{
-		Board: boardID,
-		Kind:  kind,
-		Path:  path,
-		Count: count,
-		By:    actor.ID,
-		TS:    ts,
-	}
-	scopes := proto.DigestEventScopes(boardID)
+	scopes, eventPayload := commandevents.DigestPathDeleted(boardID, kind, path, count, actor.ID, ts)
 	seq, err := appendEvent(tx, eventID, proto.EvtDigestPathDeleted, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)

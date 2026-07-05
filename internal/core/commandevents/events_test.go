@@ -294,6 +294,63 @@ func TestPostUpdateEvents(t *testing.T) {
 	}
 }
 
+func TestDigestEvents(t *testing.T) {
+	scopes, upserted := DigestEntryUpserted(DigestEntryUpsertedSpec{
+		ID: "dig_1", Board: "general", TargetKind: "post", TargetID: "post_1",
+		Kind: "archive", Title: "Title", Path: "faq", Note: "note", CreatedBy: "usr_mod", TS: 1234,
+	})
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if upserted.ID != "dig_1" || upserted.TargetID != "post_1" || upserted.Path != "faq" || upserted.CreatedBy != "usr_mod" || upserted.TS != 1234 {
+		t.Fatalf("DigestEntryUpserted payload = %+v", upserted)
+	}
+
+	scopes, updated := DigestEntryUpdated(DigestEntryUpdatedSpec{
+		ID: "dig_1", Board: "general", TargetKind: "post", TargetID: "post_1",
+		Kind: "archive", Title: "New", Path: "faq/new", Note: "new note", By: "usr_mod", TS: 1235,
+	})
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if updated.ID != "dig_1" || updated.Title != "New" || updated.Path != "faq/new" || updated.By != "usr_mod" || updated.TS != 1235 {
+		t.Fatalf("DigestEntryUpdated payload = %+v", updated)
+	}
+
+	scopes, body := DigestEntryBodySet("dig_1", "general", "archive", "body", true, "usr_mod", 1236)
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if body.ID != "dig_1" || body.Body != "body" || !body.Edited || body.By != "usr_mod" || body.TS != 1236 {
+		t.Fatalf("DigestEntryBodySet payload = %+v", body)
+	}
+
+	scopes, removed := DigestEntryRemoved("dig_1", "general", "archive", "usr_mod", 1237)
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if removed.ID != "dig_1" || removed.Kind != "archive" || removed.By != "usr_mod" || removed.TS != 1237 {
+		t.Fatalf("DigestEntryRemoved payload = %+v", removed)
+	}
+
+	scopes, directory := DigestDirectorySet("dir_1", "general", "archive", "faq", "usr_mod", 1238)
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if directory.ID != "dir_1" || directory.Path != "faq" || directory.CreatedBy != "usr_mod" || directory.TS != 1238 {
+		t.Fatalf("DigestDirectorySet payload = %+v", directory)
+	}
+
+	scopes, moved := DigestPathMoved("general", "archive", "faq", "docs", 4, "usr_mod", 1239)
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if moved.FromPath != "faq" || moved.ToPath != "docs" || moved.Count != 4 || moved.By != "usr_mod" || moved.TS != 1239 {
+		t.Fatalf("DigestPathMoved payload = %+v", moved)
+	}
+
+	scopes, copied := DigestPathCopied("general", "archive", "faq", "docs", []string{"dig_2"}, []string{"dir_2"}, 2, "usr_mod", 1240)
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if copied.FromPath != "faq" || copied.ToPath != "docs" || len(copied.EntryIDs) != 1 ||
+		len(copied.DirectoryIDs) != 1 || copied.Count != 2 || copied.CreatedBy != "usr_mod" || copied.TS != 1240 {
+		t.Fatalf("DigestPathCopied payload = %+v", copied)
+	}
+
+	scopes, deleted := DigestPathDeleted("general", "archive", "faq", 3, "usr_mod", 1241)
+	requireScopes(t, scopes, "board:general", "digest:general", "digest:global")
+	if deleted.Path != "faq" || deleted.Count != 3 || deleted.By != "usr_mod" || deleted.TS != 1241 {
+		t.Fatalf("DigestPathDeleted payload = %+v", deleted)
+	}
+}
+
 func TestUserScopedEvents(t *testing.T) {
 	folders := []proto.FavoriteTreeImportedFolderPayload{{ID: "folder_1", Name: "News", Position: 1}}
 	boards := []proto.FavoriteTreeImportedBoardPayload{{ID: "general", FolderID: "folder_1", Position: 2}}

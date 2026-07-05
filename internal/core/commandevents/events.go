@@ -303,6 +303,84 @@ func PostPurged(postID, threadID, boardID, by, reason string, ts int64) ([]strin
 	}
 }
 
+type DigestEntryUpsertedSpec proto.DigestEntryUpsertedPayload
+
+func DigestEntryUpserted(spec DigestEntryUpsertedSpec) ([]string, *proto.DigestEntryUpsertedPayload) {
+	payload := proto.DigestEntryUpsertedPayload(spec)
+	return proto.DigestEventScopes(payload.Board), &payload
+}
+
+type DigestEntryUpdatedSpec proto.DigestEntryUpdatedPayload
+
+func DigestEntryUpdated(spec DigestEntryUpdatedSpec) ([]string, *proto.DigestEntryUpdatedPayload) {
+	payload := proto.DigestEntryUpdatedPayload(spec)
+	return proto.DigestEventScopes(payload.Board), &payload
+}
+
+func DigestEntryBodySet(entryID, boardID, kind, body string, edited bool, by string, ts int64) ([]string, *proto.DigestEntryBodySetPayload) {
+	return proto.DigestEventScopes(boardID), &proto.DigestEntryBodySetPayload{
+		ID:     entryID,
+		Board:  boardID,
+		Kind:   kind,
+		Body:   body,
+		Edited: edited,
+		By:     by,
+		TS:     ts,
+	}
+}
+
+func DigestEntryRemoved(entryID, boardID, kind, by string, ts int64) ([]string, *proto.DigestEntryRemovedPayload) {
+	return proto.DigestEventScopes(boardID), &proto.DigestEntryRemovedPayload{ID: entryID, Board: boardID, Kind: kind, By: by, TS: ts}
+}
+
+func DigestDirectorySet(directoryID, boardID, kind, path, createdBy string, ts int64) ([]string, *proto.DigestDirectorySetPayload) {
+	return proto.DigestEventScopes(boardID), &proto.DigestDirectorySetPayload{
+		ID:        directoryID,
+		Board:     boardID,
+		Kind:      kind,
+		Path:      path,
+		CreatedBy: createdBy,
+		TS:        ts,
+	}
+}
+
+func DigestPathMoved(boardID, kind, fromPath, toPath string, count int, by string, ts int64) ([]string, *proto.DigestPathMovedPayload) {
+	return proto.DigestEventScopes(boardID), &proto.DigestPathMovedPayload{
+		Board:    boardID,
+		Kind:     kind,
+		FromPath: fromPath,
+		ToPath:   toPath,
+		Count:    count,
+		By:       by,
+		TS:       ts,
+	}
+}
+
+func DigestPathCopied(boardID, kind, fromPath, toPath string, entryIDs, directoryIDs []string, count int, createdBy string, ts int64) ([]string, *proto.DigestPathCopiedPayload) {
+	return proto.DigestEventScopes(boardID), &proto.DigestPathCopiedPayload{
+		Board:        boardID,
+		Kind:         kind,
+		FromPath:     fromPath,
+		ToPath:       toPath,
+		EntryIDs:     entryIDs,
+		DirectoryIDs: directoryIDs,
+		Count:        count,
+		CreatedBy:    createdBy,
+		TS:           ts,
+	}
+}
+
+func DigestPathDeleted(boardID, kind, path string, count int, by string, ts int64) ([]string, *proto.DigestPathDeletedPayload) {
+	return proto.DigestEventScopes(boardID), &proto.DigestPathDeletedPayload{
+		Board: boardID,
+		Kind:  kind,
+		Path:  path,
+		Count: count,
+		By:    by,
+		TS:    ts,
+	}
+}
+
 func FavoriteFolderCreated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderCreatedPayload) {
 	payload := &proto.FavoriteFolderCreatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
 	return []string{"user:" + userID}, payload

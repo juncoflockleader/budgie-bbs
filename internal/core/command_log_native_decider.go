@@ -2733,7 +2733,7 @@ func (e *CommandLogNativeDecisionExecutor) decideDigestCuration(record CommandLo
 		entryID = stableCommandLogDecisionID("dig_", record, 0)
 	}
 	ts := nativeCommandTimestamp(record)
-	eventPayload := &proto.DigestEntryUpsertedPayload{
+	scopes, eventPayload := commandevents.DigestEntryUpserted(commandevents.DigestEntryUpsertedSpec{
 		ID:         entryID,
 		Board:      thread.Board,
 		TargetKind: targetKind,
@@ -2744,8 +2744,8 @@ func (e *CommandLogNativeDecisionExecutor) decideDigestCuration(record CommandLo
 		Note:       note,
 		CreatedBy:  actor.ID,
 		TS:         ts,
-	}
-	events := []EventAppend{nativeEvent(record, 0, proto.EvtDigestEntryUpserted, proto.DigestEventScopes(thread.Board), eventPayload, ts)}
+	})
+	events := []EventAppend{nativeEvent(record, 0, proto.EvtDigestEntryUpserted, scopes, eventPayload, ts)}
 	if mirror, ok := projections.DigestMirrorSystemBoardForKind(kind); ok {
 		export, err := projections.DigestExportForUpsertedEntry(e.core.DB, eventPayload, thread, post)
 		if err != nil {
@@ -2773,13 +2773,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRemoveDigestEntry(ctx context.C
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtDigestEntryRemoved, proto.DigestEventScopes(entry.BoardID), &proto.DigestEntryRemovedPayload{
-		ID:    entry.ID,
-		Board: entry.BoardID,
-		Kind:  entry.Kind,
-		By:    actor.ID,
-		TS:    ts,
-	}, ts)
+	scopes, eventPayload := commandevents.DigestEntryRemoved(entry.ID, entry.BoardID, entry.Kind, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtDigestEntryRemoved, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(entry.ID, event), nil
 }
 
@@ -2818,7 +2813,7 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateDigestEntry(ctx context.C
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtDigestEntryUpdated, proto.DigestEventScopes(entry.BoardID), &proto.DigestEntryUpdatedPayload{
+	scopes, eventPayload := commandevents.DigestEntryUpdated(commandevents.DigestEntryUpdatedSpec{
 		ID:         entry.ID,
 		Board:      entry.BoardID,
 		TargetKind: entry.TargetKind,
@@ -2829,7 +2824,8 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateDigestEntry(ctx context.C
 		Note:       note,
 		By:         actor.ID,
 		TS:         ts,
-	}, ts)
+	})
+	event := nativeEvent(record, 0, proto.EvtDigestEntryUpdated, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(entry.ID, event), nil
 }
 
@@ -2848,15 +2844,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetDigestEntryBody(ctx context.
 		body = ""
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtDigestEntryBodySet, proto.DigestEventScopes(entry.BoardID), &proto.DigestEntryBodySetPayload{
-		ID:     entry.ID,
-		Board:  entry.BoardID,
-		Kind:   entry.Kind,
-		Body:   body,
-		Edited: edited,
-		By:     actor.ID,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.DigestEntryBodySet(entry.ID, entry.BoardID, entry.Kind, body, edited, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtDigestEntryBodySet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(entry.ID, event), nil
 }
 
@@ -2881,14 +2870,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateDigestDirectory(ctx conte
 		directoryID = stableCommandLogDecisionID("dir_", record, 0)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtDigestDirectorySet, proto.DigestEventScopes(boardID), &proto.DigestDirectorySetPayload{
-		ID:        directoryID,
-		Board:     boardID,
-		Kind:      kind,
-		Path:      path,
-		CreatedBy: actor.ID,
-		TS:        ts,
-	}, ts)
+	scopes, eventPayload := commandevents.DigestDirectorySet(directoryID, boardID, kind, path, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtDigestDirectorySet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(directoryID, event), nil
 }
 
@@ -2950,22 +2933,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveDigestPath(ctx context.Cont
 		count = len(entries) + len(dirs)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(
-		record,
-		0,
-		proto.EvtDigestPathMoved,
-		proto.DigestEventScopes(boardID),
-		&proto.DigestPathMovedPayload{
-			Board:    boardID,
-			Kind:     kind,
-			FromPath: fromPath,
-			ToPath:   toPath,
-			Count:    count,
-			By:       actor.ID,
-			TS:       ts,
-		},
-		ts,
-	)
+	scopes, eventPayload := commandevents.DigestPathMoved(boardID, kind, fromPath, toPath, count, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtDigestPathMoved, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(fmt.Sprintf("%s:%s:%d", boardID, kind, count), event), nil
 }
 
@@ -3014,17 +2983,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCopyDigestPath(ctx context.Cont
 	}
 	ts := nativeCommandTimestamp(record)
 	count := len(entries) + len(dirs)
-	event := nativeEvent(record, 0, proto.EvtDigestPathCopied, proto.DigestEventScopes(boardID), &proto.DigestPathCopiedPayload{
-		Board:        boardID,
-		Kind:         kind,
-		FromPath:     fromPath,
-		ToPath:       toPath,
-		EntryIDs:     entryIDs,
-		DirectoryIDs: directoryIDs,
-		Count:        count,
-		CreatedBy:    actor.ID,
-		TS:           ts,
-	}, ts)
+	scopes, eventPayload := commandevents.DigestPathCopied(boardID, kind, fromPath, toPath, entryIDs, directoryIDs, count, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtDigestPathCopied, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(fmt.Sprintf("%s:%s:%d", boardID, kind, count), event), nil
 }
 
@@ -3054,14 +3014,8 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteDigestPath(ctx context.Co
 		count = len(entries) + len(dirs)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtDigestPathDeleted, proto.DigestEventScopes(boardID), &proto.DigestPathDeletedPayload{
-		Board: boardID,
-		Kind:  kind,
-		Path:  path,
-		Count: count,
-		By:    actor.ID,
-		TS:    ts,
-	}, ts)
+	scopes, eventPayload := commandevents.DigestPathDeleted(boardID, kind, path, count, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtDigestPathDeleted, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(fmt.Sprintf("%s:%s:%d", boardID, kind, count), event), nil
 }
 
