@@ -3959,8 +3959,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardZap(ctx context.Context
 	if settings == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
 	}
-	if payload.Zapped && !settings.ZapAllowed {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "board cannot be zapped", false)
+	if errDetail := commandrules.RequireBoardZapAllowed(payload.Zapped, settings); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	scopes, eventPayload := commandevents.BoardZapSet(actor.ID, boardID, payload.Zapped, ts)

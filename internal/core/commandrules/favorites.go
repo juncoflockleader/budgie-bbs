@@ -27,3 +27,10 @@ func FavoriteTreeFromImportPayload(p proto.ImportFavoriteTreePayload) *projectio
 	}
 	return tree
 }
+
+func RequireBoardZapAllowed(zapped bool, settings *projections.BoardSettings) *proto.ErrorDetail {
+	if zapped && settings != nil && !settings.ZapAllowed {
+		return newErrDetail(proto.ErrConflict, "board cannot be zapped", false)
+	}
+	return nil
+}

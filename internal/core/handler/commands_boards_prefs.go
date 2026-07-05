@@ -44,8 +44,8 @@ func (h *Handler) setBoardZap(actor *User, p proto.SetBoardZapPayload) Reply {
 		if err != nil {
 			return internalErr(err)
 		}
-		if settings != nil && !settings.ZapAllowed {
-			return Reply{Err: errDetail(proto.ErrConflict, "board cannot be zapped", false)}
+		if errDetail := commandrules.RequireBoardZapAllowed(p.Zapped, settings); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 	}
 	if err := currentRuntime().SetBoardZap(h.db, actor.ID, p.Board, p.Zapped); err != nil {
