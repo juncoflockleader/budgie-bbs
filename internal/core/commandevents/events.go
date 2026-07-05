@@ -4,6 +4,10 @@ import "github.com/juncoflockleader/budgie-bbs/internal/proto"
 
 const LoginWatchRelationshipKind = "login_watch"
 
+func CommunityStatsSnapshotRecorded(payload *proto.CommunityStatsSnapshotRecordedPayload) ([]string, *proto.CommunityStatsSnapshotRecordedPayload) {
+	return nil, payload
+}
+
 func BoardFavoriteSet(userID, boardID, folderID string, favorite bool, position *int, ts int64) ([]string, *proto.BoardFavoriteSetPayload) {
 	payload := &proto.BoardFavoriteSetPayload{UserID: userID, Board: boardID, Favorite: favorite, FolderID: folderID, Position: position, TS: ts}
 	return []string{"board:" + boardID, "user:" + userID}, payload

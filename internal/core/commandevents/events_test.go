@@ -22,6 +22,15 @@ func TestReviewResolved(t *testing.T) {
 	}
 }
 
+func TestCommunityStatsSnapshotRecorded(t *testing.T) {
+	payload := &proto.CommunityStatsSnapshotRecordedPayload{Day: "2026-06-04", SnapshotAt: 1234, TotalUsers: 2}
+	scopes, got := CommunityStatsSnapshotRecorded(payload)
+	requireScopes(t, scopes)
+	if got != payload {
+		t.Fatalf("CommunityStatsSnapshotRecorded payload = %+v, want original payload", got)
+	}
+}
+
 func TestBoardAutomodRuleEvents(t *testing.T) {
 	scopes, payload := BoardAutomodRuleSet(
 		"rule_1", "general", true, 7,

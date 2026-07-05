@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 const (
@@ -28,6 +29,35 @@ type SystemPostPlan struct {
 	PostID   string
 	Title    string
 	Body     string
+}
+
+func (p *SnapshotPlan) SnapshotPayload() *proto.CommunityStatsSnapshotRecordedPayload {
+	snapshot := p.Snapshot
+	return &proto.CommunityStatsSnapshotRecordedPayload{
+		Day:                 snapshot.Day,
+		SnapshotAt:          snapshot.SnapshotAt,
+		TotalUsers:          snapshot.TotalUsers,
+		TotalBoards:         snapshot.TotalBoards,
+		TotalThreads:        snapshot.TotalThreads,
+		TotalPosts:          snapshot.TotalPosts,
+		TotalReactions:      snapshot.TotalReactions,
+		TotalMail:           snapshot.TotalMail,
+		TotalDirectMessages: snapshot.TotalDirectMessages,
+		TotalLogins:         snapshot.TotalLogins,
+		TotalLogouts:        snapshot.TotalLogouts,
+		TotalWebLogins:      snapshot.TotalWebLogins,
+		TotalWebLogouts:     snapshot.TotalWebLogouts,
+		TotalGuestLogins:    snapshot.TotalGuestLogins,
+		TotalGuestLogouts:   snapshot.TotalGuestLogouts,
+		TotalOnlineSeconds:  snapshot.TotalOnlineSeconds,
+		OnlineUsers:         snapshot.OnlineUsers,
+		OnlineGuests:        snapshot.OnlineGuests,
+		MaxOnlineUsers:      snapshot.MaxOnlineUsers,
+		MaxOnlineAt:         snapshot.MaxOnlineAt,
+		MaxOnlineGuests:     snapshot.MaxOnlineGuests,
+		MaxOnlineGuestsAt:   snapshot.MaxOnlineGuestsAt,
+		HeadSeq:             snapshot.HeadSeq,
+	}
 }
 
 type planner struct {

@@ -2324,31 +2324,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishStatsSnapshot(ctx contex
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	events := []EventAppend{nativeEvent(record, 0, proto.EvtCommunityStatsSnapshotRecorded, nil, &proto.CommunityStatsSnapshotRecordedPayload{
-		Day:                 plan.Snapshot.Day,
-		SnapshotAt:          plan.Snapshot.SnapshotAt,
-		TotalUsers:          plan.Snapshot.TotalUsers,
-		TotalBoards:         plan.Snapshot.TotalBoards,
-		TotalThreads:        plan.Snapshot.TotalThreads,
-		TotalPosts:          plan.Snapshot.TotalPosts,
-		TotalReactions:      plan.Snapshot.TotalReactions,
-		TotalMail:           plan.Snapshot.TotalMail,
-		TotalDirectMessages: plan.Snapshot.TotalDirectMessages,
-		TotalLogins:         plan.Snapshot.TotalLogins,
-		TotalLogouts:        plan.Snapshot.TotalLogouts,
-		TotalWebLogins:      plan.Snapshot.TotalWebLogins,
-		TotalWebLogouts:     plan.Snapshot.TotalWebLogouts,
-		TotalGuestLogins:    plan.Snapshot.TotalGuestLogins,
-		TotalGuestLogouts:   plan.Snapshot.TotalGuestLogouts,
-		TotalOnlineSeconds:  plan.Snapshot.TotalOnlineSeconds,
-		OnlineUsers:         plan.Snapshot.OnlineUsers,
-		OnlineGuests:        plan.Snapshot.OnlineGuests,
-		MaxOnlineUsers:      plan.Snapshot.MaxOnlineUsers,
-		MaxOnlineAt:         plan.Snapshot.MaxOnlineAt,
-		MaxOnlineGuests:     plan.Snapshot.MaxOnlineGuests,
-		MaxOnlineGuestsAt:   plan.Snapshot.MaxOnlineGuestsAt,
-		HeadSeq:             plan.Snapshot.HeadSeq,
-	}, ts)}
+	scopes, eventPayload := commandevents.CommunityStatsSnapshotRecorded(plan.SnapshotPayload())
+	events := []EventAppend{nativeEvent(record, 0, proto.EvtCommunityStatsSnapshotRecorded, scopes, eventPayload, ts)}
 	if len(plan.Posts) > 0 {
 		exists, err := projections.BoardExists(e.core.DB, statsplan.SystemBoardID)
 		if err != nil {
