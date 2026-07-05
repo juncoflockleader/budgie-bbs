@@ -214,7 +214,6 @@ type postCommittedJob struct {
 const editWindowDur = 24 * time.Hour
 
 type Reply = commandexec.Reply
-type CommandPartition = commandexec.Partition
 
 // cmdEnvelope is the internal queue message for the command dispatcher.
 type cmdEnvelope struct {
@@ -223,7 +222,7 @@ type cmdEnvelope struct {
 	name      proto.CommandName
 	payload   json.RawMessage
 	cid       string
-	partition CommandPartition
+	partition commandexec.Partition
 	replyCh   chan Reply
 }
 
@@ -233,7 +232,7 @@ type Handler struct {
 	bus              Bus
 	queue            chan cmdEnvelope
 	partitionWorkers int
-	lockCmd          func(ctx context.Context, partition CommandPartition) (unlock func(), err error)
+	lockCmd          func(ctx context.Context, partition commandexec.Partition) (unlock func(), err error)
 }
 
 func New(db *sql.DB, bus Bus) *Handler {
@@ -257,7 +256,7 @@ func (h *Handler) SetPartitionWorkers(n int) {
 // SetCommandLock installs an optional function that wraps each command dispatch.
 // Postgres mode uses this to hold a pg_advisory_lock for the duration of every
 // mutating command, serializing writes across nodes.
-func (h *Handler) SetCommandLock(fn func(ctx context.Context, partition CommandPartition) (unlock func(), err error)) {
+func (h *Handler) SetCommandLock(fn func(ctx context.Context, partition commandexec.Partition) (unlock func(), err error)) {
 	h.lockCmd = fn
 }
 
@@ -337,10 +336,10 @@ func (h *Handler) dispatchWithLock(env cmdEnvelope) Reply {
 
 // Execute submits a command and blocks until it is processed.
 func (h *Handler) Execute(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string) Reply {
-	return h.ExecutePartition(ctx, actor, name, payload, cid, CommandPartition{})
+	return h.ExecutePartition(ctx, actor, name, payload, cid, commandexec.Partition{})
 }
 
-func (h *Handler) ExecutePartition(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition CommandPartition) Reply {
+func (h *Handler) ExecutePartition(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition commandexec.Partition) Reply {
 	replyCh := make(chan Reply, 1)
 	env := cmdEnvelope{
 		ctx:       ctx,

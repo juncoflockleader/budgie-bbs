@@ -15,7 +15,7 @@ import (
 )
 
 func TestPartitionLaneIndexIsDeterministic(t *testing.T) {
-	partition := CommandPartition{Kind: "board", Key: "general"}
+	partition := commandexec.Partition{Kind: "board", Key: "general"}
 	first := commandexec.PartitionLaneIndex(partition, 16)
 	for i := 0; i < 20; i++ {
 		if got := commandexec.PartitionLaneIndex(partition, 16); got != first {
@@ -25,7 +25,7 @@ func TestPartitionLaneIndexIsDeterministic(t *testing.T) {
 }
 
 func TestPartitionLaneIndexFallsBackToLaneZero(t *testing.T) {
-	partition := CommandPartition{Kind: "board", Key: "general"}
+	partition := commandexec.Partition{Kind: "board", Key: "general"}
 	if got := commandexec.PartitionLaneIndex(partition, 0); got != 0 {
 		t.Fatalf("lane for zero lanes = %d, want 0", got)
 	}
@@ -41,9 +41,9 @@ func TestExecutePartitionPassesPartitionToLock(t *testing.T) {
 		},
 	})
 	h := New(nil, nil)
-	want := CommandPartition{Kind: "board", Key: "general"}
-	got := CommandPartition{}
-	h.SetCommandLock(func(ctx context.Context, partition CommandPartition) (func(), error) {
+	want := commandexec.Partition{Kind: "board", Key: "general"}
+	got := commandexec.Partition{}
+	h.SetCommandLock(func(ctx context.Context, partition commandexec.Partition) (func(), error) {
 		got = partition
 		return func() {}, nil
 	})
@@ -70,9 +70,9 @@ func TestPartitionWorkersRunDifferentPartitionsConcurrently(t *testing.T) {
 	h := New(nil, nil)
 	h.SetPartitionWorkers(8)
 	a, b := partitionsOnDifferentLanes(t, 8)
-	entered := make(chan CommandPartition, 2)
+	entered := make(chan commandexec.Partition, 2)
 	release := make(chan struct{})
-	h.SetCommandLock(func(ctx context.Context, partition CommandPartition) (func(), error) {
+	h.SetCommandLock(func(ctx context.Context, partition commandexec.Partition) (func(), error) {
 		entered <- partition
 		select {
 		case <-release:
@@ -87,9 +87,9 @@ func TestPartitionWorkersRunDifferentPartitionsConcurrently(t *testing.T) {
 	go h.Run(ctx)
 
 	var wg sync.WaitGroup
-	for _, partition := range []CommandPartition{a, b} {
+	for _, partition := range []commandexec.Partition{a, b} {
 		wg.Add(1)
-		go func(partition CommandPartition) {
+		go func(partition commandexec.Partition) {
 			defer wg.Done()
 			reply := h.ExecutePartition(ctx, nil, proto.CommandName("unknown"), json.RawMessage(`{}`), "", partition)
 			if reply.Err == nil {
@@ -115,11 +115,11 @@ func TestPartitionWorkersSerializeSamePartition(t *testing.T) {
 	})
 	h := New(nil, nil)
 	h.SetPartitionWorkers(8)
-	partition := CommandPartition{Kind: "board", Key: "general"}
+	partition := commandexec.Partition{Kind: "board", Key: "general"}
 	entered := make(chan int, 2)
 	releaseFirst := make(chan struct{})
 	var count atomic.Int64
-	h.SetCommandLock(func(ctx context.Context, got CommandPartition) (func(), error) {
+	h.SetCommandLock(func(ctx context.Context, got commandexec.Partition) (func(), error) {
 		if got != partition {
 			t.Errorf("partition = %+v, want %+v", got, partition)
 		}
@@ -170,9 +170,9 @@ func TestPartitionLockWaitSamples(t *testing.T) {
 	resetPartitionLockWaitStatsForTest()
 	t.Cleanup(resetPartitionLockWaitStatsForTest)
 
-	observePartitionLockWait(CommandPartition{Kind: "board", Key: "general"}, 2.5)
-	observePartitionLockWait(CommandPartition{Kind: "board", Key: "general"}, 1.5)
-	observePartitionLockWait(CommandPartition{Kind: "board", Key: "life"}, 1)
+	observePartitionLockWait(commandexec.Partition{Kind: "board", Key: "general"}, 2.5)
+	observePartitionLockWait(commandexec.Partition{Kind: "board", Key: "general"}, 1.5)
+	observePartitionLockWait(commandexec.Partition{Kind: "board", Key: "life"}, 1)
 
 	samples := partitionLockWaitSamples(1)
 	if got := sampleValue(t, samples, "budgie_writer_partition_lock_wait_count", "board", "general"); got != 2 {
@@ -198,27 +198,27 @@ func TestPartitionLockWaitSamples(t *testing.T) {
 	}
 }
 
-func partitionsOnDifferentLanes(t *testing.T, lanes int) (CommandPartition, CommandPartition) {
+func partitionsOnDifferentLanes(t *testing.T, lanes int) (commandexec.Partition, commandexec.Partition) {
 	t.Helper()
-	a := CommandPartition{Kind: "board", Key: "general"}
+	a := commandexec.Partition{Kind: "board", Key: "general"}
 	for _, key := range []string{"life", "tech", "music", "sports", "arts"} {
-		b := CommandPartition{Kind: "board", Key: key}
+		b := commandexec.Partition{Kind: "board", Key: key}
 		if commandexec.PartitionLaneIndex(a, lanes) != commandexec.PartitionLaneIndex(b, lanes) {
 			return a, b
 		}
 	}
 	t.Fatalf("could not find two partitions on different lanes")
-	return CommandPartition{}, CommandPartition{}
+	return commandexec.Partition{}, commandexec.Partition{}
 }
 
-func receivePartition(t *testing.T, ch <-chan CommandPartition) CommandPartition {
+func receivePartition(t *testing.T, ch <-chan commandexec.Partition) commandexec.Partition {
 	t.Helper()
 	select {
 	case p := <-ch:
 		return p
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for partition to enter lock")
-		return CommandPartition{}
+		return commandexec.Partition{}
 	}
 }
 

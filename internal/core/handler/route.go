@@ -10,7 +10,7 @@ import (
 
 // --- Idempotency wrapper ---
 
-func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition CommandPartition) Reply {
+func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition commandexec.Partition) Reply {
 	actorID := ""
 	if actor != nil {
 		actorID = actor.ID

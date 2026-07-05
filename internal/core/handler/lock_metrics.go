@@ -11,7 +11,7 @@ import (
 const partitionLockWaitSampleLimit = 100
 
 type partitionLockWaitStat struct {
-	partition CommandPartition
+	partition commandexec.Partition
 	count     int64
 	sumMS     float64
 	maxMS     float64
@@ -28,7 +28,7 @@ func init() {
 	})
 }
 
-func observePartitionLockWait(partition CommandPartition, waitMS float64) {
+func observePartitionLockWait(partition commandexec.Partition, waitMS float64) {
 	partition = commandexec.NormalizePartition(partition)
 	key := partition.Kind + "\x00" + partition.Key
 
