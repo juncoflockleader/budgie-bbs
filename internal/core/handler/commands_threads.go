@@ -400,7 +400,7 @@ func (h *Handler) appendPost(actor *projections.User, p proto.AppendPostPayload)
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
 }
 
-func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *projections.User, authorName, authorID string, thread *projections.Thread, settings *BoardSettings, postID, body string, replyTarget *projections.Post, ts int64) error {
+func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *projections.User, authorName, authorID string, thread *projections.Thread, settings *projections.BoardSettings, postID, body string, replyTarget *projections.Post, ts int64) error {
 	if actor == nil || thread == nil {
 		return nil
 	}

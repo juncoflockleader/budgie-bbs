@@ -122,6 +122,66 @@ func TestProductionCodeDoesNotUseCoreProjectionCompatibilityAliases(t *testing.T
 	}
 }
 
+func TestCoreProductionCodeDoesNotReexportProjectionDTOAliases(t *testing.T) {
+	repoRoot := coreDependencyGuardRepoRoot(t)
+	coreRoot := filepath.Join(repoRoot, "internal", "core")
+	matches := []string{}
+
+	err := filepath.Walk(coreRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if path == filepath.Join(coreRoot, "projections") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			rel = path
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok || !typeSpec.Assign.IsValid() {
+					continue
+				}
+				selector, ok := typeSpec.Type.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				ident, ok := selector.X.(*ast.Ident)
+				if !ok || ident.Name != "projections" {
+					continue
+				}
+				pos := fset.Position(typeSpec.Pos())
+				matches = append(matches, rel+":"+strconv.Itoa(pos.Line)+": "+typeSpec.Name.Name+" = projections."+selector.Sel.Name)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan core production Go files: %v", err)
+	}
+	sort.Strings(matches)
+	if len(matches) > 0 {
+		t.Fatalf("core production code must import projection DTOs directly, not re-export aliases:\n%s", strings.Join(matches, "\n"))
+	}
+}
+
 func coreDependencyGuardImports(t *testing.T, pkg string) map[string]bool {
 	t.Helper()
 

@@ -99,7 +99,7 @@ func (h *Handler) blessUser(actor *projections.User, p proto.BlessUserPayload) R
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := currentRuntime().InsertBlessing(tx, &Blessing{
+	if err := currentRuntime().InsertBlessing(tx, &projections.Blessing{
 		ID:         blessingID,
 		FromUserID: actor.ID,
 		FromName:   actor.Name,

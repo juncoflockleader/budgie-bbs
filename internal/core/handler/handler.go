@@ -21,17 +21,17 @@ type Runtime struct {
 		QueryRow(query string, args ...any) *sql.Row
 	}, query string, args ...any) *sql.Row
 	ActiveSanction               func(db *sql.DB, userID, scope string) (string, bool)
-	MatchContentFilter           func(db *sql.DB, boardID, text string) (*ContentFilter, error)
+	MatchContentFilter           func(db *sql.DB, boardID, text string) (*projections.ContentFilter, error)
 	NowMS                        func() int64
 	NewID                        func(prefix string) string
 	AppendEvent                  func(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, payload any) (int64, error)
 	GetThread                    func(db *sql.DB, id string) (*projections.Thread, error)
 	GetPost                      func(db *sql.DB, id string) (*projections.Post, error)
-	GetMail                      func(db *sql.DB, userID, messageID string) (*MailItem, error)
+	GetMail                      func(db *sql.DB, userID, messageID string) (*projections.MailItem, error)
 	GetUserTx                    func(tx *sql.Tx, id string) (*projections.User, error)
 	GetThreadTx                  func(tx *sql.Tx, id string) (*projections.Thread, error)
 	GetPostTx                    func(tx *sql.Tx, id string) (*projections.Post, error)
-	GetPollWithVotes             func(db *sql.DB, pollID, viewerUserID string) (*Poll, error)
+	GetPollWithVotes             func(db *sql.DB, pollID, viewerUserID string) (*projections.Poll, error)
 	InsertThread                 func(tx *sql.Tx, t *projections.Thread) error
 	InsertPost                   func(tx *sql.Tx, p *projections.Post) error
 	BumpThread                   func(tx *sql.Tx, threadID string, seq int64) error
@@ -56,7 +56,7 @@ type Runtime struct {
 	MoveThreadBoard              func(tx *sql.Tx, threadID, toBoard string) error
 	SetUserRole                  func(tx *sql.Tx, userID, role string) error
 	InsertBoard                  func(tx *sql.Tx, id, name, description, parentID string, position int) error
-	GetDigestExport              func(db *sql.DB, entryID string) (*DigestExport, error)
+	GetDigestExport              func(db *sql.DB, entryID string) (*projections.DigestExport, error)
 	InsertMailMessage            func(tx *sql.Tx, id, fromUserID, subject, body, parentID string, createdAt, seq int64) error
 	InsertMailCopy               func(tx *sql.Tx, messageID, userID, role, mailbox string, read, kept bool, updatedAt int64) error
 	InsertNotification           func(db *sql.DB, id, userID, kind, threadID, postID, actor string, ts int64) error
@@ -66,14 +66,14 @@ type Runtime struct {
 	SetMailGroup                 func(db *sql.DB, ownerID, groupID, name string, memberIDs []string) error
 	DeleteMailGroup              func(db *sql.DB, ownerID, groupID string) (bool, error)
 	GetMailGroupID               func(db *sql.DB, ownerID, groupRef string) (string, error)
-	ListMailGroupMembers         func(db *sql.DB, ownerID, groupRef string) ([]MailGroupMember, error)
+	ListMailGroupMembers         func(db *sql.DB, ownerID, groupRef string) ([]projections.MailGroupMember, error)
 	ListFriendUserIDs            func(db *sql.DB, ownerID string) ([]string, error)
 	ListLoginWatchers            func(db *sql.DB, targetUserID string) ([]string, error)
 	InsertDirectMessage          func(tx *sql.Tx, id, conversationID, fromUserID, toUserID, body string, createdAt, seq int64) error
-	InsertBlessing               func(tx *sql.Tx, blessing *Blessing) error
+	InsertBlessing               func(tx *sql.Tx, blessing *projections.Blessing) error
 	MarkDirectMessageRead        func(db *sql.DB, userID, messageID string) (bool, error)
 	DeleteDirectMessage          func(db *sql.DB, userID, messageID string) (bool, error)
-	GetDirectMessageSettings     func(db *sql.DB, userID string) (*DirectMessageSettings, error)
+	GetDirectMessageSettings     func(db *sql.DB, userID string) (*projections.DirectMessageSettings, error)
 	SetDirectMessageSettings     func(db *sql.DB, userID, policy string) error
 	SetUserRelationship          func(db *sql.DB, userID, targetUserID, kind, note string, active bool) error
 	SetUserPresence              func(db *sql.DB, userID, sessionID, status, mode, boardID, threadID, locationLabel, fromHost string, ts int64) error
@@ -94,14 +94,14 @@ type Runtime struct {
 	DeleteFavoriteFolder         func(db *sql.DB, userID, folderID string) error
 	MoveBoardFavorite            func(db *sql.DB, userID, boardID, folderID string, position *int) error
 	ImportFavoriteTree           func(db *sql.DB, userID string, tree *projections.FavoriteTree, replace bool) error
-	GetBoardSettings             func(db *sql.DB, boardID string) (*BoardSettings, error)
+	GetBoardSettings             func(db *sql.DB, boardID string) (*projections.BoardSettings, error)
 	BoardAllowsPublicSystemPost  func(db *sql.DB, boardID string) (bool, error)
-	SetBoardSettings             func(db *sql.DB, boardID string, patch BoardSettingsPatch) error
+	SetBoardSettings             func(db *sql.DB, boardID string, patch projections.BoardSettingsPatch) error
 	SetRecommendedBoard          func(db *sql.DB, boardID, note, curatedBy string, position *int, recommended bool) error
-	GetBoardMemberRequirements   func(db *sql.DB, boardID string) (*BoardMemberRequirements, error)
-	SetBoardMemberRequirements   func(db *sql.DB, boardID string, patch BoardMemberRequirementsPatch) error
+	GetBoardMemberRequirements   func(db *sql.DB, boardID string) (*projections.BoardMemberRequirements, error)
+	SetBoardMemberRequirements   func(db *sql.DB, boardID string, patch projections.BoardMemberRequirementsPatch) error
 	SetBoardModerator            func(db *sql.DB, boardID, userID, actorID string, moderator bool, position *int) error
-	SetBoardMember               func(db *sql.DB, boardID, userID string, member bool, patch BoardMemberPatch) error
+	SetBoardMember               func(db *sql.DB, boardID, userID string, member bool, patch projections.BoardMemberPatch) error
 	GetBoardMemberApplication    func(db *sql.DB, applicationID string) (*projections.BoardMemberApplication, error)
 	InsertBoardMemberApplication func(db *sql.DB, id, boardID, userID, note string) error
 	ReviewBoardMemberApplication func(db *sql.DB, applicationID, reviewerID, status, title, reviewNote string) error
@@ -160,22 +160,6 @@ type CounterPollVoteIdentity = counterstore.PollVoteIdentity
 type PresenceStore = presencestore.Store
 type PresenceStats = presencestore.Stats
 type ChatStore = chatstore.Store
-
-type Poll = projections.Poll
-type SocialUser = projections.SocialUser
-type ChatRoom = projections.ChatRoom
-type ChatLine = projections.ChatLine
-type BoardSettings = projections.BoardSettings
-type BoardSettingsPatch = projections.BoardSettingsPatch
-type BoardMemberPatch = projections.BoardMemberPatch
-type BoardMemberRequirements = projections.BoardMemberRequirements
-type BoardMemberRequirementsPatch = projections.BoardMemberRequirementsPatch
-type DigestExport = projections.DigestExport
-type MailItem = projections.MailItem
-type MailGroupMember = projections.MailGroupMember
-type DirectMessageSettings = projections.DirectMessageSettings
-type Blessing = projections.Blessing
-type ContentFilter = projections.ContentFilter
 
 const outboxPostCommitted = "post.committed"
 

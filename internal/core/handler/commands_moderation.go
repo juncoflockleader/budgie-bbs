@@ -143,7 +143,7 @@ func (h *Handler) appendModerationSystemPostTx(tx *sql.Tx, actor *projections.Us
 	}, ts)
 }
 
-func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *projections.User, publicAuthor string, filter *ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64) (*proto.Event, []*proto.Event, error) {
+func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *projections.User, publicAuthor string, filter *projections.ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64) (*proto.Event, []*proto.Event, error) {
 	if filter == nil {
 		return nil, nil, nil
 	}
@@ -171,7 +171,7 @@ func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *projections.Use
 	return evt, generated, nil
 }
 
-func (h *Handler) appendFilterSystemPostTx(tx *sql.Tx, actor *projections.User, publicAuthor string, filter *ContentFilter, reviewID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
+func (h *Handler) appendFilterSystemPostTx(tx *sql.Tx, actor *projections.User, publicAuthor string, filter *projections.ContentFilter, reviewID, postID, threadID, boardID string, ts int64) ([]*proto.Event, error) {
 	threadIDOut, postIDOut := proto.ContentFilterReviewPostIDs(reviewID)
 	exists, err := projections.ThreadExists(tx, threadIDOut)
 	if err != nil {

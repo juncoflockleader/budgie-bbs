@@ -393,7 +393,7 @@ func (h *Handler) leaveBoardMembership(actor *projections.User, p proto.LeaveBoa
 	if !commandrules.BoardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board membership not found", false)}
 	}
-	if err := currentRuntime().SetBoardMember(h.db, p.Board, actor.ID, false, BoardMemberPatch{}); err != nil {
+	if err := currentRuntime().SetBoardMember(h.db, p.Board, actor.ID, false, projections.BoardMemberPatch{}); err != nil {
 		return internalErr(err)
 	}
 	return Reply{Result: &proto.AckResult{ID: p.Board}}

@@ -129,14 +129,14 @@ func setCounterStoreRuntime(t *testing.T, store CounterStore) {
 			}
 			return &projections.Thread{ID: "thread-1", Board: "general"}, nil
 		},
-		GetPollWithVotes: func(_ *sql.DB, pollID, viewerUserID string) (*Poll, error) {
+		GetPollWithVotes: func(_ *sql.DB, pollID, viewerUserID string) (*projections.Poll, error) {
 			if pollID != "poll-1" {
 				t.Fatalf("GetPollWithVotes poll = %s, want poll-1", pollID)
 			}
 			if viewerUserID != "bob-id" {
 				t.Fatalf("GetPollWithVotes viewer = %s, want bob-id", viewerUserID)
 			}
-			return &Poll{
+			return &projections.Poll{
 				ID:     "poll-1",
 				PostID: "post-1",
 				Options: []projections.PollOption{
