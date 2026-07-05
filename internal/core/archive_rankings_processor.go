@@ -37,11 +37,7 @@ func (p *ArchiveRankingsProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartArchiveRankingsProcessor(ctx context.Context, interval time.Duration, batchSize int) (*ArchiveRankingsProcessor, error) {
 	processor, err := NewArchiveRankingsProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessArchiveRankingsOnce(batchSize int) (ArchiveRankingsProcessResult, error) {

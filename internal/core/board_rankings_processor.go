@@ -37,11 +37,7 @@ func (p *BoardRankingsProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartBoardRankingsProcessor(ctx context.Context, interval time.Duration, batchSize int) (*BoardRankingsProcessor, error) {
 	processor, err := NewBoardRankingsProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessBoardRankingsOnce(batchSize int) (BoardRankingsProcessResult, error) {

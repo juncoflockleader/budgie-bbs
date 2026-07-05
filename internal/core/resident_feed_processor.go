@@ -39,11 +39,7 @@ func (p *ResidentFeedProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartResidentFeedProcessor(ctx context.Context, interval time.Duration, batchSize int) (*ResidentFeedProcessor, error) {
 	processor, err := NewResidentFeedProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessResidentFeedOnce(batchSize int) (ResidentFeedProcessResult, error) {

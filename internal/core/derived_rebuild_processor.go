@@ -88,6 +88,19 @@ func nilProcessorError(name string) error {
 	return fmt.Errorf("%s processor: nil core", name)
 }
 
+type processorRunner interface {
+	Run(context.Context)
+}
+
+func startPeriodicProcessor[T processorRunner](ctx context.Context, processor T, err error) (T, error) {
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	go processor.Run(ctx)
+	return processor, nil
+}
+
 func (p *periodicProcessor) Run(ctx context.Context) {
 	if p == nil || p.Core == nil {
 		return

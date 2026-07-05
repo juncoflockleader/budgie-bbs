@@ -53,11 +53,7 @@ func (p *LatestFeedProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartLatestFeedProcessor(ctx context.Context, interval time.Duration, batchSize int) (*LatestFeedProcessor, error) {
 	processor, err := NewLatestFeedProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessLatestFeedOnce(batchSize int) (LatestFeedProcessResult, error) {

@@ -65,11 +65,7 @@ func NewAIProcessor(c *Core, interval time.Duration, batchSize int) (*AIProcesso
 // StartAIResponderProcessor launches the AI responder in the background.
 func (c *Core) StartAIResponderProcessor(ctx context.Context, interval time.Duration, batchSize int) (*AIProcessor, error) {
 	p, err := NewAIProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go p.Run(ctx)
-	return p, nil
+	return startPeriodicProcessor(ctx, p, err)
 }
 
 func (p *AIProcessor) Run(ctx context.Context) {

@@ -44,11 +44,7 @@ func (p *DigestSearchProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartDigestSearchProcessor(ctx context.Context, interval time.Duration, batchSize int) (*DigestSearchProcessor, error) {
 	processor, err := NewDigestSearchProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessDigestSearchOnce(batchSize int) (DigestSearchProcessResult, error) {

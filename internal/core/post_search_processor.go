@@ -47,11 +47,7 @@ func (p *PostSearchProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartPostSearchProcessor(ctx context.Context, interval time.Duration, batchSize int) (*PostSearchProcessor, error) {
 	processor, err := NewPostSearchProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, error) {

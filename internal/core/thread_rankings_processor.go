@@ -37,11 +37,7 @@ func (p *ThreadRankingsProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartThreadRankingsProcessor(ctx context.Context, interval time.Duration, batchSize int) (*ThreadRankingsProcessor, error) {
 	processor, err := NewThreadRankingsProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessThreadRankingsOnce(batchSize int) (ThreadRankingsProcessResult, error) {

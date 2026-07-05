@@ -37,11 +37,7 @@ func (p *CommunityStatsProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartCommunityStatsProcessor(ctx context.Context, interval time.Duration, batchSize int) (*CommunityStatsProcessor, error) {
 	processor, err := NewCommunityStatsProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessCommunityStatsOnce(batchSize int) (CommunityStatsProcessResult, error) {

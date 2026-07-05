@@ -37,11 +37,7 @@ func (p *BoardSummariesProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartBoardSummariesProcessor(ctx context.Context, interval time.Duration, batchSize int) (*BoardSummariesProcessor, error) {
 	processor, err := NewBoardSummariesProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessBoardSummariesOnce(batchSize int) (BoardSummariesProcessResult, error) {

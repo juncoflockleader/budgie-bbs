@@ -37,11 +37,7 @@ func (p *UnreadThreadSummariesProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartUnreadThreadSummariesProcessor(ctx context.Context, interval time.Duration, batchSize int) (*UnreadThreadSummariesProcessor, error) {
 	processor, err := NewUnreadThreadSummariesProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessUnreadThreadSummariesOnce(batchSize int) (UnreadThreadSummariesProcessResult, error) {

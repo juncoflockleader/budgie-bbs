@@ -37,11 +37,7 @@ func (p *ReplyRankingsProcessor) Run(ctx context.Context) {
 
 func (c *Core) StartReplyRankingsProcessor(ctx context.Context, interval time.Duration, batchSize int) (*ReplyRankingsProcessor, error) {
 	processor, err := NewReplyRankingsProcessor(c, interval, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	go processor.Run(ctx)
-	return processor, nil
+	return startPeriodicProcessor(ctx, processor, err)
 }
 
 func (c *Core) ProcessReplyRankingsOnce(batchSize int) (ReplyRankingsProcessResult, error) {
