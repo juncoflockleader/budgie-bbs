@@ -83,11 +83,11 @@ type (
 	}
 	notificationStatusMsg struct{ unread int }
 	profileMsg            struct {
-		profile *core.UserProfile
+		profile *projections.UserProfile
 		err     error
 	}
 	profileSavedMsg struct {
-		profile *core.UserProfile
+		profile *projections.UserProfile
 		err     error
 	}
 	onlineUsersMsg struct {
@@ -172,7 +172,7 @@ type model struct {
 	// Notifications tracked in the current actor session.
 	notifications []projections.Notification
 	unreadNotifs  int
-	profile       *core.UserProfile
+	profile       *projections.UserProfile
 	profileField  profileField
 	onlineUsers   []core.SocialUser
 	nodes         []core.NodeEntry       // M14: active SSH sessions for sysop panel
@@ -1943,8 +1943,8 @@ func (m model) profileFieldValue(field profileField) string {
 	}
 }
 
-func (m model) profileWithField(field profileField, value string) core.UserProfile {
-	var next core.UserProfile
+func (m model) profileWithField(field profileField, value string) projections.UserProfile {
+	var next projections.UserProfile
 	if m.profile != nil {
 		next = *m.profile
 	}
@@ -2908,7 +2908,7 @@ func (m *model) hydratePostAuthorNames(posts []core.Post) {
 	}
 }
 
-func (m *model) cacheProfileDisplayName(profile *core.UserProfile) {
+func (m *model) cacheProfileDisplayName(profile *projections.UserProfile) {
 	if profile == nil {
 		return
 	}

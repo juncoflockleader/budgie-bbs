@@ -2509,7 +2509,7 @@ func (c *Core) TrustInfo(userID string) (*projections.TrustLevelInfo, error) {
 
 // ── Modern forum projections ───────────────────────────────────────────────
 
-func (c *Core) UserProfileByName(name string) (*UserProfile, error) {
+func (c *Core) UserProfileByName(name string) (*projections.UserProfile, error) {
 	return projections.GetUserProfileByName(c.DB, name)
 }
 
@@ -2521,11 +2521,11 @@ func (c *Core) UpdateUserProfile(userID, displayName, title, bio, avatar, signat
 	return projections.UpdateUserProfile(c.DB, userID, displayName, title, bio, avatar, signature, plan, homepage)
 }
 
-func (c *Core) UserPrivateProfile(userID string) (*UserPrivateProfile, error) {
+func (c *Core) UserPrivateProfile(userID string) (*projections.UserPrivateProfile, error) {
 	return projections.GetUserPrivateProfile(c.DB, userID)
 }
 
-func (c *Core) UpdateUserPrivateProfile(profile *UserPrivateProfile) error {
+func (c *Core) UpdateUserPrivateProfile(profile *projections.UserPrivateProfile) error {
 	return projections.UpdateUserPrivateProfile(c.DB, profile)
 }
 
@@ -2599,15 +2599,15 @@ func (c *Core) TransferUserID(userID, newName string) (*User, error) {
 	return projections.TransferUserID(c.DB, userID, newName)
 }
 
-func (c *Core) ListUserPersonalFiles(userID string, includePrivate bool) ([]UserPersonalFile, error) {
+func (c *Core) ListUserPersonalFiles(userID string, includePrivate bool) ([]projections.UserPersonalFile, error) {
 	return projections.ListUserPersonalFiles(c.DB, userID, includePrivate)
 }
 
-func (c *Core) GetUserPersonalFile(userID, name string, includePrivate bool) (*UserPersonalFile, error) {
+func (c *Core) GetUserPersonalFile(userID, name string, includePrivate bool) (*projections.UserPersonalFile, error) {
 	return projections.GetUserPersonalFile(c.DB, userID, name, includePrivate)
 }
 
-func (c *Core) SaveUserPersonalFile(userID, name, body string, public bool) (*UserPersonalFile, error) {
+func (c *Core) SaveUserPersonalFile(userID, name, body string, public bool) (*projections.UserPersonalFile, error) {
 	return projections.SaveUserPersonalFile(c.DB, userID, name, body, public)
 }
 

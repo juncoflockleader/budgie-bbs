@@ -677,7 +677,7 @@ func TestUserPrivateProfileFields(t *testing.T) {
 	defer cancel()
 
 	alice := registerAndGetUser(t, c, "alice", "pw")
-	if err := c.UpdateUserPrivateProfile(&core.UserPrivateProfile{
+	if err := c.UpdateUserPrivateProfile(&projections.UserPrivateProfile{
 		UserID:            alice.ID,
 		RealName:          "Alice Zhang",
 		RealEmail:         "alice@real.example",
@@ -1015,7 +1015,7 @@ func TestDeleteUserHardPurgesAccount(t *testing.T) {
 	if err := c.UpdateUserProfile(alice.ID, "Alice", "", "", "", "secret sig", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.UpdateUserPrivateProfile(&core.UserPrivateProfile{
+	if err := c.UpdateUserPrivateProfile(&projections.UserPrivateProfile{
 		UserID:            alice.ID,
 		RealName:          "Alice Real",
 		RegistrationEmail: "alice@register.example",

@@ -12,6 +12,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -1043,7 +1044,7 @@ func (s *Server) handleUpdateOwnPrivateProfile(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
 		return
 	}
-	if err := s.core.UpdateUserPrivateProfile(&core.UserPrivateProfile{
+	if err := s.core.UpdateUserPrivateProfile(&projections.UserPrivateProfile{
 		UserID:            actor.ID,
 		RealName:          req.RealName,
 		RealEmail:         req.RealEmail,
