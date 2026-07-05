@@ -43,7 +43,7 @@ func TestMemoryBrokerCommandEventTransactionRejectsConflictingDuplicateEventIDAt
 
 	first := commandEventTransactionTestEvent("First title")
 	second := commandEventTransactionTestEvent("Second title")
-	if _, err := transactionStore.CommitCommandEvents(ctx, CommandEventTransaction{
+	if _, err := transactionStore.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: partition,
 		CommandOffset:    1,
 		Events:           []EventAppend{first, second},
@@ -56,7 +56,7 @@ func TestMemoryBrokerCommandEventTransactionRejectsConflictingDuplicateEventIDAt
 func TestBrokerCommandEventTransactionStoreRejectsMissingReturnedEvent(t *testing.T) {
 	ctx := context.Background()
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events: []EventAppend{
@@ -75,7 +75,7 @@ func TestBrokerCommandEventTransactionStoreRejectsMismatchedReturnedEvent(t *tes
 			commandEventTransactionBrokerMessage(t, returned, 1),
 		},
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
@@ -93,7 +93,7 @@ func TestBrokerCommandEventTransactionStoreRejectsTimestampDrift(t *testing.T) {
 			commandEventTransactionBrokerMessage(t, returned, 1),
 		},
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
@@ -109,7 +109,7 @@ func TestBrokerCommandEventTransactionStoreRejectsReturnedEventWithoutSequence(t
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
 		messages: []logmodel.BrokerEventLogMessage{message},
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
@@ -126,7 +126,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsPartitionOnlyReturnedEventWith
 		fakeBrokerCommandEventTransactionClient{messages: []logmodel.BrokerEventLogMessage{message}},
 		BrokerCommandEventTransactionStoreOptions{AllowPartitionOnlyEvents: true},
 	)
-	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	result, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
@@ -155,7 +155,7 @@ func TestBrokerCommandEventTransactionStoreUsesBatchClient(t *testing.T) {
 	}
 	store := NewBrokerCommandEventTransactionStore(client)
 
-	results, err := store.CommitCommandEventBatch(ctx, []CommandEventTransaction{
+	results, err := store.CommitCommandEventBatch(ctx, []logmodel.CommandEventTransaction{
 		{CommandPartition: general, CommandOffset: 2, Events: []EventAppend{first}},
 		{CommandPartition: life, CommandOffset: 3, Events: []EventAppend{second}},
 	})
@@ -187,7 +187,7 @@ func TestBrokerCommandEventTransactionStoreBatchFallsBackToSingleClient(t *testi
 	client := &countingBrokerCommandEventTransactionClient{}
 	store := NewBrokerCommandEventTransactionStore(client)
 
-	results, err := store.CommitCommandEventBatch(ctx, []CommandEventTransaction{
+	results, err := store.CommitCommandEventBatch(ctx, []logmodel.CommandEventTransaction{
 		{CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"}, CommandOffset: 2},
 		{CommandPartition: LogPartition{Kind: partitionBoard, Key: "life"}, CommandOffset: 3},
 	})
@@ -211,7 +211,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsCompatibilitySequence(t *testi
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
 		messages: []logmodel.BrokerEventLogMessage{message},
 	})
-	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	result, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
@@ -233,7 +233,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsAdapterAssignedCompatibilitySe
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
 		messages: []logmodel.BrokerEventLogMessage{message},
 	})
-	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	result, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
@@ -256,7 +256,7 @@ func TestBrokerCommandEventTransactionStoreRejectsReturnedCompatibilitySequenceD
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
 		messages: []logmodel.BrokerEventLogMessage{message},
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{requested},
@@ -277,7 +277,7 @@ func TestBrokerCommandEventTransactionStoreRejectsNonIncreasingReturnedSequence(
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
 		messages: messages,
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{first, second},
@@ -300,7 +300,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsOrderedCompatibilitySequenceBa
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
 		messages: messages,
 	})
-	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	result, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{first, second},
@@ -326,7 +326,7 @@ func TestBrokerCommandEventTransactionStoreRejectsNonIncreasingReturnedPartition
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
 		messages: messages,
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{first, second},
@@ -343,7 +343,7 @@ func TestBrokerCommandEventTransactionStoreRejectsStaleCommittedOffset(t *testin
 		},
 		committedOffset: 4,
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    5,
 		Events:           []EventAppend{requested},
@@ -361,7 +361,7 @@ func TestBrokerCommandEventTransactionStoreRejectsWrongCommittedPartition(t *tes
 		committedPartition: LogPartition{Kind: partitionBoard, Key: "other"},
 		committedOffset:    5,
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    5,
 		Events:           []EventAppend{requested},
@@ -379,7 +379,7 @@ func TestBrokerCommandEventTransactionStoreRejectsMissingCommittedPartition(t *t
 		committedPartitionMissing: true,
 		committedOffset:           5,
 	})
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    5,
 		Events:           []EventAppend{requested},
@@ -393,7 +393,7 @@ func TestBrokerCommandEventTransactionStoreRequiresEventTimestamp(t *testing.T) 
 	event := commandEventTransactionTestEventWithID("evt_transaction_missing_ts", "Missing timestamp")
 	event.TS = 0
 	store := NewBrokerCommandEventTransactionStore(client)
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events:           []EventAppend{event},
@@ -448,7 +448,7 @@ func TestBrokerCommandEventTransactionStoreRejectsDuplicateEventIDBeforeClient(t
 	ctx := context.Background()
 	client := &countingBrokerCommandEventTransactionClient{}
 	store := NewBrokerCommandEventTransactionStore(client)
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    1,
 		Events: []EventAppend{
@@ -476,7 +476,7 @@ func TestBrokerCommandEventTransactionStorePassesCommandSourcePosition(t *testin
 		LogicalOffset:     12,
 	}
 
-	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	result, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition:      LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:         12,
 		CommandSourcePosition: source,
@@ -499,7 +499,7 @@ func TestBrokerCommandEventTransactionStoreRejectsUnsafeCommandSourcePositionBef
 	ctx := context.Background()
 	client := &countingBrokerCommandEventTransactionClient{}
 	store := NewBrokerCommandEventTransactionStore(client)
-	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
+	_, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    12,
 		CommandSourcePosition: logmodel.CommandLogSourcePosition{
@@ -528,7 +528,7 @@ func TestCommandEventTransactionFinalizerRecordsTerminalFailureOnlyAfterCommit(t
 	}
 	var terminalRecords []CommandLogRecord
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			return logmodel.CommandEventTransactionResult{}, errors.New("injected transaction commit failure")
 		}),
 		TerminalFailures: commandLogTerminalFailureRecorderFunc(func(ctx context.Context, record CommandLogRecord, errDetail *proto.ErrorDetail) error {
@@ -568,7 +568,7 @@ func TestCommandEventTransactionFinalizerPassesCommandSourcePosition(t *testing.
 	}
 	var got logmodel.CommandLogSourcePosition
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			got = tx.CommandSourcePosition
 			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: tx.CommandPartition,
@@ -598,7 +598,7 @@ func TestCommandEventTransactionFinalizerReturnsRetryableProgressWhenReceiptFail
 		CID:       "cid-retryable-recorder-fails",
 	}
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			t.Fatalf("retryable command should not commit a command/event transaction")
 			return logmodel.CommandEventTransactionResult{}, nil
 		}),
@@ -625,7 +625,7 @@ func TestCommandEventTransactionFinalizerReturnsCommittedTerminalProgressWhenRec
 		CID:       "cid-terminal-recorder-fails",
 	}
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: tx.CommandPartition,
 				CommittedOffset:    tx.CommandOffset,
@@ -657,7 +657,7 @@ func TestCommandEventTransactionFinalizerReturnsCommittedAppliedProgressWhenRece
 		CID:       "cid-applied-recorder-fails",
 	}
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: tx.CommandPartition,
 				CommittedOffset:    tx.CommandOffset,
@@ -688,7 +688,7 @@ func TestCommandEventTransactionFinalizerRejectsMissingCommittedPartition(t *tes
 	}
 	var appliedRecords []CommandLogRecord
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			return logmodel.CommandEventTransactionResult{CommittedOffset: tx.CommandOffset}, nil
 		}),
 		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
@@ -717,7 +717,7 @@ func TestCommandEventTransactionFinalizerRejectsWrongCommittedPartition(t *testi
 	}
 	var terminalRecords []CommandLogRecord
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: LogPartition{Kind: partitionBoard, Key: "other"},
 				CommittedOffset:    tx.CommandOffset,
@@ -918,8 +918,8 @@ func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommi
 	}, nil
 }
 
-type commandEventTransactionStoreFunc func(context.Context, CommandEventTransaction) (logmodel.CommandEventTransactionResult, error)
+type commandEventTransactionStoreFunc func(context.Context, logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error)
 
-func (f commandEventTransactionStoreFunc) CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+func (f commandEventTransactionStoreFunc) CommitCommandEvents(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 	return f(ctx, tx)
 }

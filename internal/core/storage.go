@@ -99,24 +99,18 @@ type EventStore interface {
 	ReplayPartition(ctx context.Context, partitionKind, partitionKey string, afterOffset int64, limit int) ([]*proto.Event, error)
 }
 
-// CommandEventTransaction is the broker-native write unit for IS4: a writer
-// consumes one command-log record, decides zero or more durable events, appends
-// those events, and advances the consumed command offset through one transaction
-// boundary.
-type CommandEventTransaction = logmodel.CommandEventTransaction
-
 // CommandEventTransactionStore is the final promotion boundary for broker-owned
 // writes. Redpanda/Kafka adapters must make CommitCommandEvents atomic or
 // provide equivalent idempotent replay semantics for the append/commit gap.
 type CommandEventTransactionStore interface {
-	CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error)
+	CommitCommandEvents(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error)
 }
 
 // CommandEventTransactionBatchStore is an optional promotion boundary for
 // draining multiple logical command partitions through one broker transaction
 // where the backend can provide equivalent idempotent append/commit semantics.
 type CommandEventTransactionBatchStore interface {
-	CommitCommandEventBatch(ctx context.Context, txs []CommandEventTransaction) ([]logmodel.CommandEventTransactionResult, error)
+	CommitCommandEventBatch(ctx context.Context, txs []logmodel.CommandEventTransaction) ([]logmodel.CommandEventTransactionResult, error)
 }
 
 // EventPartitionLister exposes the partitions that currently have durable

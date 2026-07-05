@@ -555,13 +555,13 @@ func (c *Core) flushCommandLogDrainLoadNativePending(ctx context.Context, comman
 	if len(pending) == 0 {
 		return nil
 	}
-	txs := make([]CommandEventTransaction, 0, len(pending))
+	txs := make([]logmodel.CommandEventTransaction, 0, len(pending))
 	for _, partition := range pending {
 		if len(partition.records) == 0 {
 			continue
 		}
 		last := partition.records[len(partition.records)-1].record
-		txs = append(txs, CommandEventTransaction{
+		txs = append(txs, logmodel.CommandEventTransaction{
 			CommandPartition:      last.Partition,
 			CommandOffset:         last.Offset,
 			CommandSourcePosition: last.SourcePosition,

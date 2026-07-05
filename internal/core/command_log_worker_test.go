@@ -584,7 +584,7 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 	produceCommandLogWorkerRecord(t, ctx, commandLog, partition, "cid-batch-3")
 
 	var calls int
-	var gotTx CommandEventTransaction
+	var gotTx logmodel.CommandEventTransaction
 	var applied []int64
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
@@ -594,7 +594,7 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 		}),
 		Finalizer: CommandEventTransactionBatchFinalizer{
 			CommandEventTransactionFinalizer: CommandEventTransactionFinalizer{
-				Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+				Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 					calls++
 					gotTx = tx
 					return transactionStore.CommitCommandEvents(ctx, tx)
@@ -691,7 +691,7 @@ func TestCommandLogWorkerBatchFinalizerStopsBeforeRetryableFailure(t *testing.T)
 		}),
 		Finalizer: CommandEventTransactionBatchFinalizer{
 			CommandEventTransactionFinalizer: CommandEventTransactionFinalizer{
-				Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+				Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 					calls++
 					return transactionStore.CommitCommandEvents(ctx, tx)
 				}),
@@ -738,7 +738,7 @@ func TestCommandLogWorkerUsesPerRecordNativeFinalizerUnlessBatchOptedIn(t *testi
 			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_single_finalizer"}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 				calls++
 				return transactionStore.CommitCommandEvents(ctx, tx)
 			}),
@@ -847,7 +847,7 @@ func TestCommandLogWorkerReportsNativeTransactionCommitFailure(t *testing.T) {
 			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_native_transaction_commit_failure", Seq: 1}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 				return logmodel.CommandEventTransactionResult{}, errors.New("injected native transaction commit failure")
 			}),
 			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
@@ -885,7 +885,7 @@ func TestCommandLogWorkerReportsNativeRetryableReceiptFailure(t *testing.T) {
 			return commandexec.Reply{Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "native retry later", Retryable: true}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
-			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 				t.Fatalf("retryable command should not commit a command/event transaction")
 				return logmodel.CommandEventTransactionResult{}, nil
 			}),

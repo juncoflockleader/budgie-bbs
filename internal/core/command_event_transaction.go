@@ -57,7 +57,7 @@ func (f CommandEventTransactionFinalizer) FinalizeCommandLogRecord(ctx context.C
 	}
 	if reply.Err != nil {
 		result := CommandLogFinalizationResult{TerminalFailures: 1, TerminalFailure: reply.Err, Committed: true}
-		committed, err := f.Transactions.CommitCommandEvents(ctx, CommandEventTransaction{
+		committed, err := f.Transactions.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 			CommandPartition:      record.Partition,
 			CommandOffset:         record.Offset,
 			CommandSourcePosition: record.SourcePosition,
@@ -82,7 +82,7 @@ func (f CommandEventTransactionFinalizer) FinalizeCommandLogRecord(ctx context.C
 	if err != nil {
 		return CommandLogFinalizationResult{}, err
 	}
-	committed, err := f.Transactions.CommitCommandEvents(ctx, CommandEventTransaction{
+	committed, err := f.Transactions.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition:      record.Partition,
 		CommandOffset:         record.Offset,
 		CommandSourcePosition: record.SourcePosition,
@@ -165,7 +165,7 @@ func (f CommandEventTransactionBatchFinalizer) FinalizeCommandLogBatch(ctx conte
 	}
 
 	last := records[len(records)-1]
-	committed, err := base.Transactions.CommitCommandEvents(ctx, CommandEventTransaction{
+	committed, err := base.Transactions.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition:      last.Partition,
 		CommandOffset:         last.Offset,
 		CommandSourcePosition: last.SourcePosition,
@@ -308,7 +308,7 @@ func NewBrokerCommandEventTransactionStoreWithOptions(client BrokerCommandEventT
 	return &BrokerCommandEventTransactionStore{client: client, options: options}
 }
 
-func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Context, tx logmodel.CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return logmodel.CommandEventTransactionResult{}, err
 	}
@@ -361,7 +361,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Con
 	}, nil
 }
 
-func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context.Context, txs []CommandEventTransaction) ([]logmodel.CommandEventTransactionResult, error) {
+func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context.Context, txs []logmodel.CommandEventTransaction) ([]logmodel.CommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

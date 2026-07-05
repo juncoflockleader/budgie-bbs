@@ -49,7 +49,7 @@ func TestCommandEventTransactionClientCommitsEventsAndCommandOffset(t *testing.T
 		LogicalOffset:     7,
 	}
 
-	result, err := store.CommitCommandEvents(ctx, core.CommandEventTransaction{
+	result, err := store.CommitCommandEvents(ctx, logmodel.CommandEventTransaction{
 		CommandPartition:      commandPartition,
 		CommandOffset:         7,
 		CommandSourcePosition: commandSource,
