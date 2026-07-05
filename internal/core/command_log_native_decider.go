@@ -1072,57 +1072,25 @@ func (e *CommandLogNativeDecisionExecutor) decideSetPostFlag(ctx context.Context
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "thread not found", false)
 	}
 
-	marked := post.Marked
-	recommended := post.Recommended
-	noReply := post.NoReply
-	tex := post.TeX
-	mailBack := post.MailBack
-	curatorChange := false
-	threadModerationChange := false
-	authorMetadataChange := false
-	if payload.Marked != nil {
-		curatorChange = curatorChange || *payload.Marked != post.Marked
-		marked = *payload.Marked
-	}
-	if payload.Recommended != nil {
-		curatorChange = curatorChange || *payload.Recommended != post.Recommended
-		recommended = *payload.Recommended
-	}
-	if payload.NoReply != nil {
-		threadModerationChange = *payload.NoReply != post.NoReply
-		noReply = *payload.NoReply
-	}
-	if payload.TeX != nil {
-		authorMetadataChange = authorMetadataChange || *payload.TeX != post.TeX
-		tex = *payload.TeX
-	}
-	if payload.MailBack != nil {
-		authorMetadataChange = authorMetadataChange || *payload.MailBack != post.MailBack
-		mailBack = *payload.MailBack
-	}
+	flagPlan := commandrules.PlanPostFlagUpdate(post, payload)
 	canModerateThread := false
-	if threadModerationChange || authorMetadataChange {
+	if flagPlan.ThreadModerationChange || flagPlan.AuthorMetadataChange {
 		canModerateThread, err = projections.ActorCanModerateBoardThreads(e.core.DB, actor, thread.Board)
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
 	}
-	if curatorChange {
-		canCurate, err := projections.ActorCanCurateBoard(e.core.DB, actor, thread.Board)
+	canCurate := false
+	if flagPlan.CuratorChange {
+		canCurate, err = projections.ActorCanCurateBoard(e.core.DB, actor, thread.Board)
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
-		if !canCurate {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board curator permission required", false)
-		}
 	}
-	if threadModerationChange && !canModerateThread {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board thread moderation permission required", false)
+	if errDetail := commandrules.RequirePostFlagPermissions(flagPlan, actor, post, canCurate, canModerateThread); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
-	if authorMetadataChange && actor.ID != post.AuthorID && !canModerateThread {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "post author or board thread moderation permission required", false)
-	}
-	if !curatorChange && !threadModerationChange && !authorMetadataChange {
+	if !flagPlan.HasChanges() {
 		return nativeDecisionAckEvents(post.ID, nil), nil
 	}
 
@@ -1130,11 +1098,11 @@ func (e *CommandLogNativeDecisionExecutor) decideSetPostFlag(ctx context.Context
 	event := nativeEvent(record, 0, proto.EvtPostFlagsSet, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostFlagsSetPayload{
 		ID:          post.ID,
 		Thread:      post.Thread,
-		Marked:      marked,
-		Recommended: recommended,
-		NoReply:     noReply,
-		TeX:         tex,
-		MailBack:    mailBack,
+		Marked:      flagPlan.Marked,
+		Recommended: flagPlan.Recommended,
+		NoReply:     flagPlan.NoReply,
+		TeX:         flagPlan.TeX,
+		MailBack:    flagPlan.MailBack,
 		By:          actor.ID,
 		TS:          ts,
 	}, ts)

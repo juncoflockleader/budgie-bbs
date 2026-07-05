@@ -161,6 +161,65 @@ func PlanReplyTarget(replyTo string, parent *projections.Post, threadID string, 
 	return plan, nil
 }
 
+type PostFlagPlan struct {
+	Marked                 bool
+	Recommended            bool
+	NoReply                bool
+	TeX                    bool
+	MailBack               bool
+	CuratorChange          bool
+	ThreadModerationChange bool
+	AuthorMetadataChange   bool
+}
+
+func PlanPostFlagUpdate(post *projections.Post, payload proto.SetPostFlagPayload) PostFlagPlan {
+	plan := PostFlagPlan{
+		Marked:      post.Marked,
+		Recommended: post.Recommended,
+		NoReply:     post.NoReply,
+		TeX:         post.TeX,
+		MailBack:    post.MailBack,
+	}
+	if payload.Marked != nil {
+		plan.CuratorChange = plan.CuratorChange || *payload.Marked != post.Marked
+		plan.Marked = *payload.Marked
+	}
+	if payload.Recommended != nil {
+		plan.CuratorChange = plan.CuratorChange || *payload.Recommended != post.Recommended
+		plan.Recommended = *payload.Recommended
+	}
+	if payload.NoReply != nil {
+		plan.ThreadModerationChange = *payload.NoReply != post.NoReply
+		plan.NoReply = *payload.NoReply
+	}
+	if payload.TeX != nil {
+		plan.AuthorMetadataChange = plan.AuthorMetadataChange || *payload.TeX != post.TeX
+		plan.TeX = *payload.TeX
+	}
+	if payload.MailBack != nil {
+		plan.AuthorMetadataChange = plan.AuthorMetadataChange || *payload.MailBack != post.MailBack
+		plan.MailBack = *payload.MailBack
+	}
+	return plan
+}
+
+func (plan PostFlagPlan) HasChanges() bool {
+	return plan.CuratorChange || plan.ThreadModerationChange || plan.AuthorMetadataChange
+}
+
+func RequirePostFlagPermissions(plan PostFlagPlan, actor *projections.User, post *projections.Post, canCurate, canModerateThread bool) *proto.ErrorDetail {
+	if plan.CuratorChange && !canCurate {
+		return newErrDetail(proto.ErrForbidden, "board curator permission required", false)
+	}
+	if plan.ThreadModerationChange && !canModerateThread {
+		return newErrDetail(proto.ErrForbidden, "board thread moderation permission required", false)
+	}
+	if plan.AuthorMetadataChange && (actor == nil || (actor.ID != post.AuthorID && !canModerateThread)) {
+		return newErrDetail(proto.ErrForbidden, "post author or board thread moderation permission required", false)
+	}
+	return nil
+}
+
 func requireMemberBoardReadAccess(settings *projections.BoardSettings, message string, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
 	if !boardRequiresReadMembership(settings) {
 		return nil

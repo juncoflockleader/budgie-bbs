@@ -945,44 +945,16 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 		return internalErr(err)
 	}
 
-	marked := post.Marked
-	recommended := post.Recommended
-	noReply := post.NoReply
-	tex := post.TeX
-	mailBack := post.MailBack
-	curatorChange := false
-	threadModerationChange := false
-	authorMetadataChange := false
-	if p.Marked != nil {
-		curatorChange = curatorChange || *p.Marked != post.Marked
-		marked = *p.Marked
+	flagPlan := commandrules.PlanPostFlagUpdate(post, p)
+	canCurate := !flagPlan.CuratorChange || commandrules.ActorCanCurateBoard(h.db, actor, thread.Board)
+	canModerateThread := false
+	if flagPlan.ThreadModerationChange || flagPlan.AuthorMetadataChange {
+		canModerateThread = commandrules.ActorCanModerateBoardThreads(h.db, actor, thread.Board)
 	}
-	if p.Recommended != nil {
-		curatorChange = curatorChange || *p.Recommended != post.Recommended
-		recommended = *p.Recommended
+	if errDetail := commandrules.RequirePostFlagPermissions(flagPlan, actor, post, canCurate, canModerateThread); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
-	if p.NoReply != nil {
-		threadModerationChange = *p.NoReply != post.NoReply
-		noReply = *p.NoReply
-	}
-	if p.TeX != nil {
-		authorMetadataChange = authorMetadataChange || *p.TeX != post.TeX
-		tex = *p.TeX
-	}
-	if p.MailBack != nil {
-		authorMetadataChange = authorMetadataChange || *p.MailBack != post.MailBack
-		mailBack = *p.MailBack
-	}
-	if curatorChange && !commandrules.ActorCanCurateBoard(h.db, actor, thread.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board curator permission required", false)}
-	}
-	if threadModerationChange && !commandrules.ActorCanModerateBoardThreads(h.db, actor, thread.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
-	}
-	if authorMetadataChange && (actor == nil || (actor.ID != post.AuthorID && !commandrules.ActorCanModerateBoardThreads(h.db, actor, thread.Board))) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "post author or board thread moderation permission required", false)}
-	}
-	if !curatorChange && !threadModerationChange && !authorMetadataChange {
+	if !flagPlan.HasChanges() {
 		return Reply{Result: &proto.AckResult{ID: post.ID}}
 	}
 
@@ -995,12 +967,12 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 
 	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagsSet, scopes, &proto.PostFlagsSetPayload{
-		ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, TeX: tex, MailBack: mailBack, By: actor.ID, TS: ts,
+		ID: post.ID, Thread: post.Thread, Marked: flagPlan.Marked, Recommended: flagPlan.Recommended, NoReply: flagPlan.NoReply, TeX: flagPlan.TeX, MailBack: flagPlan.MailBack, By: actor.ID, TS: ts,
 	})
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := currentRuntime().SetPostFlags(tx, post.ID, marked, recommended, noReply, tex, mailBack, seq); err != nil {
+	if err := currentRuntime().SetPostFlags(tx, post.ID, flagPlan.Marked, flagPlan.Recommended, flagPlan.NoReply, flagPlan.TeX, flagPlan.MailBack, seq); err != nil {
 		return internalErr(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1008,7 +980,7 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	}
 
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostFlagsSet, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostFlagsSetPayload{ID: post.ID, Thread: post.Thread, Marked: marked, Recommended: recommended, NoReply: noReply, TeX: tex, MailBack: mailBack, By: actor.Name, TS: ts}, TS: ts})
+		Payload: &proto.PostFlagsSetPayload{ID: post.ID, Thread: post.Thread, Marked: flagPlan.Marked, Recommended: flagPlan.Recommended, NoReply: flagPlan.NoReply, TeX: flagPlan.TeX, MailBack: flagPlan.MailBack, By: actor.Name, TS: ts}, TS: ts})
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
