@@ -14,6 +14,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/statsplan"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -486,7 +487,7 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 	pollBlock, cleanBody := extractPoll(payload.Body)
 	pollStripped := pollBlock != nil && cleanBody != payload.Body
 	partition := record.Partition.Normalize()
-	if !commandLogAppendPostPartitionMatchesTarget(record.Command, record.Payload, partition) {
+	if !logmodel.CommandPartitionMatchesAppendPostTarget(record.Command, record.Payload, partition) {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, fmt.Sprintf("command log partition mismatch: record=%s/%s expected=%s/%s",
 			partition.Kind, partition.Key, partitionThread, payload.Thread), false)
 	}

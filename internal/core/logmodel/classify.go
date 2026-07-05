@@ -185,6 +185,27 @@ func ClassifyCommandPartition(actorID string, name proto.CommandName, payload js
 	return Partition{Kind: spec.kind, Key: PartitionGlobal}, true
 }
 
+func CommandPartitionMatchesAppendPostTarget(command proto.CommandName, payload json.RawMessage, actual Partition) bool {
+	if command != proto.CmdAppendPost {
+		return false
+	}
+	actual = actual.Normalize()
+	if actual.Kind != PartitionThread {
+		return false
+	}
+	var raw map[string]any
+	_ = json.Unmarshal(payload, &raw)
+	threadID := JSONString(raw["thread"])
+	if threadID == "" {
+		return false
+	}
+	if actual.Key == threadID {
+		return true
+	}
+	baseThreadID, ok := HotThreadSplitPartitionThread(actual.Key)
+	return ok && baseThreadID == threadID
+}
+
 func JSONString(v any) string {
 	switch x := v.(type) {
 	case string:

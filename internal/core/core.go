@@ -657,7 +657,7 @@ func (c *Core) validateCommandLogRecordPartition(actor *User, record CommandLogR
 	if actual.Normalize() == want {
 		return nil
 	}
-	if commandLogAppendPostPartitionMatchesTarget(record.Command, record.Payload, actual) {
+	if logmodel.CommandPartitionMatchesAppendPostTarget(record.Command, record.Payload, actual) {
 		return nil
 	}
 	return &proto.ErrorDetail{
@@ -666,27 +666,6 @@ func (c *Core) validateCommandLogRecordPartition(actor *User, record CommandLogR
 			actual.Kind, actual.Key, want.Kind, want.Key),
 		Retryable: false,
 	}
-}
-
-func commandLogAppendPostPartitionMatchesTarget(command proto.CommandName, payload json.RawMessage, actual LogPartition) bool {
-	if command != proto.CmdAppendPost {
-		return false
-	}
-	actual = actual.Normalize()
-	if actual.Kind != partitionThread {
-		return false
-	}
-	var raw map[string]any
-	_ = json.Unmarshal(payload, &raw)
-	threadID := logmodel.JSONString(raw["thread"])
-	if threadID == "" {
-		return false
-	}
-	if actual.Key == threadID {
-		return true
-	}
-	baseThreadID, ok := logmodel.HotThreadSplitPartitionThread(actual.Key)
-	return ok && baseThreadID == threadID
 }
 
 func (c *Core) classifyCommandPartition(actor *User, name proto.CommandName, payload json.RawMessage) (eventPartition, bool) {
