@@ -269,7 +269,7 @@ func New(dbPath string, options ...Option) (*Core, error) {
 	setCrossNodeViaBus(opts.crossNodeViaBus)
 	setAsyncPostSearchCommands(opts.asyncPostSearch)
 	setAsyncCommunityStatHistorySnapshots(opts.asyncCommunityStatHistory)
-	persistedHotThreadSplits, err := loadPersistedHotThreadSplits(db)
+	persistedHotThreadSplits, err := projections.LoadHotThreadSplits(db)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("load hot thread splits: %w", err)
@@ -406,7 +406,7 @@ func NewPostgres(dsn string, options ...Option) (*Core, error) {
 	h := newHandler(db, bus, counterStore, presenceStore, chatStore)
 	h.SetPartitionWorkers(pgPartitionWorkers)
 	h.SetCommandLock(pgPartitionLockFn(db))
-	persistedHotThreadSplits, err := loadPersistedHotThreadSplits(db)
+	persistedHotThreadSplits, err := projections.LoadHotThreadSplits(db)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("load hot thread splits: %w", err)
@@ -706,18 +706,7 @@ func (c *Core) PersistHotThreadSplit(threadID string, shards int) error {
 	if threadID == "" {
 		return errors.New("thread id is required")
 	}
-	if shards <= 1 {
-		if _, err := qExec(c.DB, `DELETE FROM hot_thread_splits WHERE thread_id=?`, threadID); err != nil {
-			return err
-		}
-		return c.ReloadHotThreadSplits()
-	}
-	if _, err := qExec(c.DB, `INSERT INTO hot_thread_splits (thread_id, shards, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(thread_id)
-		 DO UPDATE SET shards=excluded.shards, updated_at=excluded.updated_at`,
-		threadID, shards, nowMS(),
-	); err != nil {
+	if err := projections.PersistHotThreadSplit(c.DB, threadID, shards); err != nil {
 		return err
 	}
 	return c.ReloadHotThreadSplits()
@@ -756,7 +745,7 @@ func (c *Core) ReloadHotThreadSplits() error {
 	if c == nil || c.DB == nil {
 		return nil
 	}
-	persisted, err := loadPersistedHotThreadSplits(c.DB)
+	persisted, err := projections.LoadHotThreadSplits(c.DB)
 	if err != nil {
 		return err
 	}
@@ -788,35 +777,6 @@ func (c *Core) startHotThreadSplitConfigPoller(ctx context.Context) {
 			}
 		}
 	}()
-}
-
-func loadPersistedHotThreadSplits(db *sql.DB) (map[string]int, error) {
-	rows, err := qQuery(db, `SELECT thread_id, shards FROM hot_thread_splits ORDER BY thread_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := map[string]int{}
-	for rows.Next() {
-		var threadID string
-		var shards int
-		if err := rows.Scan(&threadID, &shards); err != nil {
-			return nil, err
-		}
-		threadID = strings.TrimSpace(threadID)
-		if threadID == "" || shards <= 1 {
-			continue
-		}
-		out[threadID] = shards
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
 }
 
 func actorID(actor *User) string {
