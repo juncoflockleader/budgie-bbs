@@ -37,7 +37,7 @@ func (h *Handler) lockMailboxes(tx *sql.Tx, copyCounts map[string]int) error {
 	return nil
 }
 
-func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
+func (h *Handler) sendMail(actor *projections.User, p proto.SendMailPayload) Reply {
 	recipientRefs, ruleErr := commandrules.ExpandMailRecipients(h.db, actor, p)
 	if ruleErr != nil {
 		return Reply{Err: ruleErr}
@@ -137,7 +137,7 @@ func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: id, Seq: seq}}
 }
 
-func (h *Handler) forwardMail(actor *User, p proto.ForwardMailPayload) Reply {
+func (h *Handler) forwardMail(actor *projections.User, p proto.ForwardMailPayload) Reply {
 	if actor == nil {
 		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
 	}
@@ -157,7 +157,7 @@ func (h *Handler) forwardMail(actor *User, p proto.ForwardMailPayload) Reply {
 	return h.sendMail(actor, commandrules.ForwardMailSendPayload(p, source))
 }
 
-func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) Reply {
+func (h *Handler) postMailToBoard(actor *projections.User, p proto.PostMailToBoardPayload) Reply {
 	if actor == nil {
 		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
 	}
@@ -194,7 +194,7 @@ func (h *Handler) postMailToBoard(actor *User, p proto.PostMailToBoardPayload) R
 	})
 }
 
-func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPayload) Reply {
+func (h *Handler) sendDigestEntryMail(actor *projections.User, p proto.SendDigestEntryMailPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeSendDigestEntryMailPayload(p)
 	if msg != "" {
@@ -218,7 +218,7 @@ func (h *Handler) sendDigestEntryMail(actor *User, p proto.SendDigestEntryMailPa
 	return h.sendMail(actor, commandrules.DigestEntryMailSendPayload(p, export))
 }
 
-func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Reply {
+func (h *Handler) mailPostAuthor(actor *projections.User, p proto.MailPostAuthorPayload) Reply {
 	if actor == nil {
 		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
 	}
@@ -259,7 +259,7 @@ func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Rep
 	return h.sendMail(actor, sendPayload)
 }
 
-func (h *Handler) appendSysmailSystemPostTx(tx *sql.Tx, actor *User, mailID, subject, mailBody string, recipientCount int, ts int64) ([]*proto.Event, error) {
+func (h *Handler) appendSysmailSystemPostTx(tx *sql.Tx, actor *projections.User, mailID, subject, mailBody string, recipientCount int, ts int64) ([]*proto.Event, error) {
 	threadID := "sysmail_thr_" + mailID
 	postID := "sysmail_pst_" + mailID
 	exists, err := projections.ThreadExists(tx, threadID)
@@ -308,7 +308,7 @@ func ensureSysmailBoardSettingsTx(tx *sql.Tx, ts int64) error {
 	return err
 }
 
-func (h *Handler) setMailGroup(actor *User, p proto.SetMailGroupPayload) Reply {
+func (h *Handler) setMailGroup(actor *projections.User, p proto.SetMailGroupPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeMailGroupPayload(p)
 	if msg != "" {
@@ -336,7 +336,7 @@ func (h *Handler) setMailGroup(actor *User, p proto.SetMailGroupPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: groupID}}
 }
 
-func (h *Handler) deleteMailGroup(actor *User, p proto.DeleteMailGroupPayload) Reply {
+func (h *Handler) deleteMailGroup(actor *projections.User, p proto.DeleteMailGroupPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeDeleteMailGroupPayload(p)
 	if msg != "" {
@@ -360,7 +360,7 @@ func (h *Handler) deleteMailGroup(actor *User, p proto.DeleteMailGroupPayload) R
 	return Reply{Result: &proto.AckResult{ID: groupID}}
 }
 
-func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
+func (h *Handler) attachMail(actor *projections.User, p proto.AttachMailPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeAttachMailPayload(p)
 	if msg != "" {
@@ -421,7 +421,7 @@ func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: attachmentID, Seq: seq}}
 }
 
-func (h *Handler) updateMail(actor *User, p proto.UpdateMailPayload) Reply {
+func (h *Handler) updateMail(actor *projections.User, p proto.UpdateMailPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeUpdateMailPayload(p)
 	if msg != "" {
@@ -453,7 +453,7 @@ func (h *Handler) updateMail(actor *User, p proto.UpdateMailPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: p.Mail}}
 }
 
-func (h *Handler) deleteMail(actor *User, p proto.DeleteMailPayload) Reply {
+func (h *Handler) deleteMail(actor *projections.User, p proto.DeleteMailPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeDeleteMailPayload(p)
 	if msg != "" {
@@ -469,7 +469,7 @@ func (h *Handler) deleteMail(actor *User, p proto.DeleteMailPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: p.Mail}}
 }
 
-func (h *Handler) deleteMailRange(actor *User, p proto.DeleteMailRangePayload) Reply {
+func (h *Handler) deleteMailRange(actor *projections.User, p proto.DeleteMailRangePayload) Reply {
 	mailIDs, msg := proto.NormalizeMailRangeIDs(p.Mail)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -505,7 +505,7 @@ func (h *Handler) deleteMailRange(actor *User, p proto.DeleteMailRangePayload) R
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(mailIDs))}}
 }
 
-func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayload) Reply {
+func (h *Handler) sendDirectMessage(actor *projections.User, p proto.SendDirectMessagePayload) Reply {
 	p, msg := proto.NormalizeSendDirectMessagePayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -538,7 +538,7 @@ func (h *Handler) sendDirectMessage(actor *User, p proto.SendDirectMessagePayloa
 	return Reply{Result: &proto.AckResult{ID: id, Seq: seq}}
 }
 
-func (h *Handler) setDirectMessageSettings(actor *User, p proto.SetDirectMessageSettingsPayload) Reply {
+func (h *Handler) setDirectMessageSettings(actor *projections.User, p proto.SetDirectMessageSettingsPayload) Reply {
 	policy, msg := proto.NormalizeDirectMessagePolicy(p.Policy)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -549,13 +549,13 @@ func (h *Handler) setDirectMessageSettings(actor *User, p proto.SetDirectMessage
 	return Reply{Result: &proto.AckResult{ID: actor.ID}}
 }
 
-func (h *Handler) markDirectMessageRead(actor *User, p proto.MarkDirectMessageReadPayload) Reply {
+func (h *Handler) markDirectMessageRead(actor *projections.User, p proto.MarkDirectMessageReadPayload) Reply {
 	return h.updateDirectMessage(p.Message, func(messageID string) (bool, error) {
 		return currentRuntime().MarkDirectMessageRead(h.db, actor.ID, messageID)
 	})
 }
 
-func (h *Handler) deleteDirectMessage(actor *User, p proto.DeleteDirectMessagePayload) Reply {
+func (h *Handler) deleteDirectMessage(actor *projections.User, p proto.DeleteDirectMessagePayload) Reply {
 	return h.updateDirectMessage(p.Message, func(messageID string) (bool, error) {
 		return currentRuntime().DeleteDirectMessage(h.db, actor.ID, messageID)
 	})
