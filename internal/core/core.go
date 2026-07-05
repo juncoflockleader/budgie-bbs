@@ -27,6 +27,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -56,7 +57,7 @@ const (
 type Core struct {
 	DB      *sql.DB
 	Bus     Bus
-	handler *Handler
+	handler *handler.Handler
 	// Nodes is the in-memory registry of active SSH sessions (M14).
 	Nodes *NodeRegistry
 	// assetStore, when non-nil, holds site-asset bytes (logo/banner) in an
@@ -458,8 +459,8 @@ func NewPostgres(dsn string, options ...Option) (*Core, error) {
 // partition advisory lock for the duration of each command execution.
 // A dedicated connection is borrowed from the pool per command so the lock
 // is pinned to a single connection and released reliably on unlock.
-func pgPartitionLockFn(db *sql.DB) func(ctx context.Context, partition CommandPartition) (func(), error) {
-	return func(ctx context.Context, partition CommandPartition) (func(), error) {
+func pgPartitionLockFn(db *sql.DB) func(ctx context.Context, partition commandexec.Partition) (func(), error) {
+	return func(ctx context.Context, partition commandexec.Partition) (func(), error) {
 		conn, err := db.Conn(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("advisory lock: get conn: %w", err)
@@ -518,7 +519,7 @@ func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName,
 	if !bypassCommandLog {
 		cid = c.shadowCommand(ctx, actor, name, payload, cid, logPartition)
 	}
-	return c.handler.ExecutePartition(ctx, actor, name, payload, cid, CommandPartition{
+	return c.handler.ExecutePartition(ctx, actor, name, payload, cid, commandexec.Partition{
 		Kind: partition.Kind,
 		Key:  partition.Key,
 	})
@@ -624,7 +625,7 @@ func (c *Core) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRec
 	if errDetail := c.validateCommandLogRecordPartition(actor, record, partition); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
-	return c.handler.ExecutePartition(ctx, actor, record.Command, record.Payload, cid, CommandPartition{
+	return c.handler.ExecutePartition(ctx, actor, record.Command, record.Payload, cid, commandexec.Partition{
 		Kind: partition.Kind,
 		Key:  partition.Key,
 	})

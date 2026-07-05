@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -23,8 +24,8 @@ func TestPostgresPartitionAdvisoryLocksArePartitionScoped(t *testing.T) {
 
 	lockFn := pgPartitionLockFn(db)
 	ctx := context.Background()
-	general := CommandPartition{Kind: partitionBoard, Key: "general"}
-	life := CommandPartition{Kind: partitionBoard, Key: "life"}
+	general := commandexec.Partition{Kind: partitionBoard, Key: "general"}
+	life := commandexec.Partition{Kind: partitionBoard, Key: "life"}
 
 	unlockGeneral, err := lockFn(ctx, general)
 	if err != nil {
@@ -77,7 +78,7 @@ func TestPostgresPartitionLockAllowsOtherBoardWriteEndToEnd(t *testing.T) {
 	})
 
 	lockFn := pgPartitionLockFn(c.DB)
-	unlockGeneral, err := lockFn(context.Background(), CommandPartition{Kind: partitionBoard, Key: "general"})
+	unlockGeneral, err := lockFn(context.Background(), commandexec.Partition{Kind: partitionBoard, Key: "general"})
 	if err != nil {
 		t.Fatalf("lock general: %v", err)
 	}

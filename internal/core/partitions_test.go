@@ -837,8 +837,8 @@ func assertStablePostPresentation(t *testing.T, first, second []Post, expectedBo
 }
 
 func TestPostgresPartitionAdvisoryLockKeyIsDeterministic(t *testing.T) {
-	a := commandexec.PartitionAdvisoryLockKey(CommandPartition{Kind: partitionBoard, Key: "general"})
-	b := commandexec.PartitionAdvisoryLockKey(CommandPartition{Kind: partitionBoard, Key: "general"})
+	a := commandexec.PartitionAdvisoryLockKey(commandexec.Partition{Kind: partitionBoard, Key: "general"})
+	b := commandexec.PartitionAdvisoryLockKey(commandexec.Partition{Kind: partitionBoard, Key: "general"})
 	if a == 0 {
 		t.Fatal("lock key should not be zero")
 	}
@@ -848,12 +848,12 @@ func TestPostgresPartitionAdvisoryLockKeyIsDeterministic(t *testing.T) {
 	if a != b {
 		t.Fatalf("lock key changed from %d to %d", a, b)
 	}
-	c := commandexec.PartitionAdvisoryLockKey(CommandPartition{Kind: partitionBoard, Key: "life"})
+	c := commandexec.PartitionAdvisoryLockKey(commandexec.Partition{Kind: partitionBoard, Key: "life"})
 	if c == a {
 		t.Fatalf("different partitions produced same lock key: %d", a)
 	}
-	fallback := commandexec.PartitionAdvisoryLockKey(CommandPartition{})
-	global := commandexec.PartitionAdvisoryLockKey(CommandPartition{Kind: partitionGlobal, Key: partitionGlobal})
+	fallback := commandexec.PartitionAdvisoryLockKey(commandexec.Partition{})
+	global := commandexec.PartitionAdvisoryLockKey(commandexec.Partition{Kind: partitionGlobal, Key: partitionGlobal})
 	if fallback != global {
 		t.Fatalf("empty partition key = %d, want global %d", fallback, global)
 	}

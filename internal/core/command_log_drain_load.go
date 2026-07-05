@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadutil"
@@ -234,7 +235,7 @@ func (c *Core) createCommandLogDrainLoadBoards(ctx context.Context, actor *User,
 		if err != nil {
 			return nil, err
 		}
-		reply := c.handler.ExecutePartition(ctx, actor, proto.CmdCreateBoard, payload, fmt.Sprintf("cmdlog-load-board-%d", i), CommandPartition{
+		reply := c.handler.ExecutePartition(ctx, actor, proto.CmdCreateBoard, payload, fmt.Sprintf("cmdlog-load-board-%d", i), commandexec.Partition{
 			Kind: partitionBoard,
 			Key:  boardID,
 		})

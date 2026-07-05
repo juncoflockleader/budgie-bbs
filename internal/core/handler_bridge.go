@@ -12,9 +12,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
-type Handler = handler.Handler
 type Reply = commandexec.Reply
-type CommandPartition = commandexec.Partition
 
 type pollBlock struct {
 	question  string
@@ -22,7 +20,7 @@ type pollBlock struct {
 	expiresAt int64
 }
 
-func newHandler(db *sql.DB, bus Bus, counterStore counterstore.Store, presenceStore presencestore.Store, chatStore chatstore.Store) *Handler {
+func newHandler(db *sql.DB, bus Bus, counterStore counterstore.Store, presenceStore presencestore.Store, chatStore chatstore.Store) *handler.Handler {
 	if counterStore == nil {
 		counterStore = sqlCounterStore{db: db}
 	}
