@@ -14,9 +14,7 @@ type UnreadThreadSummariesProcessor struct {
 }
 
 func NewUnreadThreadSummariesProcessor(c *Core, interval time.Duration, batchSize int) (*UnreadThreadSummariesProcessor, error) {
-	processor, err := newDerivedRebuildProcessor(c, "unread thread summaries", interval, batchSize, func(c *Core, batchSize int) (derivedRebuildProcessResult, error) {
-		return c.ProcessUnreadThreadSummariesOnce(batchSize)
-	})
+	processor, err := newDerivedRebuildProcessor(c, "unread thread summaries", interval, batchSize, (*Core).ProcessUnreadThreadSummariesOnce)
 	if err != nil {
 		return nil, err
 	}

@@ -14,9 +14,7 @@ type ArchiveRankingsProcessor struct {
 }
 
 func NewArchiveRankingsProcessor(c *Core, interval time.Duration, batchSize int) (*ArchiveRankingsProcessor, error) {
-	processor, err := newDerivedRebuildProcessor(c, "archive rankings", interval, batchSize, func(c *Core, batchSize int) (derivedRebuildProcessResult, error) {
-		return c.ProcessArchiveRankingsOnce(batchSize)
-	})
+	processor, err := newDerivedRebuildProcessor(c, "archive rankings", interval, batchSize, (*Core).ProcessArchiveRankingsOnce)
 	if err != nil {
 		return nil, err
 	}

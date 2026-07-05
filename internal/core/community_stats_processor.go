@@ -14,9 +14,7 @@ type CommunityStatsProcessor struct {
 }
 
 func NewCommunityStatsProcessor(c *Core, interval time.Duration, batchSize int) (*CommunityStatsProcessor, error) {
-	processor, err := newDerivedRebuildProcessor(c, "community stats", interval, batchSize, func(c *Core, batchSize int) (derivedRebuildProcessResult, error) {
-		return c.ProcessCommunityStatsOnce(batchSize)
-	})
+	processor, err := newDerivedRebuildProcessor(c, "community stats", interval, batchSize, (*Core).ProcessCommunityStatsOnce)
 	if err != nil {
 		return nil, err
 	}

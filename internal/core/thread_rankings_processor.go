@@ -14,9 +14,7 @@ type ThreadRankingsProcessor struct {
 }
 
 func NewThreadRankingsProcessor(c *Core, interval time.Duration, batchSize int) (*ThreadRankingsProcessor, error) {
-	processor, err := newDerivedRebuildProcessor(c, "thread rankings", interval, batchSize, func(c *Core, batchSize int) (derivedRebuildProcessResult, error) {
-		return c.ProcessThreadRankingsOnce(batchSize)
-	})
+	processor, err := newDerivedRebuildProcessor(c, "thread rankings", interval, batchSize, (*Core).ProcessThreadRankingsOnce)
 	if err != nil {
 		return nil, err
 	}

@@ -14,9 +14,7 @@ type BoardSummariesProcessor struct {
 }
 
 func NewBoardSummariesProcessor(c *Core, interval time.Duration, batchSize int) (*BoardSummariesProcessor, error) {
-	processor, err := newDerivedRebuildProcessor(c, "board summaries", interval, batchSize, func(c *Core, batchSize int) (derivedRebuildProcessResult, error) {
-		return c.ProcessBoardSummariesOnce(batchSize)
-	})
+	processor, err := newDerivedRebuildProcessor(c, "board summaries", interval, batchSize, (*Core).ProcessBoardSummariesOnce)
 	if err != nil {
 		return nil, err
 	}

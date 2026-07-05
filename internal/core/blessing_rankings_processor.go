@@ -14,9 +14,7 @@ type BlessingRankingsProcessor struct {
 }
 
 func NewBlessingRankingsProcessor(c *Core, interval time.Duration, batchSize int) (*BlessingRankingsProcessor, error) {
-	processor, err := newDerivedRebuildProcessor(c, "blessing rankings", interval, batchSize, func(c *Core, batchSize int) (derivedRebuildProcessResult, error) {
-		return c.ProcessBlessingRankingsOnce(batchSize)
-	})
+	processor, err := newDerivedRebuildProcessor(c, "blessing rankings", interval, batchSize, (*Core).ProcessBlessingRankingsOnce)
 	if err != nil {
 		return nil, err
 	}
