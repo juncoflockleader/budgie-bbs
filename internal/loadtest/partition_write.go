@@ -12,6 +12,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadutil"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -140,7 +141,7 @@ func normalizePartitionWriteLoadConfig(config PartitionWriteLoadConfig) Partitio
 	return config
 }
 
-func createPartitionWriteLoadBoards(ctx context.Context, c *core.Core, actor *core.User, config PartitionWriteLoadConfig) ([]string, error) {
+func createPartitionWriteLoadBoards(ctx context.Context, c *core.Core, actor *projections.User, config PartitionWriteLoadConfig) ([]string, error) {
 	boardIDs := make([]string, 0, config.Boards)
 	for i := 0; i < config.Boards; i++ {
 		boardID := fmt.Sprintf("%s_%02d", loadutil.SafeID(config.BoardPrefix), i)
@@ -157,7 +158,7 @@ func createPartitionWriteLoadBoards(ctx context.Context, c *core.Core, actor *co
 	return boardIDs, nil
 }
 
-func runPartitionWriteLoadCase(ctx context.Context, c *core.Core, actor *core.User, config PartitionWriteLoadConfig, name string, boardIDs []string, writes int) (PartitionWriteLoadCase, error) {
+func runPartitionWriteLoadCase(ctx context.Context, c *core.Core, actor *projections.User, config PartitionWriteLoadConfig, name string, boardIDs []string, writes int) (PartitionWriteLoadCase, error) {
 	result := newPartitionWriteLoadCase(name, len(boardIDs), writes)
 	if writes <= 0 {
 		return result, nil
@@ -240,7 +241,7 @@ func newPartitionWriteLoadCase(name string, boards, writes int) PartitionWriteLo
 	return PartitionWriteLoadCase{Name: name, Boards: boards, Writes: writes}
 }
 
-func execLoadCommand(ctx context.Context, c *core.Core, actor *core.User, name proto.CommandName, payload any, cid string) commandexec.Reply {
+func execLoadCommand(ctx context.Context, c *core.Core, actor *projections.User, name proto.CommandName, payload any, cid string) commandexec.Reply {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return commandexec.Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: err.Error()}}
