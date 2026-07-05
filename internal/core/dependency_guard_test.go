@@ -1,10 +1,14 @@
 package core
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -63,6 +67,58 @@ func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
 				t.Fatalf("%s must stay below command, projection, and read-model layers; found core imports: %s", pkg, strings.Join(found, ", "))
 			}
 		})
+	}
+}
+
+func TestProductionCodeDoesNotUseCoreProjectionCompatibilityAliases(t *testing.T) {
+	forbidden := map[string]bool{"Thread": true, "Post": true, "User": true}
+	repoRoot := coreDependencyGuardRepoRoot(t)
+	matches := []string{}
+
+	err := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			switch info.Name() {
+			case ".git", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			rel = path
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok || !forbidden[selector.Sel.Name] {
+				return true
+			}
+			ident, ok := selector.X.(*ast.Ident)
+			if !ok || ident.Name != "core" {
+				return true
+			}
+			pos := fset.Position(selector.Pos())
+			matches = append(matches, rel+":"+strconv.Itoa(pos.Line)+": core."+selector.Sel.Name)
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan production Go files: %v", err)
+	}
+	sort.Strings(matches)
+	if len(matches) > 0 {
+		t.Fatalf("production code must import projection DTOs from internal/core/projections, not core compatibility aliases:\n%s", strings.Join(matches, "\n"))
 	}
 }
 
