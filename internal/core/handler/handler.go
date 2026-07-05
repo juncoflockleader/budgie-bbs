@@ -42,9 +42,9 @@ type Runtime struct {
 	PromoteStagedPostBlob        func(tx *sql.Tx, stagingID, attachmentID string, expectedSize int64, contentType string) error
 	PromoteStagedMailBlob        func(tx *sql.Tx, stagingID, attachmentID string, expectedSize int64, contentType string) error
 	InsertRelayDelivery          func(tx *sql.Tx, id, boardID, threadID, postID, authorID, authorName, title, body string, createdAt, seq int64) error
-	CounterStore                 CounterStore
-	PresenceStore                PresenceStore
-	ChatStore                    ChatStore
+	CounterStore                 counterstore.Store
+	PresenceStore                presencestore.Store
+	ChatStore                    chatstore.Store
 	MarkPostRedacted             func(tx *sql.Tx, postID string, seq int64) error
 	MarkPostRestored             func(tx *sql.Tx, postID string, seq int64) error
 	RecordPostDeletion           func(tx *sql.Tx, postID, threadID, boardID, deletedByID, deletedByName, reason, kind string, deletedAt, seq int64) error
@@ -150,17 +150,6 @@ type Runtime struct {
 	PGNotifyEphemeral func(db *sql.DB, event, eid, scopes string)
 }
 
-type Bus = commandexec.EventPublisher
-type CounterStore = counterstore.Store
-type CounterMutation = counterstore.Mutation
-type CounterUserIdentity = counterstore.UserIdentity
-type CounterReactionIdentity = counterstore.ReactionIdentity
-type CounterPollVoteIdentity = counterstore.PollVoteIdentity
-
-type PresenceStore = presencestore.Store
-type PresenceStats = presencestore.Stats
-type ChatStore = chatstore.Store
-
 const outboxPostCommitted = "post.committed"
 
 var (
@@ -210,13 +199,13 @@ type cmdEnvelope struct {
 // Handler dispatches commands through one or more ordered partition lanes.
 type Handler struct {
 	db               *sql.DB
-	bus              Bus
+	bus              commandexec.EventPublisher
 	queue            chan cmdEnvelope
 	partitionWorkers int
 	lockCmd          func(ctx context.Context, partition commandexec.Partition) (unlock func(), err error)
 }
 
-func New(db *sql.DB, bus Bus) *Handler {
+func New(db *sql.DB, bus commandexec.EventPublisher) *Handler {
 	return &Handler{
 		db:    db,
 		bus:   bus,

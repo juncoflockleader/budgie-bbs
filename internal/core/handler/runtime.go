@@ -3,6 +3,9 @@ package handler
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -28,7 +31,7 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 	return currentRuntime().AppendEvent(tx, id, kind, scopes, payload)
 }
 
-func counterStore() CounterStore {
+func counterStore() counterstore.Store {
 	store := currentRuntime().CounterStore
 	if store == nil {
 		panic("handler counter store not configured")
@@ -36,7 +39,7 @@ func counterStore() CounterStore {
 	return store
 }
 
-func presenceStore() PresenceStore {
+func presenceStore() presencestore.Store {
 	store := currentRuntime().PresenceStore
 	if store == nil {
 		panic("handler presence store not configured")
@@ -44,7 +47,7 @@ func presenceStore() PresenceStore {
 	return store
 }
 
-func chatStore() ChatStore {
+func chatStore() chatstore.Store {
 	store := currentRuntime().ChatStore
 	if store == nil {
 		panic("handler chat store not configured")
@@ -52,7 +55,7 @@ func chatStore() ChatStore {
 	return store
 }
 
-func beginCounterMutation() (CounterMutation, error) {
+func beginCounterMutation() (counterstore.Mutation, error) {
 	return counterStore().BeginMutation()
 }
 

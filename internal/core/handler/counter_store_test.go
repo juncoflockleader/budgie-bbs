@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	_ "modernc.org/sqlite"
@@ -108,7 +109,7 @@ func openCounterStoreHandlerDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func setCounterStoreRuntime(t *testing.T, store CounterStore) {
+func setCounterStoreRuntime(t *testing.T, store counterstore.Store) {
 	t.Helper()
 	SetRuntime(Runtime{
 		CheckProcessed: func(_ *sql.DB, _, _, _, _, _ string) (string, bool, bool) {
@@ -179,12 +180,12 @@ func (s *fakeCounterStore) PollVote(pollID, userID string) (string, bool, error)
 	return "", false, nil
 }
 
-func (s *fakeCounterStore) UserCounterIdentity(userID string) (CounterUserIdentity, error) {
+func (s *fakeCounterStore) UserCounterIdentity(userID string) (counterstore.UserIdentity, error) {
 	s.calls = append(s.calls, "userCounterIdentity:"+userID)
-	return CounterUserIdentity{}, nil
+	return counterstore.UserIdentity{}, nil
 }
 
-func (s *fakeCounterStore) BeginMutation() (CounterMutation, error) {
+func (s *fakeCounterStore) BeginMutation() (counterstore.Mutation, error) {
 	s.calls = append(s.calls, "begin")
 	s.mutationOpen = true
 	return &fakeCounterMutation{store: s}, nil
