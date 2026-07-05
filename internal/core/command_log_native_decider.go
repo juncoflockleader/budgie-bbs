@@ -1869,14 +1869,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateBoardCommand(ctx context.
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
 	}
-	if payload.ParentID != "" {
-		found, err := projections.CategoryExists(e.core.DB, payload.ParentID)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !found {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "parent category not found", false)
-		}
+	if errDetail := commandrules.RequireParentCategory(e.core.DB, payload.ParentID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	position, err := projections.CategoryPositionForCreate(e.core.DB, payload.ID, payload.ParentID, payload.Position)
 	if err != nil {

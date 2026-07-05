@@ -478,14 +478,8 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	if p.ParentID != "" {
-		found, err := projections.CategoryExists(tx, p.ParentID)
-		if err != nil {
-			return internalErr(err)
-		}
-		if !found {
-			return Reply{Err: errDetail(proto.ErrNotFound, "parent category not found", false)}
-		}
+	if errDetail := commandrules.RequireParentCategory(tx, p.ParentID); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	position, err := projections.CategoryPositionForCreate(tx, p.ID, p.ParentID, p.Position)
 	if err != nil {

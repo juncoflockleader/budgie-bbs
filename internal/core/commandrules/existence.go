@@ -38,6 +38,20 @@ func RequireDestinationBoard(queryable Queryable, boardID string) *proto.ErrorDe
 	return nil
 }
 
+func RequireParentCategory(queryable Queryable, categoryID string) *proto.ErrorDetail {
+	if categoryID == "" {
+		return nil
+	}
+	exists, err := projections.CategoryExists(queryable, categoryID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if !exists {
+		return newErrDetail(proto.ErrNotFound, "parent category not found", false)
+	}
+	return nil
+}
+
 func RequirePost(queryable Queryable, postID string) *proto.ErrorDetail {
 	exists, err := projections.PostExists(queryable, postID)
 	if err != nil {
