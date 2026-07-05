@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 const memoryPresenceCoalesceWindowMS int64 = 30 * 1000
@@ -179,7 +182,7 @@ func (s *MemoryPresenceStore) SetGuestPresence(sessionID, status, locationLabel,
 	return nil
 }
 
-func (s *MemoryPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
+func (s *MemoryPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]projections.SocialUser, error) {
 	if s == nil {
 		return nil, sql.ErrConnDone
 	}
@@ -223,7 +226,7 @@ func (s *MemoryPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, o
 		return sessions[i].SessionID < sessions[j].SessionID
 	})
 	if offset >= len(sessions) {
-		return []SocialUser{}, nil
+		return []projections.SocialUser{}, nil
 	}
 	end := offset + limit
 	if end > len(sessions) {
@@ -231,9 +234,9 @@ func (s *MemoryPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, o
 	}
 
 	now := nowMS()
-	out := make([]SocialUser, 0, end-offset)
+	out := make([]projections.SocialUser, 0, end-offset)
 	for _, session := range sessions[offset:end] {
-		user := SocialUser{
+		user := projections.SocialUser{
 			UserID:        session.UserID,
 			Name:          session.UserID,
 			DisplayName:   session.UserID,
@@ -263,7 +266,7 @@ func (s *MemoryPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, o
 	return out, nil
 }
 
-func (s *MemoryPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
+func (s *MemoryPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]projections.SocialUser, error) {
 	if s == nil {
 		return nil, sql.ErrConnDone
 	}
@@ -279,16 +282,16 @@ func (s *MemoryPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit
 	}
 	sessions := s.chatSessions(viewerID, roomID)
 	if offset >= len(sessions) {
-		return []SocialUser{}, nil
+		return []projections.SocialUser{}, nil
 	}
 	end := offset + limit
 	if end > len(sessions) {
 		end = len(sessions)
 	}
 	now := nowMS()
-	out := make([]SocialUser, 0, end-offset)
+	out := make([]projections.SocialUser, 0, end-offset)
 	for _, session := range sessions[offset:end] {
-		user := SocialUser{
+		user := projections.SocialUser{
 			UserID:        session.UserID,
 			Name:          session.UserID,
 			DisplayName:   session.UserID,
@@ -377,9 +380,9 @@ func (s *MemoryPresenceStore) chatSessions(viewerID, roomID string) []memoryPres
 	return sessions
 }
 
-func (s *MemoryPresenceStore) Stats() (PresenceStats, error) {
+func (s *MemoryPresenceStore) Stats() (presencestore.Stats, error) {
 	if s == nil {
-		return PresenceStats{}, sql.ErrConnDone
+		return presencestore.Stats{}, sql.ErrConnDone
 	}
 	cutoff := nowMS() - 5*60*1000
 	s.mu.Lock()
@@ -396,7 +399,7 @@ func (s *MemoryPresenceStore) Stats() (PresenceStats, error) {
 			onlineGuests++
 		}
 	}
-	return PresenceStats{
+	return presencestore.Stats{
 		OnlineUsers:       len(onlineUsers),
 		OnlineGuests:      onlineGuests,
 		TotalGuestLogins:  s.totalGuestLogins,
@@ -416,7 +419,7 @@ func (s *MemoryPresenceStore) viewerCanSeeCloak(viewerID string) bool {
 	return role == "moderator" || role == "admin"
 }
 
-func (s *MemoryPresenceStore) decorateOnlineUser(viewerID string, user *SocialUser) (bool, error) {
+func (s *MemoryPresenceStore) decorateOnlineUser(viewerID string, user *projections.SocialUser) (bool, error) {
 	if s == nil || s.db == nil || user == nil {
 		return true, nil
 	}

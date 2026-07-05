@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	nats "github.com/nats-io/nats.go"
 )
@@ -71,7 +71,7 @@ type jetStreamGuestPresenceSessionRecord struct {
 	UpdatedAt     int64  `json:"updatedAt"`
 }
 
-var _ core.PresenceStore = (*JetStreamPresenceStore)(nil)
+var _ presencestore.Store = (*JetStreamPresenceStore)(nil)
 
 func NewJetStreamPresenceStore(ctx context.Context, conn *Conn, options JetStreamPresenceStoreOptions) (*JetStreamPresenceStore, error) {
 	if ctx == nil {
@@ -231,7 +231,7 @@ func (s *JetStreamPresenceStore) SetGuestPresence(sessionID, status, locationLab
 	return fmt.Errorf("nats presence store: guest session CAS failed after %d attempts", jetStreamPresenceStoreCASRetries)
 }
 
-func (s *JetStreamPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]core.SocialUser, error) {
+func (s *JetStreamPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]projections.SocialUser, error) {
 	if err := s.requireStore(); err != nil {
 		return nil, err
 	}
@@ -244,7 +244,7 @@ func (s *JetStreamPresenceStore) ListOnlineUsers(viewerID, boardID string, limit
 	boardID = strings.TrimSpace(boardID)
 	keys, err := s.kv.Keys()
 	if errors.Is(err, nats.ErrNoKeysFound) {
-		return []core.SocialUser{}, nil
+		return []projections.SocialUser{}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -275,16 +275,16 @@ func (s *JetStreamPresenceStore) ListOnlineUsers(viewerID, boardID string, limit
 		return sessions[i].SessionID < sessions[j].SessionID
 	})
 	if offset >= len(sessions) {
-		return []core.SocialUser{}, nil
+		return []projections.SocialUser{}, nil
 	}
 	end := offset + limit
 	if end > len(sessions) {
 		end = len(sessions)
 	}
 	now := time.Now().UTC().UnixMilli()
-	out := make([]core.SocialUser, 0, end-offset)
+	out := make([]projections.SocialUser, 0, end-offset)
 	for _, session := range sessions[offset:end] {
-		user := core.SocialUser{
+		user := projections.SocialUser{
 			UserID:        session.UserID,
 			Name:          session.UserID,
 			DisplayName:   session.UserID,
@@ -314,7 +314,7 @@ func (s *JetStreamPresenceStore) ListOnlineUsers(viewerID, boardID string, limit
 	return out, nil
 }
 
-func (s *JetStreamPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]core.SocialUser, error) {
+func (s *JetStreamPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]projections.SocialUser, error) {
 	if err := s.requireStore(); err != nil {
 		return nil, err
 	}
@@ -333,16 +333,16 @@ func (s *JetStreamPresenceStore) ListChatOnlineUsers(viewerID, roomID string, li
 		return nil, err
 	}
 	if offset >= len(sessions) {
-		return []core.SocialUser{}, nil
+		return []projections.SocialUser{}, nil
 	}
 	end := offset + limit
 	if end > len(sessions) {
 		end = len(sessions)
 	}
 	now := time.Now().UTC().UnixMilli()
-	out := make([]core.SocialUser, 0, end-offset)
+	out := make([]projections.SocialUser, 0, end-offset)
 	for _, session := range sessions[offset:end] {
-		user := core.SocialUser{
+		user := projections.SocialUser{
 			UserID:        session.UserID,
 			Name:          session.UserID,
 			DisplayName:   session.UserID,
@@ -460,15 +460,15 @@ func (s *JetStreamPresenceStore) chatSessions(viewerID, roomID string) ([]jetStr
 	return sessions, nil
 }
 
-func (s *JetStreamPresenceStore) Stats() (core.PresenceStats, error) {
+func (s *JetStreamPresenceStore) Stats() (presencestore.Stats, error) {
 	if err := s.requireStore(); err != nil {
-		return core.PresenceStats{}, err
+		return presencestore.Stats{}, err
 	}
 	keys, err := s.kv.Keys()
 	if errors.Is(err, nats.ErrNoKeysFound) {
 		keys = nil
 	} else if err != nil {
-		return core.PresenceStats{}, err
+		return presencestore.Stats{}, err
 	}
 	cutoff := time.Now().UTC().Add(-jetStreamPresenceOnlineWindow).UnixMilli()
 	onlineUsers := map[string]bool{}
@@ -478,7 +478,7 @@ func (s *JetStreamPresenceStore) Stats() (core.PresenceStats, error) {
 		case strings.HasPrefix(key, jetStreamPresenceSessionKeyPrefix):
 			record, _, found, err := s.readPresenceSessionRecord(key)
 			if err != nil {
-				return core.PresenceStats{}, err
+				return presencestore.Stats{}, err
 			}
 			if found && record.LastSeen >= cutoff && jetStreamPresenceStatusCountsOnline(record.Status) {
 				onlineUsers[record.UserID] = true
@@ -486,7 +486,7 @@ func (s *JetStreamPresenceStore) Stats() (core.PresenceStats, error) {
 		case strings.HasPrefix(key, jetStreamGuestPresenceKeyPrefix):
 			record, _, found, err := s.readGuestPresenceSessionRecord(key)
 			if err != nil {
-				return core.PresenceStats{}, err
+				return presencestore.Stats{}, err
 			}
 			if found && record.LastSeen >= cutoff && jetStreamGuestPresenceStatusCountsOnline(record.Status) {
 				onlineGuests++
@@ -495,13 +495,13 @@ func (s *JetStreamPresenceStore) Stats() (core.PresenceStats, error) {
 	}
 	logins, err := s.presenceCount(jetStreamGuestPresenceTotalLoginsKey())
 	if err != nil {
-		return core.PresenceStats{}, err
+		return presencestore.Stats{}, err
 	}
 	logouts, err := s.presenceCount(jetStreamGuestPresenceTotalLogoutsKey())
 	if err != nil {
-		return core.PresenceStats{}, err
+		return presencestore.Stats{}, err
 	}
-	return core.PresenceStats{
+	return presencestore.Stats{
 		OnlineUsers:       len(onlineUsers),
 		OnlineGuests:      onlineGuests,
 		TotalGuestLogins:  logins,
@@ -671,7 +671,7 @@ func (s *JetStreamPresenceStore) viewerCanSeeCloak(viewerID string) bool {
 	return role == "moderator" || role == "admin"
 }
 
-func (s *JetStreamPresenceStore) decorateOnlineUser(viewerID string, user *core.SocialUser) (bool, error) {
+func (s *JetStreamPresenceStore) decorateOnlineUser(viewerID string, user *projections.SocialUser) (bool, error) {
 	if s == nil || s.db == nil || user == nil {
 		return true, nil
 	}

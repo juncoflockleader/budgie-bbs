@@ -10,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	nats "github.com/nats-io/nats.go"
 )
 
@@ -61,7 +62,7 @@ type jetStreamChatLineRecord struct {
 	CreatedAt int64  `json:"createdAt"`
 }
 
-var _ core.ChatStore = (*JetStreamChatStore)(nil)
+var _ chatstore.Store = (*JetStreamChatStore)(nil)
 
 func NewJetStreamChatStore(ctx context.Context, conn *Conn, options JetStreamChatStoreOptions) (*JetStreamChatStore, error) {
 	if ctx == nil {
@@ -147,7 +148,7 @@ func (s *JetStreamChatStore) InsertChatLine(id, roomID, roomName, userID, userNa
 	return s.trimRoom(roomID)
 }
 
-func (s *JetStreamChatStore) ListChatRooms() ([]core.ChatRoom, error) {
+func (s *JetStreamChatStore) ListChatRooms() ([]projections.ChatRoom, error) {
 	if err := s.requireStore(); err != nil {
 		return nil, err
 	}
@@ -155,7 +156,7 @@ func (s *JetStreamChatStore) ListChatRooms() ([]core.ChatRoom, error) {
 	if err != nil {
 		return nil, err
 	}
-	rooms := []core.ChatRoom{}
+	rooms := []projections.ChatRoom{}
 	seenLobby := false
 	for _, key := range keys {
 		if !strings.HasPrefix(key, jetStreamChatRoomKeyPrefix) {
@@ -168,7 +169,7 @@ func (s *JetStreamChatStore) ListChatRooms() ([]core.ChatRoom, error) {
 		if !found {
 			continue
 		}
-		room := chatRoomRecordToCore(record)
+		room := chatRoomRecordToProjection(record)
 		room.LineCount, err = s.roomLineCount(room.ID)
 		if err != nil {
 			return nil, err
@@ -179,7 +180,7 @@ func (s *JetStreamChatStore) ListChatRooms() ([]core.ChatRoom, error) {
 		rooms = append(rooms, room)
 	}
 	if !seenLobby {
-		rooms = append(rooms, core.ChatRoom{
+		rooms = append(rooms, projections.ChatRoom{
 			ID:   "lobby",
 			Name: "Lobby",
 		})
@@ -196,7 +197,7 @@ func (s *JetStreamChatStore) ListChatRooms() ([]core.ChatRoom, error) {
 	return rooms, nil
 }
 
-func (s *JetStreamChatStore) ListChatLines(roomID string, limit int) ([]core.ChatLine, error) {
+func (s *JetStreamChatStore) ListChatLines(roomID string, limit int) ([]projections.ChatLine, error) {
 	if err := s.requireStore(); err != nil {
 		return nil, err
 	}
@@ -306,14 +307,14 @@ func (s *JetStreamChatStore) roomLineCount(roomID string) (int, error) {
 	return len(lines), nil
 }
 
-func (s *JetStreamChatStore) roomLines(roomID string) ([]core.ChatLine, error) {
+func (s *JetStreamChatStore) roomLines(roomID string) ([]projections.ChatLine, error) {
 	records, err := s.roomLineRecords(roomID)
 	if err != nil {
 		return nil, err
 	}
-	lines := make([]core.ChatLine, 0, len(records))
+	lines := make([]projections.ChatLine, 0, len(records))
 	for _, record := range records {
-		lines = append(lines, chatLineRecordToCore(record.record))
+		lines = append(lines, chatLineRecordToProjection(record.record))
 	}
 	return lines, nil
 }
@@ -472,8 +473,8 @@ func decodeJetStreamChatLineRecord(data []byte) (jetStreamChatLineRecord, error)
 	return record, nil
 }
 
-func chatRoomRecordToCore(record jetStreamChatRoomRecord) core.ChatRoom {
-	return core.ChatRoom{
+func chatRoomRecordToProjection(record jetStreamChatRoomRecord) projections.ChatRoom {
+	return projections.ChatRoom{
 		ID:        record.ID,
 		Name:      record.Name,
 		Topic:     record.Topic,
@@ -483,8 +484,8 @@ func chatRoomRecordToCore(record jetStreamChatRoomRecord) core.ChatRoom {
 	}
 }
 
-func chatLineRecordToCore(record jetStreamChatLineRecord) core.ChatLine {
-	return core.ChatLine{
+func chatLineRecordToProjection(record jetStreamChatLineRecord) projections.ChatLine {
+	return projections.ChatLine{
 		ID:        record.ID,
 		Room:      record.RoomID,
 		UserID:    record.UserID,

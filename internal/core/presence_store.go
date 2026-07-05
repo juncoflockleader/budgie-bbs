@@ -3,6 +3,7 @@ package core
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
@@ -14,7 +15,7 @@ type presenceStoreDBBinder interface {
 	BindPresenceStoreDB(db *sql.DB)
 }
 
-func bindPresenceStoreDB(store PresenceStore, db *sql.DB) {
+func bindPresenceStoreDB(store presencestore.Store, db *sql.DB) {
 	if binder, ok := store.(presenceStoreDBBinder); ok {
 		binder.BindPresenceStoreDB(db)
 	}
@@ -28,11 +29,11 @@ func (s sqlPresenceStore) SetGuestPresence(sessionID, status, locationLabel, fro
 	return setGuestPresence(s.db, sessionID, status, locationLabel, fromHost, ts)
 }
 
-func (s sqlPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
+func (s sqlPresenceStore) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]projections.SocialUser, error) {
 	return projections.ListOnlineUsers(s.db, viewerID, boardID, limit, offset)
 }
 
-func (s sqlPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
+func (s sqlPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]projections.SocialUser, error) {
 	return projections.ListChatOnlineUsers(s.db, viewerID, roomID, limit, offset)
 }
 
@@ -64,9 +65,9 @@ func (s sqlPresenceStore) ChatOnlineCounts() (map[string]int, error) {
 	return counts, rows.Err()
 }
 
-func (s sqlPresenceStore) Stats() (PresenceStats, error) {
+func (s sqlPresenceStore) Stats() (presencestore.Stats, error) {
 	cutoff := nowMS() - 5*60*1000
-	stats := PresenceStats{}
+	stats := presencestore.Stats{}
 	err := qQueryRow(s.db,
 		`SELECT
 		    (SELECT COUNT(DISTINCT user_id) FROM user_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')),

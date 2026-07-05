@@ -24,9 +24,11 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -96,9 +98,9 @@ type Core struct {
 	commandLogAuthoritative CommandLog
 	counterStore            counterstore.Store
 	counterStoreOverride    bool
-	presenceStore           PresenceStore
+	presenceStore           presencestore.Store
 	presenceStoreOverride   bool
-	chatStore               ChatStore
+	chatStore               chatstore.Store
 	chatStoreOverride       bool
 	postSearchIndex         PostSearchIndex
 	readCache               readmodel.LatestFeedCache
@@ -119,8 +121,8 @@ type coreOptions struct {
 	commandLogShadow          CommandLog
 	commandLogAuthoritative   CommandLog
 	counterStore              counterstore.Store
-	presenceStore             PresenceStore
-	chatStore                 ChatStore
+	presenceStore             presencestore.Store
+	chatStore                 chatstore.Store
 	postSearchIndex           PostSearchIndex
 	readCache                 readmodel.LatestFeedCache
 	asyncPostSearch           bool
@@ -188,13 +190,13 @@ func WithCounterStore(store counterstore.Store) Option {
 	}
 }
 
-func WithPresenceStore(store PresenceStore) Option {
+func WithPresenceStore(store presencestore.Store) Option {
 	return func(opts *coreOptions) {
 		opts.presenceStore = store
 	}
 }
 
-func WithChatStore(store ChatStore) Option {
+func WithChatStore(store chatstore.Store) Option {
 	return func(opts *coreOptions) {
 		opts.chatStore = store
 	}

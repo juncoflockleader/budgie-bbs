@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 const memoryChatRoomHistoryLimit = 200
@@ -15,19 +17,19 @@ const memoryChatRoomHistoryLimit = 200
 // policy. Production backends are sql and nats-kv (see -chat-store).
 type MemoryChatStore struct {
 	mu    sync.Mutex
-	rooms map[string]ChatRoom
-	lines map[string][]ChatLine
+	rooms map[string]projections.ChatRoom
+	lines map[string][]projections.ChatLine
 }
 
 func NewMemoryChatStore() *MemoryChatStore {
 	return &MemoryChatStore{
-		rooms: map[string]ChatRoom{
+		rooms: map[string]projections.ChatRoom{
 			"lobby": {
 				ID:   "lobby",
 				Name: "Lobby",
 			},
 		},
-		lines: map[string][]ChatLine{},
+		lines: map[string][]projections.ChatLine{},
 	}
 }
 
@@ -66,7 +68,7 @@ func (s *MemoryChatStore) InsertChatLine(id, roomID, roomName, userID, userName,
 	room.UpdatedAt = ts
 	s.rooms[roomID] = room
 
-	line := ChatLine{
+	line := projections.ChatLine{
 		ID:        id,
 		Room:      roomID,
 		UserID:    userID,
@@ -80,13 +82,13 @@ func (s *MemoryChatStore) InsertChatLine(id, roomID, roomName, userID, userName,
 	return nil
 }
 
-func (s *MemoryChatStore) ListChatRooms() ([]ChatRoom, error) {
+func (s *MemoryChatStore) ListChatRooms() ([]projections.ChatRoom, error) {
 	if s == nil {
 		return nil, sql.ErrConnDone
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]ChatRoom, 0, len(s.rooms))
+	out := make([]projections.ChatRoom, 0, len(s.rooms))
 	for id, room := range s.rooms {
 		room.LineCount = len(s.lines[id])
 		out = append(out, room)
@@ -103,7 +105,7 @@ func (s *MemoryChatStore) ListChatRooms() ([]ChatRoom, error) {
 	return out, nil
 }
 
-func (s *MemoryChatStore) ListChatLines(roomID string, limit int) ([]ChatLine, error) {
+func (s *MemoryChatStore) ListChatLines(roomID string, limit int) ([]projections.ChatLine, error) {
 	if s == nil {
 		return nil, sql.ErrConnDone
 	}
@@ -116,7 +118,7 @@ func (s *MemoryChatStore) ListChatLines(roomID string, limit int) ([]ChatLine, e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	lines := append([]ChatLine(nil), s.lines[roomID]...)
+	lines := append([]projections.ChatLine(nil), s.lines[roomID]...)
 	sort.SliceStable(lines, func(i, j int) bool {
 		if lines[i].CreatedAt != lines[j].CreatedAt {
 			return lines[i].CreatedAt > lines[j].CreatedAt

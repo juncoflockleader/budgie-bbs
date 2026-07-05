@@ -14,10 +14,10 @@ func (s sqlChatStore) InsertChatLine(id, roomID, roomName, userID, userName, bod
 	return projections.InsertChatLine(s.db, id, roomID, roomName, userID, userName, body, ts)
 }
 
-func (s sqlChatStore) ListChatRooms() ([]ChatRoom, error) {
+func (s sqlChatStore) ListChatRooms() ([]projections.ChatRoom, error) {
 	return projections.ListChatRooms(s.db)
 }
 
-func (s sqlChatStore) ListChatLines(roomID string, limit int) ([]ChatLine, error) {
+func (s sqlChatStore) ListChatLines(roomID string, limit int) ([]projections.ChatLine, error) {
 	return projections.ListChatLines(s.db, roomID, limit)
 }
