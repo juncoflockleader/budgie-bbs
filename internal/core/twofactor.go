@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/twofactorstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/totp"
 )
 
@@ -29,25 +30,12 @@ const (
 
 // SecuritySettings returns the site security settings (zero value if unset).
 func (c *Core) SecuritySettings() (*accountmodel.SecuritySettings, error) {
-	out := &accountmodel.SecuritySettings{}
-	var req int
-	err := qQueryRow(c.DB, `SELECT staff_2fa_required, updated_at FROM security_settings WHERE id='default'`).Scan(&req, &out.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return out, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	out.Staff2FARequired = req != 0
-	return out, nil
+	return twofactorstore.SecuritySettings(c.DB)
 }
 
 // SetSecuritySettings toggles whether staff (admin/moderator) must complete 2FA.
 func (c *Core) SetSecuritySettings(staff2FARequired bool) (*accountmodel.SecuritySettings, error) {
-	if _, err := qExec(c.DB,
-		`INSERT INTO security_settings (id, staff_2fa_required, updated_at) VALUES ('default', ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET staff_2fa_required=excluded.staff_2fa_required, updated_at=excluded.updated_at`,
-		boolToInt(staff2FARequired), nowMS()); err != nil {
+	if err := twofactorstore.SetSecuritySettings(c.DB, staff2FARequired, nowMS()); err != nil {
 		return nil, err
 	}
 	return c.SecuritySettings()
@@ -55,19 +43,7 @@ func (c *Core) SetSecuritySettings(staff2FARequired bool) (*accountmodel.Securit
 
 // TwoFactorStatus returns a user's enrollment state.
 func (c *Core) TwoFactorStatus(userID string) (accountmodel.TwoFactorStatus, error) {
-	var st accountmodel.TwoFactorStatus
-	var totpEnrolled, emailEnrolled int
-	err := qQueryRow(c.DB, `SELECT totp_enrolled, email_enrolled FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&totpEnrolled, &emailEnrolled)
-	if err == sql.ErrNoRows {
-		return st, nil
-	}
-	if err != nil {
-		return st, err
-	}
-	st.TOTPEnrolled = totpEnrolled != 0
-	st.EmailEnrolled = emailEnrolled != 0
-	st.BackupCodesRemaining = c.BackupCodesRemaining(userID)
-	return st, nil
+	return twofactorstore.TwoFactorStatus(c.DB, userID)
 }
 
 // BeginTOTPEnrollment generates a pending TOTP secret (not yet active) and the
@@ -197,19 +173,11 @@ func (c *Core) VerifyBackupCode(userID, code string) error {
 
 // BackupCodesRemaining counts a user's unused recovery codes.
 func (c *Core) BackupCodesRemaining(userID string) int {
-	var n int
-	_ = qQueryRow(c.DB, `SELECT COUNT(*) FROM two_factor_backup_codes WHERE user_id=? AND used=0`, userID).Scan(&n)
-	return n
+	return twofactorstore.BackupCodesRemaining(c.DB, userID)
 }
 
 func (c *Core) clearBackupCodesIfUnenrolled(userID string) error {
-	var totpEnrolled, emailEnrolled int
-	err := qQueryRow(c.DB, `SELECT totp_enrolled, email_enrolled FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&totpEnrolled, &emailEnrolled)
-	if err == nil && (totpEnrolled != 0 || emailEnrolled != 0) {
-		return nil
-	}
-	_, err = qExec(c.DB, `DELETE FROM two_factor_backup_codes WHERE user_id=?`, userID)
-	return err
+	return twofactorstore.ClearBackupCodesIfUnenrolled(c.DB, userID)
 }
 
 // TwoFactorRequiredForLogin reports whether the given staff user must pass a 2FA
@@ -360,11 +328,4 @@ func (c *Core) userRegistrationEmail(userID string) string {
 	var email string
 	_ = qQueryRow(c.DB, `SELECT COALESCE(registration_email,'') FROM user_private_profiles WHERE user_id=?`, userID).Scan(&email)
 	return strings.TrimSpace(email)
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
