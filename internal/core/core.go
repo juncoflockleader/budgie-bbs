@@ -506,7 +506,7 @@ func (c *Core) Run(ctx context.Context) {
 
 // ExecCmd submits a command for the actor and returns the result.
 // payload is the raw JSON of the command-specific payload object.
-func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string) commandexec.Reply {
+func (c *Core) ExecCmd(ctx context.Context, actor *projections.User, name proto.CommandName, payload json.RawMessage, cid string) commandexec.Reply {
 	partition, ok := c.classifyCommandPartition(actor, name, payload)
 	if !ok {
 		partition = defaultPartition()
@@ -525,7 +525,7 @@ func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName,
 	})
 }
 
-func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition LogPartition) commandexec.Reply {
+func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *projections.User, name proto.CommandName, payload json.RawMessage, cid string, partition LogPartition) commandexec.Reply {
 	actorID := ""
 	if actor != nil {
 		actorID = actor.ID
@@ -568,7 +568,7 @@ func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, nam
 	}}
 }
 
-func (c *Core) shadowCommand(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition LogPartition) string {
+func (c *Core) shadowCommand(ctx context.Context, actor *projections.User, name proto.CommandName, payload json.RawMessage, cid string, partition LogPartition) string {
 	if c == nil || c.commandLogShadow == nil {
 		return cid
 	}
@@ -606,7 +606,7 @@ func (c *Core) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRec
 	if c == nil || c.handler == nil {
 		return commandexec.Reply{Err: &proto.ErrorDetail{Code: "internal_error", Message: "core is not initialized", Retryable: true}}
 	}
-	var actor *User
+	var actor *projections.User
 	if record.ActorID != "" {
 		u, err := projections.GetUserByID(c.DB, record.ActorID)
 		if err != nil {
@@ -631,7 +631,7 @@ func (c *Core) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRec
 	})
 }
 
-func (c *Core) validateCommandLogRecordPartition(actor *User, record CommandLogRecord, actual LogPartition) *proto.ErrorDetail {
+func (c *Core) validateCommandLogRecordPartition(actor *projections.User, record CommandLogRecord, actual LogPartition) *proto.ErrorDetail {
 	expected, ok := c.classifyCommandPartition(actor, record.Command, record.Payload)
 	if !ok {
 		expected = defaultPartition()
@@ -651,7 +651,7 @@ func (c *Core) validateCommandLogRecordPartition(actor *User, record CommandLogR
 	}
 }
 
-func (c *Core) classifyCommandPartition(actor *User, name proto.CommandName, payload json.RawMessage) (eventPartition, bool) {
+func (c *Core) classifyCommandPartition(actor *projections.User, name proto.CommandName, payload json.RawMessage) (eventPartition, bool) {
 	partition, ok := classifyCommandPartition(actor, name, payload)
 	if !ok || name != proto.CmdAppendPost {
 		return partition, ok
@@ -786,7 +786,7 @@ func (c *Core) startHotThreadSplitConfigPoller(ctx context.Context) {
 	}()
 }
 
-func actorID(actor *User) string {
+func actorID(actor *projections.User) string {
 	if actor == nil {
 		return ""
 	}
@@ -931,14 +931,14 @@ func (c *Core) Unsubscribe(s *Subscription) {
 // RegisterUser creates a normal account. Names ending in the reserved AI suffix
 // are rejected; the bot accounts themselves are
 // created via registerUserInternal, which skips this check.
-func (c *Core) RegisterUser(name, password string) (*User, error) {
+func (c *Core) RegisterUser(name, password string) (*projections.User, error) {
 	if accountmodel.IsReservedAIBotName(name) {
 		return nil, fmt.Errorf("user name may not end in %q (reserved for AI bots)", accountmodel.ReservedAIBotNameSuffix)
 	}
 	return c.registerUserInternal(name, password)
 }
 
-func (c *Core) registerUserInternal(name, password string) (*User, error) {
+func (c *Core) registerUserInternal(name, password string) (*projections.User, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, err
@@ -1009,7 +1009,7 @@ func (c *Core) registerUserInternal(name, password string) (*User, error) {
 	if err := seedDefaultFavorites(tx, id, ts); err != nil {
 		return nil, fmt.Errorf("seed default favorites: %w", err)
 	}
-	user := &User{ID: id, Name: name, Role: role, Created: ts, RegistrationStatus: status}
+	user := &projections.User{ID: id, Name: name, Role: role, Created: ts, RegistrationStatus: status}
 	events := []*proto.Event{}
 	if status == "approved" {
 		events, err = c.appendAccountLifecycleRecordTx(tx, accountmodel.NewcomerLifecycleRecord(accountLifecycleUser(user)), ts)
@@ -1037,7 +1037,7 @@ func seedDefaultFavorites(db sqlLike, userID string, ts int64) error {
 	return err
 }
 
-func accountLifecycleUser(user *User) accountmodel.LifecycleUser {
+func accountLifecycleUser(user *projections.User) accountmodel.LifecycleUser {
 	if user == nil {
 		return accountmodel.LifecycleUser{}
 	}
@@ -1100,13 +1100,13 @@ func (c *Core) appendAccountLifecycleRecordTx(tx *sql.Tx, record accountmodel.Li
 	if err != nil {
 		return nil, err
 	}
-	if err := projections.InsertThread(tx, &Thread{
+	if err := projections.InsertThread(tx, &projections.Thread{
 		ID: record.ThreadID, Board: record.BoardID, Author: record.AuthorName, AuthorID: record.AuthorID, Title: record.Title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
-	if err := projections.InsertPost(tx, &Post{
+	if err := projections.InsertPost(tx, &projections.Post{
 		ID: record.PostID, Thread: record.ThreadID, Author: record.AuthorName, AuthorID: record.AuthorID,
 		Body: record.Body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
@@ -1157,7 +1157,7 @@ func markBoardReadForAllUsersTx(tx *sql.Tx, boardID string, seq, ts int64) error
 var dummyBcryptHash, _ = bcrypt.GenerateFromPassword([]byte("constant-time-placeholder"), bcrypt.DefaultCost)
 
 // AuthenticateUser verifies credentials and returns the user on success.
-func (c *Core) AuthenticateUser(name, password string) (*User, error) {
+func (c *Core) AuthenticateUser(name, password string) (*projections.User, error) {
 	u, err := projections.GetUserByName(c.DB, name)
 	if err != nil || u == nil {
 		// Run a dummy comparison so a missing account isn't distinguishable from
@@ -1188,7 +1188,7 @@ func (c *Core) AuthenticateUser(name, password string) (*User, error) {
 	return u, nil
 }
 
-func (c *Core) AuthenticateUserFromHost(name, password, host string) (*User, error) {
+func (c *Core) AuthenticateUserFromHost(name, password, host string) (*projections.User, error) {
 	u, err := c.AuthenticateUser(name, password)
 	if err != nil {
 		return nil, err
@@ -1209,7 +1209,7 @@ func (c *Core) AuthenticateUserFromHost(name, password, host string) (*User, err
 // cannot bypass the gates the password and HTTP login paths enforce (a
 // deactivated, banned, pending/rejected, unverified, or host-denied account
 // must not be admitted just because it holds a registered key).
-func (c *Core) AuthorizeUserSession(u *User, host string) error {
+func (c *Core) AuthorizeUserSession(u *projections.User, host string) error {
 	if u == nil {
 		return ErrInvalidCredentials
 	}
@@ -1546,8 +1546,8 @@ func (c *Core) cleanupDeletedUserCounterIdentity(userID string, identity counter
 	return mutation.Commit()
 }
 
-func getUserByIDTx(tx *sql.Tx, id string) (*User, error) {
-	u := &User{}
+func getUserByIDTx(tx *sql.Tx, id string) (*projections.User, error) {
+	u := &projections.User{}
 	err := qQueryRow(tx, `SELECT id, name, role, password, created,
 	        COALESCE(NULLIF(registration_status,''), 'approved'), COALESCE(reviewed_at,0), COALESCE(reviewed_by,''), COALESCE(review_reason,''),
 	        COALESCE(deactivated_at,0), COALESCE(deactivated_by,''), COALESCE(deactivated_reason,'')
@@ -1602,7 +1602,7 @@ func ensureDeletedUserTx(tx *sql.Tx, actorID string, ts int64) error {
 	return err
 }
 
-func purgeUserTx(tx *sql.Tx, actorID string, target *User, ts int64) error {
+func purgeUserTx(tx *sql.Tx, actorID string, target *projections.User, ts int64) error {
 	targetID := target.ID
 	oldName := target.Name
 	cleanup := []struct {
@@ -1688,17 +1688,17 @@ func (c *Core) AddPubkey(userID, pubkey string) error {
 }
 
 // UserByPubkey looks up a user by their SSH public key fingerprint.
-func (c *Core) UserByPubkey(pubkey string) (*User, error) {
+func (c *Core) UserByPubkey(pubkey string) (*projections.User, error) {
 	return projections.GetUserByPubkey(c.DB, pubkey)
 }
 
 // UserByID returns the user for the given ID.
-func (c *Core) UserByID(id string) (*User, error) {
+func (c *Core) UserByID(id string) (*projections.User, error) {
 	return projections.GetUserByID(c.DB, id)
 }
 
 // UserByName returns the user for the given username.
-func (c *Core) UserByName(name string) (*User, error) {
+func (c *Core) UserByName(name string) (*projections.User, error) {
 	return projections.GetUserByName(c.DB, name)
 }
 
@@ -1710,7 +1710,7 @@ func (c *Core) ListCategories() ([]projections.Category, error) {
 }
 func (c *Core) GetBoard(id string) (*projections.Board, error) { return projections.GetBoard(c.DB, id) }
 
-func (c *Core) ListCategoriesForUser(viewer *User) ([]projections.Category, error) {
+func (c *Core) ListCategoriesForUser(viewer *projections.User) ([]projections.Category, error) {
 	categories, err := c.ListCategories()
 	if err != nil {
 		return nil, err
@@ -1727,7 +1727,7 @@ func (c *Core) ListCategoriesForUser(viewer *User) ([]projections.Category, erro
 	return out, nil
 }
 
-func categoryModelViewer(viewer *User) *categorymodel.Viewer {
+func categoryModelViewer(viewer *projections.User) *categorymodel.Viewer {
 	if viewer == nil {
 		return nil
 	}
@@ -1914,7 +1914,7 @@ func (c *Core) PublishDailyStatsSnapshot(ctx context.Context, at time.Time) (*pr
 	if err != nil {
 		return nil, err
 	}
-	systemActor := &User{ID: "system", Name: "system", Role: "admin", RegistrationStatus: "approved"}
+	systemActor := &projections.User{ID: "system", Name: "system", Role: "admin", RegistrationStatus: "approved"}
 	reply := c.ExecCmd(ctx, systemActor, proto.CmdPublishStatsSnapshot, raw, "auto-stats-"+day)
 	if reply.Err != nil {
 		return nil, fmt.Errorf("%s: %s", reply.Err.Code, reply.Err.Message)
@@ -1922,7 +1922,7 @@ func (c *Core) PublishDailyStatsSnapshot(ctx context.Context, at time.Time) (*pr
 	return reply.Result, nil
 }
 
-func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]projections.BoardRanking, error) {
+func (c *Core) ListBoardRankings(actor *projections.User, limit, offset int) ([]projections.BoardRanking, error) {
 	rows, err := projections.BoardRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1935,7 +1935,7 @@ func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]projections.
 func (c *Core) ListRecommendedBoards(limit, offset int) ([]projections.RecommendedBoard, error) {
 	return projections.ListRecommendedBoards(c.DB, limit, offset)
 }
-func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int) ([]projections.ThreadRanking, error) {
+func (c *Core) ListThreadRankings(actor *projections.User, boardID string, limit, offset int) ([]projections.ThreadRanking, error) {
 	rows, err := projections.ThreadRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1945,7 +1945,7 @@ func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int
 	}
 	return projections.ListThreadRankings(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
 }
-func (c *Core) ListReplyRankings(actor *User, limit, offset int) ([]projections.ReplyRanking, error) {
+func (c *Core) ListReplyRankings(actor *projections.User, limit, offset int) ([]projections.ReplyRanking, error) {
 	rows, err := projections.ReplyRankingPostsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1981,7 +1981,7 @@ func (c *Core) ListBlessings(limit, offset int) ([]projections.Blessing, error) 
 func (c *Core) ListBoardModeratorTerms(boardID string, limit, offset int) ([]projections.BoardModeratorTerm, error) {
 	return projections.ListBoardModeratorTerms(c.DB, boardID, limit, offset)
 }
-func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) ([]projections.ArchiveRanking, error) {
+func (c *Core) ListArchiveRankings(actor *projections.User, kind string, limit, offset int) ([]projections.ArchiveRanking, error) {
 	rows, err := projections.ArchiveRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -2025,11 +2025,11 @@ func (c *Core) ListDigestEntries(boardID, kind, path string, limit, offset int) 
 func (c *Core) ListDigestPathTree(boardID, kind string) ([]projections.DigestPathNode, error) {
 	return projections.ListDigestPathTree(c.DB, boardID, kind)
 }
-func (c *Core) ListSiteDigestEntries(actor *User, kind, path string, limit, offset int) ([]projections.DigestEntry, error) {
+func (c *Core) ListSiteDigestEntries(actor *projections.User, kind, path string, limit, offset int) ([]projections.DigestEntry, error) {
 	viewer := readmodel.ViewerScopeForUser(actor)
 	return projections.ListSiteDigestEntries(c.DB, viewer.UserID, viewer.IncludePrivate, kind, path, limit, offset)
 }
-func (c *Core) SearchDigestEntries(actor *User, boardID, kind, path, query string, limit, offset int) ([]projections.DigestEntry, error) {
+func (c *Core) SearchDigestEntries(actor *projections.User, boardID, kind, path, query string, limit, offset int) ([]projections.DigestEntry, error) {
 	viewer := readmodel.ViewerScopeForUser(actor)
 	return projections.SearchDigestEntries(c.DB, viewer.UserID, viewer.IncludePrivate, boardID, kind, path, query, limit, offset)
 }
@@ -2156,7 +2156,7 @@ func (c *Core) ListThreadSummaries(userID, board string, limit, offset int, unre
 func (c *Core) ListThreadSummariesFiltered(userID, board, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]projections.ThreadSummary, error) {
 	return projections.ListThreadSummariesFiltered(c.DB, userID, board, titleQuery, authorQuery, limit, offset, unreadOnly)
 }
-func (c *Core) ListUnreadThreadSummaries(actor *User, favoritesOnly bool, folderID string, limit, offset int) ([]projections.ThreadSummary, error) {
+func (c *Core) ListUnreadThreadSummaries(actor *projections.User, favoritesOnly bool, folderID string, limit, offset int) ([]projections.ThreadSummary, error) {
 	rows, err := projections.UnreadThreadSummaryStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -2260,7 +2260,7 @@ func (c *Core) SearchPosts(query, boardID string, limit int) ([]projections.Post
 	return posts, nil
 }
 
-func (c *Core) SearchReadablePosts(actor *User, query, boardID string, limit int) ([]projections.Post, error) {
+func (c *Core) SearchReadablePosts(actor *projections.User, query, boardID string, limit int) ([]projections.Post, error) {
 	if c.postSearchIndex != nil {
 		ids, err := c.postSearchIndex.Search(context.Background(), query, boardID, limit)
 		if err != nil {
@@ -2297,7 +2297,7 @@ func (c *Core) ListPostsByAuthor(name string, limit, offset int) ([]projections.
 	return posts, nil
 }
 
-func (c *Core) ListReadablePostsByAuthor(actor *User, name string, limit, offset int) ([]projections.Post, error) {
+func (c *Core) ListReadablePostsByAuthor(actor *projections.User, name string, limit, offset int) ([]projections.Post, error) {
 	posts, err := projections.ListReadablePostsByAuthor(c.DB, actor.ID, actor.IsMod(), name, limit, offset)
 	if err != nil {
 		return nil, err
@@ -2327,7 +2327,7 @@ func (c *Core) ListResidentBoardPosts(userID string, limit, offset int) ([]proje
 	return posts, nil
 }
 
-func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]projections.Post, error) {
+func (c *Core) ListLatestFeedPosts(actor *projections.User, limit, offset int) ([]projections.Post, error) {
 	viewer := readmodel.ViewerScopeForUser(actor)
 	limit, offset = readmodel.NormalizePagination(limit, offset, 30, 100)
 	cacheKey, cacheOK := c.latestFeedCacheKey(viewer.UserID, viewer.IncludePrivate, limit, offset)
@@ -2599,7 +2599,7 @@ func (c *Core) ReviewPasswordRecoveryRequest(requestID, reviewerID, decision, ne
 	return projections.ReviewPasswordRecoveryRequest(c.DB, requestID, reviewerID, decision, passwordHash, note)
 }
 
-func (c *Core) TransferUserID(userID, newName string) (*User, error) {
+func (c *Core) TransferUserID(userID, newName string) (*projections.User, error) {
 	return projections.TransferUserID(c.DB, userID, newName)
 }
 
@@ -2681,7 +2681,7 @@ func (c *Core) ListBoardAutomodActivity(boardID string, limit, offset int) ([]pr
 // moderators/admins always can, as can a board's moderators or members with a
 // post or thread moderation capability.
 func (c *Core) UserCanModerateBoard(userID, role, boardID string) (bool, error) {
-	return projections.ActorCanModerateBoardContent(c.DB, &User{ID: userID, Role: role}, boardID)
+	return projections.ActorCanModerateBoardContent(c.DB, &projections.User{ID: userID, Role: role}, boardID)
 }
 
 func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]projections.UserSanction, error) {
