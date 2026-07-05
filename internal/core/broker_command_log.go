@@ -16,15 +16,9 @@ const (
 	brokerCommandCommitPrefix  = "budgie.commandcommit"
 )
 
-// BrokerCommandRecord is an alias for the durable broker command record model.
-type BrokerCommandRecord = logmodel.BrokerCommandRecord
-
-// BrokerCommandLogMessage is an alias for the broker command message envelope.
-type BrokerCommandLogMessage = logmodel.BrokerCommandLogMessage
-
 type BrokerCommandLogClient interface {
-	AppendCommand(ctx context.Context, partition LogPartition, record BrokerCommandRecord) (BrokerCommandLogMessage, error)
-	FetchCommands(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerCommandLogMessage, error)
+	AppendCommand(ctx context.Context, partition LogPartition, record logmodel.BrokerCommandRecord) (logmodel.BrokerCommandLogMessage, error)
+	FetchCommands(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerCommandLogMessage, error)
 	CommitPartition(ctx context.Context, partition LogPartition, offset int64) error
 	CommittedOffset(ctx context.Context, partition LogPartition) (int64, error)
 }
@@ -57,7 +51,7 @@ func (l *BrokerCommandLog) Produce(ctx context.Context, record CommandLogRecord)
 	if enqueuedAt <= 0 {
 		enqueuedAt = nowMS()
 	}
-	msg, err := l.client.AppendCommand(ctx, partition, BrokerCommandRecord{
+	msg, err := l.client.AppendCommand(ctx, partition, logmodel.BrokerCommandRecord{
 		Version:       brokerCommandRecordVersion,
 		ActorID:       record.ActorID,
 		CID:           record.CID,
@@ -70,7 +64,7 @@ func (l *BrokerCommandLog) Produce(ctx context.Context, record CommandLogRecord)
 	if err != nil {
 		return CommandLogRecord{}, err
 	}
-	return DecodeBrokerCommandMessage(msg)
+	return logmodel.DecodeBrokerCommandMessage(msg)
 }
 
 func (l *BrokerCommandLog) FetchPartition(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]CommandLogRecord, error) {
@@ -87,7 +81,7 @@ func (l *BrokerCommandLog) FetchPartition(ctx context.Context, partition LogPart
 	}
 	records := make([]CommandLogRecord, 0, len(messages))
 	for _, msg := range messages {
-		record, err := DecodeBrokerCommandMessage(msg)
+		record, err := logmodel.DecodeBrokerCommandMessage(msg)
 		if err != nil {
 			return nil, err
 		}
@@ -137,18 +131,6 @@ func (l *BrokerCommandLog) ListCommandPartitionOffsets(ctx context.Context, limi
 	return lister.ListCommandPartitionOffsets(ctx, limit)
 }
 
-func EncodeBrokerCommandRecord(record BrokerCommandRecord) ([]byte, error) {
-	return logmodel.EncodeBrokerCommandRecord(record)
-}
-
-func DecodeBrokerCommandRecord(data []byte) (BrokerCommandRecord, error) {
-	return logmodel.DecodeBrokerCommandRecord(data)
-}
-
-func DecodeBrokerCommandMessage(msg BrokerCommandLogMessage) (CommandLogRecord, error) {
-	return logmodel.DecodeBrokerCommandMessage(msg)
-}
-
 func BrokerCommandSubject(partition LogPartition) string {
 	return logmodel.BrokerSubject(brokerCommandSubjectPrefix, partition)
 }
@@ -178,32 +160,32 @@ func ParseBrokerCommandCommitSubject(subject string) (LogPartition, bool) {
 // requiring a running broker.
 type MemoryBrokerCommandLogClient struct {
 	mu        sync.Mutex
-	messages  map[LogPartition][]BrokerCommandLogMessage
+	messages  map[LogPartition][]logmodel.BrokerCommandLogMessage
 	tails     map[LogPartition]int64
-	byReceipt map[logmodel.CommandReceiptKey]BrokerCommandLogMessage
+	byReceipt map[logmodel.CommandReceiptKey]logmodel.BrokerCommandLogMessage
 	committed map[LogPartition]int64
 	head      int64
 }
 
 func NewMemoryBrokerCommandLogClient() *MemoryBrokerCommandLogClient {
 	return &MemoryBrokerCommandLogClient{
-		messages:  map[LogPartition][]BrokerCommandLogMessage{},
+		messages:  map[LogPartition][]logmodel.BrokerCommandLogMessage{},
 		tails:     map[LogPartition]int64{},
-		byReceipt: map[logmodel.CommandReceiptKey]BrokerCommandLogMessage{},
+		byReceipt: map[logmodel.CommandReceiptKey]logmodel.BrokerCommandLogMessage{},
 		committed: map[LogPartition]int64{},
 	}
 }
 
-func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partition LogPartition, record BrokerCommandRecord) (BrokerCommandLogMessage, error) {
+func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partition LogPartition, record logmodel.BrokerCommandRecord) (logmodel.BrokerCommandLogMessage, error) {
 	if err := ctx.Err(); err != nil {
-		return BrokerCommandLogMessage{}, err
+		return logmodel.BrokerCommandLogMessage{}, err
 	}
 	if c == nil {
-		return BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: nil receiver")
+		return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: nil receiver")
 	}
 	partition = partition.Normalize()
 	if strings.TrimSpace(record.CID) != "" && record.EnqueuedAt <= 0 {
-		return BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: enqueue time is required when command receipt is set")
+		return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: enqueue time is required when command receipt is set")
 	}
 
 	c.mu.Lock()
@@ -212,12 +194,12 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 	record.PartitionKey = partition.Key
 	if key, ok := logmodel.NewCommandReceiptKey(partition, record.ActorID, record.CID); ok {
 		if existing, ok := c.byReceipt[key]; ok {
-			existingRecord, err := DecodeBrokerCommandRecord(existing.Data)
+			existingRecord, err := logmodel.DecodeBrokerCommandRecord(existing.Data)
 			if err != nil {
-				return BrokerCommandLogMessage{}, err
+				return logmodel.BrokerCommandLogMessage{}, err
 			}
 			if !logmodel.SameBrokerCommandRecordIdentity(existingRecord, record) {
-				return BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: duplicate command receipt %q has different content", record.CID)
+				return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: duplicate command receipt %q has different content", record.CID)
 			}
 			return logmodel.CloneBrokerCommandLogMessage(existing), nil
 		}
@@ -230,12 +212,12 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 	if record.EnqueuedAt <= 0 {
 		record.EnqueuedAt = nowMS()
 	}
-	data, err := EncodeBrokerCommandRecord(record)
+	data, err := logmodel.EncodeBrokerCommandRecord(record)
 	if err != nil {
-		return BrokerCommandLogMessage{}, err
+		return logmodel.BrokerCommandLogMessage{}, err
 	}
 	c.head++
-	msg := BrokerCommandLogMessage{
+	msg := logmodel.BrokerCommandLogMessage{
 		Partition: partition,
 		Offset:    offset,
 		StreamSeq: c.head,
@@ -249,7 +231,7 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 	return logmodel.CloneBrokerCommandLogMessage(msg), nil
 }
 
-func (c *MemoryBrokerCommandLogClient) FetchCommands(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerCommandLogMessage, error) {
+func (c *MemoryBrokerCommandLogClient) FetchCommands(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerCommandLogMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -261,7 +243,7 @@ func (c *MemoryBrokerCommandLogClient) FetchCommands(ctx context.Context, partit
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	source := c.messages[partition]
-	out := make([]BrokerCommandLogMessage, 0, len(source))
+	out := make([]logmodel.BrokerCommandLogMessage, 0, len(source))
 	for _, msg := range source {
 		if msg.Offset <= afterOffset {
 			continue

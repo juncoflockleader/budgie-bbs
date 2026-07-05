@@ -78,24 +78,24 @@ func NewJetStreamCommandLogClient(ctx context.Context, conn *Conn, options JetSt
 	return client, nil
 }
 
-func (c *JetStreamCommandLogClient) AppendCommand(ctx context.Context, partition core.LogPartition, record core.BrokerCommandRecord) (core.BrokerCommandLogMessage, error) {
+func (c *JetStreamCommandLogClient) AppendCommand(ctx context.Context, partition core.LogPartition, record logmodel.BrokerCommandRecord) (logmodel.BrokerCommandLogMessage, error) {
 	if err := ctx.Err(); err != nil {
-		return core.BrokerCommandLogMessage{}, err
+		return logmodel.BrokerCommandLogMessage{}, err
 	}
 	if c == nil || c.js == nil {
-		return core.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: nil client")
+		return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: nil client")
 	}
 	partition = partition.Normalize()
 	subject := core.BrokerCommandSubject(partition)
 	if strings.TrimSpace(record.CID) != "" && record.EnqueuedAt <= 0 {
-		return core.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: enqueue time is required when command receipt is set")
+		return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: enqueue time is required when command receipt is set")
 	}
 
 	var lastErr error
 	for attempt := 0; attempt < jetStreamCommandLogAppendRetries; attempt++ {
 		tail, err := c.commandTail(ctx, partition, subject)
 		if err != nil {
-			return core.BrokerCommandLogMessage{}, err
+			return logmodel.BrokerCommandLogMessage{}, err
 		}
 		record.PartitionKind = partition.Kind
 		record.PartitionKey = partition.Key
@@ -106,9 +106,9 @@ func (c *JetStreamCommandLogClient) AppendCommand(ctx context.Context, partition
 		if record.EnqueuedAt <= 0 {
 			record.EnqueuedAt = time.Now().UnixMilli()
 		}
-		data, err := core.EncodeBrokerCommandRecord(record)
+		data, err := logmodel.EncodeBrokerCommandRecord(record)
 		if err != nil {
-			return core.BrokerCommandLogMessage{}, err
+			return logmodel.BrokerCommandLogMessage{}, err
 		}
 		opts := []nats.PubOpt{
 			nats.Context(ctx),
@@ -123,26 +123,26 @@ func (c *JetStreamCommandLogClient) AppendCommand(ctx context.Context, partition
 			if isWrongLastSequence(err) {
 				lastErr = err
 				if err := waitJetStreamCASRetry(ctx, attempt, jetStreamCommandLogAppendRetries); err != nil {
-					return core.BrokerCommandLogMessage{}, err
+					return logmodel.BrokerCommandLogMessage{}, err
 				}
 				continue
 			}
-			return core.BrokerCommandLogMessage{}, err
+			return logmodel.BrokerCommandLogMessage{}, err
 		}
 		if ack.Duplicate && record.CID != "" {
 			return c.findCommandByReceipt(ctx, partition, subject, record)
 		}
-		return core.BrokerCommandLogMessage{
+		return logmodel.BrokerCommandLogMessage{
 			Partition: partition,
 			Offset:    record.Offset,
 			StreamSeq: int64(ack.Sequence),
 			Data:      data,
 		}, nil
 	}
-	return core.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: append CAS failed after %d attempts: %w", jetStreamCommandLogAppendRetries, lastErr)
+	return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: append CAS failed after %d attempts: %w", jetStreamCommandLogAppendRetries, lastErr)
 }
 
-func (c *JetStreamCommandLogClient) FetchCommands(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]core.BrokerCommandLogMessage, error) {
+func (c *JetStreamCommandLogClient) FetchCommands(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerCommandLogMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (c *JetStreamCommandLogClient) FetchCommands(ctx context.Context, partition
 	if want > limit {
 		want = limit
 	}
-	out := make([]core.BrokerCommandLogMessage, 0, limit)
+	out := make([]logmodel.BrokerCommandLogMessage, 0, limit)
 	var seq uint64
 	for len(out) < want {
 		raw, err := c.js.GetMsg(c.stream, seq, nats.Context(ctx), nats.DirectGetNext(subject))
@@ -176,14 +176,14 @@ func (c *JetStreamCommandLogClient) FetchCommands(ctx context.Context, partition
 			return nil, err
 		}
 		seq = raw.Sequence + 1
-		record, err := core.DecodeBrokerCommandRecord(raw.Data)
+		record, err := logmodel.DecodeBrokerCommandRecord(raw.Data)
 		if err != nil {
 			return nil, err
 		}
 		if record.Offset <= afterOffset {
 			continue
 		}
-		out = append(out, core.BrokerCommandLogMessage{
+		out = append(out, logmodel.BrokerCommandLogMessage{
 			Partition: partition,
 			Offset:    record.Offset,
 			StreamSeq: int64(raw.Sequence),
@@ -381,7 +381,7 @@ func (c *JetStreamCommandLogClient) validateStream(ctx context.Context) error {
 	})
 }
 
-func (c *JetStreamCommandLogClient) findCommandByReceipt(ctx context.Context, partition core.LogPartition, subject string, requested core.BrokerCommandRecord) (core.BrokerCommandLogMessage, error) {
+func (c *JetStreamCommandLogClient) findCommandByReceipt(ctx context.Context, partition core.LogPartition, subject string, requested logmodel.BrokerCommandRecord) (logmodel.BrokerCommandLogMessage, error) {
 	var seq uint64
 	for {
 		raw, err := c.js.GetMsg(c.stream, seq, nats.Context(ctx), nats.DirectGetNext(subject))
@@ -389,27 +389,27 @@ func (c *JetStreamCommandLogClient) findCommandByReceipt(ctx context.Context, pa
 			break
 		}
 		if err != nil {
-			return core.BrokerCommandLogMessage{}, err
+			return logmodel.BrokerCommandLogMessage{}, err
 		}
 		seq = raw.Sequence + 1
-		record, err := core.DecodeBrokerCommandRecord(raw.Data)
+		record, err := logmodel.DecodeBrokerCommandRecord(raw.Data)
 		if err != nil {
-			return core.BrokerCommandLogMessage{}, err
+			return logmodel.BrokerCommandLogMessage{}, err
 		}
 		if record.ActorID != requested.ActorID || record.CID != requested.CID {
 			continue
 		}
 		if !logmodel.SameBrokerCommandRecordIdentity(record, requested) {
-			return core.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: duplicate command receipt %q has different content", requested.CID)
+			return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: duplicate command receipt %q has different content", requested.CID)
 		}
-		return core.BrokerCommandLogMessage{
+		return logmodel.BrokerCommandLogMessage{
 			Partition: partition.Normalize(),
 			Offset:    record.Offset,
 			StreamSeq: int64(raw.Sequence),
 			Data:      append([]byte(nil), raw.Data...),
 		}, nil
 	}
-	return core.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: duplicate command receipt %q was not found in partition %s/%s",
+	return logmodel.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: duplicate command receipt %q was not found in partition %s/%s",
 		requested.CID, partition.Kind, partition.Key)
 }
 
@@ -421,7 +421,7 @@ func (c *JetStreamCommandLogClient) commandTail(ctx context.Context, partition c
 	if err != nil {
 		return jetStreamPartitionTail{}, err
 	}
-	record, err := core.DecodeBrokerCommandRecord(raw.Data)
+	record, err := logmodel.DecodeBrokerCommandRecord(raw.Data)
 	if err != nil {
 		return jetStreamPartitionTail{}, err
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -258,7 +259,7 @@ func (f commandPartitionListerFunc) ListCommandPartitions(ctx context.Context, l
 
 func testKafkaCommandLogRecord(t *testing.T, topic string, partition core.LogPartition, physicalPartition int32, physicalOffset int64, cid string) *kgo.Record {
 	t.Helper()
-	record, err := NewKafkaCommandRecord(topic, core.BrokerCommandRecord{
+	record, err := NewKafkaCommandRecord(topic, logmodel.BrokerCommandRecord{
 		Version:       1,
 		ActorID:       "usr_alice",
 		CID:           cid,

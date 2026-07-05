@@ -204,7 +204,7 @@ func TestMemoryBrokerCommandLogClientRequiresEnqueuedAtForExplicitReceipt(t *tes
 	ctx := context.Background()
 	client := NewMemoryBrokerCommandLogClient()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	_, err := client.AppendCommand(ctx, partition, BrokerCommandRecord{
+	_, err := client.AppendCommand(ctx, partition, logmodel.BrokerCommandRecord{
 		Version:       brokerCommandRecordVersion,
 		ActorID:       "usr_alice",
 		CID:           "cid-direct-missing-enqueued-at",
@@ -442,7 +442,7 @@ func TestHotPartitionReassignmentLetsNewOwnerDrainLag(t *testing.T) {
 }
 
 func TestDecodeBrokerCommandMessageRejectsMetadataMismatch(t *testing.T) {
-	record := BrokerCommandRecord{
+	record := logmodel.BrokerCommandRecord{
 		Version:       brokerCommandRecordVersion,
 		ActorID:       "usr_alice",
 		Command:       proto.CmdCreateThread,
@@ -452,11 +452,11 @@ func TestDecodeBrokerCommandMessageRejectsMetadataMismatch(t *testing.T) {
 		PartitionKey:  "general",
 		Offset:        7,
 	}
-	data, err := EncodeBrokerCommandRecord(record)
+	data, err := logmodel.EncodeBrokerCommandRecord(record)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	_, err = DecodeBrokerCommandMessage(BrokerCommandLogMessage{
+	_, err = logmodel.DecodeBrokerCommandMessage(logmodel.BrokerCommandLogMessage{
 		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:    8,
 		Data:      data,

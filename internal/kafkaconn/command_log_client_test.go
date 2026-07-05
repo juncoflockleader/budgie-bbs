@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -21,7 +22,7 @@ func TestFranzCommandLogClientAppendReturnsAssignedRecord(t *testing.T) {
 		produceResults: kgo.ProduceResults{{Record: produced}},
 	}
 	client := newFranzCommandLogClient(runtime, FranzCommandLogClientOptions{})
-	input, err := NewKafkaCommandRecord("budgie.commands", core.BrokerCommandRecord{
+	input, err := NewKafkaCommandRecord("budgie.commands", logmodel.BrokerCommandRecord{
 		Version:       1,
 		ActorID:       "usr_alice",
 		CID:           "cid-franz-produce",

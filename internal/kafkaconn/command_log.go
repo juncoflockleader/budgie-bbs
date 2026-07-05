@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -74,7 +75,7 @@ func (l *CommandLog) Produce(ctx context.Context, record core.CommandLogRecord) 
 	if strings.TrimSpace(record.CID) != "" && record.EnqueuedAt <= 0 {
 		return core.CommandLogRecord{}, fmt.Errorf("kafka command log: enqueue time is required when command receipt is set")
 	}
-	produce, err := NewKafkaCommandRecord(options.CommandTopic, core.BrokerCommandRecord{
+	produce, err := NewKafkaCommandRecord(options.CommandTopic, logmodel.BrokerCommandRecord{
 		Version:       1,
 		ActorID:       record.ActorID,
 		CID:           record.CID,

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -26,7 +27,7 @@ type kafkaCommandRecord struct {
 	PartitionKey  string            `json:"partitionKey"`
 }
 
-func NewKafkaCommandRecord(topic string, record core.BrokerCommandRecord) (*kgo.Record, error) {
+func NewKafkaCommandRecord(topic string, record logmodel.BrokerCommandRecord) (*kgo.Record, error) {
 	topic = strings.TrimSpace(topic)
 	if topic == "" {
 		topic = DefaultCommandTopic
@@ -63,36 +64,36 @@ func NewKafkaCommandRecord(topic string, record core.BrokerCommandRecord) (*kgo.
 	}, nil
 }
 
-func DecodeKafkaCommandRecord(record *kgo.Record) (core.BrokerCommandLogMessage, CommandSourcePosition, error) {
+func DecodeKafkaCommandRecord(record *kgo.Record) (logmodel.BrokerCommandLogMessage, CommandSourcePosition, error) {
 	if record == nil {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command log: nil record")
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command log: nil record")
 	}
 	if record.Offset < 0 {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command log: negative record offset %d", record.Offset)
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command log: negative record offset %d", record.Offset)
 	}
 	var wire kafkaCommandRecord
 	if err := json.Unmarshal(record.Value, &wire); err != nil {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, err
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, err
 	}
 	if wire.Version != kafkaCommandRecordVersion {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: unsupported version %d", wire.Version)
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: unsupported version %d", wire.Version)
 	}
 	if wire.Command == "" {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: missing command")
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: missing command")
 	}
 	if len(wire.Payload) == 0 || !json.Valid(wire.Payload) {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: invalid payload")
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: invalid payload")
 	}
 	if wire.EnqueuedAt <= 0 {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: missing enqueue time")
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command record: missing enqueue time")
 	}
 	partition := core.LogPartition{Kind: wire.PartitionKind, Key: wire.PartitionKey}.Normalize()
 	if len(record.Key) > 0 && string(record.Key) != LogicalPartitionKey(partition) {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command log: record key %q does not match partition %s/%s",
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, fmt.Errorf("kafka command log: record key %q does not match partition %s/%s",
 			string(record.Key), partition.Kind, partition.Key)
 	}
 	logicalOffset := record.Offset + 1
-	brokerRecord := core.BrokerCommandRecord{
+	brokerRecord := logmodel.BrokerCommandRecord{
 		Version:       1,
 		ActorID:       wire.ActorID,
 		CID:           wire.CID,
@@ -103,11 +104,11 @@ func DecodeKafkaCommandRecord(record *kgo.Record) (core.BrokerCommandLogMessage,
 		PartitionKey:  partition.Key,
 		Offset:        logicalOffset,
 	}
-	data, err := core.EncodeBrokerCommandRecord(brokerRecord)
+	data, err := logmodel.EncodeBrokerCommandRecord(brokerRecord)
 	if err != nil {
-		return core.BrokerCommandLogMessage{}, CommandSourcePosition{}, err
+		return logmodel.BrokerCommandLogMessage{}, CommandSourcePosition{}, err
 	}
-	message := core.BrokerCommandLogMessage{
+	message := logmodel.BrokerCommandLogMessage{
 		Partition: partition,
 		Offset:    logicalOffset,
 		StreamSeq: logicalOffset,
@@ -130,7 +131,7 @@ func DecodeKafkaCommandLogRecord(record *kgo.Record) (core.CommandLogRecord, Com
 	if err != nil {
 		return core.CommandLogRecord{}, CommandSourcePosition{}, err
 	}
-	command, err := core.DecodeBrokerCommandMessage(message)
+	command, err := logmodel.DecodeBrokerCommandMessage(message)
 	if err != nil {
 		return core.CommandLogRecord{}, CommandSourcePosition{}, err
 	}

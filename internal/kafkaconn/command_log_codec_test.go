@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestKafkaCommandRecordHydratesBudgieOffsetFromKafkaOffset(t *testing.T) {
 	partition := core.LogPartition{Kind: "board", Key: "general"}
-	produce, err := NewKafkaCommandRecord(DefaultCommandTopic, core.BrokerCommandRecord{
+	produce, err := NewKafkaCommandRecord(DefaultCommandTopic, logmodel.BrokerCommandRecord{
 		ActorID:       "usr_alice",
 		CID:           "cid-kafka-command",
 		Command:       proto.CmdCreateThread,
@@ -57,7 +58,7 @@ func TestKafkaCommandRecordHydratesBudgieOffsetFromKafkaOffset(t *testing.T) {
 	if err := command.SourcePosition.ValidateForRecord(command); err != nil {
 		t.Fatalf("source position ValidateForRecord: %v", err)
 	}
-	decoded, err := core.DecodeBrokerCommandMessage(message)
+	decoded, err := logmodel.DecodeBrokerCommandMessage(message)
 	if err != nil {
 		t.Fatalf("DecodeBrokerCommandMessage: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestKafkaCommandRecordHydratesBudgieOffsetFromKafkaOffset(t *testing.T) {
 
 func TestKafkaCommandRecordRejectsMismatchedKey(t *testing.T) {
 	partition := core.LogPartition{Kind: "board", Key: "general"}
-	produce, err := NewKafkaCommandRecord(DefaultCommandTopic, core.BrokerCommandRecord{
+	produce, err := NewKafkaCommandRecord(DefaultCommandTopic, logmodel.BrokerCommandRecord{
 		ActorID:       "usr_alice",
 		Command:       proto.CmdCreateThread,
 		Payload:       json.RawMessage(`{"board":"general","title":"Kafka command"}`),
@@ -85,7 +86,7 @@ func TestKafkaCommandRecordRejectsMismatchedKey(t *testing.T) {
 }
 
 func TestKafkaCommandRecordRejectsInvalidProduceRecord(t *testing.T) {
-	_, err := NewKafkaCommandRecord(DefaultCommandTopic, core.BrokerCommandRecord{
+	_, err := NewKafkaCommandRecord(DefaultCommandTopic, logmodel.BrokerCommandRecord{
 		Command:       proto.CmdCreateThread,
 		Payload:       json.RawMessage(`not-json`),
 		PartitionKind: "board",
