@@ -5,8 +5,6 @@ import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 type Board = projections.Board
 type BoardSettings = projections.BoardSettings
 type BoardSettingsPatch = projections.BoardSettingsPatch
-type BoardModerator = projections.BoardModerator
-type BoardModeratorTerm = projections.BoardModeratorTerm
 type BoardMember = projections.BoardMember
 type BoardMemberPatch = projections.BoardMemberPatch
 type BoardMemberApplication = projections.BoardMemberApplication

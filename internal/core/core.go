@@ -1976,7 +1976,7 @@ func (c *Core) ListBlessingRankings(limit, offset int) ([]projections.BlessingRa
 func (c *Core) ListBlessings(limit, offset int) ([]projections.Blessing, error) {
 	return projections.ListBlessings(c.DB, limit, offset)
 }
-func (c *Core) ListBoardModeratorTerms(boardID string, limit, offset int) ([]BoardModeratorTerm, error) {
+func (c *Core) ListBoardModeratorTerms(boardID string, limit, offset int) ([]projections.BoardModeratorTerm, error) {
 	return projections.ListBoardModeratorTerms(c.DB, boardID, limit, offset)
 }
 func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) ([]projections.ArchiveRanking, error) {
