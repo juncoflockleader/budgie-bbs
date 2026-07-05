@@ -505,7 +505,7 @@ func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName,
 		partition = defaultPartition()
 	}
 	logPartition := logPartitionFromEventPartition(partition)
-	bypassCommandLog := commandBypassesCommandLog(name)
+	bypassCommandLog := logmodel.CommandBypassesCommandLog(name)
 	if c != nil && c.commandLogAuthoritative != nil && !bypassCommandLog {
 		return c.enqueueAuthoritativeCommand(ctx, actor, name, payload, cid, logPartition)
 	}
@@ -516,30 +516,6 @@ func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName,
 		Kind: partition.Kind,
 		Key:  partition.Key,
 	})
-}
-
-func commandBypassesCommandLog(name proto.CommandName) bool {
-	switch name {
-	case proto.CmdSendChatLine,
-		proto.CmdMUDCommand,
-		proto.CmdSetPresence,
-		proto.CmdReactPost,
-		proto.CmdUnreactPost,
-		proto.CmdVotePoll,
-		proto.CmdMarkBoardRead,
-		proto.CmdRestoreBoardRead,
-		proto.CmdMarkFavoriteFolderRead,
-		proto.CmdRestoreFavoriteFolderRead,
-		proto.CmdMarkThreadRead,
-		proto.CmdRestoreThreadRead,
-		proto.CmdMarkPostRead,
-		proto.CmdSetThreadPref,
-		proto.CmdSubscribe,
-		proto.CmdUnsubscribe:
-		return true
-	default:
-		return false
-	}
 }
 
 func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition LogPartition) Reply {

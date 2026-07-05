@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -29,7 +30,7 @@ func TestNativeCommandDecisionCoversOrderedHandlerCommands(t *testing.T) {
 		if !ok {
 			t.Fatalf("handler route references %s, but proto command constant was not found", ident)
 		}
-		if commandBypassesCommandLog(name) {
+		if logmodel.CommandBypassesCommandLog(name) {
 			continue
 		}
 		if _, ok := native[ident]; !ok {
@@ -51,7 +52,7 @@ func TestNativeCommandDecisionUnsupportedCommandsBypassCommandLog(t *testing.T) 
 		if _, ok := native[ident]; ok {
 			continue
 		}
-		if commandBypassesCommandLog(name) {
+		if logmodel.CommandBypassesCommandLog(name) {
 			continue
 		}
 		missing = append(missing, fmt.Sprintf("%s (%s)", ident, name))

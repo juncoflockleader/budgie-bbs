@@ -61,3 +61,40 @@ func TestCommandPartitionMatchesAppendPostTargetRejectsWrongTargets(t *testing.T
 		})
 	}
 }
+
+func TestCommandBypassesCommandLogCoversUnorderedCommands(t *testing.T) {
+	for _, name := range []proto.CommandName{
+		proto.CmdSendChatLine,
+		proto.CmdSetPresence,
+		proto.CmdReactPost,
+		proto.CmdUnreactPost,
+		proto.CmdVotePoll,
+		proto.CmdMarkBoardRead,
+		proto.CmdRestoreBoardRead,
+		proto.CmdMarkFavoriteFolderRead,
+		proto.CmdRestoreFavoriteFolderRead,
+		proto.CmdMarkThreadRead,
+		proto.CmdRestoreThreadRead,
+		proto.CmdMarkPostRead,
+		proto.CmdSetThreadPref,
+		proto.CmdSubscribe,
+		proto.CmdUnsubscribe,
+	} {
+		if !CommandBypassesCommandLog(name) {
+			t.Fatalf("%s should bypass the command log", name)
+		}
+	}
+}
+
+func TestCommandBypassesCommandLogKeepsOrderedCommandsOnLog(t *testing.T) {
+	for _, name := range []proto.CommandName{
+		proto.CmdCreateThread,
+		proto.CmdAppendPost,
+		proto.CmdEditPost,
+		proto.CmdPublishStatsSnapshot,
+	} {
+		if CommandBypassesCommandLog(name) {
+			t.Fatalf("%s should stay on the command log", name)
+		}
+	}
+}

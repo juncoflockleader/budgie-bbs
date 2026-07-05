@@ -142,6 +142,30 @@ func HasCommandPartitionSpec(name proto.CommandName) bool {
 	return ok
 }
 
+func CommandBypassesCommandLog(name proto.CommandName) bool {
+	switch name {
+	case proto.CmdSendChatLine,
+		proto.CmdMUDCommand,
+		proto.CmdSetPresence,
+		proto.CmdReactPost,
+		proto.CmdUnreactPost,
+		proto.CmdVotePoll,
+		proto.CmdMarkBoardRead,
+		proto.CmdRestoreBoardRead,
+		proto.CmdMarkFavoriteFolderRead,
+		proto.CmdRestoreFavoriteFolderRead,
+		proto.CmdMarkThreadRead,
+		proto.CmdRestoreThreadRead,
+		proto.CmdMarkPostRead,
+		proto.CmdSetThreadPref,
+		proto.CmdSubscribe,
+		proto.CmdUnsubscribe:
+		return true
+	default:
+		return false
+	}
+}
+
 func fieldPartition(kind string, fields ...string) commandPartitionSpec {
 	return commandPartitionSpec{kind: kind, fields: fields}
 }

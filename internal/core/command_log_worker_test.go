@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -1868,7 +1869,7 @@ func TestCommandLogBypassCoversHighVolumeUnorderedCommands(t *testing.T) {
 		proto.CmdSubscribe,
 		proto.CmdUnsubscribe,
 	} {
-		if !commandBypassesCommandLog(name) {
+		if !logmodel.CommandBypassesCommandLog(name) {
 			t.Fatalf("%s should bypass the command log", name)
 		}
 	}
@@ -1878,7 +1879,7 @@ func TestCommandLogBypassCoversHighVolumeUnorderedCommands(t *testing.T) {
 		proto.CmdEditPost,
 		proto.CmdPublishStatsSnapshot,
 	} {
-		if commandBypassesCommandLog(name) {
+		if logmodel.CommandBypassesCommandLog(name) {
 			t.Fatalf("%s should stay on the command log", name)
 		}
 	}
