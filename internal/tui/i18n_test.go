@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
@@ -50,7 +50,7 @@ func TestTUITranslationFallback(t *testing.T) {
 
 func TestTUIChineseHeaderDoesNotWrap(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageMainMenu,
 		width:        40,
 		height:       20,

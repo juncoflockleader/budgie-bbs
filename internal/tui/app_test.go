@@ -73,7 +73,7 @@ func TestInsertPollTemplateWithExpires(t *testing.T) {
 func TestRebuildPostViewMarksPollPosts(t *testing.T) {
 	var m model
 	m.vp = viewport.New(80, 20)
-	m.posts = []core.Post{
+	m.posts = []projections.Post{
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "Thread body"},
 		{ID: "pst_2", Author: "bob", CreatedSeq: 2, Body: "Reply body"},
 	}
@@ -91,7 +91,7 @@ func TestRebuildPostViewMarksPollPosts(t *testing.T) {
 func TestRebuildPostViewNoPollMarkerForNoPollPost(t *testing.T) {
 	var m model
 	m.vp = viewport.New(80, 20)
-	m.posts = []core.Post{
+	m.posts = []projections.Post{
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "Plain body"},
 	}
 	m.postPolls = map[string]*projections.Poll{}
@@ -106,7 +106,7 @@ func TestRebuildPostViewNoPollMarkerForNoPollPost(t *testing.T) {
 func TestRebuildPostViewUsesOPAndReplyOrdinals(t *testing.T) {
 	var m model
 	m.vp = viewport.New(80, 20)
-	m.posts = []core.Post{
+	m.posts = []projections.Post{
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "First"},
 		{ID: "pst_2", Author: "bob", CreatedSeq: 2, Body: "Second"},
 	}
@@ -126,7 +126,7 @@ func TestRebuildPostViewUsesOPAndReplyOrdinals(t *testing.T) {
 func TestRebuildPostViewSeparatesMetadataBodyAndSignature(t *testing.T) {
 	var m model
 	m.vp = viewport.New(80, 20)
-	m.posts = []core.Post{
+	m.posts = []projections.Post{
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "Post body", Signature: "sig line"},
 	}
 	m.postPolls = map[string]*projections.Poll{}
@@ -166,9 +166,9 @@ func TestRebuildPostViewShowsTitleAuthorTimeAndMetadata(t *testing.T) {
 	m.width = 120
 	m.currentBoard = "tech"
 	m.boards = []projections.Board{{ID: "tech", Name: "Tech Board"}}
-	m.threads = []core.Thread{{ID: "thr_1", Title: "Welcome thread"}}
+	m.threads = []projections.Thread{{ID: "thr_1", Title: "Welcome thread"}}
 	m.authorNames = map[string]string{"alice": "Alicia"}
-	m.posts = []core.Post{
+	m.posts = []projections.Post{
 		{
 			ID:            "pst_1",
 			Thread:        "thr_1",
@@ -265,7 +265,7 @@ func TestHandlePostAppendedKeepsSignature(t *testing.T) {
 
 func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageMainMenu,
 		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
@@ -323,7 +323,7 @@ func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 
 func TestMainMenuExitItemQuits(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageMainMenu,
 		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
@@ -342,7 +342,7 @@ func TestMainMenuExitItemQuits(t *testing.T) {
 
 func TestStatusMessageRendersInTopHeader(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageMainMenu,
 		statusMsg:    "profile saved",
 		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
@@ -358,7 +358,7 @@ func TestStatusMessageRendersInTopHeader(t *testing.T) {
 
 func TestMainMenuProfileShortcutOpensProfileSettings(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageMainMenu,
 		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
@@ -482,7 +482,7 @@ func TestProfileSignatureEditSavesThroughCore(t *testing.T) {
 
 func TestMainMenuOnlineShortcutOpensOnlineUsers(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageMainMenu,
 		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
@@ -543,7 +543,7 @@ func TestOnlineUsersPageShowsPresenceRows(t *testing.T) {
 
 func TestBoardAndThreadListViewsShowKeyHints(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageBoardList,
 		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
 		supportsANSI: false,
@@ -565,7 +565,7 @@ func TestBoardAndThreadListViewsShowKeyHints(t *testing.T) {
 
 func TestBoardHeaderShowsBoardTitleInBoardAndThreadViews(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageThreadList,
 		currentBoard: "tech",
 		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
@@ -588,7 +588,7 @@ func TestBoardHeaderShowsBoardTitleInBoardAndThreadViews(t *testing.T) {
 
 	m.page = pageThread
 	m.vp = viewport.New(80, 10)
-	m.posts = []core.Post{{ID: "pst_1", Author: "alice", Body: "post content"}}
+	m.posts = []projections.Post{{ID: "pst_1", Author: "alice", Body: "post content"}}
 	m.postPolls = map[string]*projections.Poll{}
 	m.rebuildPostView()
 	threadView := m.View()
@@ -603,7 +603,7 @@ func TestBoardHeaderShowsBoardTitleInBoardAndThreadViews(t *testing.T) {
 
 func TestTopHeaderMergesSectionTitle(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageNotifications,
 		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
@@ -620,7 +620,7 @@ func TestTopHeaderMergesSectionTitle(t *testing.T) {
 
 func TestViewHeightFitsTerminal(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageMainMenu,
 		width:        48,
 		height:       10,
@@ -650,7 +650,7 @@ func TestChatViewKeepsInputWithinTerminalHeight(t *testing.T) {
 	ci.Focus()
 	ci.SetValue("hello")
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageChat,
 		width:        48,
 		height:       9,
@@ -671,10 +671,10 @@ func TestChatViewKeepsInputWithinTerminalHeight(t *testing.T) {
 
 func TestThreadListPrefixesThreadSerials(t *testing.T) {
 	m := model{
-		actor: &core.User{Name: "alice"},
+		actor: &projections.User{Name: "alice"},
 		page:  pageThreadList,
 		list:  list.New(nil, list.NewDefaultDelegate(), 80, 20),
-		threads: []core.Thread{
+		threads: []projections.Thread{
 			{ID: "thr_1", Title: "Welcome", Author: "alice", PostCount: 2},
 			{ID: "thr_2", Title: "Second", Author: "bob", PostCount: 1},
 		},
@@ -689,12 +689,12 @@ func TestThreadListPrefixesThreadSerials(t *testing.T) {
 
 func TestThreadListSerialsUsePageOffset(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageThreadList,
 		currentBoard: "general",
 		threadOffset: threadPageSize,
 		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
-		threads: []core.Thread{
+		threads: []projections.Thread{
 			{ID: "thr_51", Title: "Next page", Author: "alice", PostCount: 2},
 		},
 	}
@@ -711,12 +711,12 @@ func TestThreadListSerialsUsePageOffset(t *testing.T) {
 }
 
 func TestThreadListRefreshAndPaginationKeys(t *testing.T) {
-	threads := make([]core.Thread, threadPageSize)
+	threads := make([]projections.Thread, threadPageSize)
 	for i := range threads {
-		threads[i] = core.Thread{ID: fmt.Sprintf("thr_%d", i+1), Title: fmt.Sprintf("Thread %d", i+1)}
+		threads[i] = projections.Thread{ID: fmt.Sprintf("thr_%d", i+1), Title: fmt.Sprintf("Thread %d", i+1)}
 	}
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageThreadList,
 		currentBoard: "general",
 		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
@@ -756,7 +756,7 @@ func TestThreadListRefreshAndPaginationKeys(t *testing.T) {
 
 func TestThreadReaderUpDownOpenAdjacentThreads(t *testing.T) {
 	m := model{
-		actor:         &core.User{Name: "alice"},
+		actor:         &projections.User{Name: "alice"},
 		page:          pageThread,
 		currentBoard:  "general",
 		currentThread: "thr_2",
@@ -764,7 +764,7 @@ func TestThreadReaderUpDownOpenAdjacentThreads(t *testing.T) {
 		vp:            viewport.New(80, 20),
 		postPolls:     map[string]*projections.Poll{"pst_1": {ID: "poll_1"}},
 		selectedPost:  0,
-		threads: []core.Thread{
+		threads: []projections.Thread{
 			{ID: "thr_1", Title: "First"},
 			{ID: "thr_2", Title: "Second"},
 			{ID: "thr_3", Title: "Third"},
@@ -797,12 +797,12 @@ func TestThreadReaderUpDownOpenAdjacentThreads(t *testing.T) {
 
 func TestThreadReaderUpDownBoundaries(t *testing.T) {
 	m := model{
-		actor:         &core.User{Name: "alice"},
+		actor:         &projections.User{Name: "alice"},
 		page:          pageThread,
 		currentThread: "thr_1",
 		list:          list.New(nil, list.NewDefaultDelegate(), 80, 20),
 		vp:            viewport.New(80, 20),
-		threads: []core.Thread{
+		threads: []projections.Thread{
 			{ID: "thr_1", Title: "First"},
 		},
 	}
@@ -823,14 +823,14 @@ func TestThreadReaderUpDownBoundaries(t *testing.T) {
 
 func TestThreadReaderKeepsDedicatedScrollKeys(t *testing.T) {
 	m := model{
-		actor:         &core.User{Name: "alice"},
+		actor:         &projections.User{Name: "alice"},
 		page:          pageThread,
 		currentThread: "thr_1",
 		width:         80,
 		height:        12,
 		list:          list.New(nil, list.NewDefaultDelegate(), 80, 20),
 		vp:            viewport.New(80, 4),
-		threads: []core.Thread{
+		threads: []projections.Thread{
 			{ID: "thr_1", Title: "First"},
 			{ID: "thr_2", Title: "Second"},
 		},
@@ -885,7 +885,7 @@ func TestThreadReaderKeepsDedicatedScrollKeys(t *testing.T) {
 
 func TestLeftArrowFromBoardListReturnsToMainMenu(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageBoardList,
 		list:         list.New(nil, newBBSListDelegate(nil), 80, 20),
 		supportsANSI: false,
@@ -903,7 +903,7 @@ func TestLeftArrowFromBoardListReturnsToMainMenu(t *testing.T) {
 
 func TestChatPageAcceptsTextInput(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageChat,
 		vp:           viewport.New(80, 20),
 		chatInput:    textinput.New(),
@@ -924,14 +924,14 @@ func TestChatPageAcceptsTextInput(t *testing.T) {
 
 func TestRightArrowOpensBoardAndThreadListItems(t *testing.T) {
 	m := model{
-		actor: &core.User{Name: "alice"},
+		actor: &projections.User{Name: "alice"},
 		page:  pageBoardList,
 		list:  list.New(nil, list.NewDefaultDelegate(), 80, 20),
 		boards: []projections.Board{{
 			ID:   "general",
 			Name: "General",
 		}},
-		threads: []core.Thread{{
+		threads: []projections.Thread{{
 			ID:    "thr_1",
 			Board: "general",
 			Title: "Welcome",
@@ -947,7 +947,7 @@ func TestRightArrowOpensBoardAndThreadListItems(t *testing.T) {
 		t.Fatalf("expected current board general, got %q", m.currentBoard)
 	}
 
-	m.threads = []core.Thread{{
+	m.threads = []projections.Thread{{
 		ID:    "thr_1",
 		Board: "general",
 		Title: "Welcome",
@@ -964,7 +964,7 @@ func TestRightArrowOpensBoardAndThreadListItems(t *testing.T) {
 
 func TestPostSubmittedReturnsFromComposeToThread(t *testing.T) {
 	m := model{
-		actor:         &core.User{Name: "alice"},
+		actor:         &projections.User{Name: "alice"},
 		page:          pageCompose,
 		pageStack:     []page{pageThread},
 		vp:            viewport.New(80, 20),
@@ -989,7 +989,7 @@ func TestPostSubmittedReturnsFromComposeToThread(t *testing.T) {
 
 func TestThreadSubmittedReturnsFromComposeToNewThread(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageCompose,
 		pageStack:    []page{pageThreadList},
 		vp:           viewport.New(80, 20),
@@ -1016,7 +1016,7 @@ func TestThreadSubmittedReturnsFromComposeToNewThread(t *testing.T) {
 
 func TestThreadSubmittedPendingStaysOnThreadList(t *testing.T) {
 	m := model{
-		actor:        &core.User{Name: "alice"},
+		actor:        &projections.User{Name: "alice"},
 		page:         pageCompose,
 		pageStack:    []page{pageThreadList},
 		vp:           viewport.New(80, 20),
@@ -1051,7 +1051,7 @@ func TestSubmitNewThreadPendingAckDoesNotUseReceiptAsThread(t *testing.T) {
 
 	m := model{
 		c:            c,
-		actor:        &core.User{ID: "alice", Name: "alice"},
+		actor:        &projections.User{ID: "alice", Name: "alice"},
 		currentBoard: "general",
 		compose:      textarea.New(),
 		titleInput:   textinput.New(),
@@ -1096,7 +1096,7 @@ func TestPendingCommandMessagesUseQueuedStatus(t *testing.T) {
 
 func TestNewThreadTitleEnterFocusesBodyWithoutLeadingNewline(t *testing.T) {
 	m := model{
-		actor:              &core.User{Name: "alice"},
+		actor:              &projections.User{Name: "alice"},
 		page:               pageCompose,
 		vp:                 viewport.New(80, 20),
 		compose:            textarea.New(),

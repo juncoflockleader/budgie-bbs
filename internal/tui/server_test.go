@@ -12,6 +12,7 @@ import (
 
 	charmssh "github.com/charmbracelet/ssh"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -28,7 +29,7 @@ func TestPasswordAuthAuthenticatesUserAndRecordsLogin(t *testing.T) {
 		t.Fatalf("expected password auth to succeed")
 	}
 
-	got, _ := ctx.Value(userKey{}).(*core.User)
+	got, _ := ctx.Value(userKey{}).(*projections.User)
 	if got == nil || got.ID != user.ID || got.Name != "alice" {
 		t.Fatalf("expected authenticated alice in context, got %+v", got)
 	}
@@ -80,7 +81,7 @@ func TestUnknownPubkeyStillAllowsExplicitGuest(t *testing.T) {
 	if !srv.authPublicKey(ctx, key) {
 		t.Fatalf("expected unknown key for guest user to be accepted")
 	}
-	got, _ := ctx.Value(userKey{}).(*core.User)
+	got, _ := ctx.Value(userKey{}).(*projections.User)
 	if got == nil || got.ID != "guest" || got.Name != "guest" {
 		t.Fatalf("expected guest in context, got %+v", got)
 	}
