@@ -1,6 +1,9 @@
 package commandexec
 
-import "github.com/juncoflockleader/budgie-bbs/internal/proto"
+import (
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+)
 
 // EventPublisher is the publish-only event bus surface command execution needs.
 type EventPublisher interface {
@@ -13,7 +16,4 @@ type Reply struct {
 	Err    *proto.ErrorDetail
 }
 
-type Partition struct {
-	Kind string
-	Key  string
-}
+type Partition = logmodel.Partition

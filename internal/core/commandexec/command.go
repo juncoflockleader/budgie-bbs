@@ -7,10 +7,11 @@ import (
 	"hash/fnv"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-const GlobalPartition = "global"
+const GlobalPartition = logmodel.PartitionGlobal
 
 const (
 	partitionAdvisoryLockNamespace = "budgie:partition-writer:"
@@ -29,15 +30,8 @@ func NormalizePartition(partition Partition) Partition {
 }
 
 func NormalizePartitionFields(kind, key string) (string, string) {
-	kind = strings.TrimSpace(kind)
-	key = strings.TrimSpace(key)
-	if kind == "" {
-		kind = GlobalPartition
-	}
-	if key == "" {
-		key = GlobalPartition
-	}
-	return kind, key
+	partition := logmodel.Partition{Kind: strings.TrimSpace(kind), Key: strings.TrimSpace(key)}.Normalize()
+	return partition.Kind, partition.Key
 }
 
 func PartitionLaneIndex(partition Partition, lanes int) int {
