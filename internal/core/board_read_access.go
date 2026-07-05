@@ -56,6 +56,13 @@ func (c *Core) ActorCanReadBoardID(actor *projections.User, boardID string) (boo
 	return ActorCanReadBoard(actor, info), nil
 }
 
+// UserCanModerateBoard reports whether a user may moderate a board at all: site
+// moderators/admins always can, as can a board's moderators or members with a
+// post or thread moderation capability.
+func (c *Core) UserCanModerateBoard(userID, role, boardID string) (bool, error) {
+	return projections.ActorCanModerateBoardContent(c.DB, &projections.User{ID: userID, Role: role}, boardID)
+}
+
 // AuthorizedScopes filters a client-requested set of live-event subscription
 // scopes down to those the actor may receive. Event payloads carry real content
 // (post bodies, sanctions, notifications), so without this an authenticated user

@@ -178,3 +178,23 @@ func automodAccountAgeHours(db *sql.DB, userID string) float64 {
 	}
 	return float64(age) / 3_600_000.0
 }
+
+func (c *Core) ListModerationReviews(status string, limit, offset int) ([]projections.ModerationReview, error) {
+	return projections.ListModerationReviews(c.DB, status, limit, offset)
+}
+
+func (c *Core) ListContentFilters(scope string, includeInactive bool, limit, offset int) ([]projections.ContentFilter, error) {
+	return projections.ListContentFilters(c.DB, scope, includeInactive, limit, offset)
+}
+
+func (c *Core) ListBoardAutomodRules(boardID string) ([]projections.BoardAutomodRule, error) {
+	return projections.ListBoardAutomodRules(c.DB, boardID)
+}
+
+func (c *Core) ListBoardAutomodActivity(boardID string, limit, offset int) ([]projections.BoardAutomodActivity, error) {
+	return projections.ListBoardAutomodActivity(c.DB, boardID, limit, offset)
+}
+
+func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]projections.UserSanction, error) {
+	return projections.ListUserSanctions(c.DB, userID, limit, offset)
+}

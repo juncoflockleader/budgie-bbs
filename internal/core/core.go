@@ -1366,35 +1366,6 @@ func (c *Core) TrustInfo(userID string) (*projections.TrustLevelInfo, error) {
 	return projections.TrustInfo(c.DB, userID)
 }
 
-// --- Moderation projections ---
-
-func (c *Core) ListModerationReviews(status string, limit, offset int) ([]projections.ModerationReview, error) {
-	return projections.ListModerationReviews(c.DB, status, limit, offset)
-}
-
-func (c *Core) ListContentFilters(scope string, includeInactive bool, limit, offset int) ([]projections.ContentFilter, error) {
-	return projections.ListContentFilters(c.DB, scope, includeInactive, limit, offset)
-}
-
-func (c *Core) ListBoardAutomodRules(boardID string) ([]projections.BoardAutomodRule, error) {
-	return projections.ListBoardAutomodRules(c.DB, boardID)
-}
-
-func (c *Core) ListBoardAutomodActivity(boardID string, limit, offset int) ([]projections.BoardAutomodActivity, error) {
-	return projections.ListBoardAutomodActivity(c.DB, boardID, limit, offset)
-}
-
-// UserCanModerateBoard reports whether a user may moderate a board at all: site
-// moderators/admins always can, as can a board's moderators or members with a
-// post or thread moderation capability.
-func (c *Core) UserCanModerateBoard(userID, role, boardID string) (bool, error) {
-	return projections.ActorCanModerateBoardContent(c.DB, &projections.User{ID: userID, Role: role}, boardID)
-}
-
-func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]projections.UserSanction, error) {
-	return projections.ListUserSanctions(c.DB, userID, limit, offset)
-}
-
 // RebuildProjectionsFromEventLog truncates projection tables and replays all durable
 // events from the given sequence onward to rebuild event-derived state.
 func (c *Core) RebuildProjectionsFromEventLog(fromSeq int64) error {
