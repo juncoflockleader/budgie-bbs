@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	brokerEventRecordVersion = 1
+	brokerEventRecordVersion = logmodel.BrokerEventRecordVersion
 	brokerEventSubjectPrefix = "budgie.eventlog"
 )
 
@@ -213,48 +213,11 @@ func (s *BrokerEventStore) SeedEventPartitionOffset(ctx context.Context, partiti
 }
 
 func EncodeBrokerEventRecord(record BrokerEventRecord) ([]byte, error) {
-	if record.Version == 0 {
-		record.Version = brokerEventRecordVersion
-	}
-	if record.Version != brokerEventRecordVersion {
-		return nil, fmt.Errorf("broker event record: unsupported version %d", record.Version)
-	}
-	if record.Kind == "" {
-		return nil, fmt.Errorf("broker event record: missing event kind")
-	}
-	partition := LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
-	record.PartitionKind = partition.Kind
-	record.PartitionKey = partition.Key
-	if record.PartitionOffset <= 0 {
-		return nil, fmt.Errorf("broker event record: missing partition offset")
-	}
-	if len(record.Payload) == 0 {
-		return nil, fmt.Errorf("broker event record: missing payload")
-	}
-	return json.Marshal(record)
+	return logmodel.EncodeBrokerEventRecord(record)
 }
 
 func DecodeBrokerEventRecord(data []byte) (BrokerEventRecord, error) {
-	var record BrokerEventRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return BrokerEventRecord{}, err
-	}
-	if record.Version != brokerEventRecordVersion {
-		return BrokerEventRecord{}, fmt.Errorf("broker event record: unsupported version %d", record.Version)
-	}
-	if record.Kind == "" {
-		return BrokerEventRecord{}, fmt.Errorf("broker event record: missing event kind")
-	}
-	partition := LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
-	record.PartitionKind = partition.Kind
-	record.PartitionKey = partition.Key
-	if record.PartitionOffset <= 0 {
-		return BrokerEventRecord{}, fmt.Errorf("broker event record: missing partition offset")
-	}
-	if len(record.Payload) == 0 {
-		return BrokerEventRecord{}, fmt.Errorf("broker event record: missing payload")
-	}
-	return record, nil
+	return logmodel.DecodeBrokerEventRecord(data)
 }
 
 func DecodeBrokerEventMessage(msg BrokerEventLogMessage) (*proto.Event, error) {

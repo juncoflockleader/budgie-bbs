@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	brokerCommandRecordVersion = 1
+	brokerCommandRecordVersion = logmodel.BrokerCommandRecordVersion
 	brokerCommandSubjectPrefix = "budgie.commandlog"
 	brokerCommandCommitPrefix  = "budgie.commandcommit"
 )
@@ -142,54 +142,11 @@ func (l *BrokerCommandLog) ListCommandPartitionOffsets(ctx context.Context, limi
 }
 
 func EncodeBrokerCommandRecord(record BrokerCommandRecord) ([]byte, error) {
-	if record.Version == 0 {
-		record.Version = brokerCommandRecordVersion
-	}
-	if record.Version != brokerCommandRecordVersion {
-		return nil, fmt.Errorf("broker command record: unsupported version %d", record.Version)
-	}
-	if record.Command == "" {
-		return nil, fmt.Errorf("broker command record: missing command")
-	}
-	if len(record.Payload) == 0 || !json.Valid(record.Payload) {
-		return nil, fmt.Errorf("broker command record: invalid payload")
-	}
-	partition := LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
-	record.PartitionKind = partition.Kind
-	record.PartitionKey = partition.Key
-	if record.Offset <= 0 {
-		return nil, fmt.Errorf("broker command record: missing offset")
-	}
-	if record.EnqueuedAt <= 0 {
-		return nil, fmt.Errorf("broker command record: missing enqueue time")
-	}
-	return json.Marshal(record)
+	return logmodel.EncodeBrokerCommandRecord(record)
 }
 
 func DecodeBrokerCommandRecord(data []byte) (BrokerCommandRecord, error) {
-	var record BrokerCommandRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return BrokerCommandRecord{}, err
-	}
-	if record.Version != brokerCommandRecordVersion {
-		return BrokerCommandRecord{}, fmt.Errorf("broker command record: unsupported version %d", record.Version)
-	}
-	if record.Command == "" {
-		return BrokerCommandRecord{}, fmt.Errorf("broker command record: missing command")
-	}
-	if len(record.Payload) == 0 || !json.Valid(record.Payload) {
-		return BrokerCommandRecord{}, fmt.Errorf("broker command record: invalid payload")
-	}
-	partition := LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
-	record.PartitionKind = partition.Kind
-	record.PartitionKey = partition.Key
-	if record.Offset <= 0 {
-		return BrokerCommandRecord{}, fmt.Errorf("broker command record: missing offset")
-	}
-	if record.EnqueuedAt <= 0 {
-		return BrokerCommandRecord{}, fmt.Errorf("broker command record: missing enqueue time")
-	}
-	return record, nil
+	return logmodel.DecodeBrokerCommandRecord(data)
 }
 
 func DecodeBrokerCommandMessage(msg BrokerCommandLogMessage) (CommandLogRecord, error) {
