@@ -44,47 +44,6 @@ func TestSQLCommandLogPartitionIndexTracksProducedAndCommittedOffsets(t *testing
 	}
 }
 
-func TestCommandPartitionOffsetOrderingHelpers(t *testing.T) {
-	board := LogPartition{Kind: "board", Key: "general"}.Normalize()
-	meta := LogPartition{Kind: "board", Key: "meta"}.Normalize()
-	thread := LogPartition{Kind: "thread", Key: "thr_1"}.Normalize()
-	normalized := (CommandPartitionOffset{
-		Partition:       LogPartition{},
-		TailOffset:      -1,
-		CommittedOffset: 3,
-	}).Normalize()
-	if want := (CommandPartitionOffset{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}}); normalized != want {
-		t.Fatalf("CommandPartitionOffset.Normalize = %+v, want %+v", normalized, want)
-	}
-	if got := (CommandPartitionOffset{
-		Partition:       board,
-		TailOffset:      2,
-		CommittedOffset: 5,
-	}).Lag(); got != 0 {
-		t.Fatalf("CommandPartitionOffset.Lag over-committed = %d, want 0", got)
-	}
-	offsets := []CommandPartitionOffset{
-		{Partition: meta, TailOffset: 7, CommittedOffset: 7},
-		{Partition: thread, TailOffset: 3, CommittedOffset: 0},
-		{Partition: board, TailOffset: 5, CommittedOffset: 4},
-	}
-
-	partitions := CommandPartitionsByTailOffset(offsets, 2)
-	if want := []LogPartition{meta, board}; !reflect.DeepEqual(partitions, want) {
-		t.Fatalf("CommandPartitionsByTailOffset = %+v, want %+v", partitions, want)
-	}
-
-	SortCommandPartitionOffsetsByLag(offsets)
-	want := []CommandPartitionOffset{
-		{Partition: thread, TailOffset: 3, CommittedOffset: 0},
-		{Partition: board, TailOffset: 5, CommittedOffset: 4},
-		{Partition: meta, TailOffset: 7, CommittedOffset: 7},
-	}
-	if !reflect.DeepEqual(offsets, want) {
-		t.Fatalf("SortCommandPartitionOffsetsByLag = %+v, want %+v", offsets, want)
-	}
-}
-
 func TestListCommandPartitionOffsetsWithLimitReportsOverflowAndNormalizes(t *testing.T) {
 	ctx := context.Background()
 	board := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()

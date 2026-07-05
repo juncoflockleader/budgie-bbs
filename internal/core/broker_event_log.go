@@ -393,7 +393,7 @@ func (c *MemoryBrokerEventLogClient) ListEventPartitions(ctx context.Context, li
 	if err != nil {
 		return nil, err
 	}
-	return EventPartitionsByLastOffset(offsets, limit), nil
+	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
@@ -412,7 +412,7 @@ func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Conte
 			LastOffset: tail,
 		}.Normalize())
 	}
-	SortEventPartitionOffsetsByLastOffset(offsets)
+	logmodel.SortEventPartitionOffsetsByLastOffset(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

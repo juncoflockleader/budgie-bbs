@@ -324,7 +324,7 @@ func (c *JetStreamEventLogClient) ListEventPartitions(ctx context.Context, limit
 			}.Normalize())
 		}
 	}
-	return core.EventPartitionsByLastOffset(offsets, limit), nil
+	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]core.EventPartitionOffset, error) {
@@ -350,7 +350,7 @@ func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context,
 			LastOffset: tail.logicalOffset,
 		}.Normalize())
 	}
-	core.SortEventPartitionOffsetsByLastOffset(offsets)
+	logmodel.SortEventPartitionOffsetsByLastOffset(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

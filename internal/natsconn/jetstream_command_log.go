@@ -291,7 +291,7 @@ func (c *JetStreamCommandLogClient) ListCommandPartitions(ctx context.Context, l
 			TailOffset: int64(count),
 		})
 	}
-	return core.CommandPartitionsByTailOffset(offsets, limit), nil
+	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]core.CommandPartitionOffset, error) {
@@ -358,7 +358,7 @@ func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Cont
 			CommittedOffset: commitTail.logicalOffset,
 		})
 	}
-	core.SortCommandPartitionOffsetsByLag(offsets)
+	logmodel.SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

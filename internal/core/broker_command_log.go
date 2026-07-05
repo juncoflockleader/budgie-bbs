@@ -311,7 +311,7 @@ func (c *MemoryBrokerCommandLogClient) ListCommandPartitions(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	return CommandPartitionsByTailOffset(offsets, limit), nil
+	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
@@ -332,7 +332,7 @@ func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.C
 			CommittedOffset: c.committed[partition],
 		})
 	}
-	SortCommandPartitionOffsetsByLag(offsets)
+	logmodel.SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

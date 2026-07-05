@@ -84,7 +84,7 @@ func (s *SQLEventStore) ListEventPartitions(ctx context.Context, limit int) ([]L
 	if err != nil {
 		return nil, err
 	}
-	return EventPartitionsByLastOffset(offsets, limit), nil
+	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (s *SQLEventStore) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
@@ -123,7 +123,7 @@ func (s *SQLEventStore) ListEventPartitionOffsets(ctx context.Context, limit int
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	SortEventPartitionOffsetsByLastOffset(offsets)
+	logmodel.SortEventPartitionOffsetsByLastOffset(offsets)
 	return offsets, nil
 }
 
@@ -850,7 +850,7 @@ func (s *MemoryEventStore) ListEventPartitions(ctx context.Context, limit int) (
 			LastOffset: offset,
 		}.Normalize())
 	}
-	return EventPartitionsByLastOffset(offsets, limit), nil
+	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 // MemoryCommandLog is a deterministic in-process CommandLog for tests and
@@ -966,7 +966,7 @@ func (l *MemoryCommandLog) ListCommandPartitions(ctx context.Context, limit int)
 	if err != nil {
 		return nil, err
 	}
-	return CommandPartitionsByTailOffset(offsets, limit), nil
+	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (l *MemoryCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
@@ -991,7 +991,7 @@ func (l *MemoryCommandLog) ListCommandPartitionOffsets(ctx context.Context, limi
 			CommittedOffset: l.committed[partition],
 		})
 	}
-	SortCommandPartitionOffsetsByLag(offsets)
+	logmodel.SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

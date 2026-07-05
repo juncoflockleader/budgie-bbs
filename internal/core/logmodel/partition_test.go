@@ -36,6 +36,80 @@ func TestLaggingCommandPartitionOffsetsNormalizesAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestCommandPartitionOffsetOrderingHelpers(t *testing.T) {
+	board := Partition{Kind: PartitionBoard, Key: "general"}.Normalize()
+	meta := Partition{Kind: PartitionBoard, Key: "meta"}.Normalize()
+	thread := Partition{Kind: PartitionThread, Key: "thr_1"}.Normalize()
+	normalized := (CommandPartitionOffset{
+		Partition:       Partition{},
+		TailOffset:      -1,
+		CommittedOffset: 3,
+	}).Normalize()
+	if want := (CommandPartitionOffset{Partition: Partition{Kind: PartitionGlobal, Key: PartitionGlobal}}); normalized != want {
+		t.Fatalf("CommandPartitionOffset.Normalize = %+v, want %+v", normalized, want)
+	}
+	if got := (CommandPartitionOffset{
+		Partition:       board,
+		TailOffset:      2,
+		CommittedOffset: 5,
+	}).Lag(); got != 0 {
+		t.Fatalf("CommandPartitionOffset.Lag over-committed = %d, want 0", got)
+	}
+	offsets := []CommandPartitionOffset{
+		{Partition: meta, TailOffset: 7, CommittedOffset: 7},
+		{Partition: thread, TailOffset: 3, CommittedOffset: 0},
+		{Partition: board, TailOffset: 5, CommittedOffset: 4},
+	}
+
+	partitions := CommandPartitionsByTailOffset(offsets, 2)
+	if want := []Partition{meta, board}; !reflect.DeepEqual(partitions, want) {
+		t.Fatalf("CommandPartitionsByTailOffset = %+v, want %+v", partitions, want)
+	}
+
+	SortCommandPartitionOffsetsByLag(offsets)
+	want := []CommandPartitionOffset{
+		{Partition: thread, TailOffset: 3, CommittedOffset: 0},
+		{Partition: board, TailOffset: 5, CommittedOffset: 4},
+		{Partition: meta, TailOffset: 7, CommittedOffset: 7},
+	}
+	if !reflect.DeepEqual(offsets, want) {
+		t.Fatalf("SortCommandPartitionOffsetsByLag = %+v, want %+v", offsets, want)
+	}
+}
+
+func TestEventPartitionOffsetOrderingHelpers(t *testing.T) {
+	general := Partition{Kind: PartitionBoard, Key: "general"}.Normalize()
+	life := Partition{Kind: PartitionBoard, Key: "life"}.Normalize()
+	user := Partition{Kind: PartitionUser, Key: "usr_1"}.Normalize()
+	normalized := (EventPartitionOffset{
+		Partition:  Partition{},
+		LastOffset: -2,
+	}).Normalize()
+	if want := (EventPartitionOffset{Partition: Partition{Kind: PartitionGlobal, Key: PartitionGlobal}}); normalized != want {
+		t.Fatalf("EventPartitionOffset.Normalize = %+v, want %+v", normalized, want)
+	}
+
+	offsets := []EventPartitionOffset{
+		{Partition: life, LastOffset: 2},
+		{Partition: user, LastOffset: 7},
+		{Partition: general, LastOffset: 7},
+	}
+	partitions := EventPartitionsByLastOffset(offsets, 2)
+	if want := []Partition{general, user}; !reflect.DeepEqual(partitions, want) {
+		t.Fatalf("EventPartitionsByLastOffset = %+v, want %+v", partitions, want)
+	}
+
+	SortEventPartitionOffsetsByLastOffset(offsets)
+	want := []EventPartitionOffset{
+		{Partition: general, LastOffset: 7},
+		{Partition: user, LastOffset: 7},
+		{Partition: life, LastOffset: 2},
+	}
+	if !reflect.DeepEqual(offsets, want) {
+		t.Fatalf("SortEventPartitionOffsetsByLastOffset = %+v, want %+v", offsets, want)
+	}
+}
+
 func TestEventProjectionTargetOffsets(t *testing.T) {
 	global := Partition{Kind: PartitionGlobal, Key: PartitionGlobal}.Normalize()
 	board := Partition{Kind: PartitionBoard, Key: "board-a"}.Normalize()

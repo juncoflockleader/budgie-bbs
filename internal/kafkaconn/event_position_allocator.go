@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 const brokerEventScalarOffsetID = "broker_event_log"
@@ -145,7 +146,7 @@ func (a *SQLEventPositionAllocator) ListEventPartitions(ctx context.Context, lim
 	if err != nil {
 		return nil, err
 	}
-	return core.EventPartitionsByLastOffset(offsets, limit), nil
+	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
 func (a *SQLEventPositionAllocator) ListEventPartitionOffsets(ctx context.Context, limit int) ([]core.EventPartitionOffset, error) {
@@ -185,7 +186,7 @@ func (a *SQLEventPositionAllocator) ListEventPartitionOffsets(ctx context.Contex
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	core.SortEventPartitionOffsetsByLastOffset(offsets)
+	logmodel.SortEventPartitionOffsetsByLastOffset(offsets)
 	return offsets, nil
 }
 

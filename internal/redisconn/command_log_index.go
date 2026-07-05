@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 const redisCommandLogMaxScript = `
@@ -55,7 +56,7 @@ func (i *CommandLogPartitionIndex) ListCommandPartitions(ctx context.Context, li
 	if err != nil {
 		return nil, err
 	}
-	return core.CommandPartitionsByTailOffset(offsets, limit), nil
+	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (i *CommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]core.CommandPartitionOffset, error) {
@@ -85,7 +86,7 @@ func (i *CommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Conte
 			CommittedOffset: commits[partition],
 		}.Normalize())
 	}
-	core.SortCommandPartitionOffsetsByLag(offsets)
+	logmodel.SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

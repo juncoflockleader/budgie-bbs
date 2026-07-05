@@ -521,39 +521,6 @@ func TestEventStorePartitionListersOrderHotPartitions(t *testing.T) {
 	}
 }
 
-func TestEventPartitionOffsetOrderingHelpers(t *testing.T) {
-	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
-	life := LogPartition{Kind: partitionBoard, Key: "life"}.Normalize()
-	user := LogPartition{Kind: partitionUser, Key: "usr_1"}.Normalize()
-	normalized := (EventPartitionOffset{
-		Partition:  LogPartition{},
-		LastOffset: -2,
-	}).Normalize()
-	if want := (EventPartitionOffset{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}}); normalized != want {
-		t.Fatalf("EventPartitionOffset.Normalize = %+v, want %+v", normalized, want)
-	}
-
-	offsets := []EventPartitionOffset{
-		{Partition: life, LastOffset: 2},
-		{Partition: user, LastOffset: 7},
-		{Partition: general, LastOffset: 7},
-	}
-	partitions := EventPartitionsByLastOffset(offsets, 2)
-	if want := []LogPartition{general, user}; !reflect.DeepEqual(partitions, want) {
-		t.Fatalf("EventPartitionsByLastOffset = %+v, want %+v", partitions, want)
-	}
-
-	SortEventPartitionOffsetsByLastOffset(offsets)
-	want := []EventPartitionOffset{
-		{Partition: general, LastOffset: 7},
-		{Partition: user, LastOffset: 7},
-		{Partition: life, LastOffset: 2},
-	}
-	if !reflect.DeepEqual(offsets, want) {
-		t.Fatalf("SortEventPartitionOffsetsByLastOffset = %+v, want %+v", offsets, want)
-	}
-}
-
 func TestListEventPartitionOffsetsReportsLimitAndNormalizes(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryBrokerEventLogClient()

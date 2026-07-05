@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 type memoryCommandLogPartitionIndex struct {
@@ -50,7 +51,7 @@ func (i *memoryCommandLogPartitionIndex) ListCommandPartitions(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	return core.CommandPartitionsByTailOffset(offsets, limit), nil
+	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
 func (i *memoryCommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]core.CommandPartitionOffset, error) {
@@ -70,7 +71,7 @@ func (i *memoryCommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context
 			CommittedOffset: i.committed[partition.Normalize()],
 		}.Normalize())
 	}
-	core.SortCommandPartitionOffsetsByLag(offsets)
+	logmodel.SortCommandPartitionOffsetsByLag(offsets)
 	if limit > 0 && len(offsets) > limit {
 		offsets = offsets[:limit]
 	}

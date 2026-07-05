@@ -366,7 +366,7 @@ SELECT partition_kind,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	SortCommandPartitionOffsetsByLag(offsets)
+	logmodel.SortCommandPartitionOffsetsByLag(offsets)
 	return offsets, nil
 }
 
