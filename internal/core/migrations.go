@@ -3,6 +3,8 @@ package core
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 )
 
 // Migration is a backend storage migration descriptor. SQLite uses executable
@@ -1055,7 +1057,7 @@ func seedSQLitePostReactionCountShards(db *sql.DB) error {
 			 ON CONFLICT(post_id, shard)
 			 DO UPDATE SET count_value=post_reaction_count_shards.count_value+1,
 			               updated_at=excluded.updated_at`,
-			postID, counterShardForIdentity(userID), ts,
+			postID, counterstore.ShardForIdentity(userID), ts,
 		); err != nil {
 			return fmt.Errorf("seed post reaction shard %s/%s: %w", postID, userID, err)
 		}
@@ -1097,7 +1099,7 @@ func seedSQLitePollVoteCountShards(db *sql.DB) error {
 			 ON CONFLICT(option_id, shard)
 			 DO UPDATE SET count_value=poll_vote_count_shards.count_value+1,
 			               updated_at=excluded.updated_at`,
-			pollID, optionID, counterShardForIdentity(userID), 1, ts,
+			pollID, optionID, counterstore.ShardForIdentity(userID), 1, ts,
 		); err != nil {
 			return fmt.Errorf("seed poll vote shard %s/%s/%s: %w", pollID, optionID, userID, err)
 		}
@@ -1106,17 +1108,6 @@ func seedSQLitePollVoteCountShards(db *sql.DB) error {
 		return fmt.Errorf("iterate poll vote shard seed: %w", err)
 	}
 	return nil
-}
-
-func counterShardForIdentity(identity string) int {
-	if identity == "" {
-		return 0
-	}
-	var sum int
-	for i := 0; i < len(identity); i++ {
-		sum += int(identity[i])
-	}
-	return sum % 64
 }
 
 func ensureColumn(db *sql.DB, table, name, columnDDL string) error {

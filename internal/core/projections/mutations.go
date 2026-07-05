@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -3733,14 +3734,7 @@ func decrementPollVoteCountShard(tx *sql.Tx, pollID, optionID, userID string) er
 
 // CounterShardForIdentity maps an identity key to a stable unordered-counter shard.
 func CounterShardForIdentity(identity string) int {
-	if identity == "" {
-		return 0
-	}
-	var sum int
-	for i := 0; i < len(identity); i++ {
-		sum += int(identity[i])
-	}
-	return sum % 64
+	return counterstore.ShardForIdentity(identity)
 }
 
 func InsertNotification(db sqlLike, id, userID, kind, threadID, postID, actor string, ts int64) error {

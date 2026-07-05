@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"sync"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 )
 
 const defaultMemoryCounterStoreShards = 64
@@ -155,7 +155,7 @@ func (s *MemoryCounterStore) BeginMutation() (CounterMutation, error) {
 }
 
 func (s *MemoryCounterStore) shardForIdentity(identity string) *memoryCounterShard {
-	shard := projections.CounterShardForIdentity(identity)
+	shard := counterstore.ShardForIdentity(identity)
 	if len(s.shards) > 0 {
 		shard %= len(s.shards)
 	}

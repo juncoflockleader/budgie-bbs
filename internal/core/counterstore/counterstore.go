@@ -43,3 +43,15 @@ type Mutation interface {
 	Commit() error
 	Rollback() error
 }
+
+// ShardForIdentity maps an identity key to a stable unordered-counter shard.
+func ShardForIdentity(identity string) int {
+	if identity == "" {
+		return 0
+	}
+	var sum int
+	for i := 0; i < len(identity); i++ {
+		sum += int(identity[i])
+	}
+	return sum % 64
+}
