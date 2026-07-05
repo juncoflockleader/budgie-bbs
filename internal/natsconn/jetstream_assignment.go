@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	nats "github.com/nats-io/nats.go"
 )
 
@@ -142,7 +142,7 @@ func (a *JetStreamCommandPartitionAssigner) SetMembers(ctx context.Context, memb
 	if a == nil || a.kv == nil {
 		return 0, fmt.Errorf("nats command assignment: nil assigner")
 	}
-	members = normalizeCommandAssignmentMembers(members)
+	members = logmodel.NormalizeCommandPartitionAssignmentMembers(members)
 	if len(members) == 0 {
 		return 0, fmt.Errorf("nats command assignment: empty member list")
 	}
@@ -175,7 +175,7 @@ func (a *JetStreamCommandPartitionAssigner) SetMembers(ctx context.Context, memb
 			return record.Generation, nil
 		}
 		record.Members = members
-		record.Overrides = encodeCommandAssignmentOverrides(normalizeCommandAssignmentOverrides(decodeCommandAssignmentOverrides(record.Overrides), record.Members))
+		record.Overrides = encodeCommandAssignmentOverrides(logmodel.NormalizeCommandPartitionAssignmentOverrides(decodeCommandAssignmentOverrides(record.Overrides), record.Members))
 		record.Generation++
 		if record.Generation <= 0 {
 			record.Generation = 1
@@ -273,11 +273,11 @@ func encodeCommandAssignmentRecord(record commandAssignmentRecord) ([]byte, erro
 	if record.Group == "" {
 		return nil, fmt.Errorf("nats command assignment: missing group")
 	}
-	record.Members = normalizeCommandAssignmentMembers(record.Members)
+	record.Members = logmodel.NormalizeCommandPartitionAssignmentMembers(record.Members)
 	if len(record.Members) == 0 {
 		return nil, fmt.Errorf("nats command assignment: missing members")
 	}
-	record.Overrides = encodeCommandAssignmentOverrides(normalizeCommandAssignmentOverrides(decodeCommandAssignmentOverrides(record.Overrides), record.Members))
+	record.Overrides = encodeCommandAssignmentOverrides(logmodel.NormalizeCommandPartitionAssignmentOverrides(decodeCommandAssignmentOverrides(record.Overrides), record.Members))
 	if record.Generation <= 0 {
 		return nil, fmt.Errorf("nats command assignment: missing generation")
 	}
@@ -299,7 +299,7 @@ func decodeCommandAssignmentRecord(data []byte) (commandAssignmentRecord, error)
 	if record.Group == "" {
 		return commandAssignmentRecord{}, fmt.Errorf("nats command assignment: missing group")
 	}
-	record.Members = normalizeCommandAssignmentMembers(record.Members)
+	record.Members = logmodel.NormalizeCommandPartitionAssignmentMembers(record.Members)
 	if len(record.Members) == 0 {
 		return commandAssignmentRecord{}, fmt.Errorf("nats command assignment: missing members")
 	}
@@ -314,32 +314,9 @@ func decodeCommandAssignmentRecord(data []byte) (commandAssignmentRecord, error)
 	return record, nil
 }
 
-func normalizeCommandAssignmentOverrides(overrides map[core.LogPartition]string, members []string) map[core.LogPartition]string {
-	memberSet := map[string]bool{}
-	for _, member := range normalizeCommandAssignmentMembers(members) {
-		memberSet[member] = true
-	}
-	out := map[core.LogPartition]string{}
-	for partition, ownerID := range overrides {
-		partition = partition.Normalize()
-		ownerID = strings.TrimSpace(ownerID)
-		if partition.Kind == "" || partition.Key == "" || ownerID == "" {
-			continue
-		}
-		if len(memberSet) > 0 && !memberSet[ownerID] {
-			continue
-		}
-		out[partition] = ownerID
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 func validateCommandAssignmentOverrides(overrides map[core.LogPartition]string, members []string) (map[core.LogPartition]string, error) {
 	memberSet := map[string]bool{}
-	for _, member := range normalizeCommandAssignmentMembers(members) {
+	for _, member := range logmodel.NormalizeCommandPartitionAssignmentMembers(members) {
 		memberSet[member] = true
 	}
 	out := map[core.LogPartition]string{}
@@ -388,7 +365,7 @@ func decodeCommandAssignmentOverrides(raw map[string]string) map[core.LogPartiti
 	if len(out) == 0 {
 		return nil
 	}
-	return out
+	return logmodel.NormalizeCommandPartitionAssignmentOwners(out)
 }
 
 func decodeCommandAssignmentOverridesStrict(raw map[string]string, members []string) (map[core.LogPartition]string, error) {
@@ -396,7 +373,7 @@ func decodeCommandAssignmentOverridesStrict(raw map[string]string, members []str
 		return nil, nil
 	}
 	memberSet := map[string]bool{}
-	for _, member := range normalizeCommandAssignmentMembers(members) {
+	for _, member := range logmodel.NormalizeCommandPartitionAssignmentMembers(members) {
 		memberSet[member] = true
 	}
 	out := map[core.LogPartition]string{}
@@ -431,21 +408,6 @@ func parseCommandAssignmentPartitionKey(raw string) (core.LogPartition, bool) {
 		return core.LogPartition{}, false
 	}
 	return core.LogPartition{Kind: strings.TrimSpace(kind), Key: strings.TrimSpace(key)}.Normalize(), true
-}
-
-func normalizeCommandAssignmentMembers(members []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(members))
-	for _, member := range members {
-		member = strings.TrimSpace(member)
-		if member == "" || seen[member] {
-			continue
-		}
-		seen[member] = true
-		out = append(out, member)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func commandAssignmentGroupKey(group string) string {
