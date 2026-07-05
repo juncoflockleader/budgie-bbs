@@ -2,12 +2,11 @@ package core
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -316,44 +315,15 @@ func eventAppendTS(ts int64) int64 {
 }
 
 func BrokerEventSubject(partition LogPartition) string {
-	partition = partition.Normalize()
-	return brokerEventSubjectPrefix + "." + encodeBrokerSubjectToken(partition.Kind) + "." + encodeBrokerSubjectToken(partition.Key)
+	return logmodel.BrokerSubject(brokerEventSubjectPrefix, partition)
 }
 
 func BrokerEventSubjectWildcard() string {
-	return brokerEventSubjectPrefix + ".>"
+	return logmodel.BrokerSubjectWildcard(brokerEventSubjectPrefix)
 }
 
 func ParseBrokerEventSubject(subject string) (LogPartition, bool) {
-	rest, ok := strings.CutPrefix(subject, brokerEventSubjectPrefix+".")
-	if !ok {
-		return LogPartition{}, false
-	}
-	parts := strings.Split(rest, ".")
-	if len(parts) != 2 {
-		return LogPartition{}, false
-	}
-	kind, err := decodeBrokerSubjectToken(parts[0])
-	if err != nil {
-		return LogPartition{}, false
-	}
-	key, err := decodeBrokerSubjectToken(parts[1])
-	if err != nil {
-		return LogPartition{}, false
-	}
-	return LogPartition{Kind: kind, Key: key}.Normalize(), true
-}
-
-func encodeBrokerSubjectToken(value string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(value))
-}
-
-func decodeBrokerSubjectToken(value string) (string, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
+	return logmodel.ParseBrokerSubject(brokerEventSubjectPrefix, subject)
 }
 
 // MemoryBrokerEventLogClient is a broker-shaped reference implementation for

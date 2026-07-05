@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -228,61 +229,27 @@ func DecodeBrokerCommandMessage(msg BrokerCommandLogMessage) (CommandLogRecord, 
 }
 
 func BrokerCommandSubject(partition LogPartition) string {
-	partition = partition.Normalize()
-	return brokerCommandSubjectPrefix + "." + encodeBrokerSubjectToken(partition.Kind) + "." + encodeBrokerSubjectToken(partition.Key)
+	return logmodel.BrokerSubject(brokerCommandSubjectPrefix, partition)
 }
 
 func BrokerCommandSubjectWildcard() string {
-	return brokerCommandSubjectPrefix + ".>"
+	return logmodel.BrokerSubjectWildcard(brokerCommandSubjectPrefix)
 }
 
 func ParseBrokerCommandSubject(subject string) (LogPartition, bool) {
-	rest, ok := strings.CutPrefix(subject, brokerCommandSubjectPrefix+".")
-	if !ok {
-		return LogPartition{}, false
-	}
-	parts := strings.Split(rest, ".")
-	if len(parts) != 2 {
-		return LogPartition{}, false
-	}
-	kind, err := decodeBrokerSubjectToken(parts[0])
-	if err != nil {
-		return LogPartition{}, false
-	}
-	key, err := decodeBrokerSubjectToken(parts[1])
-	if err != nil {
-		return LogPartition{}, false
-	}
-	return LogPartition{Kind: kind, Key: key}.Normalize(), true
+	return logmodel.ParseBrokerSubject(brokerCommandSubjectPrefix, subject)
 }
 
 func BrokerCommandCommitSubject(partition LogPartition) string {
-	partition = partition.Normalize()
-	return brokerCommandCommitPrefix + "." + encodeBrokerSubjectToken(partition.Kind) + "." + encodeBrokerSubjectToken(partition.Key)
+	return logmodel.BrokerSubject(brokerCommandCommitPrefix, partition)
 }
 
 func BrokerCommandCommitSubjectWildcard() string {
-	return brokerCommandCommitPrefix + ".>"
+	return logmodel.BrokerSubjectWildcard(brokerCommandCommitPrefix)
 }
 
 func ParseBrokerCommandCommitSubject(subject string) (LogPartition, bool) {
-	rest, ok := strings.CutPrefix(subject, brokerCommandCommitPrefix+".")
-	if !ok {
-		return LogPartition{}, false
-	}
-	parts := strings.Split(rest, ".")
-	if len(parts) != 2 {
-		return LogPartition{}, false
-	}
-	kind, err := decodeBrokerSubjectToken(parts[0])
-	if err != nil {
-		return LogPartition{}, false
-	}
-	key, err := decodeBrokerSubjectToken(parts[1])
-	if err != nil {
-		return LogPartition{}, false
-	}
-	return LogPartition{Kind: kind, Key: key}.Normalize(), true
+	return logmodel.ParseBrokerSubject(brokerCommandCommitPrefix, subject)
 }
 
 // MemoryBrokerCommandLogClient is a broker-shaped command log for tests and
@@ -500,8 +467,8 @@ func BrokerCommandMessageID(partition LogPartition, actorID, cid string) string 
 		return ""
 	}
 	return brokerCommandSubjectPrefix +
-		".id." + encodeBrokerSubjectToken(key.Partition.Kind) +
-		"." + encodeBrokerSubjectToken(key.Partition.Key) +
-		"." + encodeBrokerSubjectToken(key.ActorID) +
-		"." + encodeBrokerSubjectToken(key.CID)
+		".id." + logmodel.EncodeSubjectToken(key.Partition.Kind) +
+		"." + logmodel.EncodeSubjectToken(key.Partition.Key) +
+		"." + logmodel.EncodeSubjectToken(key.ActorID) +
+		"." + logmodel.EncodeSubjectToken(key.CID)
 }
