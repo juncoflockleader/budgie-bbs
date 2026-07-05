@@ -1,33 +1,16 @@
 package core
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/totp"
 )
-
-// randomIndex returns a uniform random index in [0, n) using rejection sampling,
-// avoiding the modulo bias of `byte % n` when n does not divide 256.
-func randomIndex(n int) (int, error) {
-	if n <= 0 {
-		return 0, fmt.Errorf("randomIndex: range must be positive")
-	}
-	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
-	if err != nil {
-		return 0, err
-	}
-	return int(v.Int64()), nil
-}
 
 var (
 	// ErrTwoFactorNotEnrolled is returned when a 2FA action needs an enrollment
@@ -42,26 +25,10 @@ var (
 
 const (
 	outboxEmail2FACode = "email.2fa"
-	email2FACodeTTL    = 10 * time.Minute
-	totpIssuer         = "BudgieBBS"
 )
 
-// SecuritySettings holds site-wide security policy.
-type SecuritySettings struct {
-	Staff2FARequired bool  `json:"staff2faRequired"`
-	UpdatedAt        int64 `json:"updatedAt"`
-}
-
-// TwoFactorStatus reports a user's 2FA enrollment.
-type TwoFactorStatus struct {
-	TOTPEnrolled         bool `json:"totpEnrolled"`
-	EmailEnrolled        bool `json:"emailEnrolled"`
-	BackupCodesRemaining int  `json:"backupCodesRemaining"`
-}
-
-// Enrolled reports whether any second factor is set up. Backup codes are a
-// fallback for an enrolled method, not an independent enrollment.
-func (s TwoFactorStatus) Enrolled() bool { return s.TOTPEnrolled || s.EmailEnrolled }
+type SecuritySettings = accountmodel.SecuritySettings
+type TwoFactorStatus = accountmodel.TwoFactorStatus
 
 // SecuritySettings returns the site security settings (zero value if unset).
 func (c *Core) SecuritySettings() (*SecuritySettings, error) {
@@ -120,7 +87,7 @@ func (c *Core) BeginTOTPEnrollment(userID, accountName string) (secret, uri stri
 		userID, secret, nowMS()); err != nil {
 		return "", "", err
 	}
-	return secret, totp.OTPAuthURI(totpIssuer, accountName, secret), nil
+	return secret, totp.OTPAuthURI(accountmodel.TOTPIssuer, accountName, secret), nil
 }
 
 // ConfirmTOTPEnrollment activates a pending TOTP secret once the user proves
@@ -171,11 +138,6 @@ func (c *Core) DisableEmail2FA(userID string) error {
 	return c.clearBackupCodesIfUnenrolled(userID)
 }
 
-const backupCodeCount = 10
-
-// backupCodeAlphabet excludes visually ambiguous characters.
-const backupCodeAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
-
 // GenerateBackupCodes issues a fresh set of single-use recovery codes (replacing
 // any existing ones) and returns the plaintext codes to show once. Requires an
 // enrolled second factor.
@@ -196,15 +158,15 @@ func (c *Core) GenerateBackupCodes(userID string) ([]string, error) {
 	if _, err := qExec(tx, `DELETE FROM two_factor_backup_codes WHERE user_id=?`, userID); err != nil {
 		return nil, err
 	}
-	codes := make([]string, 0, backupCodeCount)
-	for i := 0; i < backupCodeCount; i++ {
-		code, err := randomBackupCode()
+	codes := make([]string, 0, accountmodel.BackupCodeCount)
+	for i := 0; i < accountmodel.BackupCodeCount; i++ {
+		code, err := accountmodel.RandomBackupCode()
 		if err != nil {
 			return nil, err
 		}
 		if _, err := qExec(tx,
 			`INSERT INTO two_factor_backup_codes (id, user_id, code_hash, used, created_at) VALUES (?,?,?,0,?)`,
-			newID("bkp_"), userID, hashBackupCode(code), now); err != nil {
+			newID("bkp_"), userID, accountmodel.HashBackupCode(code), now); err != nil {
 			return nil, err
 		}
 		codes = append(codes, code)
@@ -217,12 +179,12 @@ func (c *Core) GenerateBackupCodes(userID string) ([]string, error) {
 
 // VerifyBackupCode consumes a single-use recovery code, returning nil on success.
 func (c *Core) VerifyBackupCode(userID, code string) error {
-	if normalizeBackupCode(code) == "" {
+	if accountmodel.NormalizeBackupCode(code) == "" {
 		return ErrTwoFactorInvalidCode
 	}
 	res, err := qExec(c.DB,
 		`UPDATE two_factor_backup_codes SET used=1 WHERE user_id=? AND code_hash=? AND used=0`,
-		userID, hashBackupCode(code))
+		userID, accountmodel.HashBackupCode(code))
 	if err != nil {
 		return err
 	}
@@ -251,34 +213,6 @@ func (c *Core) clearBackupCodesIfUnenrolled(userID string) error {
 	}
 	_, err = qExec(c.DB, `DELETE FROM two_factor_backup_codes WHERE user_id=?`, userID)
 	return err
-}
-
-func randomBackupCode() (string, error) {
-	out := make([]byte, 8)
-	for i := range out {
-		idx, err := randomIndex(len(backupCodeAlphabet))
-		if err != nil {
-			return "", err
-		}
-		out[i] = backupCodeAlphabet[idx]
-	}
-	return string(out[:4]) + "-" + string(out[4:]), nil
-}
-
-func normalizeBackupCode(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-func hashBackupCode(code string) string {
-	sum := sha256.Sum256([]byte(normalizeBackupCode(code)))
-	return hex.EncodeToString(sum[:])
 }
 
 // TwoFactorRequiredForLogin reports whether the given staff user must pass a 2FA
@@ -365,7 +299,7 @@ func (c *Core) SendEmail2FACode(userID string) error {
 	if email == "" {
 		return ErrTwoFactorNoEmail
 	}
-	code, err := randomNumericCode(6)
+	code, err := accountmodel.RandomNumericCode(6)
 	if err != nil {
 		return err
 	}
@@ -374,7 +308,7 @@ func (c *Core) SendEmail2FACode(userID string) error {
 		return err
 	}
 	now := nowMS()
-	exp := now + email2FACodeTTL.Milliseconds()
+	exp := now + accountmodel.Email2FACodeTTL.Milliseconds()
 	tx, err := c.DB.Begin()
 	if err != nil {
 		return err
@@ -386,8 +320,7 @@ func (c *Core) SendEmail2FACode(userID string) error {
 		userID, string(hash), now, exp); err != nil {
 		return err
 	}
-	subject := "Your BudgieBBS sign-in code"
-	body := fmt.Sprintf("Your verification code is %s\n\nIt expires in 10 minutes. If you did not try to sign in, you can ignore this message.", code)
+	subject, body := accountmodel.Email2FACodeMessage(code)
 	if err := enqueueOutboxJob(tx, outboxEmail2FACode, emailSendJob{From: mailFrom, To: email, Subject: subject, Body: body, TS: now}, now); err != nil {
 		return err
 	}
@@ -430,19 +363,6 @@ func (c *Core) userRegistrationEmail(userID string) string {
 	var email string
 	_ = qQueryRow(c.DB, `SELECT COALESCE(registration_email,'') FROM user_private_profiles WHERE user_id=?`, userID).Scan(&email)
 	return strings.TrimSpace(email)
-}
-
-func randomNumericCode(n int) (string, error) {
-	const digits = "0123456789"
-	buf := make([]byte, n)
-	for i := range buf {
-		idx, err := randomIndex(len(digits))
-		if err != nil {
-			return "", err
-		}
-		buf[i] = digits[idx]
-	}
-	return string(buf), nil
 }
 
 func boolToInt(b bool) int {
