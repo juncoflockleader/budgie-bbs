@@ -75,16 +75,16 @@ func (h *Handler) sendChatLine(actor *User, p proto.SendChatLinePayload) Reply {
 	if err := chatStore().InsertChatLine(id, line.RoomID, line.RoomName, actor.ID, actor.Name, line.Text, ts); err != nil {
 		return internalErr(err)
 	}
-	scopes := []string{"chat:" + line.RoomID}
+	scopes, eventPayload := commandevents.ChatLine(id, line.RoomID, actor.Name, line.Text, ts)
 
 	h.bus.Publish(&proto.Event{
 		Kind:    proto.EvtChatLine,
 		Scopes:  scopes,
-		Payload: &proto.ChatLinePayload{ID: id, Room: line.RoomID, User: actor.Name, Text: line.Text, TS: ts},
+		Payload: eventPayload,
 		TS:      ts,
 	})
 	// Notify sibling nodes in Postgres multi-node deployments.
-	pgNotifyEphemeral(h.db, string(proto.EvtChatLine), id, "chat:"+line.RoomID)
+	pgNotifyEphemeral(h.db, string(proto.EvtChatLine), id, strings.Join(scopes, ","))
 
 	return Reply{Result: &proto.AckResult{ID: id}}
 }
@@ -174,10 +174,6 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 	}
 
 	ts := nowMS()
-	scopes := []string{"presence:global"}
-	if boardID != "" {
-		scopes = append(scopes, "presence:"+boardID)
-	}
 	persistPresence := !proto.TypingPresenceStatus(status)
 	if persistPresence {
 		if err := setUserPresence(h.db, actor.ID, sessionID, status, mode, boardID, threadID, location, fromHost, ts); err != nil {
@@ -190,22 +186,23 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 		}
 	}
 
+	scopes, eventPayload := commandevents.PresenceUpdate(commandevents.PresenceUpdateSpec{
+		User:      actor.Name,
+		UserID:    actor.ID,
+		SessionID: sessionID,
+		Status:    status,
+		Mode:      mode,
+		Board:     boardID,
+		Thread:    threadID,
+		Location:  location,
+		FromHost:  fromHost,
+		TS:        ts,
+	})
 	h.bus.Publish(&proto.Event{
-		Kind:   proto.EvtPresenceUpdate,
-		Scopes: scopes,
-		Payload: &proto.PresenceUpdatePayload{
-			User:      actor.Name,
-			UserID:    actor.ID,
-			SessionID: sessionID,
-			Status:    status,
-			Mode:      mode,
-			Board:     boardID,
-			Thread:    threadID,
-			Location:  location,
-			FromHost:  fromHost,
-			TS:        ts,
-		},
-		TS: ts,
+		Kind:    proto.EvtPresenceUpdate,
+		Scopes:  scopes,
+		Payload: eventPayload,
+		TS:      ts,
 	})
 
 	return Reply{Result: &proto.AckResult{}}

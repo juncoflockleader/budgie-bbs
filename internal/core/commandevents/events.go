@@ -8,6 +8,21 @@ func CommunityStatsSnapshotRecorded(payload *proto.CommunityStatsSnapshotRecorde
 	return nil, payload
 }
 
+func ChatLine(lineID, roomID, user, text string, ts int64) ([]string, *proto.ChatLinePayload) {
+	return []string{"chat:" + roomID}, &proto.ChatLinePayload{ID: lineID, Room: roomID, User: user, Text: text, TS: ts}
+}
+
+type PresenceUpdateSpec proto.PresenceUpdatePayload
+
+func PresenceUpdate(spec PresenceUpdateSpec) ([]string, *proto.PresenceUpdatePayload) {
+	payload := proto.PresenceUpdatePayload(spec)
+	scopes := []string{"presence:global"}
+	if payload.Board != "" {
+		scopes = append(scopes, "presence:"+payload.Board)
+	}
+	return scopes, &payload
+}
+
 func BoardFavoriteSet(userID, boardID, folderID string, favorite bool, position *int, ts int64) ([]string, *proto.BoardFavoriteSetPayload) {
 	payload := &proto.BoardFavoriteSetPayload{UserID: userID, Board: boardID, Favorite: favorite, FolderID: folderID, Position: position, TS: ts}
 	return []string{"board:" + boardID, "user:" + userID}, payload

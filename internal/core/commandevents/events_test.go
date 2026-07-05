@@ -31,6 +31,25 @@ func TestCommunityStatsSnapshotRecorded(t *testing.T) {
 	}
 }
 
+func TestRealtimeEvents(t *testing.T) {
+	scopes, chat := ChatLine("chat_1", "lobby", "alice", "hello", 1234)
+	requireScopes(t, scopes, "chat:lobby")
+	if chat.ID != "chat_1" || chat.Room != "lobby" || chat.User != "alice" || chat.Text != "hello" || chat.TS != 1234 {
+		t.Fatalf("ChatLine payload = %+v", chat)
+	}
+
+	scopes, presence := PresenceUpdate(PresenceUpdateSpec{
+		User: "alice", UserID: "usr_alice", SessionID: "web", Status: "online",
+		Mode: "reading", Board: "general", Thread: "thread_1", Location: "General", FromHost: "127.0.0.1", TS: 1235,
+	})
+	requireScopes(t, scopes, "presence:global", "presence:general")
+	if presence.User != "alice" || presence.UserID != "usr_alice" || presence.SessionID != "web" ||
+		presence.Status != "online" || presence.Mode != "reading" || presence.Board != "general" ||
+		presence.Thread != "thread_1" || presence.Location != "General" || presence.FromHost != "127.0.0.1" || presence.TS != 1235 {
+		t.Fatalf("PresenceUpdate payload = %+v", presence)
+	}
+}
+
 func TestBoardAutomodRuleEvents(t *testing.T) {
 	scopes, payload := BoardAutomodRuleSet(
 		"rule_1", "general", true, 7,
