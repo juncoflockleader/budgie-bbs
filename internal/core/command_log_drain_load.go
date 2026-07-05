@@ -745,7 +745,7 @@ func commandLogDrainLoadMemberPartitions(ctx context.Context, commandLog Command
 		if err != nil {
 			return nil, err
 		}
-		return commandPartitionAssignmentPartitions(assignments), nil
+		return logmodel.CommandPartitionAssignmentPartitions(assignments), nil
 	}
 	lister, ok := commandLog.(CommandPartitionLister)
 	if !ok {

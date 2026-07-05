@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -405,7 +406,7 @@ func (w *CommandLogWorker) listDrainPartitions(ctx context.Context) ([]LogPartit
 		if err != nil {
 			return nil, err
 		}
-		return commandPartitionAssignmentPartitions(assignments), nil
+		return logmodel.CommandPartitionAssignmentPartitions(assignments), nil
 	}
 	if w.partitions == nil {
 		return nil, fmt.Errorf("command log worker: nil partition lister")
@@ -439,7 +440,7 @@ func (w *CommandLogWorker) claimPartition(ctx context.Context, partition LogPart
 }
 
 func (w *CommandLogWorker) assignPartition(ctx context.Context, partition LogPartition) (CommandPartitionAssignment, bool, error) {
-	assignment := commandPartitionAssignmentForOwner(partition, w.ownerID, 1)
+	assignment := logmodel.NewCommandPartitionAssignment(partition, w.ownerID, 1)
 	if w.assignments == nil {
 		return assignment, true, nil
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 func TestHashCommandPartitionAssignerNormalizesMembersAndBumpsGeneration(t *testing.T) {
@@ -177,7 +179,7 @@ func TestSnapshotCommandPartitionAssignerListsOwnedPartitionsAndFailsClosed(t *t
 func TestCommandPartitionAssignmentPartitionsNormalizesAndDedupes(t *testing.T) {
 	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
-	got := commandPartitionAssignmentPartitions([]CommandPartitionAssignment{
+	got := logmodel.CommandPartitionAssignmentPartitions([]CommandPartitionAssignment{
 		{Partition: general, OwnerID: "writer-a"},
 		{Partition: general, OwnerID: "writer-a"},
 		{Partition: LogPartition{}, OwnerID: "writer-a"},
@@ -191,11 +193,11 @@ func TestCommandPartitionAssignmentPartitionsNormalizesAndDedupes(t *testing.T) 
 func TestCommandPartitionAssignmentsForOwnerNormalizesOwnerAndPartitions(t *testing.T) {
 	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
-	single := commandPartitionAssignmentForOwner(LogPartition{}, " writer-b ", 43)
+	single := logmodel.NewCommandPartitionAssignment(LogPartition{}, " writer-b ", 43)
 	if want := (CommandPartitionAssignment{Partition: global, OwnerID: "writer-b", Generation: 43}); single != want {
 		t.Fatalf("commandPartitionAssignmentForOwner = %+v, want %+v", single, want)
 	}
-	got := commandPartitionAssignmentsForOwner([]LogPartition{general, LogPartition{}}, " writer-a ", 42)
+	got := logmodel.CommandPartitionAssignmentsForOwner([]LogPartition{general, LogPartition{}}, " writer-a ", 42)
 	want := []CommandPartitionAssignment{
 		{Partition: general, OwnerID: "writer-a", Generation: 42},
 		{Partition: global, OwnerID: "writer-a", Generation: 42},

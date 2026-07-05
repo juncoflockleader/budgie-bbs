@@ -34,6 +34,28 @@ func NewCommandPartitionAssignment(partition Partition, ownerID string, generati
 	}
 }
 
+func CommandPartitionAssignmentPartitions(assignments []CommandPartitionAssignment) []Partition {
+	partitions := make([]Partition, 0, len(assignments))
+	seen := map[Partition]bool{}
+	for _, assignment := range assignments {
+		partition := assignment.Partition.Normalize()
+		if seen[partition] {
+			continue
+		}
+		seen[partition] = true
+		partitions = append(partitions, partition)
+	}
+	return partitions
+}
+
+func CommandPartitionAssignmentsForOwner(partitions []Partition, ownerID string, generation int64) []CommandPartitionAssignment {
+	assignments := make([]CommandPartitionAssignment, 0, len(partitions))
+	for _, partition := range partitions {
+		assignments = append(assignments, NewCommandPartitionAssignment(partition, ownerID, generation))
+	}
+	return assignments
+}
+
 // CommandPartitionAssignmentSnapshot is the in-memory shape a native broker
 // consumer-group adapter can publish after a rebalance. Owners maps logical
 // command partitions to the writer that owns them for Generation.
