@@ -98,15 +98,7 @@ type CommandPartitionClaimer interface {
 // command. The log implementation assigns offsets for normal appends; shadow
 // and replay paths can carry existing CompatibilitySeq/PartitionOffset/TS
 // metadata when mirroring an already-durable event into a broker log.
-type EventAppend struct {
-	ID               string
-	Kind             proto.EventKind
-	Scopes           []string
-	Payload          any
-	CompatibilitySeq int64
-	PartitionOffset  int64
-	TS               int64
-}
+type EventAppend = logmodel.EventAppend
 
 // EventStore is the durable event log contract. The current SQL implementation
 // preserves global seq compatibility while also exposing partition replay; IS4
@@ -122,12 +114,7 @@ type EventStore interface {
 // consumes one command-log record, decides zero or more durable events, appends
 // those events, and advances the consumed command offset through one transaction
 // boundary.
-type CommandEventTransaction struct {
-	CommandPartition      LogPartition
-	CommandOffset         int64
-	CommandSourcePosition CommandLogSourcePosition
-	Events                []EventAppend
-}
+type CommandEventTransaction = logmodel.CommandEventTransaction
 
 // CommandLogCommitPosition is the exact command-log cursor a transaction must
 // advance after its events are durable. Partition/Offset are Budgie's logical
@@ -135,11 +122,7 @@ type CommandEventTransaction struct {
 // command source has distinct commit coordinates, such as Kafka/Redpanda.
 type CommandLogCommitPosition = logmodel.CommandLogCommitPosition
 
-type CommandEventTransactionResult struct {
-	Events             []*proto.Event
-	CommittedPartition LogPartition
-	CommittedOffset    int64
-}
+type CommandEventTransactionResult = logmodel.CommandEventTransactionResult
 
 // CommandEventTransactionStore is the final promotion boundary for broker-owned
 // writes. Redpanda/Kafka adapters must make CommitCommandEvents atomic or
