@@ -1507,8 +1507,8 @@ func (e *CommandLogNativeDecisionExecutor) decideResolveReview(ctx context.Conte
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !found || target.Status != "open" {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "review not found", false)
+	if errDetail := commandrules.RequireOpenModerationReview(found, target.Status); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	events := []EventAppend{

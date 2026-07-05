@@ -79,9 +79,12 @@ func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
 	}
 	ts := nowMS()
-	target, _, err := projections.GetModerationReviewLogTarget(h.db, p.Review)
+	target, found, err := projections.GetModerationReviewLogTarget(h.db, p.Review)
 	if err != nil {
 		return internalErr(err)
+	}
+	if errDetail := commandrules.RequireOpenModerationReview(found, target.Status); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	tx, err := h.db.Begin()
@@ -92,7 +95,7 @@ func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply
 
 	if err := currentRuntime().ResolveModerationReview(tx, p.Review, actor.ID, p.Resolution, ts); err != nil {
 		if err == sql.ErrNoRows {
-			return Reply{Err: errDetail(proto.ErrNotFound, "review not found", false)}
+			return Reply{Err: commandrules.RequireOpenModerationReview(false, "")}
 		}
 		return internalErr(err)
 	}
