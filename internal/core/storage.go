@@ -38,15 +38,7 @@ type CommandLogRecord struct {
 // CommandLogSourcePosition is the broker source offset for one command-log
 // record. Logical Partition/Offset remain the Budgie execution identity;
 // physical topic-partition offsets are what Kafka/Redpanda commits must use.
-type CommandLogSourcePosition struct {
-	Backend           string
-	Topic             string
-	PhysicalPartition int32
-	PhysicalOffset    int64
-	CommitOffset      int64
-	LogicalPartition  LogPartition
-	LogicalOffset     int64
-}
+type CommandLogSourcePosition = logmodel.CommandLogSourcePosition
 
 // CommandLog is the IS4 command-log boundary. Implementations must preserve
 // order within one partition and may process different partitions in parallel.
@@ -158,11 +150,7 @@ type CommandEventTransaction struct {
 // advance after its events are durable. Partition/Offset are Budgie's logical
 // progress marker; SourcePosition carries physical broker evidence when the
 // command source has distinct commit coordinates, such as Kafka/Redpanda.
-type CommandLogCommitPosition struct {
-	Partition      LogPartition
-	Offset         int64
-	SourcePosition CommandLogSourcePosition
-}
+type CommandLogCommitPosition = logmodel.CommandLogCommitPosition
 
 type CommandEventTransactionResult struct {
 	Events             []*proto.Event

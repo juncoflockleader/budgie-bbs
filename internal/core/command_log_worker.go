@@ -723,7 +723,7 @@ func allowCommandLogRebalance(commandLog CommandLog) {
 
 func validateCommandLogWorkerOffsetProgress(partition LogPartition, lastOffset int64, record CommandLogRecord) error {
 	partition = partition.Normalize()
-	if err := record.SourcePosition.ValidateForRecord(record); err != nil {
+	if err := record.SourcePosition.ValidateFor(record.Partition, record.Offset); err != nil {
 		return fmt.Errorf("command log worker: invalid source position in %s/%s offset %d: %w",
 			partition.Kind, partition.Key, record.Offset, err)
 	}

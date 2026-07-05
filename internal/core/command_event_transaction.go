@@ -255,7 +255,7 @@ func validateCommandEventTransactionBatch(records []CommandLogRecord) error {
 		if record.Offset <= lastOffset {
 			return fmt.Errorf("command event transaction finalizer: batch offset %d after %d is not increasing", record.Offset, lastOffset)
 		}
-		if err := record.SourcePosition.ValidateForRecord(record); err != nil {
+		if err := record.SourcePosition.ValidateFor(record.Partition, record.Offset); err != nil {
 			return fmt.Errorf("command event transaction finalizer: invalid source position in batch offset %d: %w", record.Offset, err)
 		}
 		lastOffset = record.Offset

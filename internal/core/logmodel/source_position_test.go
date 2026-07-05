@@ -1,28 +1,23 @@
-package core
+package logmodel
 
 import (
+	"strings"
 	"testing"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-func TestCommandLogSourcePositionValidatesRecordMatch(t *testing.T) {
-	record := CommandLogRecord{
-		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
-		Offset:    42,
-		Command:   proto.CmdCreateThread,
-	}
+func TestCommandLogSourcePositionValidatesLogicalPosition(t *testing.T) {
+	partition := Partition{Kind: PartitionBoard, Key: "general"}
 	position := CommandLogSourcePosition{
 		Backend:           " kafka ",
 		Topic:             " budgie.commandlog ",
 		PhysicalPartition: 7,
 		PhysicalOffset:    41,
 		CommitOffset:      42,
-		LogicalPartition:  LogPartition{Kind: partitionBoard, Key: "general"},
+		LogicalPartition:  partition,
 		LogicalOffset:     42,
 	}
-	if err := position.ValidateForRecord(record); err != nil {
-		t.Fatalf("ValidateForRecord: %v", err)
+	if err := position.ValidateFor(partition, 42); err != nil {
+		t.Fatalf("ValidateFor: %v", err)
 	}
 	normalized := position.Normalize()
 	if normalized.Backend != "kafka" || normalized.Topic != "budgie.commandlog" {
@@ -31,16 +26,13 @@ func TestCommandLogSourcePositionValidatesRecordMatch(t *testing.T) {
 }
 
 func TestCommandLogSourcePositionAllowsZeroForNonBrokerLogs(t *testing.T) {
-	if err := (CommandLogSourcePosition{}).ValidateForRecord(CommandLogRecord{}); err != nil {
-		t.Fatalf("zero ValidateForRecord: %v", err)
+	if err := (CommandLogSourcePosition{}).ValidateFor(Partition{}, 0); err != nil {
+		t.Fatalf("zero ValidateFor: %v", err)
 	}
 }
 
 func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
-	record := CommandLogRecord{
-		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
-		Offset:    42,
-	}
+	partition := Partition{Kind: PartitionBoard, Key: "general"}
 	tests := []struct {
 		name     string
 		position CommandLogSourcePosition
@@ -52,7 +44,7 @@ func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 				Topic:            "budgie.commandlog",
 				PhysicalOffset:   41,
 				CommitOffset:     42,
-				LogicalPartition: record.Partition,
+				LogicalPartition: partition,
 				LogicalOffset:    42,
 			},
 			want: "backend is required",
@@ -64,7 +56,7 @@ func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 				Topic:            "budgie.commandlog",
 				PhysicalOffset:   41,
 				CommitOffset:     41,
-				LogicalPartition: record.Partition,
+				LogicalPartition: partition,
 				LogicalOffset:    42,
 			},
 			want: "must advance physical offset",
@@ -77,7 +69,7 @@ func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 				PhysicalPartition: -1,
 				PhysicalOffset:    41,
 				CommitOffset:      42,
-				LogicalPartition:  record.Partition,
+				LogicalPartition:  partition,
 				LogicalOffset:     42,
 			},
 			want: "physical partition -1 is negative",
@@ -89,7 +81,7 @@ func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 				Topic:            "budgie.commandlog",
 				PhysicalOffset:   41,
 				CommitOffset:     42,
-				LogicalPartition: LogPartition{Kind: partitionBoard, Key: "other"},
+				LogicalPartition: Partition{Kind: PartitionBoard, Key: "other"},
 				LogicalOffset:    42,
 			},
 			want: "does not match record partition",
@@ -101,7 +93,7 @@ func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 				Topic:            "budgie.commandlog",
 				PhysicalOffset:   41,
 				CommitOffset:     42,
-				LogicalPartition: record.Partition,
+				LogicalPartition: partition,
 				LogicalOffset:    43,
 			},
 			want: "does not match record offset",
@@ -109,15 +101,14 @@ func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.position.ValidateForRecord(record)
-			requireErrorContains(t, err, tt.want)
+			requireErrorContains(t, tt.position.ValidateFor(partition, 42), tt.want)
 		})
 	}
 }
 
 func TestCommandLogCommitPositionValidatesSourceEvidence(t *testing.T) {
 	position := CommandLogCommitPosition{
-		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
+		Partition: Partition{Kind: PartitionBoard, Key: "general"},
 		Offset:    42,
 		SourcePosition: CommandLogSourcePosition{
 			Backend:           "kafka",
@@ -125,10 +116,16 @@ func TestCommandLogCommitPositionValidatesSourceEvidence(t *testing.T) {
 			PhysicalPartition: 7,
 			PhysicalOffset:    41,
 			CommitOffset:      42,
-			LogicalPartition:  LogPartition{Kind: partitionBoard, Key: "other"},
+			LogicalPartition:  Partition{Kind: PartitionBoard, Key: "other"},
 			LogicalOffset:     42,
 		},
 	}
-	err := position.Validate()
-	requireErrorContains(t, err, "does not match record partition")
+	requireErrorContains(t, position.Validate(), "does not match record partition")
+}
+
+func requireErrorContains(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want containing %q", err, want)
+	}
 }
