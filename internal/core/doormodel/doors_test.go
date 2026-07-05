@@ -1,4 +1,4 @@
-package core
+package doormodel
 
 import (
 	"os"
@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestLoadDoorsConfigEmpty(t *testing.T) {
-	cfg, err := LoadDoorsConfig("")
+func TestLoadConfigEmpty(t *testing.T) {
+	cfg, err := LoadConfig("")
 	if err != nil {
 		t.Fatalf("expected nil error for empty path, got %v", err)
 	}
@@ -16,14 +16,14 @@ func TestLoadDoorsConfigEmpty(t *testing.T) {
 	}
 }
 
-func TestLoadDoorsConfigNotFound(t *testing.T) {
-	_, err := LoadDoorsConfig("/tmp/does-not-exist-doors.json")
+func TestLoadConfigNotFound(t *testing.T) {
+	_, err := LoadConfig("/tmp/does-not-exist-doors.json")
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
 }
 
-func TestLoadDoorsConfigValid(t *testing.T) {
+func TestLoadConfigValid(t *testing.T) {
 	data := `{
 		"doors": [
 			{"id":"tw", "name":"Trade Wars", "cmd":"/bin/tw", "args":["-d","/data"]},
@@ -39,7 +39,7 @@ func TestLoadDoorsConfigValid(t *testing.T) {
 	}
 	_ = f.Close()
 
-	cfg, err := LoadDoorsConfig(f.Name())
+	cfg, err := LoadConfig(f.Name())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,13 +60,13 @@ func TestLoadDoorsConfigValid(t *testing.T) {
 	}
 }
 
-func TestLoadDoorsConfigMalformed(t *testing.T) {
+func TestLoadConfigMalformed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.json")
 	if err := os.WriteFile(path, []byte("{not valid json"), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := LoadDoorsConfig(path)
+	_, err := LoadConfig(path)
 	if err == nil {
 		t.Fatal("expected error for malformed JSON")
 	}
