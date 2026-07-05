@@ -4209,7 +4209,7 @@ func nativeModerationSystemLogEvents(db *sql.DB, record CommandLogRecord, actor 
 	}, ts, startIndex)
 }
 
-func nativeContentFilterReviewEvents(db *sql.DB, record CommandLogRecord, actor *User, publicAuthor string, filter *ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeContentFilterReviewEvents(db *sql.DB, record CommandLogRecord, actor *User, publicAuthor string, filter *projections.ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if filter == nil {
 		return nil, nil
 	}

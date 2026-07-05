@@ -4,9 +4,6 @@ import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 
 type Board = projections.Board
 type Blessing = projections.Blessing
-type ContentFilter = projections.ContentFilter
-type BoardAutomodRule = projections.BoardAutomodRule
-type BoardAutomodActivity = projections.BoardAutomodActivity
 type BoardSettings = projections.BoardSettings
 type BoardSettingsPatch = projections.BoardSettingsPatch
 type BoardModerator = projections.BoardModerator

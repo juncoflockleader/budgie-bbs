@@ -2661,15 +2661,15 @@ func (c *Core) ListModerationReviews(status string, limit, offset int) ([]Modera
 	return projections.ListModerationReviews(c.DB, status, limit, offset)
 }
 
-func (c *Core) ListContentFilters(scope string, includeInactive bool, limit, offset int) ([]ContentFilter, error) {
+func (c *Core) ListContentFilters(scope string, includeInactive bool, limit, offset int) ([]projections.ContentFilter, error) {
 	return projections.ListContentFilters(c.DB, scope, includeInactive, limit, offset)
 }
 
-func (c *Core) ListBoardAutomodRules(boardID string) ([]BoardAutomodRule, error) {
+func (c *Core) ListBoardAutomodRules(boardID string) ([]projections.BoardAutomodRule, error) {
 	return projections.ListBoardAutomodRules(c.DB, boardID)
 }
 
-func (c *Core) ListBoardAutomodActivity(boardID string, limit, offset int) ([]BoardAutomodActivity, error) {
+func (c *Core) ListBoardAutomodActivity(boardID string, limit, offset int) ([]projections.BoardAutomodActivity, error) {
 	return projections.ListBoardAutomodActivity(c.DB, boardID, limit, offset)
 }
 
