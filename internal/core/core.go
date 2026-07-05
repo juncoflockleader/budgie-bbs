@@ -2135,22 +2135,12 @@ func (c *Core) ListDigestPathTree(boardID, kind string) ([]DigestPathNode, error
 	return projections.ListDigestPathTree(c.DB, boardID, kind)
 }
 func (c *Core) ListSiteDigestEntries(actor *User, kind, path string, limit, offset int) ([]DigestEntry, error) {
-	viewerID := ""
-	includePrivate := false
-	if actor != nil {
-		viewerID = actor.ID
-		includePrivate = actor.IsMod()
-	}
-	return projections.ListSiteDigestEntries(c.DB, viewerID, includePrivate, kind, path, limit, offset)
+	viewer := readmodel.ViewerScopeForUser(actor)
+	return projections.ListSiteDigestEntries(c.DB, viewer.UserID, viewer.IncludePrivate, kind, path, limit, offset)
 }
 func (c *Core) SearchDigestEntries(actor *User, boardID, kind, path, query string, limit, offset int) ([]DigestEntry, error) {
-	viewerID := ""
-	includePrivate := false
-	if actor != nil {
-		viewerID = actor.ID
-		includePrivate = actor.IsMod()
-	}
-	return projections.SearchDigestEntries(c.DB, viewerID, includePrivate, boardID, kind, path, query, limit, offset)
+	viewer := readmodel.ViewerScopeForUser(actor)
+	return projections.SearchDigestEntries(c.DB, viewer.UserID, viewer.IncludePrivate, boardID, kind, path, query, limit, offset)
 }
 func (c *Core) GetDigestExport(entryID string) (*DigestExport, error) {
 	return projections.GetDigestExport(c.DB, entryID)
@@ -2392,15 +2382,8 @@ func (c *Core) SearchReadablePosts(actor *User, query, boardID string, limit int
 		}
 		return posts, nil
 	}
-	var (
-		posts []Post
-		err   error
-	)
-	if actor == nil {
-		posts, err = projections.SearchReadablePosts(c.DB, "", false, query, boardID, limit)
-	} else {
-		posts, err = projections.SearchReadablePosts(c.DB, actor.ID, actor.IsMod(), query, boardID, limit)
-	}
+	viewer := readmodel.ViewerScopeForUser(actor)
+	posts, err := projections.SearchReadablePosts(c.DB, viewer.UserID, viewer.IncludePrivate, query, boardID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -2452,14 +2435,9 @@ func (c *Core) ListResidentBoardPosts(userID string, limit, offset int) ([]Post,
 }
 
 func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]Post, error) {
-	viewerID := ""
-	includePrivate := false
-	if actor != nil {
-		viewerID = actor.ID
-		includePrivate = actor.IsMod()
-	}
+	viewer := readmodel.ViewerScopeForUser(actor)
 	limit, offset = readmodel.NormalizePagination(limit, offset, 30, 100)
-	cacheKey, cacheOK := c.latestFeedCacheKey(viewerID, includePrivate, limit, offset)
+	cacheKey, cacheOK := c.latestFeedCacheKey(viewer.UserID, viewer.IncludePrivate, limit, offset)
 	if cacheOK {
 		if posts, ok, err := c.readCache.GetLatestFeedPosts(context.Background(), cacheKey); err == nil && ok {
 			if err := c.applyCounterStorePostCounts(posts); err != nil {
@@ -2473,9 +2451,9 @@ func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]Post, erro
 		err   error
 	)
 	if rows, err := projections.LatestFeedMaterializedRowCount(c.DB); err == nil && rows > 0 {
-		posts, err = projections.ListLatestFeedPostsMaterialized(c.DB, viewerID, includePrivate, limit, offset)
+		posts, err = projections.ListLatestFeedPostsMaterialized(c.DB, viewer.UserID, viewer.IncludePrivate, limit, offset)
 	} else {
-		posts, err = projections.ListLatestFeedPosts(c.DB, viewerID, includePrivate, limit, offset)
+		posts, err = projections.ListLatestFeedPosts(c.DB, viewer.UserID, viewer.IncludePrivate, limit, offset)
 	}
 	if err != nil {
 		return nil, err
