@@ -4,12 +4,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
 
+const coreDependencyGuardModulePath = "github.com/juncoflockleader/budgie-bbs"
+
 func TestCoreDoesNotImportInternetScaleToolingPackages(t *testing.T) {
-	const modulePath = "github.com/juncoflockleader/budgie-bbs"
 	forbiddenImports := []string{
 		"internal/kafkaconn",
 		"internal/loadtest",
@@ -24,11 +26,45 @@ func TestCoreDoesNotImportInternetScaleToolingPackages(t *testing.T) {
 		"internal/scalebudget",
 	}
 
-	cmd := exec.Command("go", "list", "-f", "{{range .Imports}}{{println .}}{{end}}", "./internal/core")
+	imports := coreDependencyGuardImports(t, "./internal/core")
+	forbiddenPrefixes := make([]string, 0, len(forbiddenImports))
+	for _, suffix := range forbiddenImports {
+		forbiddenPrefixes = append(forbiddenPrefixes, coreDependencyGuardModulePath+"/"+suffix)
+	}
+	found := coreDependencyGuardMatchingImports(imports, forbiddenPrefixes)
+	if len(found) > 0 {
+		t.Fatalf("internal/core must not import internet-scale tooling packages: %s", strings.Join(found, ", "))
+	}
+}
+
+func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
+	modelPackages := []string{
+		"./internal/core/accountmodel",
+		"./internal/core/boardmodel",
+		"./internal/core/categorymodel",
+	}
+
+	for _, pkg := range modelPackages {
+		t.Run(pkg, func(t *testing.T) {
+			imports := coreDependencyGuardImports(t, pkg)
+			found := coreDependencyGuardMatchingImports(imports, []string{
+				coreDependencyGuardModulePath + "/internal/core",
+			})
+			if len(found) > 0 {
+				t.Fatalf("%s must stay below command, projection, and read-model layers; found core imports: %s", pkg, strings.Join(found, ", "))
+			}
+		})
+	}
+}
+
+func coreDependencyGuardImports(t *testing.T, pkg string) map[string]bool {
+	t.Helper()
+
+	cmd := exec.Command("go", "list", "-f", "{{range .Imports}}{{println .}}{{end}}", pkg)
 	cmd.Dir = coreDependencyGuardRepoRoot(t)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go list core imports: %v\n%s", err, out)
+		t.Fatalf("go list %s imports: %v\n%s", pkg, err, out)
 	}
 
 	imports := map[string]bool{}
@@ -38,18 +74,20 @@ func TestCoreDoesNotImportInternetScaleToolingPackages(t *testing.T) {
 			imports[line] = true
 		}
 	}
+	return imports
+}
+
+func coreDependencyGuardMatchingImports(imports map[string]bool, forbiddenPrefixes []string) []string {
 	found := []string{}
-	for _, suffix := range forbiddenImports {
-		prefix := modulePath + "/" + suffix
+	for _, prefix := range forbiddenPrefixes {
 		for imported := range imports {
 			if imported == prefix || strings.HasPrefix(imported, prefix+"/") {
 				found = append(found, imported)
 			}
 		}
 	}
-	if len(found) > 0 {
-		t.Fatalf("internal/core must not import internet-scale tooling packages: %s", strings.Join(found, ", "))
-	}
+	sort.Strings(found)
+	return found
 }
 
 func coreDependencyGuardRepoRoot(t *testing.T) string {
