@@ -1305,13 +1305,8 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 	canModerateThread := commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board)
 	isAuthor := commandrules.ActorAuthoredBy(actor, thread.AuthorID, thread.Author)
 	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), thread.CreatedAt, editWindowDur.Milliseconds())
-	if !canModerateThread {
-		if !isAuthor {
-			return Reply{Err: errDetail(proto.ErrForbidden, "thread author or board thread moderation permission required", false)}
-		}
-		if !withinWindow {
-			return Reply{Err: commandrules.AuthorEditWindowExpiredError()}
-		}
+	if errDetail := commandrules.RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
@@ -1354,8 +1349,8 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	if !commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
+	if errDetail := commandrules.RequireThreadModeration(commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board)); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
@@ -1398,8 +1393,8 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 	if thread == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 	}
-	if !commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board thread moderation permission required", false)}
+	if errDetail := commandrules.RequireThreadModeration(commandrules.ActorCanModerateBoardThreads(tx, actor, thread.Board)); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	if _, found, err := projections.BoardName(tx, p.ToBoard); err != nil {

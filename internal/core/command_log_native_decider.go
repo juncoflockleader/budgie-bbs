@@ -1360,13 +1360,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSetThreadTitle(ctx context.Cont
 	}
 	isAuthor := commandrules.ActorAuthoredBy(actor, thread.AuthorID, thread.Author)
 	ts := nativeCommandTimestamp(record)
-	if !canModerateThread {
-		if !isAuthor {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread author or board thread moderation permission required", false)
-		}
-		if !commandrules.WithinAuthorEditWindow(ts, thread.CreatedAt, nativeAuthorEditWindow.Milliseconds()) {
-			return nativeCommandDecision{}, commandrules.AuthorEditWindowExpiredError()
-		}
+	withinWindow := commandrules.WithinAuthorEditWindow(ts, thread.CreatedAt, nativeAuthorEditWindow.Milliseconds())
+	if errDetail := commandrules.RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	event := nativeEvent(record, 0, proto.EvtThreadTitleSet, []string{"board:" + thread.Board, "thread:" + thread.ID}, &proto.ThreadTitleSetPayload{
 		Thread: thread.ID,
@@ -1397,8 +1393,8 @@ func (e *CommandLogNativeDecisionExecutor) decideLockThread(ctx context.Context,
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !canModerateThread {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board thread moderation permission required", false)
+	if errDetail := commandrules.RequireThreadModeration(canModerateThread); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	event := nativeEvent(record, 0, proto.EvtThreadLocked, []string{"board:" + thread.Board, "thread:" + thread.ID}, &proto.ThreadLockedPayload{
@@ -1430,8 +1426,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveThread(ctx context.Context,
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !canModerateThread {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board thread moderation permission required", false)
+	if errDetail := commandrules.RequireThreadModeration(canModerateThread); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if _, found, err := projections.BoardName(e.core.DB, payload.ToBoard); err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)

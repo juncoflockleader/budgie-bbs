@@ -230,6 +230,26 @@ func PlanPostRedaction(canModeratePosts, isAuthor, withinWindow bool) (string, *
 	return "recycle", nil
 }
 
+func RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow bool) *proto.ErrorDetail {
+	if canModerateThread {
+		return nil
+	}
+	if !isAuthor {
+		return newErrDetail(proto.ErrForbidden, "thread author or board thread moderation permission required", false)
+	}
+	if !withinWindow {
+		return AuthorEditWindowExpiredError()
+	}
+	return nil
+}
+
+func RequireThreadModeration(canModerateThread bool) *proto.ErrorDetail {
+	if !canModerateThread {
+		return newErrDetail(proto.ErrForbidden, "board thread moderation permission required", false)
+	}
+	return nil
+}
+
 func requireMemberBoardReadAccess(settings *projections.BoardSettings, message string, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
 	if !boardRequiresReadMembership(settings) {
 		return nil
