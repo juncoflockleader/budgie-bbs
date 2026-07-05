@@ -96,8 +96,8 @@ func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayloa
 	if err != nil {
 		return internalErr(err)
 	}
-	if !emit {
-		return Reply{Err: errDetail(proto.ErrForbidden, "member-read poll results stay on the source board", false)}
+	if errDetail := commandrules.RequirePollResultPublicBoard(emit); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	threadID, seq, err := h.ensurePollResultSystemPost(actor, thread, poll)
 	if err != nil {

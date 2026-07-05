@@ -30,3 +30,10 @@ func RequirePollResultPublisher(canManagePolls, isPostAuthor, isThreadAuthor boo
 	}
 	return newErrDetail(proto.ErrForbidden, "poll author or board poll manager required", false)
 }
+
+func RequirePollResultPublicBoard(emitPublicSystemPost bool) *proto.ErrorDetail {
+	if emitPublicSystemPost {
+		return nil
+	}
+	return newErrDetail(proto.ErrForbidden, "member-read poll results stay on the source board", false)
+}

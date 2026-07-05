@@ -1571,8 +1571,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishPollResult(ctx context.C
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !emit {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "member-read poll results stay on the source board", false)
+	if errDetail := commandrules.RequirePollResultPublicBoard(emit); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 
 	threadID, postID := proto.PollResultPostIDs(poll.ID)
