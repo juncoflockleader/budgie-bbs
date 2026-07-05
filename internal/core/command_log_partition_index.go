@@ -126,14 +126,6 @@ func (l *IndexedCommandLog) CommittedOffset(ctx context.Context, partition LogPa
 	return 0, nil
 }
 
-func CommandPartitionsByTailOffset(offsets []CommandPartitionOffset, limit int) []LogPartition {
-	return logmodel.CommandPartitionsByTailOffset(offsets, limit)
-}
-
-func SortCommandPartitionOffsetsByLag(offsets []CommandPartitionOffset) {
-	logmodel.SortCommandPartitionOffsetsByLag(offsets)
-}
-
 func listCommandPartitionOffsetsWithLimit(ctx context.Context, lister CommandPartitionOffsetLister, limit int) ([]CommandPartitionOffset, bool, error) {
 	if lister == nil {
 		return nil, false, fmt.Errorf("nil command partition offset lister")

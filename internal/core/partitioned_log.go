@@ -184,14 +184,6 @@ type EventLogPromotionReadinessReport struct {
 
 type EventPartitionOffset = logmodel.EventPartitionOffset
 
-func EventPartitionsByLastOffset(offsets []EventPartitionOffset, limit int) []LogPartition {
-	return logmodel.EventPartitionsByLastOffset(offsets, limit)
-}
-
-func SortEventPartitionOffsetsByLastOffset(offsets []EventPartitionOffset) {
-	logmodel.SortEventPartitionOffsetsByLastOffset(offsets)
-}
-
 func listEventPartitionOffsets(ctx context.Context, lister EventPartitionOffsetLister, limit int) ([]EventPartitionOffset, bool, error) {
 	if lister == nil {
 		return nil, false, fmt.Errorf("nil event partition offset lister")
