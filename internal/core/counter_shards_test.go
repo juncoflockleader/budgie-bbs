@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -163,7 +164,7 @@ func assertPollVoteShardTotal(t *testing.T, c *core.Core, optionID string, want 
 	}
 }
 
-func assertThreadRankingReactionCount(t *testing.T, c *core.Core, viewer *core.User, threadID string, want int) {
+func assertThreadRankingReactionCount(t *testing.T, c *core.Core, viewer *projections.User, threadID string, want int) {
 	t.Helper()
 	threads, err := c.ListThreadRankings(viewer, "", 10, 0)
 	if err != nil {

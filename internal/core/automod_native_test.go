@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -24,7 +25,7 @@ func TestNativeAutomodEmitsActionEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mustExec := func(actor *User, cmd proto.CommandName, payload any) {
+	mustExec := func(actor *projections.User, cmd proto.CommandName, payload any) {
 		t.Helper()
 		raw := marshalCoreTestJSON(t, "marshal "+string(cmd), payload)
 		if r := c.ExecCmd(ctx, actor, cmd, raw, ""); r.Err != nil {

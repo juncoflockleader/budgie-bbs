@@ -145,7 +145,7 @@ func parseNativeDecisionTestFile(t *testing.T, path string) *ast.File {
 	return file
 }
 
-func registerNativeDecisionTestUser(t *testing.T, c *Core, name string) *User {
+func registerNativeDecisionTestUser(t *testing.T, c *Core, name string) *projections.User {
 	t.Helper()
 	user, err := c.RegisterUser(name, "pw")
 	if err != nil {
@@ -2607,7 +2607,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 
 	commandLog, eventStore, executor, worker := newNativeDecisionTestHarness(c)
 	boardPartition := LogPartition{Kind: partitionBoard, Key: "general"}
-	expectNativeErr := func(actor *User, partition LogPartition, command proto.CommandName, payload any, wantCode string) {
+	expectNativeErr := func(actor *projections.User, partition LogPartition, command proto.CommandName, payload any, wantCode string) {
 		t.Helper()
 		raw := marshalCoreTestJSON(t, fmt.Sprintf("marshal %s payload", command), payload)
 		reply := executor.ExecuteCommandLogRecord(ctx, CommandLogRecord{
@@ -2623,7 +2623,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 			t.Fatalf("%s reply = %+v, want terminal %s", command, reply, wantCode)
 		}
 	}
-	produceAndDrain := func(actor *User, partition LogPartition, command proto.CommandName, payload any, cid string, ts int64) CommandLogRecord {
+	produceAndDrain := func(actor *projections.User, partition LogPartition, command proto.CommandName, payload any, cid string, ts int64) CommandLogRecord {
 		t.Helper()
 		raw := marshalCoreTestJSON(t, fmt.Sprintf("marshal %s payload", command), payload)
 		return produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, string(command), CommandLogRecord{

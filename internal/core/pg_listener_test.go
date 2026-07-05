@@ -9,6 +9,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -189,7 +190,7 @@ func TestHandlePGEphemeralUnorderedTrafficWakeups(t *testing.T) {
 	}
 }
 
-func execPGListenerTestCmd(t *testing.T, c *Core, actor *User, cmd proto.CommandName, payload any) *proto.AckResult {
+func execPGListenerTestCmd(t *testing.T, c *Core, actor *projections.User, cmd proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
 	raw := marshalCoreTestJSON(t, "marshal "+string(cmd), payload)
 	reply := c.ExecCmd(context.Background(), actor, cmd, raw, "")

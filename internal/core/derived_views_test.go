@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -320,7 +321,7 @@ func TestDerivedViewWatermarkWorkerTracksHead(t *testing.T) {
 	stopWorker()
 }
 
-func createDerivedViewTestThread(t *testing.T, c *Core, actor *User) *proto.AckResult {
+func createDerivedViewTestThread(t *testing.T, c *Core, actor *projections.User) *proto.AckResult {
 	t.Helper()
 	raw := marshalCoreTestJSON(t, "marshal command", proto.CreateThreadPayload{
 		Board: "general",

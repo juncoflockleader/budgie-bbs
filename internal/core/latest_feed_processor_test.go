@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -180,7 +181,7 @@ func TestLatestFeedReadCacheServesStableWatermarkHit(t *testing.T) {
 	}
 
 	cache.hit = true
-	cache.posts = []Post{{
+	cache.posts = []projections.Post{{
 		ID:          "cached_post",
 		Thread:      "cached_thread",
 		Board:       "general",
@@ -211,7 +212,7 @@ func latestFeedRowCount(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertLatestFeedThreads(t *testing.T, posts []Post, wantThreads, absentThreads []string) {
+func assertLatestFeedThreads(t *testing.T, posts []projections.Post, wantThreads, absentThreads []string) {
 	t.Helper()
 	got := map[string]bool{}
 	for _, post := range posts {
@@ -236,10 +237,10 @@ type scriptedLatestFeedReadCache struct {
 	puts    int
 	hit     bool
 	lastKey readmodel.LatestFeedKey
-	posts   []Post
+	posts   []projections.Post
 }
 
-func (c *scriptedLatestFeedReadCache) GetLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey) ([]Post, bool, error) {
+func (c *scriptedLatestFeedReadCache) GetLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey) ([]projections.Post, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -251,7 +252,7 @@ func (c *scriptedLatestFeedReadCache) GetLatestFeedPosts(ctx context.Context, ke
 	return readmodel.ClonePosts(c.posts), true, nil
 }
 
-func (c *scriptedLatestFeedReadCache) PutLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey, posts []Post) error {
+func (c *scriptedLatestFeedReadCache) PutLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey, posts []projections.Post) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

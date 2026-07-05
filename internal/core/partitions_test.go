@@ -12,6 +12,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -201,7 +202,7 @@ func TestClassifyCommandPartitionUsesPayloadAndActorFallbacks(t *testing.T) {
 		t.Fatalf("createThread partition = %+v", p)
 	}
 
-	actor := &User{ID: "usr_alice"}
+	actor := &projections.User{ID: "usr_alice"}
 	p, ok = classifyCommandPartition(actor, proto.CmdSetPresence, []byte(`{"status":"active"}`))
 	if !ok {
 		t.Fatal("setPresence did not classify")
@@ -222,7 +223,7 @@ func TestClassifyCommandPartitionUsesPayloadAndActorFallbacks(t *testing.T) {
 func TestHotThreadSplitRoutesAppendPostsToReplySubpartitions(t *testing.T) {
 	var c Core
 	c.SetHotThreadSplit("thr_hot", 4)
-	actor := &User{ID: "usr_alice"}
+	actor := &projections.User{ID: "usr_alice"}
 	payload := []byte(`{"thread":"thr_hot","body":"hello"}`)
 
 	p, ok := c.classifyCommandPartition(actor, proto.CmdAppendPost, payload)
@@ -330,7 +331,7 @@ func TestHotThreadSplitBlockingLagRequiresAffectedPartitionsToDrain(t *testing.T
 	commandLog := NewMemoryCommandLog()
 	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 
-	actor := &User{ID: "usr_alice"}
+	actor := &projections.User{ID: "usr_alice"}
 	baseReply := c.ExecCmd(ctx, actor, proto.CmdAppendPost, []byte(`{"thread":"thr_hot","body":"base queued"}`), "cid-base-queued")
 	if baseReply.Err != nil {
 		t.Fatalf("enqueue base append: %+v", baseReply.Err)
@@ -374,7 +375,7 @@ func TestHotThreadSplitBlockingLagRequiresAffectedPartitionsToDrain(t *testing.T
 
 func TestHotThreadSplitDistributesReplyBacklogAndLagFalls(t *testing.T) {
 	ctx := context.Background()
-	actor := &User{ID: "usr_alice"}
+	actor := &projections.User{ID: "usr_alice"}
 	const threadID = "thr_hot"
 	const replies = 8
 
@@ -467,7 +468,7 @@ func TestHotThreadSplitDistributesReplyBacklogAndLagFalls(t *testing.T) {
 	}
 }
 
-func enqueueClassifiedAppendPostCommand(t *testing.T, ctx context.Context, c *Core, commandLog CommandLog, actor *User, threadID, body string, sequence int) LogPartition {
+func enqueueClassifiedAppendPostCommand(t *testing.T, ctx context.Context, c *Core, commandLog CommandLog, actor *projections.User, threadID, body string, sequence int) LogPartition {
 	t.Helper()
 	raw, err := json.Marshal(proto.AppendPostPayload{Thread: threadID, Body: body})
 	if err != nil {
@@ -505,7 +506,7 @@ func TestHotThreadSplitAuthoritativeCommandUsesSplitPartition(t *testing.T) {
 	c := newCoreTestCore(t, WithAuthoritativeCommandLog(commandLog))
 	c.SetHotThreadSplit("thr_hot", 4)
 
-	reply := c.ExecCmd(context.Background(), &User{ID: "usr_alice"}, proto.CmdAppendPost, []byte(`{"thread":"thr_hot","body":"hello"}`), "cid-hot-reply")
+	reply := c.ExecCmd(context.Background(), &projections.User{ID: "usr_alice"}, proto.CmdAppendPost, []byte(`{"thread":"thr_hot","body":"hello"}`), "cid-hot-reply")
 	if reply.Err != nil {
 		t.Fatalf("exec split append: %+v", reply.Err)
 	}
@@ -517,7 +518,7 @@ func TestHotThreadSplitAuthoritativeCommandUsesSplitPartition(t *testing.T) {
 func TestHotThreadSplitCommandLogValidationAcceptsThreadPartitionFamily(t *testing.T) {
 	var c Core
 	c.SetHotThreadSplit("thr_hot", 4)
-	actor := &User{ID: "usr_alice"}
+	actor := &projections.User{ID: "usr_alice"}
 	payload := []byte(`{"thread":"thr_hot","body":"hello"}`)
 	p, ok := c.classifyCommandPartition(actor, proto.CmdAppendPost, payload)
 	if !ok {
@@ -717,7 +718,7 @@ func TestHotThreadSplitModerationRemainsCausalForTargetPost(t *testing.T) {
 	}
 }
 
-func execPartitionTestCommand(t *testing.T, c *Core, actor *User, name proto.CommandName, payload any, cid string) *proto.AckResult {
+func execPartitionTestCommand(t *testing.T, c *Core, actor *projections.User, name proto.CommandName, payload any, cid string) *proto.AckResult {
 	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -765,7 +766,7 @@ func drainPartitionTestCommandLog(t *testing.T, ctx context.Context, c *Core, co
 	return results
 }
 
-func findPartitionTestThreadByTitle(t *testing.T, c *Core, boardID, title string) Thread {
+func findPartitionTestThreadByTitle(t *testing.T, c *Core, boardID, title string) projections.Thread {
 	t.Helper()
 	threads, err := c.ListThreads(boardID, 100, 0)
 	if err != nil {
@@ -777,10 +778,10 @@ func findPartitionTestThreadByTitle(t *testing.T, c *Core, boardID, title string
 		}
 	}
 	t.Fatalf("thread %q not found in %+v", title, threads)
-	return Thread{}
+	return projections.Thread{}
 }
 
-func splitReplyBodiesForDistinctPartitions(t *testing.T, c *Core, actor *User, threadID string, count int) []string {
+func splitReplyBodiesForDistinctPartitions(t *testing.T, c *Core, actor *projections.User, threadID string, count int) []string {
 	t.Helper()
 	bodies := make([]string, 0, count)
 	seen := map[string]bool{}
@@ -806,7 +807,7 @@ func splitReplyBodiesForDistinctPartitions(t *testing.T, c *Core, actor *User, t
 	return bodies
 }
 
-func assertStablePostPresentation(t *testing.T, first, second []Post, expectedBodies []string) {
+func assertStablePostPresentation(t *testing.T, first, second []projections.Post, expectedBodies []string) {
 	t.Helper()
 	if len(first) != len(expectedBodies) {
 		t.Fatalf("first read post len = %d, want %d: %+v", len(first), len(expectedBodies), first)

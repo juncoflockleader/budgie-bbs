@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -295,7 +296,7 @@ func (i *testPostSearchIndex) Search(_ context.Context, query, boardID string, l
 
 func postSearchBoolPtr(v bool) *bool { return &v }
 
-func execPostSearchTestCommand(t *testing.T, c *Core, actor *User, name proto.CommandName, payload any) *proto.AckResult {
+func execPostSearchTestCommand(t *testing.T, c *Core, actor *projections.User, name proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {

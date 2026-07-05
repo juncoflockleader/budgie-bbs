@@ -103,7 +103,7 @@ func newTestCorePostgres(t *testing.T, baseDSN string, options ...core.Option) (
 	return c, cancel
 }
 
-func registerAndGetUser(t *testing.T, c *core.Core, name, password string) *core.User {
+func registerAndGetUser(t *testing.T, c *core.Core, name, password string) *projections.User {
 	t.Helper()
 	u, err := c.RegisterUser(name, password)
 	if err != nil {
@@ -122,7 +122,7 @@ func marshalCoreTestPayload(t *testing.T, payload any) []byte {
 }
 
 // exec is a helper that submits a command and fails the test on error.
-func exec(t *testing.T, c *core.Core, actor *core.User, cmd proto.CommandName, payload any) *proto.AckResult {
+func exec(t *testing.T, c *core.Core, actor *projections.User, cmd proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
 	raw := marshalCoreTestPayload(t, payload)
 	reply := c.ExecCmd(context.Background(), actor, cmd, raw, "")
@@ -133,7 +133,7 @@ func exec(t *testing.T, c *core.Core, actor *core.User, cmd proto.CommandName, p
 }
 
 // execExpectErr submits a command and expects it to be rejected with the given code.
-func execExpectErr(t *testing.T, c *core.Core, actor *core.User, cmd proto.CommandName, payload any, expectCode string) {
+func execExpectErr(t *testing.T, c *core.Core, actor *projections.User, cmd proto.CommandName, payload any, expectCode string) {
 	t.Helper()
 	raw := marshalCoreTestPayload(t, payload)
 	reply := c.ExecCmd(context.Background(), actor, cmd, raw, "")
@@ -370,7 +370,7 @@ func TestAppendPostQuotedReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var quoted *core.Post
+	var quoted *projections.Post
 	for i := range posts {
 		if posts[i].ID == reply.ID {
 			quoted = &posts[i]
@@ -3155,7 +3155,7 @@ func TestAutomaticDailyStatsSnapshot(t *testing.T) {
 	}
 }
 
-func hasThreadSummary(threads []core.Thread, id, titlePart string) bool {
+func hasThreadSummary(threads []projections.Thread, id, titlePart string) bool {
 	for _, thread := range threads {
 		if thread.ID == id && strings.Contains(thread.Title, titlePart) {
 			return true
@@ -5215,7 +5215,7 @@ func TestSysopMailAll(t *testing.T) {
 		Subject: "Campus bulletin",
 		Body:    "Maintenance at midnight.",
 	})
-	for _, user := range []*core.User{alice, bob, carol} {
+	for _, user := range []*projections.User{alice, bob, carol} {
 		inbox, err := c.ListMail(user.ID, "inbox", 10, 0, false)
 		if err != nil {
 			t.Fatal(err)
@@ -6550,7 +6550,7 @@ func boardNameForThread(threads []projections.ThreadSummary, threadID string) st
 	return ""
 }
 
-func hasPostID(posts []core.Post, postID string) bool {
+func hasPostID(posts []projections.Post, postID string) bool {
 	for _, post := range posts {
 		if post.ID == postID {
 			return true
@@ -6559,7 +6559,7 @@ func hasPostID(posts []core.Post, postID string) bool {
 	return false
 }
 
-func hasPostInThread(posts []core.Post, threadID string) bool {
+func hasPostInThread(posts []projections.Post, threadID string) bool {
 	for _, post := range posts {
 		if post.Thread == threadID {
 			return true
@@ -6568,7 +6568,7 @@ func hasPostInThread(posts []core.Post, threadID string) bool {
 	return false
 }
 
-func postBoardNameForThread(posts []core.Post, threadID string) string {
+func postBoardNameForThread(posts []projections.Post, threadID string) string {
 	for _, post := range posts {
 		if post.Thread == threadID {
 			return post.BoardName
@@ -6577,7 +6577,7 @@ func postBoardNameForThread(posts []core.Post, threadID string) string {
 	return ""
 }
 
-func postThreadTitleForThread(posts []core.Post, threadID string) string {
+func postThreadTitleForThread(posts []projections.Post, threadID string) string {
 	for _, post := range posts {
 		if post.Thread == threadID {
 			return post.ThreadTitle
@@ -6586,7 +6586,7 @@ func postThreadTitleForThread(posts []core.Post, threadID string) string {
 	return ""
 }
 
-func postThreadTitleForPost(posts []core.Post, postID string) string {
+func postThreadTitleForPost(posts []projections.Post, postID string) string {
 	for _, post := range posts {
 		if post.ID == postID {
 			return post.ThreadTitle
@@ -6595,7 +6595,7 @@ func postThreadTitleForPost(posts []core.Post, postID string) string {
 	return ""
 }
 
-func postReplyDepth(posts []core.Post, postID string) int {
+func postReplyDepth(posts []projections.Post, postID string) int {
 	for _, post := range posts {
 		if post.ID == postID {
 			return post.ReplyDepth
@@ -7238,7 +7238,7 @@ func TestPollCreationSupportsExpiryOnReply(t *testing.T) {
 		t.Fatalf("expected 2 posts, got %d", len(posts))
 	}
 
-	var reply *core.Post
+	var reply *projections.Post
 	for i := range posts {
 		if posts[i].ID == replyRes.ID {
 			reply = &posts[i]
@@ -8456,7 +8456,7 @@ func TestPollCreationOnReplyPost(t *testing.T) {
 		t.Fatalf("expected 2 posts, got %d", len(posts))
 	}
 
-	var reply *core.Post
+	var reply *projections.Post
 	for _, p := range posts {
 		if p.ID == postRes.ID {
 			reply = &p
@@ -8513,7 +8513,7 @@ func TestPollCreationOnReplyWithMissingCloseTagLeavesBodyIntact(t *testing.T) {
 		t.Fatalf("expected 2 posts, got %d", len(posts))
 	}
 
-	var reply *core.Post
+	var reply *projections.Post
 	for i := range posts {
 		if posts[i].ID == replyRes.ID {
 			reply = &posts[i]
@@ -8558,7 +8558,7 @@ func TestPollCreationOnReplySupportsUppercasePollTags(t *testing.T) {
 		t.Fatalf("expected 2 posts, got %d", len(posts))
 	}
 
-	var reply *core.Post
+	var reply *projections.Post
 	for i := range posts {
 		if posts[i].ID == replyRes.ID {
 			reply = &posts[i]
@@ -8618,7 +8618,7 @@ func TestPollCreationOnReplyPreservesBodyAroundMarkup(t *testing.T) {
 		t.Fatalf("expected 2 posts, got %d", len(posts))
 	}
 
-	var reply *core.Post
+	var reply *projections.Post
 	for i := range posts {
 		if posts[i].ID == replyRes.ID {
 			reply = &posts[i]
@@ -8678,7 +8678,7 @@ func TestPollCreationOnReplyRejectsInvalidExpires(t *testing.T) {
 		t.Fatalf("expected 2 posts, got %d", len(posts))
 	}
 
-	var reply *core.Post
+	var reply *projections.Post
 	for i := range posts {
 		if posts[i].ID == replyRes.ID {
 			reply = &posts[i]
@@ -8725,7 +8725,7 @@ func TestPollCreationOnReplyRequiresQuestionText(t *testing.T) {
 		t.Fatalf("expected 2 posts, got %d", len(posts))
 	}
 
-	var reply *core.Post
+	var reply *projections.Post
 	for i := range posts {
 		if posts[i].ID == replyRes.ID {
 			reply = &posts[i]
@@ -8840,7 +8840,7 @@ func TestPollCreationOnReplyWithMultiplePollBlocksUsesFirstBlock(t *testing.T) {
 		t.Fatalf("expected 2 posts in thread, got %d", len(posts))
 	}
 
-	var replyPost *core.Post
+	var replyPost *projections.Post
 	for i := range posts {
 		if posts[i].ID == reply.ID {
 			replyPost = &posts[i]
@@ -8892,7 +8892,7 @@ func TestPollCreationOnReplyWithMalformedFirstPollLeavesLaterPollUntouched(t *te
 		t.Fatalf("expected 2 posts in thread, got %d", len(posts))
 	}
 
-	var replyPost *core.Post
+	var replyPost *projections.Post
 	for i := range posts {
 		if posts[i].ID == reply.ID {
 			replyPost = &posts[i]
@@ -9133,8 +9133,8 @@ func TestBoardDeletedPostsRebuildFromEventLog(t *testing.T) {
 }
 
 type forumSnapshot struct {
-	thread          *core.Thread
-	posts           []core.Post
+	thread          *projections.Thread
+	posts           []projections.Post
 	pollQuestion    string
 	pollOptionTexts []string
 	pollVoteTotal   int

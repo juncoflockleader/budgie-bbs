@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-func mudCmd(t *testing.T, c *core.Core, actor *core.User, line string) {
+func mudCmd(t *testing.T, c *core.Core, actor *projections.User, line string) {
 	t.Helper()
 	raw := marshalCoreTestPayload(t, proto.MUDCommandPayload{Line: line})
 	if r := c.ExecCmd(context.Background(), actor, proto.CmdMUDCommand, raw, ""); r.Err != nil {

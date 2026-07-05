@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -133,7 +134,7 @@ func TestPostgresPartitionLockAllowsOtherBoardWriteEndToEnd(t *testing.T) {
 	assertPostgresPartitionTestThreadVisible(t, c, "general", released.ID)
 }
 
-func execPostgresPartitionTestCmd(t *testing.T, c *Core, ctx context.Context, actor *User, cmd proto.CommandName, payload any) *proto.AckResult {
+func execPostgresPartitionTestCmd(t *testing.T, c *Core, ctx context.Context, actor *projections.User, cmd proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
 	reply := execPostgresPartitionTestCmdReply(t, c, ctx, actor, cmd, payload)
 	if reply.Err != nil {
@@ -142,7 +143,7 @@ func execPostgresPartitionTestCmd(t *testing.T, c *Core, ctx context.Context, ac
 	return reply.Result
 }
 
-func execPostgresPartitionTestCmdReply(t *testing.T, c *Core, ctx context.Context, actor *User, cmd proto.CommandName, payload any) commandexec.Reply {
+func execPostgresPartitionTestCmdReply(t *testing.T, c *Core, ctx context.Context, actor *projections.User, cmd proto.CommandName, payload any) commandexec.Reply {
 	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {

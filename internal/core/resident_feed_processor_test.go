@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -143,7 +144,7 @@ func residentFeedRowCount(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertResidentFeedThreads(t *testing.T, posts []Post, wantThreads, absentThreads []string) {
+func assertResidentFeedThreads(t *testing.T, posts []projections.Post, wantThreads, absentThreads []string) {
 	t.Helper()
 	got := map[string]bool{}
 	for _, post := range posts {
