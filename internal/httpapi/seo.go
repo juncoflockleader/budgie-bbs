@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 )
 
 // sitemapCache holds the most recently generated sitemap and serves it with a
@@ -74,7 +74,7 @@ func (s *Server) sitemapTTL() time.Duration {
 	if s.sitemapInterval > 0 {
 		return s.sitemapInterval
 	}
-	return core.DefaultSitemapInterval
+	return sitemodel.DefaultSitemapInterval
 }
 
 // resolveBaseURL returns the configured public base URL, or derives one from the
@@ -100,7 +100,7 @@ func (s *Server) resolveBaseURL(r *http.Request) string {
 // handleRobotsTxt serves robots.txt, advertising the sitemap and keeping the
 // JSON API out of the index.
 func (s *Server) handleRobotsTxt(w http.ResponseWriter, r *http.Request) {
-	body := core.GenerateRobotsTxt(s.resolveBaseURL(r))
+	body := sitemodel.GenerateRobotsTxt(s.resolveBaseURL(r))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	_, _ = w.Write(body)
@@ -111,7 +111,7 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	base := s.resolveBaseURL(r)
 	body := s.sitemap.serve(s.generateSitemap, base, s.sitemapTTL())
 	if len(body) == 0 {
-		body = core.MinimalSitemap(base) // generation failed on a cold cache
+		body = sitemodel.MinimalSitemap(base) // generation failed on a cold cache
 	}
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
