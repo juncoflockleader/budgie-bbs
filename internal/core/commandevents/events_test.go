@@ -52,6 +52,49 @@ func TestBoardCreated(t *testing.T) {
 	}
 }
 
+func TestBoardConfigEvents(t *testing.T) {
+	scopes, settings := BoardSettingsSet(BoardSettingsSetSpec{
+		Board:              "general",
+		ReadOnly:           true,
+		AttachmentsAllowed: true,
+		MemberReadMode:     true,
+		GuestAccess:        "read",
+		By:                 "usr_admin",
+		TS:                 1234,
+	})
+	requireScopes(t, scopes, "board:general")
+	if settings.Board != "general" || !settings.ReadOnly || !settings.AttachmentsAllowed ||
+		!settings.MemberReadMode || settings.GuestAccess != "read" || settings.By != "usr_admin" || settings.TS != 1234 {
+		t.Fatalf("BoardSettingsSet payload = %+v", settings)
+	}
+
+	scopes, requirements := BoardMemberRequirementsSet(BoardMemberRequirementsSetSpec{
+		Board:                     "general",
+		MinLoginCount:             1,
+		MinPostCount:              2,
+		MinTrustLevel:             3,
+		MinBoardOriginalPostCount: 4,
+		MaxMembers:                5,
+		ApprovalMode:              "auto",
+		By:                        "usr_admin",
+		TS:                        1235,
+	})
+	requireScopes(t, scopes, "board:general")
+	if requirements.Board != "general" || requirements.MinLoginCount != 1 || requirements.MinPostCount != 2 ||
+		requirements.MinTrustLevel != 3 || requirements.MinBoardOriginalPostCount != 4 ||
+		requirements.MaxMembers != 5 || requirements.ApprovalMode != "auto" ||
+		requirements.By != "usr_admin" || requirements.TS != 1235 {
+		t.Fatalf("BoardMemberRequirementsSet payload = %+v", requirements)
+	}
+
+	scopes, recommended := BoardRecommendedSet("general", true, "start here", 6, "usr_admin", 1236)
+	requireScopes(t, scopes, "board:general")
+	if recommended.Board != "general" || !recommended.Recommended || recommended.Note != "start here" ||
+		recommended.Position != 6 || recommended.CuratedBy != "usr_admin" || recommended.TS != 1236 {
+		t.Fatalf("BoardRecommendedSet payload = %+v", recommended)
+	}
+}
+
 func TestBoardRoleMembershipEvents(t *testing.T) {
 	scopes, moderator := BoardModeratorSet("general", "usr_alice", true, 4, "usr_admin", 1234)
 	requireScopes(t, scopes, "board:general", "user:usr_alice")

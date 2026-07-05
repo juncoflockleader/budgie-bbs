@@ -59,6 +59,31 @@ func BoardCreated(boardID, name, description, parentID string, position int, by 
 	}
 }
 
+type BoardSettingsSetSpec proto.BoardSettingsSetPayload
+
+func BoardSettingsSet(spec BoardSettingsSetSpec) ([]string, *proto.BoardSettingsSetPayload) {
+	payload := proto.BoardSettingsSetPayload(spec)
+	return []string{"board:" + payload.Board}, &payload
+}
+
+type BoardMemberRequirementsSetSpec proto.BoardMemberRequirementsSetPayload
+
+func BoardMemberRequirementsSet(spec BoardMemberRequirementsSetSpec) ([]string, *proto.BoardMemberRequirementsSetPayload) {
+	payload := proto.BoardMemberRequirementsSetPayload(spec)
+	return []string{"board:" + payload.Board}, &payload
+}
+
+func BoardRecommendedSet(boardID string, recommended bool, note string, position int, curatedBy string, ts int64) ([]string, *proto.BoardRecommendedSetPayload) {
+	return []string{"board:" + boardID}, &proto.BoardRecommendedSetPayload{
+		Board:       boardID,
+		Recommended: recommended,
+		Note:        note,
+		Position:    position,
+		CuratedBy:   curatedBy,
+		TS:          ts,
+	}
+}
+
 func BoardModeratorSet(boardID, userID string, moderator bool, position int, by string, ts int64) ([]string, *proto.BoardModeratorSetPayload) {
 	return []string{"board:" + boardID, "user:" + userID}, &proto.BoardModeratorSetPayload{
 		Board:     boardID,

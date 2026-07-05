@@ -1818,7 +1818,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardSettings(ctx context.Co
 	}
 	projections.ApplyBoardSettingsPatch(settings, projections.BoardSettingsPatchFromPayload(payload))
 	ts := nativeCommandTimestamp(record)
-	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardSettingsSet, []string{"board:" + boardID}, &proto.BoardSettingsSetPayload{
+	scopes, eventPayload := commandevents.BoardSettingsSet(commandevents.BoardSettingsSetSpec{
 		Board:              boardID,
 		AnonymousAllowed:   settings.AnonymousAllowed,
 		ReadOnly:           settings.ReadOnly,
@@ -1833,7 +1833,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardSettings(ctx context.Co
 		GuestAccess:        settings.GuestAccess,
 		By:                 actor.ID,
 		TS:                 ts,
-	}, ts)}
+	})
+	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardSettingsSet, scopes, eventPayload, ts)}
 	if settingLines := proto.BoardSettingsAuditLines(payload); len(settingLines) > 0 && !settings.MemberReadMode {
 		lines := []string{
 			"Action: board settings changed",
@@ -1884,7 +1885,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardMemberRequirements(ctx 
 	patch := projections.BoardMemberRequirementsPatchFromPayload(payload)
 	projections.ApplyBoardMemberRequirementsPatch(req, patch)
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardMemberRequirementsSet, []string{"board:" + boardID}, &proto.BoardMemberRequirementsSetPayload{
+	scopes, eventPayload := commandevents.BoardMemberRequirementsSet(commandevents.BoardMemberRequirementsSetSpec{
 		Board:                     boardID,
 		MinLoginCount:             req.MinLoginCount,
 		MinPostCount:              req.MinPostCount,
@@ -1898,7 +1899,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardMemberRequirements(ctx 
 		ApprovalMode:              req.ApprovalMode,
 		By:                        actor.ID,
 		TS:                        ts,
-	}, ts)
+	})
+	event := nativeEvent(record, 0, proto.EvtBoardMemberRequirementsSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(boardID, event), nil
 }
 
@@ -2252,14 +2254,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetRecommendedBoard(ctx context
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardRecommendedSet, []string{"board:" + boardID}, &proto.BoardRecommendedSetPayload{
-		Board:       boardID,
-		Recommended: payload.Recommended,
-		Note:        payload.Note,
-		Position:    position,
-		CuratedBy:   actor.ID,
-		TS:          ts,
-	}, ts)
+	scopes, eventPayload := commandevents.BoardRecommendedSet(boardID, payload.Recommended, payload.Note, position, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtBoardRecommendedSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(boardID, event), nil
 }
 
