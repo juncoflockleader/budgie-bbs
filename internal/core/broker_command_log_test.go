@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -131,7 +132,7 @@ func TestBrokerCommandLogSynthesizesCIDWhenMissing(t *testing.T) {
 		Payload:    []byte(`{"board":"general","title":"General"}`),
 		EnqueuedAt: 1000,
 	}, "produce")
-	wantCID := SyntheticCommandLogCID(partition, record.Offset)
+	wantCID := logmodel.SyntheticCommandLogCID(partition, record.Offset)
 	if record.CID != wantCID {
 		t.Fatalf("record cid = %q, want %q", record.CID, wantCID)
 	}

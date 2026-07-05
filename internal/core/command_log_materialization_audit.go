@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 )
 
@@ -98,7 +99,7 @@ func (c *Core) auditCommandLogMaterializationOffsets(ctx context.Context, comman
 					after = record.Offset
 					continue
 				}
-				commandID, err := EffectiveCommandLogCID(record)
+				commandID, err := logmodel.EffectiveCommandLogCID(record)
 				if err != nil {
 					return commandLogMaterializationAuditError(report, fmt.Errorf("command log materialization audit: command id: %w", err))
 				}

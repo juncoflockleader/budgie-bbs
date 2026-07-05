@@ -888,7 +888,7 @@ func (l *MemoryCommandLog) Produce(ctx context.Context, record CommandLogRecord)
 	}
 	record.Offset = int64(len(l.records[record.Partition]) + 1)
 	if record.CID == "" {
-		record.CID = SyntheticCommandLogCID(record.Partition, record.Offset)
+		record.CID = logmodel.SyntheticCommandLogCID(record.Partition, record.Offset)
 	}
 	l.records[record.Partition] = append(l.records[record.Partition], record)
 	if key, ok := logmodel.NewCommandReceiptKey(record.Partition, record.ActorID, record.CID); ok {

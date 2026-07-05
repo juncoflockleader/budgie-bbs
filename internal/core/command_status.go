@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -66,7 +67,7 @@ func (c *Core) CommandStatus(ctx context.Context, actor *User, commandID string,
 	if len(records) == 0 || records[0].Offset != offset || records[0].ActorID != actorID {
 		return nil, ErrCommandStatusNotFound
 	}
-	recordID, err := EffectiveCommandLogCID(records[0])
+	recordID, err := logmodel.EffectiveCommandLogCID(records[0])
 	if err != nil {
 		return nil, fmt.Errorf("command status: command log record id: %w", err)
 	}
@@ -162,7 +163,7 @@ func (c *Core) RecordCommandLogAppliedBatch(ctx context.Context, records []Comma
 		if results[i] == nil {
 			continue
 		}
-		commandID, err := EffectiveCommandLogCID(record)
+		commandID, err := logmodel.EffectiveCommandLogCID(record)
 		if err != nil {
 			return fmt.Errorf("command log receipt: command id: %w", err)
 		}
@@ -217,7 +218,7 @@ func (c *Core) recordCommandLogReceipt(ctx context.Context, record CommandLogRec
 	if errDetail == nil && status != CommandStatusApplied {
 		return nil
 	}
-	commandID, err := EffectiveCommandLogCID(record)
+	commandID, err := logmodel.EffectiveCommandLogCID(record)
 	if err != nil {
 		return fmt.Errorf("command log receipt: command id: %w", err)
 	}

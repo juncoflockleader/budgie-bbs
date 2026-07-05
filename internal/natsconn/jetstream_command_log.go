@@ -101,7 +101,7 @@ func (c *JetStreamCommandLogClient) AppendCommand(ctx context.Context, partition
 		record.PartitionKey = partition.Key
 		record.Offset = tail.logicalOffset + 1
 		if record.CID == "" {
-			record.CID = core.SyntheticCommandLogCID(partition, record.Offset)
+			record.CID = logmodel.SyntheticCommandLogCID(partition, record.Offset)
 		}
 		if record.EnqueuedAt <= 0 {
 			record.EnqueuedAt = time.Now().UnixMilli()

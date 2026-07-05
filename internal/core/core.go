@@ -545,7 +545,7 @@ func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, nam
 			Retryable: true,
 		}}
 	}
-	commandID, err := EffectiveCommandLogCID(record)
+	commandID, err := logmodel.EffectiveCommandLogCID(record)
 	if err != nil {
 		return Reply{Err: &proto.ErrorDetail{
 			Code:      proto.ErrCommandLogUnavailable,
@@ -790,7 +790,7 @@ func actorID(actor *User) string {
 }
 
 func commandLogExecutionCID(record CommandLogRecord) (string, *proto.ErrorDetail) {
-	cid, err := EffectiveCommandLogCID(record)
+	cid, err := logmodel.EffectiveCommandLogCID(record)
 	if err != nil {
 		return "", &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "command log record missing offset for idempotent execution", Retryable: false}
 	}

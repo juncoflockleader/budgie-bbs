@@ -2357,7 +2357,7 @@ func TestCoreCommandLogShadowUsesSyntheticCIDForImmediateExecution(t *testing.T)
 		t.Fatalf("records = %+v, want one shadow command", records)
 	}
 	record := records[0]
-	wantCID := SyntheticCommandLogCID(partition, record.Offset)
+	wantCID := logmodel.SyntheticCommandLogCID(partition, record.Offset)
 	if record.CID != wantCID {
 		t.Fatalf("shadow record cid = %q, want %q", record.CID, wantCID)
 	}

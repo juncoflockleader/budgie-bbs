@@ -225,7 +225,7 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 	offset := c.tails[partition] + 1
 	record.Offset = offset
 	if record.CID == "" {
-		record.CID = SyntheticCommandLogCID(partition, offset)
+		record.CID = logmodel.SyntheticCommandLogCID(partition, offset)
 	}
 	if record.EnqueuedAt <= 0 {
 		record.EnqueuedAt = nowMS()
