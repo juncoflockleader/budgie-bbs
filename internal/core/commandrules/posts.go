@@ -4,6 +4,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/postmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/threadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -221,34 +222,31 @@ func RequirePostRedacted(redacted bool, message string) *proto.ErrorDetail {
 }
 
 func RequireThreadOpenForReply(locked, canModerateBoard bool) *proto.ErrorDetail {
-	if locked && !canModerateBoard {
+	if !threadmodel.ReplyAllowed(locked, canModerateBoard) {
 		return newErrDetail(proto.ErrThreadLocked, "thread is locked", false)
 	}
 	return nil
 }
 
 func RequireThreadStarterAcceptsReplies(noReply, canModerateThread bool) *proto.ErrorDetail {
-	if noReply && !canModerateThread {
+	if !threadmodel.StarterAcceptsReplies(noReply, canModerateThread) {
 		return newErrDetail(proto.ErrForbidden, "thread starter is not accepting replies", false)
 	}
 	return nil
 }
 
 func RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow bool) *proto.ErrorDetail {
-	if canModerateThread {
-		return nil
-	}
-	if !isAuthor {
+	switch threadmodel.TitlePermissionFailureFor(canModerateThread, isAuthor, withinWindow) {
+	case threadmodel.TitlePermissionAuthor:
 		return newErrDetail(proto.ErrForbidden, "thread author or board thread moderation permission required", false)
-	}
-	if !withinWindow {
+	case threadmodel.TitlePermissionEditWindow:
 		return AuthorEditWindowExpiredError()
 	}
 	return nil
 }
 
 func RequireThreadModeration(canModerateThread bool) *proto.ErrorDetail {
-	if !canModerateThread {
+	if !threadmodel.ModerationAllowed(canModerateThread) {
 		return newErrDetail(proto.ErrForbidden, "board thread moderation permission required", false)
 	}
 	return nil

@@ -43,6 +43,7 @@ func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
 		"./internal/core/boardmodel",
 		"./internal/core/categorymodel",
 		"./internal/core/postmodel",
+		"./internal/core/threadmodel",
 	}
 
 	for _, pkg := range modelPackages {
