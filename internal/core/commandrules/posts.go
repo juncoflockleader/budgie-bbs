@@ -1,6 +1,7 @@
 package commandrules
 
 import (
+	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -47,7 +48,7 @@ func RequirePostAttachmentCapacity(existingCount int) *proto.ErrorDetail {
 }
 
 func RequireBoardMailInAllowed(settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
-	if settings != nil && !settings.MailInAllowed && !canModerateBoard {
+	if !boardPostPolicySettings(settings).AllowsMailIn(canModerateBoard) {
 		return newErrDetail(proto.ErrForbidden, "board mail-in is disabled", false)
 	}
 	return nil
@@ -97,14 +98,6 @@ func RequirePostAuthorEditWindow(canBypassAuthorWindow, isAuthor, withinWindow b
 	return AuthorEditWindowExpiredError()
 }
 
-func boardRequiresPostingMembership(settings *projections.BoardSettings) bool {
-	return settings != nil && (settings.MemberReadMode || settings.MemberPostMode)
-}
-
-func boardRequiresReadMembership(settings *projections.BoardSettings) bool {
-	return settings != nil && settings.MemberReadMode
-}
-
 func RequireThreadCreationBoardAccess(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
 	return requireThreadCreationBoardAccess(settings, canModerateBoard, func() (bool, *proto.ErrorDetail) {
 		return ActorCanUseMemberBoard(queryable, actor, boardID), nil
@@ -118,13 +111,11 @@ func RequireThreadCreationBoardAccessStrict(queryable Queryable, actor *projecti
 }
 
 func requireThreadCreationBoardAccess(settings *projections.BoardSettings, canModerateBoard bool, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
-	if settings == nil {
-		return nil
-	}
-	if settings.ReadOnly && !canModerateBoard {
+	policy := boardPostPolicySettings(settings)
+	if policy.BlocksThreadCreation(canModerateBoard) {
 		return newErrDetail(proto.ErrForbidden, "board is read-only", false)
 	}
-	return requirePostingMemberAccess(settings, canUseMemberBoard, "board members only")
+	return requirePostingMemberAccess(policy, canUseMemberBoard, "board members only")
 }
 
 func RequireReplyBoardAccess(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
@@ -140,13 +131,11 @@ func RequireReplyBoardAccessStrict(queryable Queryable, actor *projections.User,
 }
 
 func requireReplyBoardAccess(settings *projections.BoardSettings, canModerateBoard bool, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
-	if settings == nil {
-		return nil
-	}
-	if (settings.ReadOnly || settings.NoReply) && !canModerateBoard {
+	policy := boardPostPolicySettings(settings)
+	if policy.BlocksReply(canModerateBoard) {
 		return newErrDetail(proto.ErrForbidden, "board is not accepting replies", false)
 	}
-	return requirePostingMemberAccess(settings, canUseMemberBoard, "board members only")
+	return requirePostingMemberAccess(policy, canUseMemberBoard, "board members only")
 }
 
 func RequireMemberBoardReadAccess(queryable Queryable, actor *projections.User, boardID string, settings *projections.BoardSettings, message string) *proto.ErrorDetail {
@@ -329,7 +318,8 @@ func RequireBoardPostModeration(canModeratePosts bool) *proto.ErrorDetail {
 }
 
 func requireMemberBoardReadAccess(settings *projections.BoardSettings, message string, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
-	if !boardRequiresReadMembership(settings) {
+	policy := boardPostPolicySettings(settings)
+	if !policy.RequiresReadMembership() {
 		return nil
 	}
 	canUse, errDetail := canUseMemberBoard()
@@ -342,8 +332,8 @@ func requireMemberBoardReadAccess(settings *projections.BoardSettings, message s
 	return nil
 }
 
-func requirePostingMemberAccess(settings *projections.BoardSettings, canUseMemberBoard func() (bool, *proto.ErrorDetail), message string) *proto.ErrorDetail {
-	if !boardRequiresPostingMembership(settings) {
+func requirePostingMemberAccess(settings *boardmodel.PostPolicySettings, canUseMemberBoard func() (bool, *proto.ErrorDetail), message string) *proto.ErrorDetail {
+	if !settings.RequiresPostingMembership() {
 		return nil
 	}
 	canUse, errDetail := canUseMemberBoard()
@@ -354,6 +344,19 @@ func requirePostingMemberAccess(settings *projections.BoardSettings, canUseMembe
 		return newErrDetail(proto.ErrForbidden, message, false)
 	}
 	return nil
+}
+
+func boardPostPolicySettings(settings *projections.BoardSettings) *boardmodel.PostPolicySettings {
+	if settings == nil {
+		return nil
+	}
+	return &boardmodel.PostPolicySettings{
+		ReadOnly:       settings.ReadOnly,
+		NoReply:        settings.NoReply,
+		MailInAllowed:  settings.MailInAllowed,
+		MemberReadMode: settings.MemberReadMode,
+		MemberPostMode: settings.MemberPostMode,
+	}
 }
 
 func actorCanUseMemberBoardStrict(queryable Queryable, actor *projections.User, boardID string) (bool, *proto.ErrorDetail) {
