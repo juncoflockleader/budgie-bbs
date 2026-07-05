@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -86,20 +87,14 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 		switch action {
 		case "manual_review":
 			reviewID := stableCommandLogDecisionID("rev_", record, idx)
-			actionEvent = &EventAppend{
-				ID: evtID, Kind: proto.EvtPostFlagged, Scopes: []string{"moderation:global"}, // moderation-only: reporter/reason not broadcast to board (M8)
-				Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "automod", PostID: postID, Thread: threadID, Reporter: by, Reason: reason, TS: ts}, TS: ts,
-			}
+			scopes, payload := commandevents.PostFlagged(reviewID, "automod", postID, threadID, by, reason, ts)
+			actionEvent = &EventAppend{ID: evtID, Kind: proto.EvtPostFlagged, Scopes: scopes, Payload: payload, TS: ts}
 		case "redact":
-			actionEvent = &EventAppend{
-				ID: evtID, Kind: proto.EvtPostRedacted, Scopes: []string{"thread:" + threadID, "board:" + boardID},
-				Payload: &proto.PostRedactedPayload{ID: postID, Thread: threadID, By: by, Reason: reason, TS: ts}, TS: ts,
-			}
+			scopes, payload := commandevents.PostRedacted(postID, threadID, boardID, by, reason, "", ts)
+			actionEvent = &EventAppend{ID: evtID, Kind: proto.EvtPostRedacted, Scopes: scopes, Payload: payload, TS: ts}
 		case "lock_thread":
-			actionEvent = &EventAppend{
-				ID: evtID, Kind: proto.EvtThreadLocked, Scopes: []string{"board:" + boardID, "thread:" + threadID},
-				Payload: &proto.ThreadLockedPayload{Thread: threadID, Locked: true, By: by, TS: ts}, TS: ts,
-			}
+			scopes, payload := commandevents.ThreadLocked(threadID, boardID, true, by, ts)
+			actionEvent = &EventAppend{ID: evtID, Kind: proto.EvtThreadLocked, Scopes: scopes, Payload: payload, TS: ts}
 		case "board_mute", "board_ban", "global_mute":
 			kind := "mute"
 			if action == "board_ban" {
@@ -109,24 +104,20 @@ func nativeAutomodEvents(db *sql.DB, record CommandLogRecord, actorID, postID, t
 			if action == "global_mute" {
 				scope = "global"
 			}
-			actionEvent = &EventAppend{
-				ID: evtID, Kind: proto.EvtUserSanctioned, Scopes: []string{"account:" + actorID},
-				Payload: &proto.UserSanctionedPayload{User: actorID, Kind: kind, Scope: scope, DurationSec: rule.DurationSec, By: by, Reason: reason, TS: ts}, TS: ts,
-			}
+			scopes, payload := commandevents.UserSanctioned(actorID, actorID, kind, scope, rule.DurationSec, by, reason, ts)
+			actionEvent = &EventAppend{ID: evtID, Kind: proto.EvtUserSanctioned, Scopes: scopes, Payload: payload, TS: ts}
 		default:
 			continue
 		}
 		events = append(events, *actionEvent)
 		idx++
+		auditScopes, auditPayload := commandevents.BoardAutomodTriggered(
+			stableCommandLogDecisionID("amlog_", record, idx),
+			boardID, rule.ID, rule.MatchType, action, actorID, postID, threadID, reason, ts,
+		)
 		events = append(events, EventAppend{
-			ID:     stableCommandLogDecisionID("evt_", record, idx),
-			Kind:   proto.EvtBoardAutomodTriggered,
-			Scopes: []string{"moderation:global"}, // moderation-only: metadata must not reach board subscribers (M8 sibling)
-			Payload: &proto.BoardAutomodTriggeredPayload{
-				ID: stableCommandLogDecisionID("amlog_", record, idx), Board: boardID, RuleID: rule.ID,
-				MatchType: rule.MatchType, Action: action, TargetUser: actorID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
-			},
-			TS: ts,
+			ID: stableCommandLogDecisionID("evt_", record, idx), Kind: proto.EvtBoardAutomodTriggered,
+			Scopes: auditScopes, Payload: auditPayload, TS: ts,
 		})
 		idx++
 	}

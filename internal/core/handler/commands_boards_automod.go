@@ -23,14 +23,7 @@ func (h *Handler) applyAutomodActionTx(tx *sql.Tx, ruleID, matchType, action, re
 			return nil, err
 		}
 		generated = append(generated, events...)
-		auditPayload := &proto.BoardAutomodTriggeredPayload{
-			ID: newID("amlog_"), Board: boardID, RuleID: ruleID, MatchType: matchType, Action: act,
-			TargetUser: targetUserID, PostID: postID, ThreadID: threadID, Reason: reason, TS: ts,
-		}
-		// Moderation-only: the audit payload carries rule/target/action metadata,
-		// so it must not be delivered/replayed on the board scope (that exposes
-		// moderation internals to every board member — M8 sibling).
-		auditScopes := []string{"moderation:global"}
+		auditScopes, auditPayload := commandevents.BoardAutomodTriggered(newID("amlog_"), boardID, ruleID, matchType, act, targetUserID, postID, threadID, reason, ts)
 		auditSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardAutomodTriggered, auditScopes, auditPayload)
 		if err != nil {
 			return nil, err

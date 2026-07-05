@@ -66,6 +66,21 @@ func BoardAutomodRuleDeleted(ruleID, boardID, by string, ts int64) ([]string, *p
 	return []string{"board:" + boardID}, &proto.BoardAutomodRuleDeletedPayload{ID: ruleID, Board: boardID, By: by, TS: ts}
 }
 
+func BoardAutomodTriggered(auditID, boardID, ruleID, matchType, action, targetUser, postID, threadID, reason string, ts int64) ([]string, *proto.BoardAutomodTriggeredPayload) {
+	return []string{"moderation:global"}, &proto.BoardAutomodTriggeredPayload{
+		ID:         auditID,
+		Board:      boardID,
+		RuleID:     ruleID,
+		MatchType:  matchType,
+		Action:     action,
+		TargetUser: targetUser,
+		PostID:     postID,
+		ThreadID:   threadID,
+		Reason:     reason,
+		TS:         ts,
+	}
+}
+
 func BoardCreated(boardID, name, description, parentID string, position int, by string, ts int64) ([]string, *proto.BoardCreatedPayload) {
 	return []string{"board:" + boardID}, &proto.BoardCreatedPayload{
 		ID:          boardID,

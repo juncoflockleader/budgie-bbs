@@ -69,6 +69,14 @@ func TestBoardAutomodRuleEvents(t *testing.T) {
 	if deleted.ID != "rule_1" || deleted.Board != "general" || deleted.By != "usr_mod" || deleted.TS != 1235 {
 		t.Fatalf("BoardAutomodRuleDeleted payload = %+v", deleted)
 	}
+
+	scopes, triggered := BoardAutomodTriggered("audit_1", "general", "rule_1", "keyword", "redact", "usr_target", "post_1", "thread_1", "reason", 1236)
+	requireScopes(t, scopes, "moderation:global")
+	if triggered.ID != "audit_1" || triggered.Board != "general" || triggered.RuleID != "rule_1" ||
+		triggered.MatchType != "keyword" || triggered.Action != "redact" || triggered.TargetUser != "usr_target" ||
+		triggered.PostID != "post_1" || triggered.ThreadID != "thread_1" || triggered.Reason != "reason" || triggered.TS != 1236 {
+		t.Fatalf("BoardAutomodTriggered payload = %+v", triggered)
+	}
 }
 
 func TestBoardCreated(t *testing.T) {
