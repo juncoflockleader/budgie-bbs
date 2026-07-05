@@ -15,7 +15,7 @@ import (
 
 // --- Thread/post command implementations ---
 
-func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
+func (h *Handler) createThread(actor *projections.User, p proto.CreateThreadPayload) Reply {
 	p, msg := proto.NormalizeCreateThreadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -187,7 +187,7 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }
 
-func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
+func (h *Handler) appendPost(actor *projections.User, p proto.AppendPostPayload) Reply {
 	p, msg := proto.NormalizeAppendPostPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -400,7 +400,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
 }
 
-func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName, authorID string, thread *projections.Thread, settings *BoardSettings, postID, body string, replyTarget *projections.Post, ts int64) error {
+func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *projections.User, authorName, authorID string, thread *projections.Thread, settings *BoardSettings, postID, body string, replyTarget *projections.Post, ts int64) error {
 	if actor == nil || thread == nil {
 		return nil
 	}
@@ -484,7 +484,7 @@ func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName,
 	return nil
 }
 
-func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
+func (h *Handler) repostPost(actor *projections.User, p proto.RepostPostPayload) Reply {
 	if actor == nil {
 		return Reply{Err: errDetail(proto.ErrForbidden, "authentication required", false)}
 	}
@@ -661,7 +661,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }
 
-func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, authorID string, target *projections.Post, thread *projections.Thread, replyPostID, replyBody string, ts int64) (*proto.Event, error) {
+func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *projections.User, authorName, authorID string, target *projections.Post, thread *projections.Thread, replyPostID, replyBody string, ts int64) (*proto.Event, error) {
 	if actor == nil || target == nil || !target.MailBack || target.Redacted {
 		return nil, nil
 	}
@@ -708,7 +708,7 @@ func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, a
 	return &proto.Event{Kind: proto.EvtMailSent, Seq: seq, Scopes: scopes, Payload: eventPayload, TS: ts}, nil
 }
 
-func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply {
+func (h *Handler) postBoardMail(actor *projections.User, p proto.PostBoardMailPayload) Reply {
 	p, msg := proto.NormalizePostBoardMailPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -768,7 +768,7 @@ func (h *Handler) currentPostSignature(authorID string) (string, error) {
 	})
 }
 
-func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
+func (h *Handler) attachPost(actor *projections.User, p proto.AttachPostPayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeAttachPostPayload(p)
 	if msg != "" {
@@ -855,7 +855,7 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: attachmentID, Seq: seq}}
 }
 
-func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
+func (h *Handler) editPost(actor *projections.User, p proto.EditPostPayload) Reply {
 	p, msg := proto.NormalizeEditPostPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -920,7 +920,7 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
-func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
+func (h *Handler) setPostFlag(actor *projections.User, p proto.SetPostFlagPayload) Reply {
 	p, msg := proto.NormalizeSetPostFlagPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -977,7 +977,7 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
-func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
+func (h *Handler) redactPost(actor *projections.User, p proto.RedactPostPayload) Reply {
 	p, msg := proto.NormalizeRedactPostPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -1037,7 +1037,7 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
-func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
+func (h *Handler) restorePost(actor *projections.User, p proto.RestorePostPayload) Reply {
 	p, msg := proto.NormalizeRestorePostPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -1090,7 +1090,7 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
-func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) Reply {
+func (h *Handler) redactPostRange(actor *projections.User, p proto.RedactPostRangePayload) Reply {
 	p, msg := proto.NormalizeRedactPostRangePayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -1146,7 +1146,7 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
 }
 
-func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload) Reply {
+func (h *Handler) restorePostRange(actor *projections.User, p proto.RestorePostRangePayload) Reply {
 	p, msg := proto.NormalizeRestorePostRangePayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -1199,7 +1199,7 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
 }
 
-func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Reply {
+func (h *Handler) clearBoardJunk(actor *projections.User, p proto.ClearBoardJunkPayload) Reply {
 	p, msg := proto.NormalizeClearBoardJunkPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -1257,7 +1257,7 @@ func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*projections.Post, *pr
 	})
 }
 
-func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Reply {
+func (h *Handler) setThreadTitle(actor *projections.User, p proto.SetThreadTitlePayload) Reply {
 	p, msg := proto.NormalizeSetThreadTitlePayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -1311,7 +1311,7 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
 }
 
-func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
+func (h *Handler) lockThread(actor *projections.User, p proto.LockThreadPayload) Reply {
 	p, msg := proto.NormalizeLockThreadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -1354,7 +1354,7 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
 }
 
-func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
+func (h *Handler) moveThread(actor *projections.User, p proto.MoveThreadPayload) Reply {
 	p, msg := proto.NormalizeMoveThreadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
