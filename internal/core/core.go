@@ -1704,11 +1704,13 @@ func (c *Core) UserByName(name string) (*User, error) {
 
 // --- Projection readers (safe for concurrent access) ---
 
-func (c *Core) ListBoards() ([]Board, error)        { return projections.ListBoards(c.DB) }
-func (c *Core) ListCategories() ([]Category, error) { return projections.ListCategories(c.DB) }
-func (c *Core) GetBoard(id string) (*Board, error)  { return projections.GetBoard(c.DB, id) }
+func (c *Core) ListBoards() ([]Board, error) { return projections.ListBoards(c.DB) }
+func (c *Core) ListCategories() ([]projections.Category, error) {
+	return projections.ListCategories(c.DB)
+}
+func (c *Core) GetBoard(id string) (*Board, error) { return projections.GetBoard(c.DB, id) }
 
-func (c *Core) ListCategoriesForUser(viewer *User) ([]Category, error) {
+func (c *Core) ListCategoriesForUser(viewer *User) ([]projections.Category, error) {
 	categories, err := c.ListCategories()
 	if err != nil {
 		return nil, err
@@ -1716,7 +1718,7 @@ func (c *Core) ListCategoriesForUser(viewer *User) ([]Category, error) {
 	if viewer != nil && viewer.IsAdmin() {
 		return categories, nil
 	}
-	out := make([]Category, 0, len(categories))
+	out := make([]projections.Category, 0, len(categories))
 	for _, category := range categories {
 		if categorymodel.VisibleToUser(categoryModelCategory(category), categoryModelViewer(viewer)) {
 			out = append(out, category)
@@ -1732,7 +1734,7 @@ func categoryModelViewer(viewer *User) *categorymodel.Viewer {
 	return &categorymodel.Viewer{Role: viewer.Role}
 }
 
-func categoryModelCategory(category Category) categorymodel.Category {
+func categoryModelCategory(category projections.Category) categorymodel.Category {
 	return categorymodel.Category{
 		ID:          category.ID,
 		Name:        category.Name,
@@ -1743,7 +1745,7 @@ func categoryModelCategory(category Category) categorymodel.Category {
 	}
 }
 
-func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.UpdatePatch) (*Category, error) {
+func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.UpdatePatch) (*projections.Category, error) {
 	actorID = strings.TrimSpace(actorID)
 	categoryID = strings.TrimSpace(categoryID)
 	if actorID == "" || categoryID == "" {
@@ -1808,8 +1810,8 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.Up
 	return updated, nil
 }
 
-func getCategoryTx(tx *sql.Tx, categoryID string) (*Category, error) {
-	var category Category
+func getCategoryTx(tx *sql.Tx, categoryID string) (*projections.Category, error) {
+	var category projections.Category
 	err := qQueryRow(tx,
 		`SELECT id, name, description, parent_id, position, visibility, created_at, updated_at
 		   FROM categories WHERE id=?`,

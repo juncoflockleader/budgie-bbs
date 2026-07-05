@@ -339,7 +339,7 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateBoard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list categories: %v", err)
 	}
-	var projectedCategory *Category
+	var projectedCategory *projections.Category
 	for i := range categories {
 		if categories[i].ID == "clubs" {
 			projectedCategory = &categories[i]

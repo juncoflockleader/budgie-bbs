@@ -1649,7 +1649,7 @@ func TestBoardDirectoryHierarchy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byID := map[string]core.Category{}
+	byID := map[string]projections.Category{}
 	for _, category := range categories {
 		byID[category.ID] = category
 	}
