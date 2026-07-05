@@ -2002,19 +2002,19 @@ func (c *Core) ListBoardSummaries(userID string, unreadOnly bool, opts ...projec
 func (c *Core) GetBoardInfo(boardID string) (*projections.BoardInfo, error) {
 	return projections.GetBoardInfo(c.DB, boardID)
 }
-func (c *Core) GetBoardMemberRequirements(boardID string) (*BoardMemberRequirements, error) {
+func (c *Core) GetBoardMemberRequirements(boardID string) (*projections.BoardMemberRequirements, error) {
 	return projections.GetBoardMemberRequirements(c.DB, boardID)
 }
-func (c *Core) ListBoardMembers(boardID string) ([]BoardMember, error) {
+func (c *Core) ListBoardMembers(boardID string) ([]projections.BoardMember, error) {
 	return projections.ListBoardMembers(c.DB, boardID)
 }
 func (c *Core) UserIsBoardMember(boardID, userID string) (bool, error) {
 	return projections.BoardMemberExists(c.DB, boardID, userID)
 }
-func (c *Core) GetBoardMemberApplication(applicationID string) (*BoardMemberApplication, error) {
+func (c *Core) GetBoardMemberApplication(applicationID string) (*projections.BoardMemberApplication, error) {
 	return projections.GetBoardMemberApplication(c.DB, applicationID)
 }
-func (c *Core) ListBoardMemberApplications(boardID, status, userID string, limit, offset int) ([]BoardMemberApplication, error) {
+func (c *Core) ListBoardMemberApplications(boardID, status, userID string, limit, offset int) ([]projections.BoardMemberApplication, error) {
 	return projections.ListBoardMemberApplications(c.DB, boardID, status, userID, limit, offset)
 }
 func (c *Core) ListDigestEntries(boardID, kind, path string, limit, offset int) ([]projections.DigestEntry, error) {

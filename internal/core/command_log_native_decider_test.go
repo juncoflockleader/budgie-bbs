@@ -1095,7 +1095,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get board info after member add: %v", err)
 	}
-	var projectedBob *BoardMember
+	var projectedBob *projections.BoardMember
 	for i := range info.Members {
 		if info.Members[i].UserID == bob.ID {
 			projectedBob = &info.Members[i]
@@ -1623,7 +1623,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 	if err != nil {
 		t.Fatalf("list board members after review: %v", err)
 	}
-	var bobMember *BoardMember
+	var bobMember *projections.BoardMember
 	for i := range members {
 		if members[i].UserID == bob.ID {
 			bobMember = &members[i]

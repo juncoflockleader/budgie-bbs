@@ -3984,7 +3984,7 @@ func (e *CommandLogNativeDecisionExecutor) nativeRequireDigestPathMutation(actor
 	return nil
 }
 
-func nativeRequireBoardMembershipAdmission(c *Core, boardID, userID string, requirements *BoardMemberRequirements) *proto.ErrorDetail {
+func nativeRequireBoardMembershipAdmission(c *Core, boardID, userID string, requirements *projections.BoardMemberRequirements) *proto.ErrorDetail {
 	if requirements == nil {
 		return nil
 	}
