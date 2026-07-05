@@ -184,6 +184,65 @@ func TestCoreProductionCodeDoesNotReexportProjectionDTOAliases(t *testing.T) {
 	}
 }
 
+func TestCoreOrchestrationFileKeepsDomainStorageSQLOut(t *testing.T) {
+	repoRoot := coreDependencyGuardRepoRoot(t)
+	path := filepath.Join(repoRoot, "internal", "core", "core.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse core.go: %v", err)
+	}
+
+	allowedInfraSQL := map[string]bool{
+		"acquireUserBootstrapGate": true,
+		"pgPartitionLockFn":        true,
+	}
+	forbiddenCalls := map[string]bool{"qExec": true, "qQuery": true, "qQueryRow": true}
+	sqlPrefixes := []string{"SELECT ", "INSERT INTO", "DELETE FROM"}
+	matches := []string{}
+
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || allowedInfraSQL[fn.Name.Name] {
+			continue
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.CallExpr:
+				if ident, ok := n.Fun.(*ast.Ident); ok && forbiddenCalls[ident.Name] {
+					pos := fset.Position(ident.Pos())
+					matches = append(matches, "core.go:"+strconv.Itoa(pos.Line)+": "+fn.Name.Name+" calls "+ident.Name)
+				}
+			case *ast.BasicLit:
+				if n.Kind != token.STRING {
+					return true
+				}
+				value, err := strconv.Unquote(n.Value)
+				if err != nil {
+					value = n.Value
+				}
+				upper := strings.ToUpper(strings.TrimSpace(value))
+				for _, prefix := range sqlPrefixes {
+					if strings.HasPrefix(upper, prefix) {
+						pos := fset.Position(n.Pos())
+						matches = append(matches, "core.go:"+strconv.Itoa(pos.Line)+": "+fn.Name.Name+" contains SQL literal")
+						break
+					}
+				}
+				if strings.HasPrefix(upper, "UPDATE ") && strings.Contains(upper, " SET ") {
+					pos := fset.Position(n.Pos())
+					matches = append(matches, "core.go:"+strconv.Itoa(pos.Line)+": "+fn.Name.Name+" contains SQL literal")
+				}
+			}
+			return true
+		})
+	}
+	sort.Strings(matches)
+	if len(matches) > 0 {
+		t.Fatalf("core.go should keep domain storage SQL in store/projection packages, not orchestration:\n%s", strings.Join(matches, "\n"))
+	}
+}
+
 func coreDependencyGuardImports(t *testing.T, pkg string) map[string]bool {
 	t.Helper()
 
