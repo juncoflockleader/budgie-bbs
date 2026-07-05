@@ -2043,12 +2043,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardModerator(ctx context.C
 	if payloadMsg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)
 	}
-	exists, err := projections.BoardExists(e.core.DB, boardID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, boardID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	target, errDetail := commandrules.ResolveUserRef(e.core.DB, userRef)
 	if errDetail != nil {
@@ -2105,12 +2101,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardMember(ctx context.Cont
 	if payloadMsg != "" && (boardID == "" || userRef == "") {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)
 	}
-	exists, err := projections.BoardExists(e.core.DB, boardID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, boardID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	canModerateBoard, err := projections.ActorCanModerateBoard(e.core.DB, actor, boardID)
 	if err != nil {
@@ -2187,12 +2179,8 @@ func (e *CommandLogNativeDecisionExecutor) decideLeaveBoardMembership(ctx contex
 	if boardID == "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)
 	}
-	exists, err := projections.BoardExists(e.core.DB, boardID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, boardID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	event := nativeEvent(record, 0, proto.EvtBoardMemberSet, []string{"board:" + boardID, "user:" + actor.ID}, &proto.BoardMemberSetPayload{
@@ -2219,12 +2207,8 @@ func (e *CommandLogNativeDecisionExecutor) decideApplyBoardMembership(ctx contex
 	if boardID == "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)
 	}
-	exists, err := projections.BoardExists(e.core.DB, boardID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, boardID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if payloadMsg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)
@@ -2374,12 +2358,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetRecommendedBoard(ctx context
 	if boardID == "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)
 	}
-	exists, err := projections.BoardExists(e.core.DB, boardID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, boardID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if payloadMsg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)
