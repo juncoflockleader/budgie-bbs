@@ -3164,7 +3164,7 @@ func hasThreadSummary(threads []core.Thread, id, titlePart string) bool {
 	return false
 }
 
-func hasBoardRanking(boards []core.BoardRanking, id string) bool {
+func hasBoardRanking(boards []projections.BoardRanking, id string) bool {
 	for _, board := range boards {
 		if board.ID == id {
 			return true
@@ -3173,7 +3173,7 @@ func hasBoardRanking(boards []core.BoardRanking, id string) bool {
 	return false
 }
 
-func hasThreadRanking(threads []core.ThreadRanking, id string) bool {
+func hasThreadRanking(threads []projections.ThreadRanking, id string) bool {
 	for _, thread := range threads {
 		if thread.ID == id {
 			return true
@@ -3182,7 +3182,7 @@ func hasThreadRanking(threads []core.ThreadRanking, id string) bool {
 	return false
 }
 
-func hasReplyRankingThread(replies []core.ReplyRanking, threadID string) bool {
+func hasReplyRankingThread(replies []projections.ReplyRanking, threadID string) bool {
 	for _, reply := range replies {
 		if reply.ThreadID == threadID {
 			return true
@@ -3191,7 +3191,7 @@ func hasReplyRankingThread(replies []core.ReplyRanking, threadID string) bool {
 	return false
 }
 
-func hasArchiveRankingBoard(archives []core.ArchiveRanking, boardID string) bool {
+func hasArchiveRankingBoard(archives []projections.ArchiveRanking, boardID string) bool {
 	for _, archive := range archives {
 		if archive.BoardID == boardID {
 			return true

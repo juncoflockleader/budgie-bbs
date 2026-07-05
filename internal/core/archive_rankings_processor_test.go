@@ -218,7 +218,7 @@ func archiveRankingStatsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertArchiveRankingTop(t *testing.T, rankings []ArchiveRanking, boardID, path string, entryCount, editedCount int) {
+func assertArchiveRankingTop(t *testing.T, rankings []projections.ArchiveRanking, boardID, path string, entryCount, editedCount int) {
 	t.Helper()
 	if len(rankings) == 0 ||
 		rankings[0].BoardID != boardID ||
@@ -229,7 +229,7 @@ func assertArchiveRankingTop(t *testing.T, rankings []ArchiveRanking, boardID, p
 	}
 }
 
-func assertArchiveRankingAbsent(t *testing.T, rankings []ArchiveRanking, boardID string) {
+func assertArchiveRankingAbsent(t *testing.T, rankings []projections.ArchiveRanking, boardID string) {
 	t.Helper()
 	for _, ranking := range rankings {
 		if ranking.BoardID == boardID {
@@ -238,11 +238,11 @@ func assertArchiveRankingAbsent(t *testing.T, rankings []ArchiveRanking, boardID
 	}
 }
 
-func findArchiveRanking(rankings []ArchiveRanking, boardID, path string) (ArchiveRanking, bool) {
+func findArchiveRanking(rankings []projections.ArchiveRanking, boardID, path string) (projections.ArchiveRanking, bool) {
 	for _, ranking := range rankings {
 		if ranking.BoardID == boardID && ranking.Path == path {
 			return ranking, true
 		}
 	}
-	return ArchiveRanking{}, false
+	return projections.ArchiveRanking{}, false
 }

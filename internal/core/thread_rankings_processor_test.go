@@ -222,25 +222,25 @@ func threadRankingStatsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertThreadRankingTop(t *testing.T, threads []ThreadRanking, threadID string, postCount, reactionCount int) {
+func assertThreadRankingTop(t *testing.T, threads []projections.ThreadRanking, threadID string, postCount, reactionCount int) {
 	t.Helper()
 	if len(threads) == 0 || threads[0].ID != threadID || threads[0].PostCount != postCount || threads[0].ReactionCount != reactionCount {
 		t.Fatalf("thread rankings top = %+v, want %s with %d posts and %d reactions", threads, threadID, postCount, reactionCount)
 	}
 }
 
-func assertThreadRankingAbsent(t *testing.T, threads []ThreadRanking, threadID string) {
+func assertThreadRankingAbsent(t *testing.T, threads []projections.ThreadRanking, threadID string) {
 	t.Helper()
 	if _, ok := findThreadRanking(threads, threadID); ok {
 		t.Fatalf("thread rankings include %s, want absent: %+v", threadID, threads)
 	}
 }
 
-func findThreadRanking(threads []ThreadRanking, threadID string) (ThreadRanking, bool) {
+func findThreadRanking(threads []projections.ThreadRanking, threadID string) (projections.ThreadRanking, bool) {
 	for _, thread := range threads {
 		if thread.ID == threadID {
 			return thread, true
 		}
 	}
-	return ThreadRanking{}, false
+	return projections.ThreadRanking{}, false
 }

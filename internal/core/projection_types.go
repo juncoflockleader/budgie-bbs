@@ -3,14 +3,7 @@ package core
 import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 
 type Board = projections.Board
-type BoardRanking = projections.BoardRanking
-type RecommendedBoard = projections.RecommendedBoard
-type ThreadRanking = projections.ThreadRanking
-type ReplyRanking = projections.ReplyRanking
-type UserRanking = projections.UserRanking
 type Blessing = projections.Blessing
-type BlessingRanking = projections.BlessingRanking
-type ArchiveRanking = projections.ArchiveRanking
 type ContentFilter = projections.ContentFilter
 type BoardAutomodRule = projections.BoardAutomodRule
 type BoardAutomodActivity = projections.BoardAutomodActivity

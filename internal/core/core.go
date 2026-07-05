@@ -1920,7 +1920,7 @@ func (c *Core) PublishDailyStatsSnapshot(ctx context.Context, at time.Time) (*pr
 	return reply.Result, nil
 }
 
-func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]BoardRanking, error) {
+func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]projections.BoardRanking, error) {
 	rows, err := projections.BoardRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1930,10 +1930,10 @@ func (c *Core) ListBoardRankings(actor *User, limit, offset int) ([]BoardRanking
 	}
 	return projections.ListBoardRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
 }
-func (c *Core) ListRecommendedBoards(limit, offset int) ([]RecommendedBoard, error) {
+func (c *Core) ListRecommendedBoards(limit, offset int) ([]projections.RecommendedBoard, error) {
 	return projections.ListRecommendedBoards(c.DB, limit, offset)
 }
-func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int) ([]ThreadRanking, error) {
+func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int) ([]projections.ThreadRanking, error) {
 	rows, err := projections.ThreadRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1943,7 +1943,7 @@ func (c *Core) ListThreadRankings(actor *User, boardID string, limit, offset int
 	}
 	return projections.ListThreadRankings(c.DB, actor.ID, actor.IsMod(), boardID, limit, offset)
 }
-func (c *Core) ListReplyRankings(actor *User, limit, offset int) ([]ReplyRanking, error) {
+func (c *Core) ListReplyRankings(actor *User, limit, offset int) ([]projections.ReplyRanking, error) {
 	rows, err := projections.ReplyRankingPostsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1953,7 +1953,7 @@ func (c *Core) ListReplyRankings(actor *User, limit, offset int) ([]ReplyRanking
 	}
 	return projections.ListReplyRankings(c.DB, actor.ID, actor.IsMod(), limit, offset)
 }
-func (c *Core) ListUserRankings(limit, offset int) ([]UserRanking, error) {
+func (c *Core) ListUserRankings(limit, offset int) ([]projections.UserRanking, error) {
 	rows, err := projections.UserRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1963,7 +1963,7 @@ func (c *Core) ListUserRankings(limit, offset int) ([]UserRanking, error) {
 	}
 	return projections.ListUserRankings(c.DB, limit, offset)
 }
-func (c *Core) ListBlessingRankings(limit, offset int) ([]BlessingRanking, error) {
+func (c *Core) ListBlessingRankings(limit, offset int) ([]projections.BlessingRanking, error) {
 	rows, err := projections.BlessingRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -1979,7 +1979,7 @@ func (c *Core) ListBlessings(limit, offset int) ([]Blessing, error) {
 func (c *Core) ListBoardModeratorTerms(boardID string, limit, offset int) ([]BoardModeratorTerm, error) {
 	return projections.ListBoardModeratorTerms(c.DB, boardID, limit, offset)
 }
-func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) ([]ArchiveRanking, error) {
+func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) ([]projections.ArchiveRanking, error) {
 	rows, err := projections.ArchiveRankingStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err

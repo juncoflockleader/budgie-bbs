@@ -136,14 +136,14 @@ func blessingRankingStatsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertBlessingRankingTop(t *testing.T, rankings []BlessingRanking, name string, count int) {
+func assertBlessingRankingTop(t *testing.T, rankings []projections.BlessingRanking, name string, count int) {
 	t.Helper()
 	if len(rankings) == 0 || rankings[0].Name != name || rankings[0].BlessingCount != count {
 		t.Fatalf("blessing rankings top = %+v, want %s with %d blessings", rankings, name, count)
 	}
 }
 
-func assertBlessingRankingCount(t *testing.T, rankings []BlessingRanking, name string, count int) {
+func assertBlessingRankingCount(t *testing.T, rankings []projections.BlessingRanking, name string, count int) {
 	t.Helper()
 	for _, ranking := range rankings {
 		if ranking.Name == name {

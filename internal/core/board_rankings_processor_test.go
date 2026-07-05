@@ -174,25 +174,25 @@ func boardRankingStatsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertBoardRankingTop(t *testing.T, boards []BoardRanking, boardID string, postCount int) {
+func assertBoardRankingTop(t *testing.T, boards []projections.BoardRanking, boardID string, postCount int) {
 	t.Helper()
 	if len(boards) == 0 || boards[0].ID != boardID || boards[0].PostCount != postCount {
 		t.Fatalf("board rankings top = %+v, want %s with %d posts", boards, boardID, postCount)
 	}
 }
 
-func assertBoardRankingAbsent(t *testing.T, boards []BoardRanking, boardID string) {
+func assertBoardRankingAbsent(t *testing.T, boards []projections.BoardRanking, boardID string) {
 	t.Helper()
 	if _, ok := findBoardRanking(boards, boardID); ok {
 		t.Fatalf("board rankings include %s, want absent: %+v", boardID, boards)
 	}
 }
 
-func findBoardRanking(boards []BoardRanking, boardID string) (BoardRanking, bool) {
+func findBoardRanking(boards []projections.BoardRanking, boardID string) (projections.BoardRanking, bool) {
 	for _, board := range boards {
 		if board.ID == boardID {
 			return board, true
 		}
 	}
-	return BoardRanking{}, false
+	return projections.BoardRanking{}, false
 }

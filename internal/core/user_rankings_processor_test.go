@@ -222,14 +222,14 @@ func userRankingStatsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertUserRankingTop(t *testing.T, users []UserRanking, name string, posts, reactions int) {
+func assertUserRankingTop(t *testing.T, users []projections.UserRanking, name string, posts, reactions int) {
 	t.Helper()
 	if len(users) == 0 || users[0].Name != name || users[0].PostsCreated != posts || users[0].ReactionsReceived != reactions {
 		t.Fatalf("user rankings top = %+v, want %s with %d posts and %d reactions", users, name, posts, reactions)
 	}
 }
 
-func assertUserRankingPosts(t *testing.T, users []UserRanking, name string, posts int) {
+func assertUserRankingPosts(t *testing.T, users []projections.UserRanking, name string, posts int) {
 	t.Helper()
 	for _, user := range users {
 		if user.Name == name {

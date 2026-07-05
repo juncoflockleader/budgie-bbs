@@ -177,25 +177,25 @@ func replyRankingPostsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertReplyRankingTop(t *testing.T, replies []ReplyRanking, postID string, excerptPart string) {
+func assertReplyRankingTop(t *testing.T, replies []projections.ReplyRanking, postID string, excerptPart string) {
 	t.Helper()
 	if len(replies) == 0 || replies[0].PostID != postID || !strings.Contains(replies[0].Excerpt, excerptPart) {
 		t.Fatalf("reply rankings top = %+v, want %s containing %q", replies, postID, excerptPart)
 	}
 }
 
-func assertReplyRankingAbsent(t *testing.T, replies []ReplyRanking, postID string) {
+func assertReplyRankingAbsent(t *testing.T, replies []projections.ReplyRanking, postID string) {
 	t.Helper()
 	if _, ok := findReplyRanking(replies, postID); ok {
 		t.Fatalf("reply rankings include %s, want absent: %+v", postID, replies)
 	}
 }
 
-func findReplyRanking(replies []ReplyRanking, postID string) (ReplyRanking, bool) {
+func findReplyRanking(replies []projections.ReplyRanking, postID string) (projections.ReplyRanking, bool) {
 	for _, reply := range replies {
 		if reply.PostID == postID {
 			return reply, true
 		}
 	}
-	return ReplyRanking{}, false
+	return projections.ReplyRanking{}, false
 }
