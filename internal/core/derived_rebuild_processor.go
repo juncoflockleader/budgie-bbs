@@ -189,6 +189,10 @@ func (c *Core) finishEmptyDerivedViewEventBatch(batch derivedViewEventBatch) err
 	return c.RecordDerivedViewApplied(batch.View, batch.FromSeq)
 }
 
+func recordDerivedViewAppliedTx(tx *sql.Tx, view string, appliedSeq int64) error {
+	return projections.RecordDerivedViewApplied(tx, view, appliedSeq, nowMS())
+}
+
 func (c *Core) applyDerivedViewEventBatchTx(batch derivedViewEventBatch, errPrefix string, apply func(*sql.Tx, *proto.Event) (bool, error)) (events, changed int, appliedSeq int64, err error) {
 	appliedSeq = batch.AppliedSeq
 	tx, err := c.DB.Begin()

@@ -2,9 +2,7 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -67,7 +65,7 @@ func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, er
 		return result, c.finishEmptyDerivedViewEventBatch(batch)
 	}
 
-	events, indexed, appliedSeq, err := c.applyDerivedViewEventBatchTx(batch, "post search", applyPostSearchEvent)
+	events, indexed, appliedSeq, err := c.applyDerivedViewEventBatchTx(batch, "post search", projections.PostSearchEventApplier(cleanPostSearchBody))
 	if err != nil {
 		return result, err
 	}
@@ -178,75 +176,7 @@ func (c *Core) upsertExternalPostSearchDocument(ctx context.Context, postID stri
 	return true, nil
 }
 
-func applyPostSearchEvent(tx *sql.Tx, evt *proto.Event) (bool, error) {
-	switch payload := evt.Payload.(type) {
-	case *proto.PostAppendedPayload:
-		body := payload.Body
-		sourceBody := payload.Body
-		if strings.TrimSpace(payload.RawBody) != "" {
-			sourceBody = payload.RawBody
-		}
-		if pollBlock, cleanBody := extractPoll(sourceBody); pollBlock != nil && cleanBody != sourceBody {
-			body = cleanBody
-		}
-		boardID := ""
-		if thread, err := getThreadTx(tx, payload.Thread); err != nil {
-			return false, err
-		} else if thread != nil {
-			boardID = thread.Board
-		}
-		if err := projections.FtsInsertPost(tx, payload.ID, payload.Thread, boardID, payload.Author, body); err != nil {
-			return false, err
-		}
-		return true, nil
-	case *proto.PostEditedPayload:
-		if err := projections.FtsUpdatePost(tx, payload.ID, payload.NewBody); err != nil {
-			return false, err
-		}
-		return true, nil
-	case *proto.PostRedactedPayload:
-		if err := projections.FtsDeletePost(tx, payload.ID); err != nil {
-			return false, err
-		}
-		return true, nil
-	case *proto.PostRestoredPayload:
-		if err := reindexPostSearchFromProjection(tx, payload.ID); err != nil {
-			return false, err
-		}
-		return true, nil
-	case *proto.PostPurgedPayload:
-		if err := projections.FtsDeletePost(tx, payload.ID); err != nil {
-			return false, err
-		}
-		return true, nil
-	case *proto.ThreadMovedPayload:
-		if _, err := qExec(tx, `UPDATE posts_fts SET board_id=? WHERE thread_id=?`, payload.ToBoard, payload.Thread); err != nil {
-			return false, err
-		}
-		return true, nil
-	default:
-		return false, nil
-	}
-}
-
-func reindexPostSearchFromProjection(tx *sql.Tx, postID string) error {
-	post, err := getPostTx(tx, postID)
-	if err != nil {
-		return err
-	}
-	if post == nil || post.Redacted {
-		return projections.FtsDeletePost(tx, postID)
-	}
-	thread, err := getThreadTx(tx, post.Thread)
-	if err != nil {
-		return err
-	}
-	if thread == nil {
-		return projections.FtsDeletePost(tx, postID)
-	}
-	return projections.FtsInsertPost(tx, post.ID, post.Thread, thread.Board, post.Author, post.Body)
-}
-
-func recordDerivedViewAppliedTx(tx *sql.Tx, view string, appliedSeq int64) error {
-	return projections.RecordDerivedViewApplied(tx, view, appliedSeq, nowMS())
+func cleanPostSearchBody(body string) (string, bool) {
+	pollBlock, cleanBody := extractPoll(body)
+	return cleanBody, pollBlock != nil
 }
