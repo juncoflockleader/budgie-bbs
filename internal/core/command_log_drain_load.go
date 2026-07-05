@@ -203,7 +203,7 @@ func (c *Core) commandLogDrainLoadActorsByBoard(actor *projections.User, boardID
 	for _, boardID := range boardIDs {
 		actorsByBoard[boardID] = actor
 	}
-	if actor == nil || len(boardIDs) <= 1 || config.ExecutorMode != loadmodel.CommandLogDrainExecutorNative || currentSQLFlavor != postgresFlavor {
+	if actor == nil || len(boardIDs) <= 1 || config.ExecutorMode != loadmodel.CommandLogDrainExecutorNative || SQLFlavor() != postgresFlavor {
 		return actorsByBoard, nil
 	}
 	for i, boardID := range boardIDs {
@@ -865,7 +865,7 @@ func (c *Core) projectCommandLogDrainLoadEvents(ctx context.Context, eventStore 
 	seenPartitions := map[LogPartition]bool{}
 	projectionSource := loadmodel.CommandLogDrainLoadEventProjectionSource(config)
 	projectionConcurrency := 1
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		projectionConcurrency = config.Writers
 	}
 	for {

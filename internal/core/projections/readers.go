@@ -4966,7 +4966,7 @@ func ListPosts(db *sql.DB, threadID string, limit, offset int) ([]Post, error) {
 // recency. Returns the WHERE predicate, the ORDER BY expression, and the value
 // to bind for the query placeholder.
 func ftsSearchClause(query string) (predicate, order, arg string) {
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		return "f.body ILIKE ?", "p.created_at DESC", "%" + query + "%"
 	}
 	return "posts_fts MATCH ?", "rank", query

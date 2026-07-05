@@ -254,7 +254,7 @@ func (c *Core) MaterializeEventStorePartition(ctx context.Context, store EventSt
 	defer tx.Rollback() //nolint:errcheck
 
 	var compatibilitySeqs map[string]int64
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		compatibilitySeqs, err = indexEventStoreProjectionCompatibilityEventsTx(tx, eventsToApply)
 		if err != nil {
 			return result, fmt.Errorf("event store materializer: index compatibility events for %s/%s: %w",
@@ -263,7 +263,7 @@ func (c *Core) MaterializeEventStorePartition(ctx context.Context, store EventSt
 	}
 
 	applyCtx := &projectionApplyContext{}
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		applied, lastOffset, ok, err := materializeHotNativeProjectionBatchTx(tx, applyCtx, compatibilitySeqs, eventsToApply)
 		if err != nil {
 			return result, fmt.Errorf("event store materializer: apply hot native batch for %s/%s: %w",
@@ -434,7 +434,7 @@ func indexEventStoreProjectionCompatibilityEventTx(tx *sql.Tx, evt *proto.Event)
 		return 0, fmt.Errorf("event timestamp is required")
 	}
 
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		_, err = qExec(tx,
 			`INSERT INTO events (id, kind, payload, created_at, partition_kind, partition_key, partition_offset)
 			 VALUES (?, ?, CAST(? AS JSONB), ?, ?, ?, ?)
@@ -510,7 +510,7 @@ func indexEventStoreProjectionCompatibilityEventsTx(tx *sql.Tx, events []*proto.
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if currentSQLFlavor != postgresFlavor {
+	if SQLFlavor() != postgresFlavor {
 		seqs := make(map[string]int64, len(events))
 		for _, evt := range events {
 			seq, err := indexEventStoreProjectionCompatibilityEventTx(tx, evt)
@@ -792,7 +792,7 @@ type hotNativeProjectionThreadMeta struct {
 }
 
 func materializeHotNativeProjectionBatchTx(tx *sql.Tx, applyCtx *projectionApplyContext, compatibilitySeqs map[string]int64, events []*proto.Event) (int, int64, bool, error) {
-	if currentSQLFlavor != postgresFlavor || len(events) == 0 {
+	if SQLFlavor() != postgresFlavor || len(events) == 0 {
 		return 0, 0, false, nil
 	}
 	threads := make([]hotNativeProjectionThread, 0, len(events))

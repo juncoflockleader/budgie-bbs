@@ -11,7 +11,7 @@ import (
 
 func openSQLiteTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	oldFlavor := currentSQLFlavor
+	oldFlavor := SQLFlavor()
 	SetSQLFlavor(sqliteFlavor)
 	t.Cleanup(func() { SetSQLFlavor(oldFlavor) })
 

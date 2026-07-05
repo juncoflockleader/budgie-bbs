@@ -41,8 +41,8 @@ func TestCoreDoesNotImportInternetScaleToolingPackages(t *testing.T) {
 	}
 }
 
-func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
-	modelPackages := []string{
+func TestCoreLeafPackagesRemainBelowExecutionLayers(t *testing.T) {
+	leafPackages := []string{
 		"./internal/core/accountmodel",
 		"./internal/core/automodmodel",
 		"./internal/core/boardmodel",
@@ -53,18 +53,19 @@ func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
 		"./internal/core/notificationmodel",
 		"./internal/core/postmodel",
 		"./internal/core/pollmodel",
+		"./internal/core/sqlstore",
 		"./internal/core/socialmodel",
 		"./internal/core/threadmodel",
 	}
 
-	for _, pkg := range modelPackages {
+	for _, pkg := range leafPackages {
 		t.Run(pkg, func(t *testing.T) {
 			imports := coreDependencyGuardImports(t, pkg)
 			found := coreDependencyGuardMatchingImports(imports, []string{
 				coreDependencyGuardModulePath + "/internal/core",
 			})
 			if len(found) > 0 {
-				t.Fatalf("%s must stay below command, projection, and read-model layers; found core imports: %s", pkg, strings.Join(found, ", "))
+				t.Fatalf("%s must stay below command, projection, read-model, and storage layers; found core imports: %s", pkg, strings.Join(found, ", "))
 			}
 		})
 	}

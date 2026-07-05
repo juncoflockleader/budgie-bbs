@@ -47,7 +47,7 @@ func (c *Core) StartBackgroundWorker(ctx context.Context, autoStats bool) {
 }
 
 func (c *Core) StartBackgroundWorkerWithConfig(ctx context.Context, config BackgroundWorkerConfig) {
-	if currentSQLFlavor != postgresFlavor {
+	if SQLFlavor() != postgresFlavor {
 		c.StartOutboxWorker(ctx)
 		if config.AutoStats {
 			go c.runStatsScheduler(ctx)

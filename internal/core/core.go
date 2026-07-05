@@ -345,7 +345,7 @@ const pgUserBootstrapLockKey = int64(1654893724)
 // so concurrent registrations cannot both observe an empty users table. It is a
 // no-op on SQLite, which already serializes writes via a single connection.
 func acquireUserBootstrapGate(tx *sql.Tx) error {
-	if currentSQLFlavor != postgresFlavor {
+	if SQLFlavor() != postgresFlavor {
 		return nil
 	}
 	_, err := qExec(tx, `SELECT pg_advisory_xact_lock(?)`, pgUserBootstrapLockKey)

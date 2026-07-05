@@ -43,7 +43,7 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 	// event_scopes and stores the timestamp as created_at. Either way the
 	// per-scope rows below are the authoritative scope index.
 	var seq int64
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		seq, err = execReturningSeq(tx,
 			`INSERT INTO events (id, kind, payload, created_at, partition_kind, partition_key, partition_offset)
 			 VALUES (?,?,CAST(? AS JSONB),?,?,?,?)`,
@@ -69,7 +69,7 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 
 	// In Postgres mode, notify sibling nodes about this new event.
 	// The NOTIFY is inside the same transaction so it's only delivered on commit.
-	if currentSQLFlavor == postgresFlavor && currentNodeID != "" && !currentCrossNodeViaBus {
+	if SQLFlavor() == postgresFlavor && currentNodeID != "" && !currentCrossNodeViaBus {
 		notifyPayload := fmt.Sprintf(`{"seq":%d,"event":%q,"node_id":%q,"scopes":%q}`,
 			seq, string(kind), currentNodeID, strings.Join(scopes, ","))
 		if _, err := tx.Exec(`SELECT pg_notify($1, $2)`, pgNotifyChannel, notifyPayload); err != nil {
@@ -82,7 +82,7 @@ func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, p
 }
 
 func acquireScalarAppendGate(tx *sql.Tx) error {
-	if currentSQLFlavor != postgresFlavor {
+	if SQLFlavor() != postgresFlavor {
 		return nil
 	}
 	start := time.Now()
@@ -95,7 +95,7 @@ func nextPartitionOffset(tx *sql.Tx, partition eventPartition) (int64, error) {
 	if partition.Kind == "" || partition.Key == "" {
 		partition = defaultPartition()
 	}
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		var offset int64
 		err := qQueryRow(tx,
 			`INSERT INTO event_partition_offsets (partition_kind, partition_key, last_offset)
@@ -141,7 +141,7 @@ func nextPartitionOffset(tx *sql.Tx, partition eventPartition) (int64, error) {
 // Used so sibling nodes can fetch the record by ID and re-publish locally.
 // No-op when not in Postgres mode or when nodeID is unset.
 func pgNotifyEphemeralFn(db *sql.DB, event, eid, scopes string) {
-	if currentSQLFlavor != postgresFlavor || currentNodeID == "" || currentCrossNodeViaBus {
+	if SQLFlavor() != postgresFlavor || currentNodeID == "" || currentCrossNodeViaBus {
 		return
 	}
 	payload := fmt.Sprintf(`{"seq":0,"event":%q,"node_id":%q,"scopes":%q,"eid":%q}`,
@@ -164,7 +164,7 @@ func headSeq(db *sql.DB) (int64, error) {
 // given scopes (pass nil for all events).
 func replayEvents(db *sql.DB, after int64, filterScopes []string, limit int) ([]*proto.Event, error) {
 	query := `SELECT id, seq, kind, scopes, payload, ts, partition_kind, partition_key, partition_offset FROM events WHERE seq > ? ORDER BY seq`
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		// Postgres normalizes scopes into event_scopes and names the timestamp
 		// created_at; reassemble the comma-separated scope string and alias the
 		// timestamp so the scan below is identical to the SQLite path.
@@ -194,7 +194,7 @@ func replayPartitionEventsFiltered(db *sql.DB, partitionKind, partitionKey strin
 	          FROM events
 	         WHERE partition_kind=? AND partition_key=? AND partition_offset > ?
 	         ORDER BY partition_offset, seq`
-	if currentSQLFlavor == postgresFlavor {
+	if SQLFlavor() == postgresFlavor {
 		query = `SELECT e.id, e.seq, e.kind,
 		                COALESCE((SELECT string_agg(scope, ',') FROM event_scopes es WHERE es.seq = e.seq), '') AS scopes,
 		                e.payload, e.created_at, e.partition_kind, e.partition_key, e.partition_offset
