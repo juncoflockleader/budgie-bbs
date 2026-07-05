@@ -76,6 +76,28 @@ func UserCounterIdentity(queryable sqlstore.SQLLike, userID string) (UserIdentit
 	return identity, nil
 }
 
+func ReactionAuthors(queryable sqlstore.RowQueryable, reactions []ReactionIdentity) (map[string]string, error) {
+	authors := map[string]string{}
+	for _, reaction := range reactions {
+		if reaction.PostID == "" {
+			continue
+		}
+		if _, ok := authors[reaction.PostID]; ok {
+			continue
+		}
+		var authorID string
+		err := sqlstore.QueryRow(queryable, `SELECT author_id FROM posts WHERE id=?`, reaction.PostID).Scan(&authorID)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		authors[reaction.PostID] = authorID
+	}
+	return authors, nil
+}
+
 func ClearReactionReceived(tx *sql.Tx, userID string) error {
 	_, err := sqlstore.Exec(tx, `UPDATE user_activity SET reactions_recv=0 WHERE user_id=?`, userID)
 	return err

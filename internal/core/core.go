@@ -1347,23 +1347,9 @@ func (c *Core) snapshotUserCounterIdentityTx(tx *sql.Tx, userID string) (counter
 	if err != nil {
 		return counterstore.UserIdentity{}, nil, err
 	}
-	authors := map[string]string{}
-	for _, reaction := range identity.Reactions {
-		if reaction.PostID == "" {
-			continue
-		}
-		if _, ok := authors[reaction.PostID]; ok {
-			continue
-		}
-		var authorID string
-		err := qQueryRow(tx, `SELECT author_id FROM posts WHERE id=?`, reaction.PostID).Scan(&authorID)
-		if err == sql.ErrNoRows {
-			continue
-		}
-		if err != nil {
-			return counterstore.UserIdentity{}, nil, err
-		}
-		authors[reaction.PostID] = authorID
+	authors, err := counterstore.ReactionAuthors(tx, identity.Reactions)
+	if err != nil {
+		return counterstore.UserIdentity{}, nil, err
 	}
 	return identity, authors, nil
 }
