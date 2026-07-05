@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -100,7 +100,7 @@ func (s *Server) handleSetBoardAIConfig(w http.ResponseWriter, r *http.Request) 
 		t := strings.TrimSpace(*req.APIToken)
 		req.APIToken = &t
 	}
-	cfg, err := s.core.SetBoardAIConfig(boardID, core.BoardAIConfigPatch{
+	cfg, err := s.core.SetBoardAIConfig(boardID, projections.BoardAIConfigPatch{
 		Enabled:     req.Enabled,
 		Provider:    req.Provider,
 		Model:       req.Model,

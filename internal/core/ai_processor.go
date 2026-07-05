@@ -19,9 +19,9 @@ const aiResponderView = "ai.responder"
 
 // aiGenerateFunc generates a reply for a board's bot. Injectable so tests can
 // avoid real network calls.
-type aiGenerateFunc func(ctx context.Context, rt *BoardAIRuntime, system, prompt string) (string, error)
+type aiGenerateFunc func(ctx context.Context, rt *projections.BoardAIRuntime, system, prompt string) (string, error)
 
-func defaultAIGenerate(ctx context.Context, rt *BoardAIRuntime, system, prompt string) (string, error) {
+func defaultAIGenerate(ctx context.Context, rt *projections.BoardAIRuntime, system, prompt string) (string, error) {
 	return aiprovider.Generate(ctx, aiprovider.Request{
 		Provider:  rt.Provider,
 		Model:     rt.Model,
@@ -237,7 +237,7 @@ func (p *AIProcessor) maybeReply(ctx context.Context, post *proto.PostAppendedPa
 
 // buildPrompt assembles the system prompt (board-mod reply prompt + a default
 // instruction) and a transcript of the recent thread for the user message.
-func (p *AIProcessor) buildPrompt(rt *BoardAIRuntime, botName string, thread *Thread, triggering *proto.PostAppendedPayload) (system, prompt string) {
+func (p *AIProcessor) buildPrompt(rt *projections.BoardAIRuntime, botName string, thread *Thread, triggering *proto.PostAppendedPayload) (system, prompt string) {
 	var sys strings.Builder
 	fmt.Fprintf(&sys, "You are %q, an AI participant on the %q board of a community forum. ", botName, thread.Board)
 	sys.WriteString("Write a single concise, helpful forum reply to the most recent message. Do not include a salutation or signature.")

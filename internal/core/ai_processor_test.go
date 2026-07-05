@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -34,7 +35,7 @@ func TestBoardAITokenWriteOnly(t *testing.T) {
 	exec(t, c, admin, proto.CmdCreateBoard, proto.CreateBoardPayload{ID: "ai", Name: "AI"})
 
 	tok := "sk-secret-123"
-	if _, err := c.SetBoardAIConfig("ai", core.BoardAIConfigPatch{APIToken: &tok}); err != nil {
+	if _, err := c.SetBoardAIConfig("ai", projections.BoardAIConfigPatch{APIToken: &tok}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := c.BoardAIConfig("ai")
@@ -68,7 +69,7 @@ func TestAIResponderEveryPost(t *testing.T) {
 	}
 	enabled, mode, role := true, "every_post", "user"
 	tok := "sk-test"
-	if _, err := c.SetBoardAIConfig("ai", core.BoardAIConfigPatch{Enabled: &enabled, APIToken: &tok, Mode: &mode, TriggerRole: &role}); err != nil {
+	if _, err := c.SetBoardAIConfig("ai", projections.BoardAIConfigPatch{Enabled: &enabled, APIToken: &tok, Mode: &mode, TriggerRole: &role}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.EnsureBoardAIBot("ai"); err != nil {
@@ -80,7 +81,7 @@ func TestAIResponderEveryPost(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	p.Generate = func(ctx context.Context, rt *core.BoardAIRuntime, system, prompt string) (string, error) {
+	p.Generate = func(ctx context.Context, rt *projections.BoardAIRuntime, system, prompt string) (string, error) {
 		calls++
 		if !strings.Contains(prompt, "2+2") {
 			t.Errorf("prompt missing the user message: %q", prompt)
@@ -122,7 +123,7 @@ func TestAIResponderSiteToggleGates(t *testing.T) {
 	// Board fully configured + enabled, but site AI stays OFF.
 	enabled, mode, role := true, "every_post", "user"
 	tok := "sk-test"
-	if _, err := c.SetBoardAIConfig("ai", core.BoardAIConfigPatch{Enabled: &enabled, APIToken: &tok, Mode: &mode, TriggerRole: &role}); err != nil {
+	if _, err := c.SetBoardAIConfig("ai", projections.BoardAIConfigPatch{Enabled: &enabled, APIToken: &tok, Mode: &mode, TriggerRole: &role}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.EnsureBoardAIBot("ai"); err != nil {
@@ -131,7 +132,7 @@ func TestAIResponderSiteToggleGates(t *testing.T) {
 
 	p, _ := core.NewAIProcessor(c, time.Second, 100)
 	calls := 0
-	p.Generate = func(ctx context.Context, rt *core.BoardAIRuntime, system, prompt string) (string, error) {
+	p.Generate = func(ctx context.Context, rt *projections.BoardAIRuntime, system, prompt string) (string, error) {
 		calls++
 		return "should not happen", nil
 	}

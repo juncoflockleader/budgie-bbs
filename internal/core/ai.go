@@ -14,12 +14,12 @@ import (
 // BoardAIRuntime (used by the responder processor) does and is never serialized.
 
 // AISettings returns the site-wide AI toggle.
-func (c *Core) AISettings() (*AISettings, error) {
+func (c *Core) AISettings() (*projections.AISettings, error) {
 	return projections.GetAISettings(c.DB)
 }
 
 // SetAISettings flips the site-wide AI toggle (admin-only at the HTTP layer).
-func (c *Core) SetAISettings(enabled bool) (*AISettings, error) {
+func (c *Core) SetAISettings(enabled bool) (*projections.AISettings, error) {
 	return projections.SetAISettings(c.DB, enabled)
 }
 
@@ -31,18 +31,18 @@ func (c *Core) AIEnabled() bool {
 }
 
 // BoardAIConfig returns the API-safe (token-free) config for a board.
-func (c *Core) BoardAIConfig(boardID string) (*BoardAIConfig, error) {
+func (c *Core) BoardAIConfig(boardID string) (*projections.BoardAIConfig, error) {
 	return projections.GetBoardAIConfig(c.DB, boardID)
 }
 
 // SetBoardAIConfig applies a partial patch and returns the API-safe config.
-func (c *Core) SetBoardAIConfig(boardID string, patch BoardAIConfigPatch) (*BoardAIConfig, error) {
+func (c *Core) SetBoardAIConfig(boardID string, patch projections.BoardAIConfigPatch) (*projections.BoardAIConfig, error) {
 	return projections.SetBoardAIConfig(c.DB, boardID, patch)
 }
 
 // BoardAIRuntime returns the full server-side config (incl. token + counters)
 // for the responder processor. nil when no config exists.
-func (c *Core) BoardAIRuntime(boardID string) (*BoardAIRuntime, error) {
+func (c *Core) BoardAIRuntime(boardID string) (*projections.BoardAIRuntime, error) {
 	return projections.GetBoardAIRuntime(c.DB, boardID)
 }
 
