@@ -1,6 +1,7 @@
 package commandrules
 
 import (
+	"github.com/juncoflockleader/budgie-bbs/internal/core/favoritemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -29,21 +30,22 @@ func FavoriteTreeFromImportPayload(p proto.ImportFavoriteTreePayload) *projectio
 }
 
 func RequireBoardZapAllowed(zapped bool, settings *projections.BoardSettings) *proto.ErrorDetail {
-	if zapped && settings != nil && !settings.ZapAllowed {
+	zapAllowed := settings == nil || settings.ZapAllowed
+	if !favoritemodel.BoardZapAllowed(zapped, zapAllowed) {
 		return newErrDetail(proto.ErrConflict, "board cannot be zapped", false)
 	}
 	return nil
 }
 
 func RequireFavoriteFolderNotSelfParent(folderID, parentID string) *proto.ErrorDetail {
-	if parentID == folderID {
+	if favoritemodel.FolderSelfParentFailure(folderID, parentID) == favoritemodel.FolderParentSelf {
 		return newErrDetail(proto.ErrValidationFailed, "folder cannot be its own parent", false)
 	}
 	return nil
 }
 
 func RequireFavoriteFolderNotDescendantParent(containsParent bool) *proto.ErrorDetail {
-	if containsParent {
+	if favoritemodel.FolderDescendantParentFailure(containsParent) == favoritemodel.FolderParentDescendant {
 		return newErrDetail(proto.ErrValidationFailed, "folder cannot move under its descendant", false)
 	}
 	return nil
