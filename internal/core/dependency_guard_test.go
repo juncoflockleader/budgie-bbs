@@ -40,6 +40,7 @@ func TestCoreDoesNotImportInternetScaleToolingPackages(t *testing.T) {
 func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
 	modelPackages := []string{
 		"./internal/core/accountmodel",
+		"./internal/core/automodmodel",
 		"./internal/core/boardmodel",
 		"./internal/core/chatmodel",
 		"./internal/core/categorymodel",
