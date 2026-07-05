@@ -3,6 +3,7 @@ package logmodel
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -152,4 +153,42 @@ func SameBrokerEventRecordIdentity(existing, requested BrokerEventRecord) bool {
 		}
 	}
 	return true
+}
+
+// NormalizeBrokerEventTransactionRecords prepares broker event records for a
+// transaction append before the broker assigns PartitionOffset.
+func NormalizeBrokerEventTransactionRecords(records []BrokerEventRecord, duplicateScope string) ([]BrokerEventRecord, error) {
+	if duplicateScope == "" {
+		duplicateScope = "one transaction"
+	}
+	normalized := make([]BrokerEventRecord, 0, len(records))
+	byID := map[string]BrokerEventRecord{}
+	for _, record := range records {
+		record.ID = strings.TrimSpace(record.ID)
+		if record.ID == "" {
+			return nil, fmt.Errorf("event id is required")
+		}
+		if record.Kind == "" {
+			return nil, fmt.Errorf("event kind is required")
+		}
+		if len(record.Payload) == 0 || !json.Valid(record.Payload) {
+			return nil, fmt.Errorf("event payload is not valid JSON")
+		}
+		partition := Partition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
+		record.PartitionKind = partition.Kind
+		record.PartitionKey = partition.Key
+		record.PartitionOffset = 0
+		if record.TS <= 0 {
+			return nil, fmt.Errorf("event timestamp is required")
+		}
+		if existing, ok := byID[record.ID]; ok {
+			if !SameBrokerEventRecordIdentity(existing, record) {
+				return nil, fmt.Errorf("duplicate event id %q has different content", record.ID)
+			}
+			return nil, fmt.Errorf("duplicate event id %q in %s", record.ID, duplicateScope)
+		}
+		byID[record.ID] = record
+		normalized = append(normalized, record)
+	}
+	return normalized, nil
 }

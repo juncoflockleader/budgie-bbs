@@ -2,9 +2,7 @@ package natsconn
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
@@ -103,9 +101,9 @@ func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(c
 		}
 		commands[i] = command
 	}
-	records, err := normalizeJetStreamTransactionEvents(records)
+	records, err := logmodel.NormalizeBrokerEventTransactionRecords(records, "one transaction")
 	if err != nil {
-		return core.BrokerCommandEventTransactionBatchResult{}, err
+		return core.BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("nats command/event transaction: %w", err)
 	}
 
 	var messages []core.BrokerEventLogMessage
@@ -136,37 +134,4 @@ func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(c
 		Messages: messages,
 		Commits:  commits,
 	}, nil
-}
-
-func normalizeJetStreamTransactionEvents(records []core.BrokerEventRecord) ([]core.BrokerEventRecord, error) {
-	normalized := make([]core.BrokerEventRecord, 0, len(records))
-	byID := map[string]core.BrokerEventRecord{}
-	for _, record := range records {
-		record.ID = strings.TrimSpace(record.ID)
-		if record.ID == "" {
-			return nil, fmt.Errorf("nats command/event transaction: event id is required")
-		}
-		if record.Kind == "" {
-			return nil, fmt.Errorf("nats command/event transaction: event kind is required")
-		}
-		if len(record.Payload) == 0 || !json.Valid(record.Payload) {
-			return nil, fmt.Errorf("nats command/event transaction: event payload is not valid JSON")
-		}
-		partition := core.LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
-		record.PartitionKind = partition.Kind
-		record.PartitionKey = partition.Key
-		record.PartitionOffset = 0
-		if record.TS <= 0 {
-			return nil, fmt.Errorf("nats command/event transaction: event timestamp is required")
-		}
-		if existing, ok := byID[record.ID]; ok {
-			if !logmodel.SameBrokerEventRecordIdentity(existing, record) {
-				return nil, fmt.Errorf("nats command/event transaction: duplicate event id %q has different content", record.ID)
-			}
-			return nil, fmt.Errorf("nats command/event transaction: duplicate event id %q in one transaction", record.ID)
-		}
-		byID[record.ID] = record
-		normalized = append(normalized, record)
-	}
-	return normalized, nil
 }

@@ -26,6 +26,42 @@ func TestSameBrokerEventRecordIdentityIncludesTimestamp(t *testing.T) {
 	}
 }
 
+func TestNormalizeBrokerEventTransactionRecordsPreparesPendingEvents(t *testing.T) {
+	record := brokerEventIdentityRecord(1000)
+	record.ID = " evt_pending "
+	record.PartitionOffset = 99
+	record.PartitionKind = ""
+	record.PartitionKey = ""
+
+	records, err := NormalizeBrokerEventTransactionRecords([]BrokerEventRecord{record}, "")
+	if err != nil {
+		t.Fatalf("NormalizeBrokerEventTransactionRecords: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	got := records[0]
+	if got.ID != "evt_pending" || got.PartitionKind != PartitionGlobal || got.PartitionKey != PartitionGlobal || got.PartitionOffset != 0 {
+		t.Fatalf("normalized record = %+v, want trimmed id, global partition, pending offset", got)
+	}
+}
+
+func TestNormalizeBrokerEventTransactionRecordsRejectsDuplicateIDs(t *testing.T) {
+	record := brokerEventIdentityRecord(1000)
+
+	_, err := NormalizeBrokerEventTransactionRecords([]BrokerEventRecord{record, record}, "one batch")
+	if err == nil || err.Error() != `duplicate event id "evt_identity_ts" in one batch` {
+		t.Fatalf("duplicate err = %v", err)
+	}
+
+	conflict := record
+	conflict.TS = 2000
+	_, err = NormalizeBrokerEventTransactionRecords([]BrokerEventRecord{record, conflict}, "one batch")
+	if err == nil || err.Error() != `duplicate event id "evt_identity_ts" has different content` {
+		t.Fatalf("conflict err = %v", err)
+	}
+}
+
 func brokerCommandIdentityRecord(enqueuedAt int64) BrokerCommandRecord {
 	return BrokerCommandRecord{
 		Version:       BrokerCommandRecordVersion,
