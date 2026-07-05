@@ -10,6 +10,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadutil"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -197,8 +198,8 @@ func (c *Core) runCommandLogDrainLoadPhase(ctx context.Context, report *loadmode
 	return nil
 }
 
-func (c *Core) commandLogDrainLoadActorsByBoard(actor *User, boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) (map[string]*User, error) {
-	actorsByBoard := make(map[string]*User, len(boardIDs))
+func (c *Core) commandLogDrainLoadActorsByBoard(actor *projections.User, boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) (map[string]*projections.User, error) {
+	actorsByBoard := make(map[string]*projections.User, len(boardIDs))
 	for _, boardID := range boardIDs {
 		actorsByBoard[boardID] = actor
 	}
@@ -215,7 +216,7 @@ func (c *Core) commandLogDrainLoadActorsByBoard(actor *User, boardIDs []string, 
 	return actorsByBoard, nil
 }
 
-func commandLogDrainLoadActorForBoard(actorsByBoard map[string]*User, boardID string) (*User, error) {
+func commandLogDrainLoadActorForBoard(actorsByBoard map[string]*projections.User, boardID string) (*projections.User, error) {
 	actor := actorsByBoard[boardID]
 	if actor == nil {
 		return nil, fmt.Errorf("command log drain load: missing actor for board %s", boardID)
@@ -223,7 +224,7 @@ func commandLogDrainLoadActorForBoard(actorsByBoard map[string]*User, boardID st
 	return actor, nil
 }
 
-func (c *Core) createCommandLogDrainLoadBoards(ctx context.Context, actor *User, config loadmodel.CommandLogDrainLoadConfig) ([]string, error) {
+func (c *Core) createCommandLogDrainLoadBoards(ctx context.Context, actor *projections.User, config loadmodel.CommandLogDrainLoadConfig) ([]string, error) {
 	boardIDs := make([]string, 0, config.Boards)
 	for i := 0; i < config.Boards; i++ {
 		boardID := fmt.Sprintf("%s_%02d", loadutil.SafeID(config.BoardPrefix), i)
@@ -247,7 +248,7 @@ func (c *Core) createCommandLogDrainLoadBoards(ctx context.Context, actor *User,
 	return boardIDs, nil
 }
 
-func (c *Core) produceCommandLogDrainLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*User, boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogLoadStage, error) {
+func (c *Core) produceCommandLogDrainLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*projections.User, boardIDs []string, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogLoadStage, error) {
 	stage := loadmodel.CommandLogLoadStage{Commands: loadmodel.CommandLogDrainLoadCreateThreadCommands(config)}
 	body := loadutil.Body(config.BodyBytes)
 	return loadutil.RunCommandLogLoadSubmitStage(ctx, stage, config.SubmitConcurrency, "produce command-log load", func(workerID, i int) string {
@@ -269,7 +270,7 @@ func (c *Core) produceCommandLogDrainLoad(ctx context.Context, commandLog Comman
 	})
 }
 
-func (c *Core) produceCommandLogAppendPostLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*User, targets []commandLogDrainLoadThreadTarget, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogLoadStage, error) {
+func (c *Core) produceCommandLogAppendPostLoad(ctx context.Context, commandLog CommandLog, actorsByBoard map[string]*projections.User, targets []commandLogDrainLoadThreadTarget, config loadmodel.CommandLogDrainLoadConfig) (loadmodel.CommandLogLoadStage, error) {
 	stage := loadmodel.CommandLogLoadStage{Commands: len(targets) * config.RepliesPerThread}
 	body := loadutil.Body(config.BodyBytes)
 	return loadutil.RunCommandLogLoadSubmitStage(ctx, stage, config.SubmitConcurrency, "produce command-log appendPost load", func(workerID, i int) string {
@@ -295,7 +296,7 @@ func (c *Core) produceCommandLogAppendPostLoad(ctx context.Context, commandLog C
 	})
 }
 
-func (c *Core) submitCommandLogDrainLoadCommand(ctx context.Context, commandLog CommandLog, actor *User, config loadmodel.CommandLogDrainLoadConfig, partition LogPartition, command proto.CommandName, payload json.RawMessage, cid string) string {
+func (c *Core) submitCommandLogDrainLoadCommand(ctx context.Context, commandLog CommandLog, actor *projections.User, config loadmodel.CommandLogDrainLoadConfig, partition LogPartition, command proto.CommandName, payload json.RawMessage, cid string) string {
 	if config.AuthoritativeSubmit {
 		reply := c.ExecCmd(ctx, actor, command, payload, cid)
 		if reply.Err != nil {
