@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadutil"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -239,10 +240,10 @@ func newPartitionWriteLoadCase(name string, boards, writes int) PartitionWriteLo
 	return PartitionWriteLoadCase{Name: name, Boards: boards, Writes: writes}
 }
 
-func execLoadCommand(ctx context.Context, c *core.Core, actor *core.User, name proto.CommandName, payload any, cid string) core.Reply {
+func execLoadCommand(ctx context.Context, c *core.Core, actor *core.User, name proto.CommandName, payload any, cid string) commandexec.Reply {
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return core.Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: err.Error()}}
+		return commandexec.Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: err.Error()}}
 	}
 	return c.ExecCmd(ctx, actor, name, raw, cid)
 }

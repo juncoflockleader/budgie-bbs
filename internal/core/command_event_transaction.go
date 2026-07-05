@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -13,12 +14,12 @@ import (
 // CommandLogEventDecider extracts the durable events a command-log decision
 // needs to append before the command offset can advance.
 type CommandLogEventDecider interface {
-	DecideCommandLogEvents(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error)
+	DecideCommandLogEvents(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error)
 }
 
-type CommandLogEventDeciderFunc func(context.Context, CommandLogRecord, Reply) ([]EventAppend, error)
+type CommandLogEventDeciderFunc func(context.Context, CommandLogRecord, commandexec.Reply) ([]EventAppend, error)
 
-func (f CommandLogEventDeciderFunc) DecideCommandLogEvents(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+func (f CommandLogEventDeciderFunc) DecideCommandLogEvents(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 	return f(ctx, record, reply)
 }
 
@@ -41,7 +42,7 @@ type CommandEventTransactionBatchFinalizer struct {
 	CommandEventTransactionFinalizer
 }
 
-func (f CommandEventTransactionFinalizer) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply Reply) (CommandLogFinalizationResult, error) {
+func (f CommandEventTransactionFinalizer) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) (CommandLogFinalizationResult, error) {
 	if f.Transactions == nil {
 		return CommandLogFinalizationResult{}, fmt.Errorf("command event transaction finalizer: nil transaction store")
 	}
@@ -109,11 +110,11 @@ func (f CommandEventTransactionFinalizer) FinalizeCommandLogRecord(ctx context.C
 	return result, nil
 }
 
-func (f CommandEventTransactionBatchFinalizer) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply Reply) (CommandLogFinalizationResult, error) {
+func (f CommandEventTransactionBatchFinalizer) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) (CommandLogFinalizationResult, error) {
 	return f.CommandEventTransactionFinalizer.FinalizeCommandLogRecord(ctx, record, reply)
 }
 
-func (f CommandEventTransactionBatchFinalizer) FinalizeCommandLogBatch(ctx context.Context, records []CommandLogRecord, replies []Reply) (CommandLogFinalizationResult, error) {
+func (f CommandEventTransactionBatchFinalizer) FinalizeCommandLogBatch(ctx context.Context, records []CommandLogRecord, replies []commandexec.Reply) (CommandLogFinalizationResult, error) {
 	base := f.CommandEventTransactionFinalizer
 	if f.Transactions == nil {
 		return CommandLogFinalizationResult{}, fmt.Errorf("command event transaction finalizer: nil transaction store")

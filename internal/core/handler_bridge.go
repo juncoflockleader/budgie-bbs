@@ -4,15 +4,12 @@ import (
 	"database/sql"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
-	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandparse"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/handler"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
-
-type Reply = commandexec.Reply
 
 type pollBlock struct {
 	question  string

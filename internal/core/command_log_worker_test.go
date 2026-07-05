@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -74,9 +75,9 @@ func TestCommandLogWorkerCommitsSuccessfulRecordsInPartitionOrder(t *testing.T) 
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       log,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -112,13 +113,13 @@ func TestCommandLogWorkerDrainsPartitionsConcurrently(t *testing.T) {
 		Log:                  log,
 		BatchSize:            10,
 		PartitionConcurrency: 2,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			started <- record.Partition.Normalize()
 			select {
 			case <-release:
 			case <-ctx.Done():
 			}
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -164,11 +165,11 @@ func TestCommandLogWorkerPartitionConcurrencyPreservesPartitionOrder(t *testing.
 		Log:                  log,
 		BatchSize:            10,
 		PartitionConcurrency: 2,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			mu.Lock()
 			seen[record.Partition.Normalize()] = append(seen[record.Partition.Normalize()], record.Offset)
 			mu.Unlock()
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -197,8 +198,8 @@ func TestCommandLogWorkerAllowsRebalanceAfterFetchedBatch(t *testing.T) {
 		Log:        log,
 		Partitions: base,
 		BatchSize:  10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -224,8 +225,8 @@ func TestCommandLogWorkerDoesNotCommitWhenAppliedReceiptFails(t *testing.T) {
 		Applied: commandLogAppliedRecorderFunc(func(ctx context.Context, record CommandLogRecord, result *proto.AckResult) error {
 			return wantErr
 		}),
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_applied_fails", Seq: 1}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_applied_fails", Seq: 1}}
 		}),
 	})
 
@@ -260,12 +261,12 @@ func TestCommandLogWorkerStopsBeforeRetryableFailure(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       log,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
 			if record.Offset == 2 {
-				return Reply{Err: &proto.ErrorDetail{Code: "temporary_failure", Message: "try again", Retryable: true}}
+				return commandexec.Reply{Err: &proto.ErrorDetail{Code: "temporary_failure", Message: "try again", Retryable: true}}
 			}
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -297,12 +298,12 @@ func TestCommandLogWorkerCommitsTerminalFailures(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       log,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
 			if record.Offset == 1 {
-				return Reply{Err: &proto.ErrorDetail{Code: "validation_failed", Message: "bad command", Retryable: false}}
+				return commandexec.Reply{Err: &proto.ErrorDetail{Code: "validation_failed", Message: "bad command", Retryable: false}}
 			}
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -331,9 +332,9 @@ func TestCommandLogWorkerRetriesCommandOffsetCommit(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       log,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -366,9 +367,9 @@ func TestCommandLogWorkerReportsCommandOffsetCommitFailure(t *testing.T) {
 		Log:            log,
 		BatchSize:      10,
 		CommitAttempts: 2,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -400,10 +401,10 @@ func TestCommandLogWorkerSupportsTransactionalFinalizer(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_transactional_finalizer", Seq: 1}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_transactional_finalizer", Seq: 1}}
 		}),
-		Finalizer: CommandLogFinalizerFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) (CommandLogFinalizationResult, error) {
+		Finalizer: CommandLogFinalizerFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) (CommandLogFinalizationResult, error) {
 			finalized = append(finalized, record.Offset)
 			if reply.Result == nil {
 				return CommandLogFinalizationResult{}, errors.New("missing command result")
@@ -456,9 +457,9 @@ func TestCommandLogWorkerAllowsSourcePositionBackedSparseOffsets(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       log,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -482,8 +483,8 @@ func TestCommandLogWorkerRejectsSparseOffsetsWithoutSourcePosition(t *testing.T)
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       log,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -513,8 +514,8 @@ func TestCommandLogWorkerRejectsInvalidSparseSourcePosition(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       log,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -538,12 +539,12 @@ func TestCommandLogWorkerSupportsCommandEventTransactionFinalizer(t *testing.T) 
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_command_event_transaction", Seq: 1}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_command_event_transaction", Seq: 1}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: transactionStore,
-			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 				decided = append(decided, record.Offset)
 				if reply.Result == nil {
 					return nil, errors.New("missing command result")
@@ -588,8 +589,8 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_batch"}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_batch"}}
 		}),
 		Finalizer: CommandEventTransactionBatchFinalizer{
 			CommandEventTransactionFinalizer: CommandEventTransactionFinalizer{
@@ -598,7 +599,7 @@ func TestCommandLogWorkerBatchFinalizerCommitsFetchedPartitionBatch(t *testing.T
 					gotTx = tx
 					return transactionStore.CommitCommandEvents(ctx, tx)
 				}),
-				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 					return commandLogWorkerThreadNewEvent(record, "evt_batch_", "Batch "), nil
 				}),
 				Applied: commandLogAppliedRecorderFunc(func(ctx context.Context, record CommandLogRecord, result *proto.AckResult) error {
@@ -642,13 +643,13 @@ func TestCommandLogWorkerBatchFinalizerRecordsIndexedCommit(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_indexed_batch"}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_indexed_batch"}}
 		}),
 		Finalizer: CommandEventTransactionBatchFinalizer{
 			CommandEventTransactionFinalizer: CommandEventTransactionFinalizer{
 				Transactions: transactionStore,
-				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 					return commandLogWorkerThreadNewEvent(record, "evt_indexed_batch_", "Indexed Batch "), nil
 				}),
 			},
@@ -681,12 +682,12 @@ func TestCommandLogWorkerBatchFinalizerStopsBeforeRetryableFailure(t *testing.T)
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
 			if record.Offset == 2 {
-				return Reply{Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "try again", Retryable: true}}
+				return commandexec.Reply{Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "try again", Retryable: true}}
 			}
-			return Reply{Result: &proto.AckResult{ID: "ack_batch_retry"}}
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_batch_retry"}}
 		}),
 		Finalizer: CommandEventTransactionBatchFinalizer{
 			CommandEventTransactionFinalizer: CommandEventTransactionFinalizer{
@@ -694,7 +695,7 @@ func TestCommandLogWorkerBatchFinalizerStopsBeforeRetryableFailure(t *testing.T)
 					calls++
 					return transactionStore.CommitCommandEvents(ctx, tx)
 				}),
-				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+				Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 					return commandLogWorkerThreadNewEvent(record, "evt_batch_retry_", "Batch retry "), nil
 				}),
 				RetryableFailures: commandLogRetryableFailureRecorderFunc(func(ctx context.Context, record CommandLogRecord, errDetail *proto.ErrorDetail) error {
@@ -733,15 +734,15 @@ func TestCommandLogWorkerUsesPerRecordNativeFinalizerUnlessBatchOptedIn(t *testi
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_single_finalizer"}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_single_finalizer"}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
 				calls++
 				return transactionStore.CommitCommandEvents(ctx, tx)
 			}),
-			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 				return commandLogWorkerThreadNewEvent(record, "evt_single_finalizer_", "Single finalizer "), nil
 			}),
 		},
@@ -767,12 +768,12 @@ func TestCommandLogWorkerReportsCommittedProgressWhenNativeAppliedReceiptFails(t
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_applied_recorder_error", Seq: 1}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_applied_recorder_error", Seq: 1}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: transactionStore,
-			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 				return []EventAppend{commandLogWorkerThreadNewEventWithID(
 					"evt_applied_recorder_error",
 					"thr_applied_recorder_error",
@@ -805,12 +806,12 @@ func TestCommandEventTransactionFinalizerDoesNotCommitWhenEventDecisionIsInvalid
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_invalid_command_event_transaction", Seq: 1}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_invalid_command_event_transaction", Seq: 1}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: transactionStore,
-			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 				return nil, errors.New("native event decision failed")
 			}),
 		},
@@ -842,14 +843,14 @@ func TestCommandLogWorkerReportsNativeTransactionCommitFailure(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_native_transaction_commit_failure", Seq: 1}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_native_transaction_commit_failure", Seq: 1}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
 				return CommandEventTransactionResult{}, errors.New("injected native transaction commit failure")
 			}),
-			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+			Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 				return []EventAppend{commandLogWorkerThreadNewEventWithID(
 					"evt_native_transaction_commit_failure",
 					"thr_native_transaction_commit_failure",
@@ -880,8 +881,8 @@ func TestCommandLogWorkerReportsNativeRetryableReceiptFailure(t *testing.T) {
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "native retry later", Retryable: true}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "native retry later", Retryable: true}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
@@ -918,8 +919,8 @@ func TestCommandEventTransactionFinalizerRecordsTerminalFailureReceipts(t *testi
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
 		Log:       commandLog,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "native command unsupported"}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "native command unsupported"}}
 		}),
 		Finalizer: CommandEventTransactionFinalizer{
 			Transactions: transactionStore,
@@ -972,9 +973,9 @@ func TestCommandLogWorkerClaimsPartitionBeforeDraining(t *testing.T) {
 		OwnerID:   "writer-a",
 		ClaimTTL:  100 * time.Millisecond,
 		BatchSize: 1,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seenA = append(seenA, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 	firstResults := drainCommandLogWorkerOnce(t, ctx, workerA, "writer-a drain")
@@ -992,9 +993,9 @@ func TestCommandLogWorkerClaimsPartitionBeforeDraining(t *testing.T) {
 		OwnerID:   "writer-b",
 		ClaimTTL:  100 * time.Millisecond,
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seenB = append(seenB, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 	now = 1050
@@ -1038,9 +1039,9 @@ func TestCommandLogWorkerStopsWhenClaimLostDuringDrain(t *testing.T) {
 		Claims:    claimer,
 		OwnerID:   "writer-a",
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -1078,9 +1079,9 @@ func TestCommandLogWorkerDoesNotCommitAfterClaimLostBeforeCommit(t *testing.T) {
 		Claims:    claimer,
 		OwnerID:   "writer-a",
 		BatchSize: 10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -1119,14 +1120,14 @@ func TestCommandLogWorkerRefreshesClaimDuringLongExecution(t *testing.T) {
 		ClaimTTL:             90 * time.Millisecond,
 		ClaimRefreshInterval: 10 * time.Millisecond,
 		BatchSize:            10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
 			executionStartedOnce.Do(func() { close(executionStarted) })
 			select {
 			case <-releaseExecution:
-				return Reply{}
+				return commandexec.Reply{}
 			case <-ctx.Done():
-				return Reply{Err: &proto.ErrorDetail{Code: "cancelled", Message: ctx.Err().Error(), Retryable: true}}
+				return commandexec.Reply{Err: &proto.ErrorDetail{Code: "cancelled", Message: ctx.Err().Error(), Retryable: true}}
 			}
 		}),
 	})
@@ -1180,14 +1181,14 @@ func TestCommandLogWorkerDoesNotCommitIfHeartbeatLosesClaimDuringExecution(t *te
 		ClaimTTL:             90 * time.Millisecond,
 		ClaimRefreshInterval: 10 * time.Millisecond,
 		BatchSize:            10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
 			executionStartedOnce.Do(func() { close(executionStarted) })
 			select {
 			case <-claimer.Lost():
-				return Reply{}
+				return commandexec.Reply{}
 			case <-ctx.Done():
-				return Reply{Err: &proto.ErrorDetail{Code: "cancelled", Message: ctx.Err().Error(), Retryable: true}}
+				return commandexec.Reply{Err: &proto.ErrorDetail{Code: "cancelled", Message: ctx.Err().Error(), Retryable: true}}
 			}
 		}),
 	})
@@ -1245,9 +1246,9 @@ func TestCommandLogWorkerDrainsOnlyAssignedPartitions(t *testing.T) {
 		Assignments: assigner,
 		OwnerID:     "writer-a",
 		BatchSize:   10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Partition)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -1292,9 +1293,9 @@ func TestCommandLogWorkerUsesAssignmentListerWithoutGlobalPartitionScan(t *testi
 		Assignments: assigner,
 		OwnerID:     "writer-a",
 		BatchSize:   10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Partition)
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -1331,7 +1332,7 @@ func TestCommandLogWorkerDoesNotCommitAfterSnapshotRebalanceBeforeCommit(t *test
 		Assignments: assigner,
 		OwnerID:     "writer-a",
 		BatchSize:   10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
 			assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 				Generation: 32,
@@ -1339,7 +1340,7 @@ func TestCommandLogWorkerDoesNotCommitAfterSnapshotRebalanceBeforeCommit(t *test
 					partition: "writer-b",
 				},
 			})
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 
@@ -1362,19 +1363,19 @@ func TestCommandLogWorkerDoesNotFinalizeOutcomeAfterAssignmentLost(t *testing.T)
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	tests := []struct {
 		name  string
-		reply Reply
+		reply commandexec.Reply
 	}{
 		{
 			name:  "applied",
-			reply: Reply{Result: &proto.AckResult{ID: "ack_lost_assignment", Seq: 1}},
+			reply: commandexec.Reply{Result: &proto.AckResult{ID: "ack_lost_assignment", Seq: 1}},
 		},
 		{
 			name:  "terminal",
-			reply: Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "bad command", Retryable: false}},
+			reply: commandexec.Reply{Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "bad command", Retryable: false}},
 		},
 		{
 			name:  "retryable",
-			reply: Reply{Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "try again", Retryable: true}},
+			reply: commandexec.Reply{Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "try again", Retryable: true}},
 		},
 	}
 	for _, tt := range tests {
@@ -1405,7 +1406,7 @@ func TestCommandLogWorkerDoesNotFinalizeOutcomeAfterAssignmentLost(t *testing.T)
 					retrying++
 					return nil
 				}),
-				Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+				Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 					assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 						Generation: 42,
 						Owners: map[LogPartition]string{
@@ -1452,14 +1453,14 @@ func TestCommandLogWorkerDoesNotCommitIfAssignmentLostDuringExecution(t *testing
 		ClaimTTL:             90 * time.Millisecond,
 		ClaimRefreshInterval: 10 * time.Millisecond,
 		BatchSize:            10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			seen = append(seen, record.Offset)
 			executionStartedOnce.Do(func() { close(executionStarted) })
 			select {
 			case <-assigner.Lost():
-				return Reply{}
+				return commandexec.Reply{}
 			case <-ctx.Done():
-				return Reply{Err: &proto.ErrorDetail{Code: "cancelled", Message: ctx.Err().Error(), Retryable: true}}
+				return commandexec.Reply{Err: &proto.ErrorDetail{Code: "cancelled", Message: ctx.Err().Error(), Retryable: true}}
 			}
 		}),
 	})
@@ -1516,10 +1517,10 @@ func TestCommandLogWorkerCancelsFinalizerIfAssignmentLostDuringFinalization(t *t
 		ClaimTTL:             90 * time.Millisecond,
 		ClaimRefreshInterval: 10 * time.Millisecond,
 		BatchSize:            10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Result: &proto.AckResult{ID: "ack_finalizer_assignment_loss", Seq: 1}}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Result: &proto.AckResult{ID: "ack_finalizer_assignment_loss", Seq: 1}}
 		}),
-		Finalizer: CommandLogFinalizerFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) (CommandLogFinalizationResult, error) {
+		Finalizer: CommandLogFinalizerFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) (CommandLogFinalizationResult, error) {
 			finalizerStartedOnce.Do(func() { close(finalizerStarted) })
 			select {
 			case <-ctx.Done():
@@ -1986,8 +1987,8 @@ func TestCoreAuthoritativeCommandLogStatusReportsRetryableFailure(t *testing.T) 
 		Log:               commandLog,
 		RetryableFailures: c,
 		BatchSize:         10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Err: retryableErr}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Err: retryableErr}
 		}),
 	})
 	results := drainCommandLogWorkerOnce(t, ctx, worker, "drain once")
@@ -2035,8 +2036,8 @@ func TestCoreAuthoritativeCommandLogClearsRetryingReceiptAfterSuccess(t *testing
 		Log:               commandLog,
 		RetryableFailures: c,
 		BatchSize:         10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-			return Reply{Err: retryableErr}
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Err: retryableErr}
 		}),
 	})
 	retryingResults := drainCommandLogWorkerOnce(t, ctx, retryingWorker, "retrying drain")
@@ -2258,10 +2259,10 @@ func TestCommandLogWorkerCrashBeforeMaterializationReplaysOnReplacement(t *testi
 		ClaimTTL:             90 * time.Millisecond,
 		ClaimRefreshInterval: 10 * time.Millisecond,
 		BatchSize:            10,
-		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
+		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 			executionStartedOnce.Do(func() { close(executionStarted) })
 			<-releaseExecution
-			return Reply{}
+			return commandexec.Reply{}
 		}),
 	})
 	done := make(chan commandLogWorkerDrainResult, 1)

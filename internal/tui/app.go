@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -3323,7 +3324,7 @@ func (m model) resubscribeThread(threadID string) tea.Cmd {
 	}
 }
 
-func isPendingCommandReply(reply core.Reply) bool {
+func isPendingCommandReply(reply commandexec.Reply) bool {
 	return reply.Result != nil && reply.Result.Status == proto.AckStatusPending
 }
 

@@ -418,7 +418,7 @@ func (c *Core) drainCommandLogLoad(ctx context.Context, commandLog CommandLog, c
 
 type commandLogDrainLoadNativePendingRecord struct {
 	record     CommandLogRecord
-	reply      Reply
+	reply      commandexec.Reply
 	eventStart int
 	eventEnd   int
 }
@@ -429,7 +429,7 @@ type commandLogDrainLoadNativePendingPartition struct {
 	events  []EventAppend
 }
 
-func (p *commandLogDrainLoadNativePendingPartition) appendRecord(ctx context.Context, executor *CommandLogNativeDecisionExecutor, record CommandLogRecord, reply Reply) error {
+func (p *commandLogDrainLoadNativePendingPartition) appendRecord(ctx context.Context, executor *CommandLogNativeDecisionExecutor, record CommandLogRecord, reply commandexec.Reply) error {
 	if p == nil {
 		return fmt.Errorf("command log drain load: nil pending partition")
 	}

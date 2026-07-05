@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -15,12 +16,12 @@ import (
 // partitions. The current bridge can execute through the SQL-backed handler;
 // later implementations can decide events without touching SQL projections.
 type CommandLogExecutor interface {
-	ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) Reply
+	ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) commandexec.Reply
 }
 
-type CommandLogExecutorFunc func(context.Context, CommandLogRecord) Reply
+type CommandLogExecutorFunc func(context.Context, CommandLogRecord) commandexec.Reply
 
-func (f CommandLogExecutorFunc) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) Reply {
+func (f CommandLogExecutorFunc) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 	return f(ctx, record)
 }
 
@@ -46,7 +47,7 @@ type CommandLogBatchAppliedRecorder interface {
 // offset commit; future broker-native writers can replace it with an event-log
 // append/offset commit transaction and return Committed.
 type CommandLogFinalizer interface {
-	FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply Reply) (CommandLogFinalizationResult, error)
+	FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) (CommandLogFinalizationResult, error)
 }
 
 type CommandLogCommitRecorder interface {
@@ -57,7 +58,7 @@ type CommandLogCommitRecorder interface {
 // command partition. Implementations should return Committed only after the
 // batch's last command offset is durable.
 type CommandLogBatchFinalizer interface {
-	FinalizeCommandLogBatch(ctx context.Context, records []CommandLogRecord, replies []Reply) (CommandLogFinalizationResult, error)
+	FinalizeCommandLogBatch(ctx context.Context, records []CommandLogRecord, replies []commandexec.Reply) (CommandLogFinalizationResult, error)
 }
 
 type CommandLogFinalizationResult struct {
@@ -70,9 +71,9 @@ type CommandLogFinalizationResult struct {
 	Committed        bool
 }
 
-type CommandLogFinalizerFunc func(context.Context, CommandLogRecord, Reply) (CommandLogFinalizationResult, error)
+type CommandLogFinalizerFunc func(context.Context, CommandLogRecord, commandexec.Reply) (CommandLogFinalizationResult, error)
 
-func (f CommandLogFinalizerFunc) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply Reply) (CommandLogFinalizationResult, error) {
+func (f CommandLogFinalizerFunc) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) (CommandLogFinalizationResult, error) {
 	return f(ctx, record, reply)
 }
 
@@ -584,7 +585,7 @@ func (w *CommandLogWorker) drainPartitionWithBatchFinalizer(ctx context.Context,
 		return fmt.Errorf("command log worker: nil batch finalizer")
 	}
 	pendingRecords := make([]CommandLogRecord, 0, len(records))
-	pendingReplies := make([]Reply, 0, len(records))
+	pendingReplies := make([]commandexec.Reply, 0, len(records))
 	pendingLastOffset := result.LastOffset
 	flushPending := func() (bool, error) {
 		if len(pendingRecords) == 0 {
@@ -743,7 +744,7 @@ type commandLogFinalizationOutcome struct {
 	err       error
 }
 
-func (w *CommandLogWorker) finalizeWithOwnershipHeartbeat(ctx context.Context, partition LogPartition, record CommandLogRecord, reply Reply, result *CommandLogWorkerResult) (CommandLogFinalizationResult, bool, error) {
+func (w *CommandLogWorker) finalizeWithOwnershipHeartbeat(ctx context.Context, partition LogPartition, record CommandLogRecord, reply commandexec.Reply, result *CommandLogWorkerResult) (CommandLogFinalizationResult, bool, error) {
 	if !w.shouldHeartbeatOwnership() {
 		finalized, err := w.finalizer.FinalizeCommandLogRecord(ctx, record, reply)
 		return finalized, true, err
@@ -794,7 +795,7 @@ func (w *CommandLogWorker) finalizeWithOwnershipHeartbeat(ctx context.Context, p
 	}
 }
 
-func (w *CommandLogWorker) finalizeBatchWithOwnershipHeartbeat(ctx context.Context, partition LogPartition, records []CommandLogRecord, replies []Reply, finalizer CommandLogBatchFinalizer, result *CommandLogWorkerResult) (CommandLogFinalizationResult, bool, error) {
+func (w *CommandLogWorker) finalizeBatchWithOwnershipHeartbeat(ctx context.Context, partition LogPartition, records []CommandLogRecord, replies []commandexec.Reply, finalizer CommandLogBatchFinalizer, result *CommandLogWorkerResult) (CommandLogFinalizationResult, bool, error) {
 	if !w.shouldHeartbeatOwnership() {
 		finalized, err := finalizer.FinalizeCommandLogBatch(ctx, records, replies)
 		return finalized, true, err
@@ -871,11 +872,11 @@ func advanceCommandLogWorkerResult(result *CommandLogWorkerResult, offset int64,
 	result.Processed += count
 }
 
-func (w *CommandLogWorker) executeWithOwnershipHeartbeat(ctx context.Context, partition LogPartition, record CommandLogRecord, result *CommandLogWorkerResult) (Reply, bool, error) {
+func (w *CommandLogWorker) executeWithOwnershipHeartbeat(ctx context.Context, partition LogPartition, record CommandLogRecord, result *CommandLogWorkerResult) (commandexec.Reply, bool, error) {
 	if !w.shouldHeartbeatOwnership() {
 		return w.executor.ExecuteCommandLogRecord(ctx, record), true, nil
 	}
-	done := make(chan Reply, 1)
+	done := make(chan commandexec.Reply, 1)
 	go func() {
 		done <- w.executor.ExecuteCommandLogRecord(ctx, record)
 	}()
@@ -887,7 +888,7 @@ func (w *CommandLogWorker) executeWithOwnershipHeartbeat(ctx context.Context, pa
 		select {
 		case reply := <-done:
 			if refreshErr != nil {
-				return Reply{}, false, refreshErr
+				return commandexec.Reply{}, false, refreshErr
 			}
 			return reply, claimOwned, nil
 		case <-ticker.C:
@@ -904,7 +905,7 @@ func (w *CommandLogWorker) executeWithOwnershipHeartbeat(ctx context.Context, pa
 				claimOwned = false
 			}
 		case <-ctx.Done():
-			return Reply{}, false, ctx.Err()
+			return commandexec.Reply{}, false, ctx.Err()
 		}
 	}
 }
@@ -973,7 +974,7 @@ type commandLogDefaultFinalizer struct {
 	retryableFailures CommandLogRetryableFailureRecorder
 }
 
-func (f commandLogDefaultFinalizer) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply Reply) (CommandLogFinalizationResult, error) {
+func (f commandLogDefaultFinalizer) FinalizeCommandLogRecord(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) (CommandLogFinalizationResult, error) {
 	result := CommandLogFinalizationResult{}
 	if reply.Err != nil && reply.Err.Retryable {
 		result.RetryableFailure = reply.Err

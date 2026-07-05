@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -34,16 +35,16 @@ func NewCommandLogNativeDecisionExecutor(c *Core) *CommandLogNativeDecisionExecu
 	return &CommandLogNativeDecisionExecutor{core: c}
 }
 
-func (e *CommandLogNativeDecisionExecutor) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) Reply {
+func (e *CommandLogNativeDecisionExecutor) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 	decision, errDetail := e.decide(ctx, record)
 	if errDetail != nil {
-		return Reply{Err: errDetail}
+		return commandexec.Reply{Err: errDetail}
 	}
 	e.rememberDecision(record, decision)
 	return decision.reply
 }
 
-func (e *CommandLogNativeDecisionExecutor) DecideCommandLogEvents(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+func (e *CommandLogNativeDecisionExecutor) DecideCommandLogEvents(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 	if reply.Err != nil {
 		return nil, nil
 	}
@@ -64,7 +65,7 @@ func (e *CommandLogNativeDecisionExecutor) DecideCommandLogEvents(ctx context.Co
 }
 
 type nativeCommandDecision struct {
-	reply  Reply
+	reply  commandexec.Reply
 	events []EventAppend
 }
 
@@ -359,7 +360,7 @@ func nativeDecisionAckEvent(id string, event EventAppend) nativeCommandDecision 
 
 func nativeDecisionAckEvents(id string, events []EventAppend) nativeCommandDecision {
 	return nativeCommandDecision{
-		reply:  Reply{Result: &proto.AckResult{ID: id}},
+		reply:  commandexec.Reply{Result: &proto.AckResult{ID: id}},
 		events: events,
 	}
 }
@@ -1492,7 +1493,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishPollResult(ctx context.C
 	if existingSeq, found, err := projections.ThreadLastSeq(e.core.DB, threadID); err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	} else if found {
-		return nativeCommandDecision{reply: Reply{Result: &proto.AckResult{ID: threadID, Seq: existingSeq}}}, nil
+		return nativeCommandDecision{reply: commandexec.Reply{Result: &proto.AckResult{ID: threadID, Seq: existingSeq}}}, nil
 	}
 
 	ts := nativeCommandTimestamp(record)
@@ -2362,7 +2363,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishStatsSnapshot(ctx contex
 		reply.Seq = plan.MainExistingSeq
 	}
 	return nativeCommandDecision{
-		reply:  Reply{Result: reply},
+		reply:  commandexec.Reply{Result: reply},
 		events: events,
 	}, nil
 }
@@ -2388,7 +2389,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishSystemNotice(ctx context
 	if existingSeq, found, err := projections.ThreadLastSeq(e.core.DB, threadID); err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	} else if found {
-		return nativeCommandDecision{reply: Reply{Result: &proto.AckResult{ID: threadID, Seq: existingSeq}}}, nil
+		return nativeCommandDecision{reply: commandexec.Reply{Result: &proto.AckResult{ID: threadID, Seq: existingSeq}}}, nil
 	}
 
 	ts := nativeCommandTimestamp(record)

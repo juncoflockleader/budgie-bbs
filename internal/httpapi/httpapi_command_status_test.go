@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -378,8 +379,8 @@ func TestHTTPCommandStatusReportsRetryableCommandLogFailure(t *testing.T) {
 		Log:               commandLog,
 		RetryableFailures: c,
 		BatchSize:         10,
-		Executor: core.CommandLogExecutorFunc(func(ctx context.Context, record core.CommandLogRecord) core.Reply {
-			return core.Reply{Err: retryableErr}
+		Executor: core.CommandLogExecutorFunc(func(ctx context.Context, record core.CommandLogRecord) commandexec.Reply {
+			return commandexec.Reply{Err: retryableErr}
 		}),
 	})
 	results, err := worker.DrainOnce(ctx)

@@ -142,7 +142,7 @@ func execPostgresPartitionTestCmd(t *testing.T, c *Core, ctx context.Context, ac
 	return reply.Result
 }
 
-func execPostgresPartitionTestCmdReply(t *testing.T, c *Core, ctx context.Context, actor *User, cmd proto.CommandName, payload any) Reply {
+func execPostgresPartitionTestCmdReply(t *testing.T, c *Core, ctx context.Context, actor *User, cmd proto.CommandName, payload any) commandexec.Reply {
 	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {

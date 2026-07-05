@@ -506,7 +506,7 @@ func (c *Core) Run(ctx context.Context) {
 
 // ExecCmd submits a command for the actor and returns the result.
 // payload is the raw JSON of the command-specific payload object.
-func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string) Reply {
+func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string) commandexec.Reply {
 	partition, ok := c.classifyCommandPartition(actor, name, payload)
 	if !ok {
 		partition = defaultPartition()
@@ -525,7 +525,7 @@ func (c *Core) ExecCmd(ctx context.Context, actor *User, name proto.CommandName,
 	})
 }
 
-func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition LogPartition) Reply {
+func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition LogPartition) commandexec.Reply {
 	actorID := ""
 	if actor != nil {
 		actorID = actor.ID
@@ -543,7 +543,7 @@ func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, nam
 		EnqueuedAt: enqueuedAt,
 	})
 	if err != nil {
-		return Reply{Err: &proto.ErrorDetail{
+		return commandexec.Reply{Err: &proto.ErrorDetail{
 			Code:      proto.ErrCommandLogUnavailable,
 			Message:   err.Error(),
 			Retryable: true,
@@ -551,14 +551,14 @@ func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, nam
 	}
 	commandID, err := logmodel.EffectiveCommandLogCID(record)
 	if err != nil {
-		return Reply{Err: &proto.ErrorDetail{
+		return commandexec.Reply{Err: &proto.ErrorDetail{
 			Code:      proto.ErrCommandLogUnavailable,
 			Message:   err.Error(),
 			Retryable: true,
 		}}
 	}
 	partition = record.Partition.Normalize()
-	return Reply{Result: &proto.AckResult{
+	return commandexec.Reply{Result: &proto.AckResult{
 		ID:                   commandID,
 		Status:               proto.AckStatusPending,
 		CommandID:            commandID,
@@ -602,28 +602,28 @@ func (c *Core) shadowCommand(ctx context.Context, actor *User, name proto.Comman
 // SQL-backed handler without mirroring it back into the command log. It is the
 // bridge used while broker-owned writers are introduced behind the existing
 // command implementation.
-func (c *Core) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) Reply {
+func (c *Core) ExecuteCommandLogRecord(ctx context.Context, record CommandLogRecord) commandexec.Reply {
 	if c == nil || c.handler == nil {
-		return Reply{Err: &proto.ErrorDetail{Code: "internal_error", Message: "core is not initialized", Retryable: true}}
+		return commandexec.Reply{Err: &proto.ErrorDetail{Code: "internal_error", Message: "core is not initialized", Retryable: true}}
 	}
 	var actor *User
 	if record.ActorID != "" {
 		u, err := projections.GetUserByID(c.DB, record.ActorID)
 		if err != nil {
-			return Reply{Err: &proto.ErrorDetail{Code: "internal_error", Message: err.Error(), Retryable: true}}
+			return commandexec.Reply{Err: &proto.ErrorDetail{Code: "internal_error", Message: err.Error(), Retryable: true}}
 		}
 		if u == nil {
-			return Reply{Err: &proto.ErrorDetail{Code: proto.ErrUnauthenticated, Message: "command actor not found", Retryable: false}}
+			return commandexec.Reply{Err: &proto.ErrorDetail{Code: proto.ErrUnauthenticated, Message: "command actor not found", Retryable: false}}
 		}
 		actor = u
 	}
 	cid, errDetail := commandLogExecutionCID(record)
 	if errDetail != nil {
-		return Reply{Err: errDetail}
+		return commandexec.Reply{Err: errDetail}
 	}
 	partition := record.Partition.Normalize()
 	if errDetail := c.validateCommandLogRecordPartition(actor, record, partition); errDetail != nil {
-		return Reply{Err: errDetail}
+		return commandexec.Reply{Err: errDetail}
 	}
 	return c.handler.ExecutePartition(ctx, actor, record.Command, record.Payload, cid, commandexec.Partition{
 		Kind: partition.Kind,

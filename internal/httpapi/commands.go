@@ -11,6 +11,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -72,7 +73,7 @@ func (s *Server) handleSetGuestPresence(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeAck(w, r.Header.Get("X-Command-Id"), core.Reply{Result: &proto.AckResult{}})
+	writeAck(w, r.Header.Get("X-Command-Id"), commandexec.Reply{Result: &proto.AckResult{}})
 }
 
 func requestHost(r *http.Request) string {
@@ -1571,7 +1572,7 @@ func (s *Server) handlePublishSystemNotice(w http.ResponseWriter, r *http.Reques
 }
 
 // writeAck serialises a handler Reply into the wire ack envelope.
-func writeAck(w http.ResponseWriter, cid string, reply core.Reply) {
+func writeAck(w http.ResponseWriter, cid string, reply commandexec.Reply) {
 	type ack struct {
 		Kind   string             `json:"kind"`
 		CID    string             `json:"cid,omitempty"`
@@ -1591,6 +1592,6 @@ func writeAck(w http.ResponseWriter, cid string, reply core.Reply) {
 	writeJSON(w, status, a)
 }
 
-func isPendingAckReply(reply core.Reply) bool {
+func isPendingAckReply(reply commandexec.Reply) bool {
 	return reply.Result != nil && reply.Result.Status == proto.AckStatusPending
 }

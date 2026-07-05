@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -535,7 +536,7 @@ func TestCommandEventTransactionFinalizerRecordsTerminalFailureOnlyAfterCommit(t
 		}),
 	}
 
-	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
+	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, commandexec.Reply{
 		Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "terminal"},
 	})
 	requireErrorContains(t, err, "injected transaction commit failure")
@@ -573,12 +574,12 @@ func TestCommandEventTransactionFinalizerPassesCommandSourcePosition(t *testing.
 				CommittedOffset:    tx.CommandOffset,
 			}, nil
 		}),
-		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 			return nil, nil
 		}),
 	}
 
-	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{Result: &proto.AckResult{ID: "ack_source_position"}})
+	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, commandexec.Reply{Result: &proto.AckResult{ID: "ack_source_position"}})
 	if err != nil {
 		t.Fatalf("FinalizeCommandLogRecord: %v", err)
 	}
@@ -605,7 +606,7 @@ func TestCommandEventTransactionFinalizerReturnsRetryableProgressWhenReceiptFail
 		}),
 	}
 
-	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
+	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, commandexec.Reply{
 		Err: &proto.ErrorDetail{Code: "dependency_unavailable", Message: "try again", Retryable: true},
 	})
 	requireErrorContains(t, err, "retryable receipt write failed")
@@ -634,7 +635,7 @@ func TestCommandEventTransactionFinalizerReturnsCommittedTerminalProgressWhenRec
 		}),
 	}
 
-	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
+	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, commandexec.Reply{
 		Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "terminal"},
 	})
 	requireErrorContains(t, err, "terminal receipt write failed")
@@ -661,7 +662,7 @@ func TestCommandEventTransactionFinalizerReturnsCommittedAppliedProgressWhenRece
 				CommittedOffset:    tx.CommandOffset,
 			}, nil
 		}),
-		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 			return nil, nil
 		}),
 		Applied: commandLogAppliedRecorderFunc(func(ctx context.Context, record CommandLogRecord, result *proto.AckResult) error {
@@ -669,7 +670,7 @@ func TestCommandEventTransactionFinalizerReturnsCommittedAppliedProgressWhenRece
 		}),
 	}
 
-	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{Result: &proto.AckResult{ID: "ack_applied_recorder_fails"}})
+	result, err := finalizer.FinalizeCommandLogRecord(ctx, record, commandexec.Reply{Result: &proto.AckResult{ID: "ack_applied_recorder_fails"}})
 	requireErrorContains(t, err, "applied receipt write failed")
 	if !result.Committed || result.Applied != 1 {
 		t.Fatalf("finalization result = %+v, want committed applied progress despite recorder error", result)
@@ -689,7 +690,7 @@ func TestCommandEventTransactionFinalizerRejectsMissingCommittedPartition(t *tes
 		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
 			return CommandEventTransactionResult{CommittedOffset: tx.CommandOffset}, nil
 		}),
-		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply Reply) ([]EventAppend, error) {
+		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 			return nil, nil
 		}),
 		Applied: commandLogAppliedRecorderFunc(func(ctx context.Context, record CommandLogRecord, result *proto.AckResult) error {
@@ -698,7 +699,7 @@ func TestCommandEventTransactionFinalizerRejectsMissingCommittedPartition(t *tes
 		}),
 	}
 
-	_, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{Result: &proto.AckResult{ID: "ack_missing_partition"}})
+	_, err := finalizer.FinalizeCommandLogRecord(ctx, record, commandexec.Reply{Result: &proto.AckResult{ID: "ack_missing_partition"}})
 	requireErrorContains(t, err, "missing committed partition")
 	if len(appliedRecords) != 0 {
 		t.Fatalf("applied records = %+v, want none without committed partition evidence", appliedRecords)
@@ -727,7 +728,7 @@ func TestCommandEventTransactionFinalizerRejectsWrongCommittedPartition(t *testi
 		}),
 	}
 
-	_, err := finalizer.FinalizeCommandLogRecord(ctx, record, Reply{
+	_, err := finalizer.FinalizeCommandLogRecord(ctx, record, commandexec.Reply{
 		Err: &proto.ErrorDetail{Code: proto.ErrValidationFailed, Message: "terminal"},
 	})
 	requireErrorContains(t, err, "committed partition board/other for record partition board/general")

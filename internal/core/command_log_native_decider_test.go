@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -224,7 +225,7 @@ func requireNativeDecisionEventKinds(t *testing.T, events any, label string, kin
 	}
 }
 
-func requireNativeDecisionTerminalError(t *testing.T, reply Reply, code string, label string, messages ...string) {
+func requireNativeDecisionTerminalError(t *testing.T, reply commandexec.Reply, code string, label string, messages ...string) {
 	t.Helper()
 	if reply.Err == nil || reply.Err.Code != code || reply.Err.Retryable {
 		t.Fatalf("%s = %+v, want terminal %s", label, reply, code)

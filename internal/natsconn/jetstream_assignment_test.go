@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	nats "github.com/nats-io/nats.go"
 )
@@ -182,7 +183,7 @@ func TestJetStreamCommandPartitionAssignerRebalanceReplayDoesNotDuplicateSQLComm
 	if generation, err := assigner.SetMembers(ctx, []string{"writer-a"}); err != nil || generation != 1 {
 		t.Fatalf("initial assignment generation = %d, %v; want 1, nil", generation, err)
 	}
-	firstExecution := make(chan core.Reply, 1)
+	firstExecution := make(chan commandexec.Reply, 1)
 	releaseExecution := make(chan struct{})
 	workerA := core.NewCommandLogWorker(core.CommandLogWorkerConfig{
 		Log:                  commandLog,
@@ -190,7 +191,7 @@ func TestJetStreamCommandPartitionAssignerRebalanceReplayDoesNotDuplicateSQLComm
 		OwnerID:              "writer-a",
 		BatchSize:            10,
 		ClaimRefreshInterval: 10 * time.Millisecond,
-		Executor: core.CommandLogExecutorFunc(func(ctx context.Context, record core.CommandLogRecord) core.Reply {
+		Executor: core.CommandLogExecutorFunc(func(ctx context.Context, record core.CommandLogRecord) commandexec.Reply {
 			reply := c.ExecuteCommandLogRecord(ctx, record)
 			firstExecution <- reply
 			select {
@@ -354,14 +355,14 @@ func waitForCommandAssignmentWorkerDrain(t *testing.T, ch <-chan commandAssignme
 	}
 }
 
-func waitForCommandAssignmentReply(t *testing.T, ch <-chan core.Reply) core.Reply {
+func waitForCommandAssignmentReply(t *testing.T, ch <-chan commandexec.Reply) commandexec.Reply {
 	t.Helper()
 	select {
 	case reply := <-ch:
 		return reply
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for command execution")
-		return core.Reply{}
+		return commandexec.Reply{}
 	}
 }
 
