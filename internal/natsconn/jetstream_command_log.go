@@ -280,13 +280,13 @@ func (c *JetStreamCommandLogClient) ListCommandPartitions(ctx context.Context, l
 	if err != nil {
 		return nil, err
 	}
-	offsets := make([]core.CommandPartitionOffset, 0, len(info.State.Subjects))
+	offsets := make([]logmodel.CommandPartitionOffset, 0, len(info.State.Subjects))
 	for subject, count := range info.State.Subjects {
 		partition, ok := core.ParseBrokerCommandSubject(subject)
 		if !ok {
 			continue
 		}
-		offsets = append(offsets, core.CommandPartitionOffset{
+		offsets = append(offsets, logmodel.CommandPartitionOffset{
 			Partition:  partition,
 			TailOffset: int64(count),
 		})
@@ -294,7 +294,7 @@ func (c *JetStreamCommandLogClient) ListCommandPartitions(ctx context.Context, l
 	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
-func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]core.CommandPartitionOffset, error) {
+func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Cont
 		}
 		commitSubjects[partition.Normalize()] = subject
 	}
-	offsets := make([]core.CommandPartitionOffset, 0, len(commandInfo.State.Subjects))
+	offsets := make([]logmodel.CommandPartitionOffset, 0, len(commandInfo.State.Subjects))
 	for subject, count := range commandInfo.State.Subjects {
 		if count == 0 {
 			continue
@@ -338,7 +338,7 @@ func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Cont
 			}
 			committedOffset = commitTail.logicalOffset
 		}
-		offsets = append(offsets, core.CommandPartitionOffset{
+		offsets = append(offsets, logmodel.CommandPartitionOffset{
 			Partition:       partition,
 			TailOffset:      int64(count),
 			CommittedOffset: committedOffset,
@@ -352,7 +352,7 @@ func (c *JetStreamCommandLogClient) ListCommandPartitionOffsets(ctx context.Cont
 		if err != nil {
 			return nil, err
 		}
-		offsets = append(offsets, core.CommandPartitionOffset{
+		offsets = append(offsets, logmodel.CommandPartitionOffset{
 			Partition:       partition,
 			TailOffset:      0,
 			CommittedOffset: commitTail.logicalOffset,

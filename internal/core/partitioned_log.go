@@ -959,7 +959,7 @@ func (l *MemoryCommandLog) ListCommandPartitions(ctx context.Context, limit int)
 	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
-func (l *MemoryCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l *MemoryCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -969,13 +969,13 @@ func (l *MemoryCommandLog) ListCommandPartitionOffsets(ctx context.Context, limi
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	offsets := make([]CommandPartitionOffset, 0, len(l.records))
+	offsets := make([]logmodel.CommandPartitionOffset, 0, len(l.records))
 	for partition, records := range l.records {
 		if len(records) == 0 {
 			continue
 		}
 		partition = partition.Normalize()
-		offsets = append(offsets, CommandPartitionOffset{
+		offsets = append(offsets, logmodel.CommandPartitionOffset{
 			Partition:       partition,
 			TailOffset:      int64(len(records)),
 			CommittedOffset: l.committed[partition],

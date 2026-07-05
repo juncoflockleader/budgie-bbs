@@ -490,7 +490,7 @@ func enqueueClassifiedAppendPostCommand(t *testing.T, ctx context.Context, c *Co
 	return logPartition
 }
 
-func hasBlockingCommandPartition(offsets []CommandPartitionOffset, partition LogPartition, lag int64) bool {
+func hasBlockingCommandPartition(offsets []logmodel.CommandPartitionOffset, partition LogPartition, lag int64) bool {
 	partition = partition.Normalize()
 	for _, offset := range offsets {
 		if offset.Partition.Normalize() == partition && offset.TailOffset-offset.CommittedOffset == lag {

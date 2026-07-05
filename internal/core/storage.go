@@ -52,12 +52,10 @@ type CommandPartitionLister interface {
 	ListCommandPartitions(ctx context.Context, limit int) ([]LogPartition, error)
 }
 
-type CommandPartitionOffset = logmodel.CommandPartitionOffset
-
 // CommandPartitionOffsetLister exposes command-log tail and committed offsets
 // so operators can see writer lag before promoting a partitioned command log.
 type CommandPartitionOffsetLister interface {
-	ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error)
+	ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error)
 }
 
 type CommandPartitionClaim = logmodel.CommandPartitionClaim

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -213,11 +214,11 @@ func (l sparseAuditCommandLog) CommittedOffset(ctx context.Context, partition Lo
 	return l.committed, nil
 }
 
-func (l sparseAuditCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l sparseAuditCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return []CommandPartitionOffset{{
+	return []logmodel.CommandPartitionOffset{{
 		Partition:       l.partition,
 		TailOffset:      l.committed,
 		CommittedOffset: l.committed,

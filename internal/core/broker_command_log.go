@@ -121,9 +121,9 @@ func (l *BrokerCommandLog) ListCommandPartitions(ctx context.Context, limit int)
 	return lister.ListCommandPartitions(ctx, limit)
 }
 
-func (l *BrokerCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l *BrokerCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	lister, ok := l.client.(interface {
-		ListCommandPartitionOffsets(context.Context, int) ([]CommandPartitionOffset, error)
+		ListCommandPartitionOffsets(context.Context, int) ([]logmodel.CommandPartitionOffset, error)
 	})
 	if !ok {
 		return nil, fmt.Errorf("broker command log: partition offset listing is not supported")
@@ -296,7 +296,7 @@ func (c *MemoryBrokerCommandLogClient) ListCommandPartitions(ctx context.Context
 	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
-func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -305,10 +305,10 @@ func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.C
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	offsets := make([]CommandPartitionOffset, 0, len(c.tails))
+	offsets := make([]logmodel.CommandPartitionOffset, 0, len(c.tails))
 	for partition, tail := range c.tails {
 		partition = partition.Normalize()
-		offsets = append(offsets, CommandPartitionOffset{
+		offsets = append(offsets, logmodel.CommandPartitionOffset{
 			Partition:       partition,
 			TailOffset:      tail,
 			CommittedOffset: c.committed[partition],

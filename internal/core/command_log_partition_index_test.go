@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -35,7 +36,7 @@ func TestSQLCommandLogPartitionIndexTracksProducedAndCommittedOffsets(t *testing
 	if err != nil {
 		t.Fatalf("ListCommandPartitionOffsets: %v", err)
 	}
-	want := []CommandPartitionOffset{
+	want := []logmodel.CommandPartitionOffset{
 		{Partition: board, TailOffset: 2, CommittedOffset: 1},
 		{Partition: thread, TailOffset: 1, CommittedOffset: 0},
 	}
@@ -61,7 +62,7 @@ func TestListCommandPartitionOffsetsWithLimitReportsOverflowAndNormalizes(t *tes
 	if !limited {
 		t.Fatal("limited = false, want true")
 	}
-	want := []CommandPartitionOffset{
+	want := []logmodel.CommandPartitionOffset{
 		{Partition: board, TailOffset: 2, CommittedOffset: 2},
 		{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}},
 	}
@@ -76,7 +77,7 @@ func TestListCommandPartitionOffsetsWithLimitReportsOverflowAndNormalizes(t *tes
 	if limited {
 		t.Fatal("unlimited limited = true, want false")
 	}
-	want = append(want, CommandPartitionOffset{Partition: thread, TailOffset: 4, CommittedOffset: 1})
+	want = append(want, logmodel.CommandPartitionOffset{Partition: thread, TailOffset: 4, CommittedOffset: 1})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unlimited offsets = %+v, want %+v", got, want)
 	}
@@ -90,13 +91,13 @@ func TestListCommandLogPartitionOffsetsWithLimitRequiresOffsetLister(t *testing.
 	}
 }
 
-type commandPartitionOffsetSliceLister []CommandPartitionOffset
+type commandPartitionOffsetSliceLister []logmodel.CommandPartitionOffset
 
-func (l commandPartitionOffsetSliceLister) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l commandPartitionOffsetSliceLister) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := append([]CommandPartitionOffset(nil), l...)
+	out := append([]logmodel.CommandPartitionOffset(nil), l...)
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
@@ -131,7 +132,7 @@ func TestIndexedCommandLogRegistersPartitionBeforeProducing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCommandPartitionOffsets: %v", err)
 	}
-	want := []CommandPartitionOffset{{Partition: partition, TailOffset: 0, CommittedOffset: 0}}
+	want := []logmodel.CommandPartitionOffset{{Partition: partition, TailOffset: 0, CommittedOffset: 0}}
 	if !reflect.DeepEqual(offsets, want) {
 		t.Fatalf("offsets after failed produce = %+v, want %+v", offsets, want)
 	}
@@ -161,7 +162,7 @@ func TestSQLCommandLogPartitionIndexTracksFetchedExternalTailsAndClampsCommit(t 
 	if err != nil {
 		t.Fatalf("ListCommandPartitionOffsets: %v", err)
 	}
-	want := []CommandPartitionOffset{{Partition: partition, TailOffset: 2, CommittedOffset: 2}}
+	want := []logmodel.CommandPartitionOffset{{Partition: partition, TailOffset: 2, CommittedOffset: 2}}
 	if !reflect.DeepEqual(offsets, want) {
 		t.Fatalf("offsets = %+v, want committed offset clamped to indexed tail %+v", offsets, want)
 	}

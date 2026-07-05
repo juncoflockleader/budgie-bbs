@@ -704,9 +704,9 @@ func commandLogDrainLoadMemberPartitionCursors(ctx context.Context, commandLog C
 	return cursors, nil
 }
 
-func commandLogDrainLoadAssignedLaggingPartitionOffsets(ctx context.Context, offsets []CommandPartitionOffset, assigner CommandPartitionAssigner, ownerID string) ([]CommandPartitionOffset, error) {
+func commandLogDrainLoadAssignedLaggingPartitionOffsets(ctx context.Context, offsets []logmodel.CommandPartitionOffset, assigner CommandPartitionAssigner, ownerID string) ([]logmodel.CommandPartitionOffset, error) {
 	ownerID = strings.TrimSpace(ownerID)
-	assignedOffsets := make([]CommandPartitionOffset, 0, len(offsets))
+	assignedOffsets := make([]logmodel.CommandPartitionOffset, 0, len(offsets))
 	for _, offset := range logmodel.LaggingCommandPartitionOffsets(offsets) {
 		assignment, assigned, err := assigner.AssignCommandPartition(ctx, ownerID, offset.Partition)
 		if err != nil {
@@ -817,7 +817,7 @@ func (a commandLogDrainLoadSnapshotAssigner) StableCommandPartitionAssignment() 
 	return true
 }
 
-func (a commandLogDrainLoadSnapshotAssigner) ListAssignedCommandPartitionOffsets(ctx context.Context, ownerID string, limit int) ([]CommandPartitionOffset, error) {
+func (a commandLogDrainLoadSnapshotAssigner) ListAssignedCommandPartitionOffsets(ctx context.Context, ownerID string, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

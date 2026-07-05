@@ -28,7 +28,7 @@ func (c *Core) AuditCommandLogMaterialization(ctx context.Context, commandLog Co
 	return c.auditCommandLogMaterializationOffsets(ctx, commandLog, report, offsets, limited)
 }
 
-func (c *Core) auditCommandLogMaterializationFromOffsets(ctx context.Context, commandLog CommandLog, config loadmodel.CommandLogMaterializationAuditConfig, offsets []CommandPartitionOffset, limited bool) (loadmodel.CommandLogMaterializationAuditReport, error) {
+func (c *Core) auditCommandLogMaterializationFromOffsets(ctx context.Context, commandLog CommandLog, config loadmodel.CommandLogMaterializationAuditConfig, offsets []logmodel.CommandPartitionOffset, limited bool) (loadmodel.CommandLogMaterializationAuditReport, error) {
 	report := loadmodel.NewCommandLogMaterializationAuditReport(config, nowMS())
 	if err := c.validateCommandLogMaterializationAudit(ctx, commandLog); err != nil {
 		return commandLogMaterializationAuditError(report, err)
@@ -49,7 +49,7 @@ func (c *Core) validateCommandLogMaterializationAudit(ctx context.Context, comma
 	return nil
 }
 
-func (c *Core) auditCommandLogMaterializationOffsets(ctx context.Context, commandLog CommandLog, report loadmodel.CommandLogMaterializationAuditReport, offsets []CommandPartitionOffset, limited bool) (loadmodel.CommandLogMaterializationAuditReport, error) {
+func (c *Core) auditCommandLogMaterializationOffsets(ctx context.Context, commandLog CommandLog, report loadmodel.CommandLogMaterializationAuditReport, offsets []logmodel.CommandPartitionOffset, limited bool) (loadmodel.CommandLogMaterializationAuditReport, error) {
 	loadmodel.RecordCommandLogMaterializationAuditCoverage(&report, len(offsets), limited)
 	for _, offset := range offsets {
 		partition := offset.Partition.Normalize()

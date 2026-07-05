@@ -273,7 +273,7 @@ func (l noFetchCommandLog) ListCommandPartitions(ctx context.Context, limit int)
 	return l.partitions.ListCommandPartitions(ctx, limit)
 }
 
-func (l noFetchCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l noFetchCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	return l.offsets.ListCommandPartitionOffsets(ctx, limit)
 }
 
@@ -718,7 +718,7 @@ type commandLogWithOffsetsOnly struct {
 	offsets CommandPartitionOffsetLister
 }
 
-func (l commandLogWithOffsetsOnly) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l commandLogWithOffsetsOnly) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	return l.offsets.ListCommandPartitionOffsets(ctx, limit)
 }
 
@@ -727,7 +727,7 @@ type countingCommandPartitionOffsetLister struct {
 	calls int
 }
 
-func (l *countingCommandPartitionOffsetLister) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l *countingCommandPartitionOffsetLister) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	l.calls++
 	return l.inner.ListCommandPartitionOffsets(ctx, limit)
 }
@@ -776,7 +776,7 @@ func (l *countingCommandLogOffsetAccess) CommittedOffset(ctx context.Context, pa
 	return l.CommandLog.CommittedOffset(ctx, partition)
 }
 
-func (l *countingCommandLogOffsetAccess) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l *countingCommandLogOffsetAccess) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	l.mu.Lock()
 	l.listOffsetCalls++
 	l.mu.Unlock()

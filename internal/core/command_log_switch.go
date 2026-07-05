@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 // SwitchableCommandLog lets setup code use a lightweight producer for command
@@ -89,7 +91,7 @@ func (l *SwitchableCommandLog) ListCommandPartitions(ctx context.Context, limit 
 	return nil, fmt.Errorf("switchable command log: partition listing unavailable")
 }
 
-func (l *SwitchableCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l *SwitchableCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	log := l.drainLog()
 	if lister, ok := log.(CommandPartitionOffsetLister); ok {
 		return lister.ListCommandPartitionOffsets(ctx, limit)

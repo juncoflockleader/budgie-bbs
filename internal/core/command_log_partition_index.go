@@ -126,7 +126,7 @@ func (l *IndexedCommandLog) CommittedOffset(ctx context.Context, partition LogPa
 	return 0, nil
 }
 
-func listCommandPartitionOffsetsWithLimit(ctx context.Context, lister CommandPartitionOffsetLister, limit int) ([]CommandPartitionOffset, bool, error) {
+func listCommandPartitionOffsetsWithLimit(ctx context.Context, lister CommandPartitionOffsetLister, limit int) ([]logmodel.CommandPartitionOffset, bool, error) {
 	if lister == nil {
 		return nil, false, fmt.Errorf("nil command partition offset lister")
 	}
@@ -156,7 +156,7 @@ func requireCommandPartitionOffsetLister(commandLog CommandLog, errMessage strin
 	return lister, nil
 }
 
-func listCommandLogPartitionOffsetsWithLimit(ctx context.Context, commandLog CommandLog, limit int, errMessage string) ([]CommandPartitionOffset, bool, error) {
+func listCommandLogPartitionOffsetsWithLimit(ctx context.Context, commandLog CommandLog, limit int, errMessage string) ([]logmodel.CommandPartitionOffset, bool, error) {
 	lister, err := requireCommandPartitionOffsetLister(commandLog, errMessage)
 	if err != nil {
 		return nil, false, err
@@ -185,7 +185,7 @@ func (l *IndexedCommandLog) ListCommandPartitions(ctx context.Context, limit int
 	return l.index.ListCommandPartitions(ctx, limit)
 }
 
-func (l *IndexedCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (l *IndexedCommandLog) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -313,7 +313,7 @@ SELECT partition_kind, partition_key
 	return partitions, nil
 }
 
-func (i *SQLCommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
+func (i *SQLCommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -347,9 +347,9 @@ SELECT partition_kind,
 		return nil, fmt.Errorf("command log partition index: list offsets: %w", err)
 	}
 	defer rows.Close()
-	offsets := make([]CommandPartitionOffset, 0)
+	offsets := make([]logmodel.CommandPartitionOffset, 0)
 	for rows.Next() {
-		var offset CommandPartitionOffset
+		var offset logmodel.CommandPartitionOffset
 		if err := rows.Scan(&offset.Partition.Kind, &offset.Partition.Key, &offset.TailOffset, &offset.CommittedOffset); err != nil {
 			return nil, err
 		}

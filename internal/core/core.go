@@ -719,7 +719,7 @@ func (c *Core) PersistHotThreadSplit(threadID string, shards int) error {
 	return c.ReloadHotThreadSplits()
 }
 
-func (c *Core) HotThreadSplitBlockingLag(ctx context.Context, threadID string, nextShards int) ([]CommandPartitionOffset, error) {
+func (c *Core) HotThreadSplitBlockingLag(ctx context.Context, threadID string, nextShards int) ([]logmodel.CommandPartitionOffset, error) {
 	if c == nil || c.commandLogAuthoritative == nil {
 		return nil, nil
 	}
@@ -736,7 +736,7 @@ func (c *Core) HotThreadSplitBlockingLag(ctx context.Context, threadID string, n
 		return nil, err
 	}
 	affected := logmodel.HotThreadSplitPartitionSet(threadID, c.hotThreadSplitShards(threadID), nextShards)
-	blocking := make([]CommandPartitionOffset, 0)
+	blocking := make([]logmodel.CommandPartitionOffset, 0)
 	for _, offset := range offsets {
 		if _, ok := affected[offset.Partition]; !ok {
 			continue

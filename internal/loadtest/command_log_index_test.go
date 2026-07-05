@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -30,7 +31,7 @@ func TestIndexedCommandLogTracksProducedPartitionsAndOffsets(t *testing.T) {
 		t.Fatalf("partitions = %+v, want board then thread by tail offset", partitions)
 	}
 
-	requireCommandPartitionOffsets(t, ctx, log, []core.CommandPartitionOffset{
+	requireCommandPartitionOffsets(t, ctx, log, []logmodel.CommandPartitionOffset{
 		{Partition: board, TailOffset: 2, CommittedOffset: 1},
 		{Partition: thread, TailOffset: 1, CommittedOffset: 0},
 	})
@@ -51,7 +52,7 @@ func TestIndexedCommandLogTracksFetchedTailsForExternalProducers(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("records = %d, want 2", len(records))
 	}
-	requireCommandPartitionOffsets(t, ctx, log, []core.CommandPartitionOffset{{Partition: partition, TailOffset: 2, CommittedOffset: 0}})
+	requireCommandPartitionOffsets(t, ctx, log, []logmodel.CommandPartitionOffset{{Partition: partition, TailOffset: 2, CommittedOffset: 0}})
 }
 
 func TestIndexedCommandLogClampsCommittedOffsetToIndexedTail(t *testing.T) {
@@ -63,7 +64,7 @@ func TestIndexedCommandLogClampsCommittedOffsetToIndexedTail(t *testing.T) {
 	if err := log.CommitPartition(ctx, partition, 10); err != nil {
 		t.Fatalf("commit board: %v", err)
 	}
-	requireCommandPartitionOffsets(t, ctx, log, []core.CommandPartitionOffset{{Partition: partition, TailOffset: 1, CommittedOffset: 1}})
+	requireCommandPartitionOffsets(t, ctx, log, []logmodel.CommandPartitionOffset{{Partition: partition, TailOffset: 1, CommittedOffset: 1}})
 }
 
 func TestIndexedCommandLogCommittedOffsetUsesLogicalIndex(t *testing.T) {
@@ -115,7 +116,7 @@ func produceIndexedCommandLogRecord(t *testing.T, ctx context.Context, log core.
 	return record
 }
 
-func requireCommandPartitionOffsets(t *testing.T, ctx context.Context, log *core.IndexedCommandLog, want []core.CommandPartitionOffset) {
+func requireCommandPartitionOffsets(t *testing.T, ctx context.Context, log *core.IndexedCommandLog, want []logmodel.CommandPartitionOffset) {
 	t.Helper()
 	offsets, err := log.ListCommandPartitionOffsets(ctx, 0)
 	if err != nil {

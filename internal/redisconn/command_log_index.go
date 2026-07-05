@@ -59,7 +59,7 @@ func (i *CommandLogPartitionIndex) ListCommandPartitions(ctx context.Context, li
 	return logmodel.CommandPartitionsByTailOffset(offsets, limit), nil
 }
 
-func (i *CommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]core.CommandPartitionOffset, error) {
+func (i *CommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error) {
 	if i == nil || i.client == nil {
 		return nil, fmt.Errorf("redis command log partition index: nil client")
 	}
@@ -78,9 +78,9 @@ func (i *CommandLogPartitionIndex) ListCommandPartitionOffsets(ctx context.Conte
 	for partition := range commits {
 		seen[partition] = true
 	}
-	offsets := make([]core.CommandPartitionOffset, 0, len(seen))
+	offsets := make([]logmodel.CommandPartitionOffset, 0, len(seen))
 	for partition := range seen {
-		offsets = append(offsets, core.CommandPartitionOffset{
+		offsets = append(offsets, logmodel.CommandPartitionOffset{
 			Partition:       partition,
 			TailOffset:      tails[partition],
 			CommittedOffset: commits[partition],

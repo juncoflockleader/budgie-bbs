@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -157,7 +157,7 @@ func hotThreadSplitDTOs(splits map[string]int) []hotThreadSplitDTO {
 	return out
 }
 
-func hotThreadSplitLagDTOs(offsets []core.CommandPartitionOffset) []hotThreadSplitLagDTO {
+func hotThreadSplitLagDTOs(offsets []logmodel.CommandPartitionOffset) []hotThreadSplitLagDTO {
 	out := make([]hotThreadSplitLagDTO, 0, len(offsets))
 	for _, offset := range offsets {
 		partition := offset.Partition.Normalize()

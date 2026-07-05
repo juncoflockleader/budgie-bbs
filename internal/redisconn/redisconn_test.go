@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 )
@@ -35,7 +36,7 @@ func TestCommandLogPartitionIndexTracksOffsetsWithRedisHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCommandPartitionOffsets: %v", err)
 	}
-	want := []core.CommandPartitionOffset{
+	want := []logmodel.CommandPartitionOffset{
 		{Partition: thread, TailOffset: 1, CommittedOffset: 0},
 		{Partition: board, TailOffset: 2, CommittedOffset: 2},
 	}
