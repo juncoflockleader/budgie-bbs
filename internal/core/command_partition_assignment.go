@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-	"hash/fnv"
-	"sort"
 	"strings"
 	"sync"
 
@@ -90,7 +88,7 @@ func (a *SnapshotCommandPartitionAssigner) ListAssignedCommandPartitions(ctx con
 	ownerID = strings.TrimSpace(ownerID)
 	a.mu.RLock()
 	generation := a.generation
-	assignments := cloneCommandPartitionAssignmentOverrides(a.assignments)
+	assignments := logmodel.CloneCommandPartitionAssignmentOwners(a.assignments)
 	a.mu.RUnlock()
 	partitions := make([]LogPartition, 0, len(assignments))
 	for partition, assignedOwner := range assignments {
@@ -148,7 +146,7 @@ func (a *SnapshotCommandPartitionAssigner) Snapshot() CommandPartitionAssignment
 	defer a.mu.RUnlock()
 	return CommandPartitionAssignmentSnapshot{
 		Generation: a.generation,
-		Owners:     cloneCommandPartitionAssignmentOverrides(a.assignments),
+		Owners:     logmodel.CloneCommandPartitionAssignmentOwners(a.assignments),
 	}
 }
 
@@ -156,10 +154,10 @@ func NewHashCommandPartitionAssignerWithOverrides(members []string, overrides ma
 	if generation <= 0 {
 		generation = 1
 	}
-	members = normalizeCommandPartitionAssignmentMembers(members)
+	members = logmodel.NormalizeCommandPartitionAssignmentMembers(members)
 	return &HashCommandPartitionAssigner{
 		members:    members,
-		overrides:  normalizeCommandPartitionAssignmentOverrides(overrides, members),
+		overrides:  logmodel.NormalizeCommandPartitionAssignmentOverrides(overrides, members),
 		generation: generation,
 	}
 }
@@ -175,7 +173,7 @@ func (a *HashCommandPartitionAssigner) AssignCommandPartition(ctx context.Contex
 	}
 	a.mu.RLock()
 	members := append([]string(nil), a.members...)
-	overrides := cloneCommandPartitionAssignmentOverrides(a.overrides)
+	overrides := logmodel.CloneCommandPartitionAssignmentOwners(a.overrides)
 	generation := a.generation
 	a.mu.RUnlock()
 	if len(members) == 0 {
@@ -183,7 +181,7 @@ func (a *HashCommandPartitionAssigner) AssignCommandPartition(ctx context.Contex
 	}
 	assignedOwner := overrides[partition]
 	if assignedOwner == "" {
-		assignedOwner = members[commandPartitionAssignmentIndex(partition, len(members))]
+		assignedOwner = members[logmodel.CommandPartitionAssignmentIndex(partition, len(members))]
 	}
 	assignment := commandPartitionAssignmentForOwner(partition, assignedOwner, generation)
 	return assignment, assignment.OwnerID == ownerID, nil
@@ -195,8 +193,8 @@ func (a *HashCommandPartitionAssigner) SetMembers(members []string) int64 {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.members = normalizeCommandPartitionAssignmentMembers(members)
-	a.overrides = normalizeCommandPartitionAssignmentOverrides(a.overrides, a.members)
+	a.members = logmodel.NormalizeCommandPartitionAssignmentMembers(members)
+	a.overrides = logmodel.NormalizeCommandPartitionAssignmentOverrides(a.overrides, a.members)
 	a.generation++
 	if a.generation <= 0 {
 		a.generation = 1
@@ -228,7 +226,7 @@ func (a *HashCommandPartitionAssigner) SetOverrides(overrides map[LogPartition]s
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.overrides = normalizeCommandPartitionAssignmentOverrides(overrides, a.members)
+	a.overrides = logmodel.NormalizeCommandPartitionAssignmentOverrides(overrides, a.members)
 	a.generation++
 	if a.generation <= 0 {
 		a.generation = 1
@@ -242,66 +240,5 @@ func (a *HashCommandPartitionAssigner) Overrides() map[LogPartition]string {
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return cloneCommandPartitionAssignmentOverrides(a.overrides)
-}
-
-func normalizeCommandPartitionAssignmentMembers(members []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(members))
-	for _, member := range members {
-		member = strings.TrimSpace(member)
-		if member == "" || seen[member] {
-			continue
-		}
-		seen[member] = true
-		out = append(out, member)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func normalizeCommandPartitionAssignmentOverrides(overrides map[LogPartition]string, members []string) map[LogPartition]string {
-	memberSet := map[string]bool{}
-	for _, member := range normalizeCommandPartitionAssignmentMembers(members) {
-		memberSet[member] = true
-	}
-	out := map[LogPartition]string{}
-	for partition, ownerID := range overrides {
-		partition = partition.Normalize()
-		ownerID = strings.TrimSpace(ownerID)
-		if partition.Kind == "" || partition.Key == "" || ownerID == "" {
-			continue
-		}
-		if len(memberSet) > 0 && !memberSet[ownerID] {
-			continue
-		}
-		out[partition] = ownerID
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func cloneCommandPartitionAssignmentOverrides(overrides map[LogPartition]string) map[LogPartition]string {
-	if len(overrides) == 0 {
-		return nil
-	}
-	out := make(map[LogPartition]string, len(overrides))
-	for partition, ownerID := range overrides {
-		out[partition.Normalize()] = ownerID
-	}
-	return out
-}
-
-func commandPartitionAssignmentIndex(partition LogPartition, memberCount int) int {
-	if memberCount <= 1 {
-		return 0
-	}
-	partition = partition.Normalize()
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(partition.Kind))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(partition.Key))
-	return int(h.Sum64() % uint64(memberCount))
+	return logmodel.CloneCommandPartitionAssignmentOwners(a.overrides)
 }

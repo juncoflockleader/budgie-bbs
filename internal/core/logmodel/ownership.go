@@ -1,6 +1,10 @@
 package logmodel
 
-import "strings"
+import (
+	"hash/fnv"
+	"sort"
+	"strings"
+)
 
 type CommandPartitionClaim struct {
 	Partition Partition
@@ -52,4 +56,65 @@ func NormalizeCommandPartitionAssignmentOwners(assignments map[Partition]string)
 		return nil
 	}
 	return out
+}
+
+func NormalizeCommandPartitionAssignmentMembers(members []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(members))
+	for _, member := range members {
+		member = strings.TrimSpace(member)
+		if member == "" || seen[member] {
+			continue
+		}
+		seen[member] = true
+		out = append(out, member)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func NormalizeCommandPartitionAssignmentOverrides(overrides map[Partition]string, members []string) map[Partition]string {
+	memberSet := map[string]bool{}
+	for _, member := range NormalizeCommandPartitionAssignmentMembers(members) {
+		memberSet[member] = true
+	}
+	out := map[Partition]string{}
+	for partition, ownerID := range overrides {
+		partition = partition.Normalize()
+		ownerID = strings.TrimSpace(ownerID)
+		if partition.Kind == "" || partition.Key == "" || ownerID == "" {
+			continue
+		}
+		if len(memberSet) > 0 && !memberSet[ownerID] {
+			continue
+		}
+		out[partition] = ownerID
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func CloneCommandPartitionAssignmentOwners(overrides map[Partition]string) map[Partition]string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	out := make(map[Partition]string, len(overrides))
+	for partition, ownerID := range overrides {
+		out[partition.Normalize()] = ownerID
+	}
+	return out
+}
+
+func CommandPartitionAssignmentIndex(partition Partition, memberCount int) int {
+	if memberCount <= 1 {
+		return 0
+	}
+	partition = partition.Normalize()
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(partition.Kind))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(partition.Key))
+	return int(h.Sum64() % uint64(memberCount))
 }

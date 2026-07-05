@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadutil"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -812,14 +813,14 @@ func newCommandLogDrainLoadAssigner(ctx context.Context, commandLog CommandLog, 
 }
 
 func commandLogDrainLoadAssignmentSnapshot(offsets []CommandPartitionOffset, members []string) CommandPartitionAssignmentSnapshot {
-	members = normalizeCommandPartitionAssignmentMembers(members)
+	members = logmodel.NormalizeCommandPartitionAssignmentMembers(members)
 	owners := map[LogPartition]string{}
 	for _, offset := range commandLogDrainLoadLaggingPartitionOffsets(offsets) {
 		if len(members) == 0 {
 			break
 		}
 		partition := offset.Partition.Normalize()
-		owners[partition] = members[commandPartitionAssignmentIndex(partition, len(members))]
+		owners[partition] = members[logmodel.CommandPartitionAssignmentIndex(partition, len(members))]
 	}
 	return CommandPartitionAssignmentSnapshot{
 		Generation: 1,
