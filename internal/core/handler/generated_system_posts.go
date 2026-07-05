@@ -30,23 +30,16 @@ func (h *Handler) appendGeneratedSystemPostTx(tx *sql.Tx, actor *User, spec gene
 		if err != nil {
 			return nil, err
 		}
-		boardScopes := []string{"board:" + spec.BoardID}
-		boardSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          spec.BoardID,
-			Name:        spec.BoardName,
-			Description: spec.Description,
-			Position:    position,
-			By:          actor.ID,
-			TS:          ts,
-		})
+		boardScopes, payload := commandevents.BoardCreated(spec.BoardID, spec.BoardName, spec.Description, "", position, actor.ID, ts)
+		boardSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, payload)
 		if err != nil {
 			return nil, err
 		}
 		if err := currentRuntime().InsertBoard(tx, spec.BoardID, spec.BoardName, spec.Description, "", position); err != nil {
 			return nil, err
 		}
-		out = append(out, &proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: boardScopes,
-			Payload: &proto.BoardCreatedPayload{ID: spec.BoardID, Name: spec.BoardName, Description: spec.Description, By: actor.Name, TS: ts}, TS: ts})
+		_, publicPayload := commandevents.BoardCreated(spec.BoardID, spec.BoardName, spec.Description, "", 0, actor.Name, ts)
+		out = append(out, &proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: boardScopes, Payload: publicPayload, TS: ts})
 	}
 	if spec.AfterEnsureBoard != nil {
 		if err := spec.AfterEnsureBoard(); err != nil {

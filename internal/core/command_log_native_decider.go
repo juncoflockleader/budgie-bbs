@@ -1783,15 +1783,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateBoardCommand(ctx context.
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardCreated, []string{"board:" + payload.ID}, &proto.BoardCreatedPayload{
-		ID:          payload.ID,
-		Name:        payload.Name,
-		Description: payload.Description,
-		ParentID:    payload.ParentID,
-		Position:    position,
-		By:          actor.ID,
-		TS:          ts,
-	}, ts)
+	scopes, eventPayload := commandevents.BoardCreated(payload.ID, payload.Name, payload.Description, payload.ParentID, position, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtBoardCreated, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(payload.ID, event), nil
 }
 
@@ -4033,14 +4026,8 @@ func nativeGeneratedSystemPostPosition(db *sql.DB, boardID string, mode nativeGe
 }
 
 func nativeGeneratedBoardCreatedEvent(record CommandLogRecord, actor *User, spec nativeGeneratedSystemPostSpec, position int, ts int64, eventIndex int) EventAppend {
-	return nativeEvent(record, eventIndex, proto.EvtBoardCreated, []string{"board:" + spec.BoardID}, &proto.BoardCreatedPayload{
-		ID:          spec.BoardID,
-		Name:        spec.BoardName,
-		Description: spec.Description,
-		Position:    position,
-		By:          actor.ID,
-		TS:          ts,
-	}, ts)
+	scopes, payload := commandevents.BoardCreated(spec.BoardID, spec.BoardName, spec.Description, "", position, actor.ID, ts)
+	return nativeEvent(record, eventIndex, proto.EvtBoardCreated, scopes, payload, ts)
 }
 
 func (e *CommandLogNativeDecisionExecutor) loadNativeDigestEntryMutationActor(record CommandLogRecord, entryID string, allowRemoved bool) (*User, projections.DigestPathEntryRow, *proto.ErrorDetail) {

@@ -43,6 +43,15 @@ func TestBoardAutomodRuleEvents(t *testing.T) {
 	}
 }
 
+func TestBoardCreated(t *testing.T) {
+	scopes, payload := BoardCreated("general", "General", "Talk", "root", 2, "usr_admin", 1234)
+	requireScopes(t, scopes, "board:general")
+	if payload.ID != "general" || payload.Name != "General" || payload.Description != "Talk" ||
+		payload.ParentID != "root" || payload.Position != 2 || payload.By != "usr_admin" || payload.TS != 1234 {
+		t.Fatalf("BoardCreated payload = %+v", payload)
+	}
+}
+
 func TestPostFlagged(t *testing.T) {
 	scopes, payload := PostFlagged("rev_1", "post_flag", "post_1", "thread_1", "usr_reporter", "reason", 1234)
 	requireScopes(t, scopes, "moderation:global")

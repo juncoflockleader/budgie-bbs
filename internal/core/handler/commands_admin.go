@@ -479,10 +479,8 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 		return internalErr(err)
 	}
 
-	scopes := []string{"board:" + p.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, scopes, &proto.BoardCreatedPayload{
-		ID: p.ID, Name: p.Name, Description: p.Description, ParentID: p.ParentID, Position: position, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.BoardCreated(p.ID, p.Name, p.Description, p.ParentID, position, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -493,8 +491,8 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: seq, Scopes: scopes,
-		Payload: &proto.BoardCreatedPayload{ID: p.ID, Name: p.Name, Description: p.Description, ParentID: p.ParentID, Position: position, By: actor.Name, TS: ts}, TS: ts})
+	_, publicPayload := commandevents.BoardCreated(p.ID, p.Name, p.Description, p.ParentID, position, actor.Name, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: p.ID, Seq: seq}}
 }
