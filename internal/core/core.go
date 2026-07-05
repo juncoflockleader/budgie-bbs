@@ -982,16 +982,6 @@ func commandLogExecutionCID(record CommandLogRecord) (string, *proto.ErrorDetail
 	return cid, nil
 }
 
-func EffectiveCommandLogCID(record CommandLogRecord) (string, error) {
-	if record.CID != "" {
-		return record.CID, nil
-	}
-	if record.Offset <= 0 {
-		return "", fmt.Errorf("command log record missing offset")
-	}
-	return SyntheticCommandLogCID(record.Partition, record.Offset), nil
-}
-
 // Head returns the current highest seq in the event log.
 func (c *Core) Head() (int64, error) {
 	return headSeq(c.DB)
