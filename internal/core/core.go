@@ -2241,7 +2241,7 @@ func (c *Core) SearchPosts(query, boardID string, limit int) ([]projections.Post
 		if err != nil {
 			return nil, err
 		}
-		posts, err := hydrateSearchPostIDs(c.DB, nil, ids, boardID, limit, false)
+		posts, err := projections.HydrateSearchPostIDs(c.DB, nil, ids, boardID, limit, false)
 		if err != nil {
 			return nil, err
 		}
@@ -2266,7 +2266,7 @@ func (c *Core) SearchReadablePosts(actor *projections.User, query, boardID strin
 		if err != nil {
 			return nil, err
 		}
-		posts, err := hydrateSearchPostIDs(c.DB, actor, ids, boardID, limit, true)
+		posts, err := projections.HydrateSearchPostIDs(c.DB, actor, ids, boardID, limit, true)
 		if err != nil {
 			return nil, err
 		}

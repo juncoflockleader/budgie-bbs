@@ -102,6 +102,57 @@ func PostSearchDocumentByID(db *sql.DB, postID string) (PostSearchDocument, bool
 	return doc, true, rows.Err()
 }
 
+func HydrateSearchPostIDs(db *sql.DB, actor *User, ids []string, boardID string, limit int, enforceReadable bool) ([]Post, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	boardID = strings.TrimSpace(boardID)
+	seen := map[string]bool{}
+	capacity := len(ids)
+	if capacity > limit {
+		capacity = limit
+	}
+	posts := make([]Post, 0, capacity)
+	for _, rawID := range ids {
+		if len(posts) >= limit {
+			break
+		}
+		postID := strings.TrimSpace(rawID)
+		if postID == "" || seen[postID] {
+			continue
+		}
+		seen[postID] = true
+		post, postBoardID, memberRead, ok, err := getSearchHydrationPost(db, postID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		if boardID != "" && postBoardID != boardID {
+			continue
+		}
+		if enforceReadable {
+			readable, err := actorCanReadBoardForSearch(db, actor, postBoardID, memberRead)
+			if err != nil {
+				return nil, err
+			}
+			if !readable {
+				continue
+			}
+		}
+		posts = append(posts, post)
+	}
+	for i := range posts {
+		attachments, err := ListPostAttachments(db, posts[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		posts[i].Attachments = attachments
+	}
+	return posts, nil
+}
+
 func ApplyPostSearchEvent(tx *sql.Tx, evt *proto.Event, cleanBody PostSearchBodyCleaner) (bool, error) {
 	if evt == nil {
 		return false, nil
@@ -144,6 +195,61 @@ func ApplyPostSearchEvent(tx *sql.Tx, evt *proto.Event, cleanBody PostSearchBody
 	default:
 		return false, nil
 	}
+}
+
+func getSearchHydrationPost(db *sql.DB, postID string) (Post, string, bool, bool, error) {
+	rows, err := QQuery(db,
+		`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
+		        COALESCE(p.reply_to,''), p.version, p.redacted,
+		        COALESCE((SELECT SUM(count_value) FROM post_reaction_count_shards WHERE post_id=p.id), (SELECT COUNT(*) FROM post_reactions WHERE post_id=p.id), 0),
+		        p.created_seq, p.updated_seq, p.created_at, p.updated_at,
+		        t.board, COALESCE(s.member_read_mode, 0)
+		   FROM posts p
+		   JOIN threads t ON t.id=p.thread
+		   LEFT JOIN board_settings s ON s.board_id=t.board
+		  WHERE p.id=?
+		  LIMIT 1`,
+		postID,
+	)
+	if err != nil {
+		return Post{}, "", false, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return Post{}, "", false, false, rows.Err()
+	}
+	var (
+		post       Post
+		redacted   int
+		board      string
+		memberRead int
+	)
+	if err := rows.Scan(&post.ID, &post.Thread, &post.Author, &post.AuthorID, &post.Body, &post.Signature, &post.ContentType,
+		&post.ReplyTo, &post.Version, &redacted, &post.ReactionCount, &post.CreatedSeq, &post.UpdatedSeq, &post.CreatedAt, &post.UpdatedAt,
+		&board, &memberRead); err != nil {
+		return Post{}, "", false, false, err
+	}
+	if post.CreatedAt == 0 {
+		post.CreatedAt = post.CreatedSeq
+	}
+	if post.UpdatedAt == 0 {
+		post.UpdatedAt = post.CreatedAt
+	}
+	post.Redacted = redacted != 0
+	if rows.Next() {
+		return Post{}, "", false, false, fmt.Errorf("duplicate post row %s", postID)
+	}
+	if post.Redacted {
+		return Post{}, board, memberRead != 0, false, rows.Err()
+	}
+	return post, board, memberRead != 0, true, rows.Err()
+}
+
+func actorCanReadBoardForSearch(db *sql.DB, actor *User, boardID string, memberRead bool) (bool, error) {
+	if !memberRead {
+		return true, nil
+	}
+	return ActorCanUseMemberBoard(db, actor, boardID)
 }
 
 func normalizePostSearchDocument(doc *PostSearchDocument) {
