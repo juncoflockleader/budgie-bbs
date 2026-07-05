@@ -133,7 +133,7 @@ func postSearchDocumentByID(db *sql.DB, postID string) (PostSearchDocument, bool
 	return doc, true, rows.Err()
 }
 
-func hydrateSearchPostIDs(db *sql.DB, actor *User, ids []string, boardID string, limit int, enforceReadable bool) ([]Post, error) {
+func hydrateSearchPostIDs(db *sql.DB, actor *projections.User, ids []string, boardID string, limit int, enforceReadable bool) ([]projections.Post, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
@@ -143,7 +143,7 @@ func hydrateSearchPostIDs(db *sql.DB, actor *User, ids []string, boardID string,
 	if capacity > limit {
 		capacity = limit
 	}
-	posts := make([]Post, 0, capacity)
+	posts := make([]projections.Post, 0, capacity)
 	for _, rawID := range ids {
 		if len(posts) >= limit {
 			break
@@ -184,7 +184,7 @@ func hydrateSearchPostIDs(db *sql.DB, actor *User, ids []string, boardID string,
 	return posts, nil
 }
 
-func getSearchHydrationPost(db *sql.DB, postID string) (Post, string, bool, bool, error) {
+func getSearchHydrationPost(db *sql.DB, postID string) (projections.Post, string, bool, bool, error) {
 	rows, err := qQuery(db,
 		`SELECT p.id, p.thread, p.author, COALESCE(p.author_id,''), p.body, COALESCE(p.signature,''), p.content_type,
 		        COALESCE(p.reply_to,''), p.version, p.redacted,
@@ -199,14 +199,14 @@ func getSearchHydrationPost(db *sql.DB, postID string) (Post, string, bool, bool
 		postID,
 	)
 	if err != nil {
-		return Post{}, "", false, false, err
+		return projections.Post{}, "", false, false, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return Post{}, "", false, false, rows.Err()
+		return projections.Post{}, "", false, false, rows.Err()
 	}
 	var (
-		post       Post
+		post       projections.Post
 		redacted   int
 		board      string
 		memberRead int
@@ -214,7 +214,7 @@ func getSearchHydrationPost(db *sql.DB, postID string) (Post, string, bool, bool
 	if err := rows.Scan(&post.ID, &post.Thread, &post.Author, &post.AuthorID, &post.Body, &post.Signature, &post.ContentType,
 		&post.ReplyTo, &post.Version, &redacted, &post.ReactionCount, &post.CreatedSeq, &post.UpdatedSeq, &post.CreatedAt, &post.UpdatedAt,
 		&board, &memberRead); err != nil {
-		return Post{}, "", false, false, err
+		return projections.Post{}, "", false, false, err
 	}
 	if post.CreatedAt == 0 {
 		post.CreatedAt = post.CreatedSeq
@@ -224,15 +224,15 @@ func getSearchHydrationPost(db *sql.DB, postID string) (Post, string, bool, bool
 	}
 	post.Redacted = redacted != 0
 	if rows.Next() {
-		return Post{}, "", false, false, fmt.Errorf("duplicate post row %s", postID)
+		return projections.Post{}, "", false, false, fmt.Errorf("duplicate post row %s", postID)
 	}
 	if post.Redacted {
-		return Post{}, board, memberRead != 0, false, rows.Err()
+		return projections.Post{}, board, memberRead != 0, false, rows.Err()
 	}
 	return post, board, memberRead != 0, true, rows.Err()
 }
 
-func actorCanReadBoardForSearch(db *sql.DB, actor *User, boardID string, memberRead bool) (bool, error) {
+func actorCanReadBoardForSearch(db *sql.DB, actor *projections.User, boardID string, memberRead bool) (bool, error) {
 	if !memberRead {
 		return true, nil
 	}

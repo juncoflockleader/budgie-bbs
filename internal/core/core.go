@@ -2147,7 +2147,7 @@ func (c *Core) ImportFavoriteTree(userID string, tree *projections.FavoriteTree,
 	}
 	return c.ListFavoriteTree(userID)
 }
-func (c *Core) ListThreads(board string, limit, offset int) ([]Thread, error) {
+func (c *Core) ListThreads(board string, limit, offset int) ([]projections.Thread, error) {
 	return projections.ListThreads(c.DB, board, limit, offset)
 }
 func (c *Core) ListThreadSummaries(userID, board string, limit, offset int, unreadOnly bool) ([]projections.ThreadSummary, error) {
@@ -2166,8 +2166,10 @@ func (c *Core) ListUnreadThreadSummaries(actor *User, favoritesOnly bool, folder
 	}
 	return projections.ListUnreadThreadSummaries(c.DB, actor.ID, actor.IsMod(), favoritesOnly, folderID, limit, offset)
 }
-func (c *Core) GetThread(id string) (*Thread, error) { return projections.GetThread(c.DB, id) }
-func (c *Core) ListPosts(thread string, limit, offset int) ([]Post, error) {
+func (c *Core) GetThread(id string) (*projections.Thread, error) {
+	return projections.GetThread(c.DB, id)
+}
+func (c *Core) ListPosts(thread string, limit, offset int) ([]projections.Post, error) {
 	posts, err := projections.ListPosts(c.DB, thread, limit, offset)
 	if err != nil {
 		return nil, err
@@ -2177,7 +2179,7 @@ func (c *Core) ListPosts(thread string, limit, offset int) ([]Post, error) {
 	}
 	return posts, nil
 }
-func (c *Core) ListReplyTreePosts(rootPostID string, limit, offset int) ([]Post, error) {
+func (c *Core) ListReplyTreePosts(rootPostID string, limit, offset int) ([]projections.Post, error) {
 	posts, err := projections.ListReplyTreePosts(c.DB, rootPostID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -2223,7 +2225,7 @@ func (c *Core) StoreMailAttachmentBlob(attachmentID string, data []byte, content
 func (c *Core) PruneExpiredAttachmentBlobStaging(limit int) (int64, error) {
 	return projections.PruneExpiredStagedAttachmentBlobs(c.DB, nowMS(), limit)
 }
-func (c *Core) GetPost(id string) (*Post, error) {
+func (c *Core) GetPost(id string) (*projections.Post, error) {
 	post, err := projections.GetPost(c.DB, id)
 	if err != nil || post == nil {
 		return post, err
@@ -2233,7 +2235,7 @@ func (c *Core) GetPost(id string) (*Post, error) {
 	}
 	return post, nil
 }
-func (c *Core) SearchPosts(query, boardID string, limit int) ([]Post, error) {
+func (c *Core) SearchPosts(query, boardID string, limit int) ([]projections.Post, error) {
 	if c.postSearchIndex != nil {
 		ids, err := c.postSearchIndex.Search(context.Background(), query, boardID, limit)
 		if err != nil {
@@ -2258,7 +2260,7 @@ func (c *Core) SearchPosts(query, boardID string, limit int) ([]Post, error) {
 	return posts, nil
 }
 
-func (c *Core) SearchReadablePosts(actor *User, query, boardID string, limit int) ([]Post, error) {
+func (c *Core) SearchReadablePosts(actor *User, query, boardID string, limit int) ([]projections.Post, error) {
 	if c.postSearchIndex != nil {
 		ids, err := c.postSearchIndex.Search(context.Background(), query, boardID, limit)
 		if err != nil {
@@ -2284,7 +2286,7 @@ func (c *Core) SearchReadablePosts(actor *User, query, boardID string, limit int
 	return posts, nil
 }
 
-func (c *Core) ListPostsByAuthor(name string, limit, offset int) ([]Post, error) {
+func (c *Core) ListPostsByAuthor(name string, limit, offset int) ([]projections.Post, error) {
 	posts, err := projections.ListPostsByAuthor(c.DB, name, limit, offset)
 	if err != nil {
 		return nil, err
@@ -2295,7 +2297,7 @@ func (c *Core) ListPostsByAuthor(name string, limit, offset int) ([]Post, error)
 	return posts, nil
 }
 
-func (c *Core) ListReadablePostsByAuthor(actor *User, name string, limit, offset int) ([]Post, error) {
+func (c *Core) ListReadablePostsByAuthor(actor *User, name string, limit, offset int) ([]projections.Post, error) {
 	posts, err := projections.ListReadablePostsByAuthor(c.DB, actor.ID, actor.IsMod(), name, limit, offset)
 	if err != nil {
 		return nil, err
@@ -2306,9 +2308,9 @@ func (c *Core) ListReadablePostsByAuthor(actor *User, name string, limit, offset
 	return posts, nil
 }
 
-func (c *Core) ListResidentBoardPosts(userID string, limit, offset int) ([]Post, error) {
+func (c *Core) ListResidentBoardPosts(userID string, limit, offset int) ([]projections.Post, error) {
 	var (
-		posts []Post
+		posts []projections.Post
 		err   error
 	)
 	if rows, err := projections.ResidentFeedMaterializedRowCount(c.DB); err == nil && rows > 0 {
@@ -2325,7 +2327,7 @@ func (c *Core) ListResidentBoardPosts(userID string, limit, offset int) ([]Post,
 	return posts, nil
 }
 
-func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]Post, error) {
+func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]projections.Post, error) {
 	viewer := readmodel.ViewerScopeForUser(actor)
 	limit, offset = readmodel.NormalizePagination(limit, offset, 30, 100)
 	cacheKey, cacheOK := c.latestFeedCacheKey(viewer.UserID, viewer.IncludePrivate, limit, offset)
@@ -2338,7 +2340,7 @@ func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]Post, erro
 		}
 	}
 	var (
-		posts []Post
+		posts []projections.Post
 		err   error
 	)
 	if rows, err := projections.LatestFeedMaterializedRowCount(c.DB); err == nil && rows > 0 {
@@ -2429,7 +2431,7 @@ func (c *Core) useCounterStoreOverride() bool {
 	return c != nil && c.counterStoreOverride && c.counterStore != nil
 }
 
-func (c *Core) applyCounterStorePostCounts(posts []Post) error {
+func (c *Core) applyCounterStorePostCounts(posts []projections.Post) error {
 	if !c.useCounterStoreOverride() {
 		return nil
 	}
@@ -2441,7 +2443,7 @@ func (c *Core) applyCounterStorePostCounts(posts []Post) error {
 	return nil
 }
 
-func (c *Core) applyCounterStorePostCount(post *Post) error {
+func (c *Core) applyCounterStorePostCount(post *projections.Post) error {
 	if !c.useCounterStoreOverride() || post == nil {
 		return nil
 	}

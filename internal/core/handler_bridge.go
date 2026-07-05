@@ -176,8 +176,8 @@ func extractPoll(body string) (*pollBlock, string) {
 	}, cleanBody
 }
 
-func getUserTx(tx *sql.Tx, id string) (*User, error) {
-	u := &User{}
+func getUserTx(tx *sql.Tx, id string) (*projections.User, error) {
+	u := &projections.User{}
 	err := qQueryRow(tx, `SELECT id, name, role, password, created,
 	        COALESCE(NULLIF(registration_status,''), 'approved'), COALESCE(reviewed_at,0), COALESCE(reviewed_by,''), COALESCE(review_reason,''),
 	        COALESCE(deactivated_at,0), COALESCE(deactivated_by,''), COALESCE(deactivated_reason,'')
@@ -191,8 +191,8 @@ func getUserTx(tx *sql.Tx, id string) (*User, error) {
 	return u, err
 }
 
-func getThreadTx(tx *sql.Tx, id string) (*Thread, error) {
-	t := &Thread{}
+func getThreadTx(tx *sql.Tx, id string) (*projections.Thread, error) {
+	t := &projections.Thread{}
 	var locked int
 	err := qQueryRow(tx,
 		`SELECT id, board, author, COALESCE(author_id,''), title, locked, post_count, last_seq, created_ts, created_at, updated_at FROM threads WHERE id=?`, id,
@@ -213,8 +213,8 @@ func getThreadTx(tx *sql.Tx, id string) (*Thread, error) {
 	return t, nil
 }
 
-func getPostTx(tx *sql.Tx, id string) (*Post, error) {
-	p := &Post{}
+func getPostTx(tx *sql.Tx, id string) (*projections.Post, error) {
+	p := &projections.Post{}
 	var redacted, marked, recommended, noReply, tex, mailBack int
 	err := qQueryRow(tx,
 		`SELECT id, thread, author, COALESCE(author_id,''), body, COALESCE(signature,''), content_type, COALESCE(reply_to,''), version,

@@ -25,15 +25,15 @@ type Runtime struct {
 	NowMS                        func() int64
 	NewID                        func(prefix string) string
 	AppendEvent                  func(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, payload any) (int64, error)
-	GetThread                    func(db *sql.DB, id string) (*Thread, error)
-	GetPost                      func(db *sql.DB, id string) (*Post, error)
+	GetThread                    func(db *sql.DB, id string) (*projections.Thread, error)
+	GetPost                      func(db *sql.DB, id string) (*projections.Post, error)
 	GetMail                      func(db *sql.DB, userID, messageID string) (*MailItem, error)
-	GetUserTx                    func(tx *sql.Tx, id string) (*User, error)
-	GetThreadTx                  func(tx *sql.Tx, id string) (*Thread, error)
-	GetPostTx                    func(tx *sql.Tx, id string) (*Post, error)
+	GetUserTx                    func(tx *sql.Tx, id string) (*projections.User, error)
+	GetThreadTx                  func(tx *sql.Tx, id string) (*projections.Thread, error)
+	GetPostTx                    func(tx *sql.Tx, id string) (*projections.Post, error)
 	GetPollWithVotes             func(db *sql.DB, pollID, viewerUserID string) (*Poll, error)
-	InsertThread                 func(tx *sql.Tx, t *Thread) error
-	InsertPost                   func(tx *sql.Tx, p *Post) error
+	InsertThread                 func(tx *sql.Tx, t *projections.Thread) error
+	InsertPost                   func(tx *sql.Tx, p *projections.Post) error
 	BumpThread                   func(tx *sql.Tx, threadID string, seq int64) error
 	InsertPoll                   func(tx *sql.Tx, id, postID, question string, expiresAt, ts int64) error
 	InsertPollOption             func(tx *sql.Tx, id, pollID, text string, position int) error

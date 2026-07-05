@@ -140,9 +140,9 @@ type EventPartitionOffsetSeeder interface {
 type ProjectionStore interface {
 	ListBoards(ctx context.Context) ([]projections.Board, error)
 	GetBoard(ctx context.Context, id string) (*projections.Board, error)
-	ListThreads(ctx context.Context, boardID string, limit, offset int) ([]Thread, error)
-	GetThread(ctx context.Context, id string) (*Thread, error)
-	ListPosts(ctx context.Context, threadID string, limit, offset int) ([]Post, error)
+	ListThreads(ctx context.Context, boardID string, limit, offset int) ([]projections.Thread, error)
+	GetThread(ctx context.Context, id string) (*projections.Thread, error)
+	ListPosts(ctx context.Context, threadID string, limit, offset int) ([]projections.Post, error)
 }
 
 // CommandReceiptStore owns command idempotency. Receipts are partition-scoped so
