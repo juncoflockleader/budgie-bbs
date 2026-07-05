@@ -5893,7 +5893,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSetMailGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list mail groups: %v", err)
 	}
-	var lab *MailGroup
+	var lab *projections.MailGroup
 	for i := range groups {
 		if groups[i].ID == groupEvent.ID {
 			lab = &groups[i]
