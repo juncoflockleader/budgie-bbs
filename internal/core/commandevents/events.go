@@ -100,6 +100,34 @@ func UserSanctionCleared(accountUserID, payloadUser, kind, scope, by, reason str
 	}
 }
 
+func ThreadTitleSet(threadID, boardID, title, by string, ts int64) ([]string, *proto.ThreadTitleSetPayload) {
+	return []string{"board:" + boardID, "thread:" + threadID}, &proto.ThreadTitleSetPayload{
+		Thread: threadID,
+		Title:  title,
+		By:     by,
+		TS:     ts,
+	}
+}
+
+func ThreadLocked(threadID, boardID string, locked bool, by string, ts int64) ([]string, *proto.ThreadLockedPayload) {
+	return []string{"board:" + boardID, "thread:" + threadID}, &proto.ThreadLockedPayload{
+		Thread: threadID,
+		Locked: locked,
+		By:     by,
+		TS:     ts,
+	}
+}
+
+func ThreadMoved(threadID, fromBoardID, toBoardID, by string, ts int64) ([]string, *proto.ThreadMovedPayload) {
+	return []string{"board:" + fromBoardID, "board:" + toBoardID}, &proto.ThreadMovedPayload{
+		Thread:    threadID,
+		FromBoard: fromBoardID,
+		ToBoard:   toBoardID,
+		By:        by,
+		TS:        ts,
+	}
+}
+
 func FavoriteFolderCreated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderCreatedPayload) {
 	payload := &proto.FavoriteFolderCreatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
 	return []string{"user:" + userID}, payload

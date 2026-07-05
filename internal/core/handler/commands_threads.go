@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -1306,10 +1307,8 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 		return Reply{Err: errDetail}
 	}
 
-	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadTitleSet, scopes, &proto.ThreadTitleSetPayload{
-		Thread: thread.ID, Title: p.Title, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.ThreadTitleSet(thread.ID, thread.Board, p.Title, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadTitleSet, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1320,8 +1319,9 @@ func (h *Handler) setThreadTitle(actor *User, p proto.SetThreadTitlePayload) Rep
 		return internalErr(err)
 	}
 
+	_, publicPayload := commandevents.ThreadTitleSet(thread.ID, thread.Board, p.Title, actor.Name, ts)
 	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadTitleSet, Seq: seq, Scopes: scopes,
-		Payload: &proto.ThreadTitleSetPayload{Thread: thread.ID, Title: p.Title, By: actor.Name, TS: ts}, TS: ts})
+		Payload: publicPayload, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
 }
@@ -1350,10 +1350,8 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 		return Reply{Err: errDetail}
 	}
 
-	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadLocked, scopes, &proto.ThreadLockedPayload{
-		Thread: thread.ID, Locked: p.Locked, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.ThreadLocked(thread.ID, thread.Board, p.Locked, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadLocked, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1364,8 +1362,9 @@ func (h *Handler) lockThread(actor *User, p proto.LockThreadPayload) Reply {
 		return internalErr(err)
 	}
 
+	_, publicPayload := commandevents.ThreadLocked(thread.ID, thread.Board, p.Locked, actor.Name, ts)
 	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadLocked, Seq: seq, Scopes: scopes,
-		Payload: &proto.ThreadLockedPayload{Thread: thread.ID, Locked: p.Locked, By: actor.Name, TS: ts}, TS: ts})
+		Payload: publicPayload, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
 }
@@ -1398,10 +1397,8 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 		return Reply{Err: errDetail}
 	}
 
-	scopes := []string{"board:" + thread.Board, "board:" + p.ToBoard}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadMoved, scopes, &proto.ThreadMovedPayload{
-		Thread: thread.ID, FromBoard: thread.Board, ToBoard: p.ToBoard, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.ThreadMoved(thread.ID, thread.Board, p.ToBoard, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadMoved, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1412,8 +1409,9 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 		return internalErr(err)
 	}
 
+	_, publicPayload := commandevents.ThreadMoved(thread.ID, thread.Board, p.ToBoard, actor.Name, ts)
 	h.bus.Publish(&proto.Event{Kind: proto.EvtThreadMoved, Seq: seq, Scopes: scopes,
-		Payload: &proto.ThreadMovedPayload{Thread: thread.ID, FromBoard: thread.Board, ToBoard: p.ToBoard, By: actor.Name, TS: ts}, TS: ts})
+		Payload: publicPayload, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: thread.ID, Seq: seq}}
 }

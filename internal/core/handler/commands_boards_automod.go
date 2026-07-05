@@ -75,8 +75,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 		}
 		return []*proto.Event{{Kind: proto.EvtPostRedacted, Seq: seq, Scopes: scopes, Payload: payload, TS: ts}}, nil
 	case "lock_thread":
-		scopes := []string{"board:" + boardID, "thread:" + threadID}
-		payload := &proto.ThreadLockedPayload{Thread: threadID, Locked: true, By: by, TS: ts}
+		scopes, payload := commandevents.ThreadLocked(threadID, boardID, true, by, ts)
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadLocked, scopes, payload)
 		if err != nil {
 			return nil, err

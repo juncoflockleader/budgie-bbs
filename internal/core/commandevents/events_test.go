@@ -83,3 +83,24 @@ func TestUserSanctionEvents(t *testing.T) {
 		t.Fatalf("UserSanctionCleared payload = %+v", cleared)
 	}
 }
+
+func TestThreadModerationEvents(t *testing.T) {
+	scopes, title := ThreadTitleSet("thread_1", "general", "New title", "usr_mod", 1234)
+	requireScopes(t, scopes, "board:general", "thread:thread_1")
+	if title.Thread != "thread_1" || title.Title != "New title" || title.By != "usr_mod" || title.TS != 1234 {
+		t.Fatalf("ThreadTitleSet payload = %+v", title)
+	}
+
+	scopes, locked := ThreadLocked("thread_1", "general", true, "usr_mod", 1235)
+	requireScopes(t, scopes, "board:general", "thread:thread_1")
+	if locked.Thread != "thread_1" || !locked.Locked || locked.By != "usr_mod" || locked.TS != 1235 {
+		t.Fatalf("ThreadLocked payload = %+v", locked)
+	}
+
+	scopes, moved := ThreadMoved("thread_1", "general", "announcements", "usr_mod", 1236)
+	requireScopes(t, scopes, "board:general", "board:announcements")
+	if moved.Thread != "thread_1" || moved.FromBoard != "general" || moved.ToBoard != "announcements" ||
+		moved.By != "usr_mod" || moved.TS != 1236 {
+		t.Fatalf("ThreadMoved payload = %+v", moved)
+	}
+}

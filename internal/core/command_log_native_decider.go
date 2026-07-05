@@ -1364,12 +1364,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetThreadTitle(ctx context.Cont
 	if errDetail := commandrules.RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	event := nativeEvent(record, 0, proto.EvtThreadTitleSet, []string{"board:" + thread.Board, "thread:" + thread.ID}, &proto.ThreadTitleSetPayload{
-		Thread: thread.ID,
-		Title:  payload.Title,
-		By:     actor.ID,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.ThreadTitleSet(thread.ID, thread.Board, payload.Title, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtThreadTitleSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(thread.ID, event), nil
 }
 
@@ -1397,12 +1393,8 @@ func (e *CommandLogNativeDecisionExecutor) decideLockThread(ctx context.Context,
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtThreadLocked, []string{"board:" + thread.Board, "thread:" + thread.ID}, &proto.ThreadLockedPayload{
-		Thread: thread.ID,
-		Locked: payload.Locked,
-		By:     actor.ID,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.ThreadLocked(thread.ID, thread.Board, payload.Locked, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtThreadLocked, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(thread.ID, event), nil
 }
 
@@ -1433,13 +1425,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveThread(ctx context.Context,
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtThreadMoved, []string{"board:" + thread.Board, "board:" + payload.ToBoard}, &proto.ThreadMovedPayload{
-		Thread:    thread.ID,
-		FromBoard: thread.Board,
-		ToBoard:   payload.ToBoard,
-		By:        actor.ID,
-		TS:        ts,
-	}, ts)
+	scopes, eventPayload := commandevents.ThreadMoved(thread.ID, thread.Board, payload.ToBoard, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtThreadMoved, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(thread.ID, event), nil
 }
 
