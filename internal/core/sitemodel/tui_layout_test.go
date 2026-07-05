@@ -1,4 +1,4 @@
-package core
+package sitemodel
 
 import (
 	"strings"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestNormalizeTUIMainMenuLayoutDefaults(t *testing.T) {
-	got, err := normalizeTUIMainMenuLayout(nil)
+	got, err := NormalizeTUIMainMenuLayout(nil)
 	if err != nil {
 		t.Fatalf("nil layout: %v", err)
 	}
@@ -26,23 +26,23 @@ func TestNormalizeTUIMainMenuLayoutDefaults(t *testing.T) {
 
 func TestNormalizeTUIMainMenuLayoutValidation(t *testing.T) {
 	// Unknown block type rejected.
-	if _, err := normalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "bogus"}}}); err == nil {
+	if _, err := NormalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "bogus"}}}); err == nil {
 		t.Fatal("expected error for unknown block type")
 	}
 	// Unknown stock art rejected.
-	if _, err := normalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "art", Stock: "nope"}}}); err == nil {
+	if _, err := NormalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "art", Stock: "nope"}}}); err == nil {
 		t.Fatal("expected error for unknown stock art")
 	}
 	// Bad color rejected.
-	if _, err := normalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "text", Text: "hi", Color: "blue"}}}); err == nil {
+	if _, err := NormalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "text", Text: "hi", Color: "blue"}}}); err == nil {
 		t.Fatal("expected error for non-hex color")
 	}
 	// Two menu blocks rejected.
-	if _, err := normalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "menu"}, {Type: "menu"}}}); err == nil {
+	if _, err := NormalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "menu"}, {Type: "menu"}}}); err == nil {
 		t.Fatal("expected error for duplicate menu block")
 	}
 	// Menu auto-appended when omitted.
-	got, err := normalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "art", Stock: "budgie-bbs", Align: "center"}}})
+	got, err := NormalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "art", Stock: "budgie-bbs", Align: "center"}}})
 	if err != nil {
 		t.Fatalf("art-only layout: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestNormalizeTUIMainMenuLayoutValidation(t *testing.T) {
 		t.Fatalf("menu should be auto-appended, last block is %q", last.Type)
 	}
 	// Empty inline art dropped.
-	got, err = normalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "art", Art: "   "}, {Type: "menu"}}})
+	got, err = NormalizeTUIMainMenuLayout(&TUIMainMenuLayout{Blocks: []TUIBlock{{Type: "art", Art: "   "}, {Type: "menu"}}})
 	if err != nil {
 		t.Fatalf("empty art layout: %v", err)
 	}
@@ -69,11 +69,11 @@ func TestTUIMainMenuLayoutEncodeDecodeRoundTrip(t *testing.T) {
 		{Type: "text", Text: "welcome", Align: "center", Color: "#58a6ff"},
 		{Type: "menu", Align: "left"},
 	}}
-	raw, err := encodeTUIMainMenuLayout(in)
+	raw, err := EncodeTUIMainMenuLayout(in)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	out := decodeTUIMainMenuLayout(raw)
+	out := DecodeTUIMainMenuLayout(raw)
 	if len(out.Blocks) != len(in.Blocks) {
 		t.Fatalf("round-trip block count: got %d want %d", len(out.Blocks), len(in.Blocks))
 	}
@@ -81,7 +81,7 @@ func TestTUIMainMenuLayoutEncodeDecodeRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip lost text block fields: %+v", out.Blocks[2])
 	}
 	// Empty/blank decodes to the default.
-	if d := decodeTUIMainMenuLayout(""); len(d.Blocks) == 0 {
+	if d := DecodeTUIMainMenuLayout(""); len(d.Blocks) == 0 {
 		t.Fatal("empty raw should decode to default")
 	}
 }

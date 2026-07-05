@@ -33,14 +33,14 @@ func (c *Core) SiteAppearance() (*SiteAppearance, error) {
 		   FROM site_appearance_settings WHERE id='default'`,
 	).Scan(&out.SiteTitle, &out.Logo, &out.Tagline, &out.BannerMessage, &out.AccentColor, &out.DefaultTheme, &layoutRaw, &out.UpdatedAt)
 	if err == sql.ErrNoRows {
-		layout := defaultTUIMainMenuLayout()
+		layout := sitemodel.DefaultTUIMainMenuLayout()
 		out.MainMenuLayout = &layout
 		return out, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	layout := decodeTUIMainMenuLayout(layoutRaw)
+	layout := sitemodel.DecodeTUIMainMenuLayout(layoutRaw)
 	out.MainMenuLayout = &layout
 	fields := sitemodel.ApplyAppearanceDefaults(siteAppearanceFields(*out))
 	applySiteAppearanceFields(out, fields)
@@ -53,11 +53,11 @@ func (c *Core) SetSiteAppearance(a SiteAppearance) (*SiteAppearance, error) {
 	if err != nil {
 		return nil, err
 	}
-	normLayout, err := normalizeTUIMainMenuLayout(a.MainMenuLayout)
+	normLayout, err := sitemodel.NormalizeTUIMainMenuLayout(a.MainMenuLayout)
 	if err != nil {
 		return nil, err
 	}
-	layoutRaw, err := encodeTUIMainMenuLayout(normLayout)
+	layoutRaw, err := sitemodel.EncodeTUIMainMenuLayout(normLayout)
 	if err != nil {
 		return nil, err
 	}
