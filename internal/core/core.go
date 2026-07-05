@@ -2529,19 +2529,19 @@ func (c *Core) UpdateUserPrivateProfile(profile *UserPrivateProfile) error {
 	return projections.UpdateUserPrivateProfile(c.DB, profile)
 }
 
-func (c *Core) AccountRegistrationSettings() (*AccountRegistrationSettings, error) {
+func (c *Core) AccountRegistrationSettings() (*projections.AccountRegistrationSettings, error) {
 	return projections.GetAccountRegistrationSettings(c.DB)
 }
 
-func (c *Core) SetAccountRegistrationSettings(requireApproval bool) (*AccountRegistrationSettings, error) {
+func (c *Core) SetAccountRegistrationSettings(requireApproval bool) (*projections.AccountRegistrationSettings, error) {
 	return projections.SetAccountRegistrationSettings(c.DB, requireApproval)
 }
 
-func (c *Core) ListAccountRegistrations(status string, limit, offset int) ([]AccountRegistration, error) {
+func (c *Core) ListAccountRegistrations(status string, limit, offset int) ([]projections.AccountRegistration, error) {
 	return projections.ListAccountRegistrations(c.DB, status, limit, offset)
 }
 
-func (c *Core) ReviewAccountRegistration(userID, reviewerID, decision, reason string) (*AccountRegistration, error) {
+func (c *Core) ReviewAccountRegistration(userID, reviewerID, decision, reason string) (*projections.AccountRegistration, error) {
 	review, err := projections.ReviewAccountRegistration(c.DB, userID, reviewerID, decision, reason)
 	if err != nil {
 		return nil, err
@@ -2572,7 +2572,7 @@ func (c *Core) ReviewAccountRegistration(userID, reviewerID, decision, reason st
 	return review, nil
 }
 
-func (c *Core) RequestPasswordRecovery(name, submittedName, submittedEmail, note string) (*PasswordRecoveryRequest, error) {
+func (c *Core) RequestPasswordRecovery(name, submittedName, submittedEmail, note string) (*projections.PasswordRecoveryRequest, error) {
 	u, err := c.UserByName(name)
 	if err != nil || u == nil {
 		return nil, err
@@ -2580,11 +2580,11 @@ func (c *Core) RequestPasswordRecovery(name, submittedName, submittedEmail, note
 	return projections.CreatePasswordRecoveryRequest(c.DB, newID("pwdrec_"), u.ID, submittedName, submittedEmail, note)
 }
 
-func (c *Core) ListPasswordRecoveryRequests(status string, limit, offset int) ([]PasswordRecoveryRequest, error) {
+func (c *Core) ListPasswordRecoveryRequests(status string, limit, offset int) ([]projections.PasswordRecoveryRequest, error) {
 	return projections.ListPasswordRecoveryRequests(c.DB, status, limit, offset)
 }
 
-func (c *Core) ReviewPasswordRecoveryRequest(requestID, reviewerID, decision, newPassword, note string) (*PasswordRecoveryRequest, error) {
+func (c *Core) ReviewPasswordRecoveryRequest(requestID, reviewerID, decision, newPassword, note string) (*projections.PasswordRecoveryRequest, error) {
 	passwordHash, err := accountmodel.PasswordRecoveryReviewHash(decision, newPassword, func(password string) (string, error) {
 		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		return string(hash), err
