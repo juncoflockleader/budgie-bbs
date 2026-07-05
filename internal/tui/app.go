@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -1739,7 +1740,7 @@ func (m model) View() string {
 }
 
 func (m model) renderMainMenu() string {
-	layout := core.DefaultTUIMainMenuLayout()
+	layout := sitemodel.DefaultTUIMainMenuLayout()
 	if m.appearance != nil && m.appearance.MainMenuLayout != nil && len(m.appearance.MainMenuLayout.Blocks) > 0 {
 		layout = *m.appearance.MainMenuLayout
 	}
@@ -1775,7 +1776,7 @@ func (m model) renderMainMenu() string {
 		case "art":
 			art := strings.TrimRight(blk.Art, "\n")
 			if s := strings.TrimSpace(blk.Stock); s != "" {
-				art = core.StockTUIArt(s)
+				art = sitemodel.StockTUIArt(s)
 			}
 			if strings.TrimSpace(art) == "" {
 				continue

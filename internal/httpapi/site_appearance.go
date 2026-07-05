@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -37,8 +38,8 @@ func (s *Server) handleGetSiteAppearance(w http.ResponseWriter, r *http.Request)
 // admin layout editor can offer them with previews. Public (decorative only).
 func (s *Server) handleGetTUIStockArt(w http.ResponseWriter, r *http.Request) {
 	arts := make([]map[string]string, 0)
-	for _, name := range core.StockTUIArtNames() {
-		arts = append(arts, map[string]string{"name": name, "art": core.StockTUIArt(name)})
+	for _, name := range sitemodel.StockTUIArtNames() {
+		arts = append(arts, map[string]string{"name": name, "art": sitemodel.StockTUIArt(name)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"arts": arts})
 }
