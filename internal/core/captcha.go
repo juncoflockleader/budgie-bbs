@@ -19,27 +19,17 @@ var (
 	ErrCaptchaFailed = errors.New("captcha verification failed")
 )
 
-const (
-	CaptchaModeOff      = captchamodel.ModeOff
-	CaptchaModeNative   = captchamodel.ModeNative
-	CaptchaModeProvider = captchamodel.ModeProvider
-)
-
-type CaptchaConfig = captchamodel.Config
-type CaptchaPolicy = captchamodel.Policy
-type CaptchaSubmission = captchamodel.Submission
-
 type captchaRuntime struct {
-	cfg      CaptchaConfig
+	cfg      captchamodel.Config
 	provider *captcha.ProviderVerifier
 }
 
 // SetCaptcha configures signup captcha. Call once at startup. Mode "off" (the
 // default) disables it. Safe to call on a nil-captcha Core.
-func (c *Core) SetCaptcha(cfg CaptchaConfig) {
+func (c *Core) SetCaptcha(cfg captchamodel.Config) {
 	cfg = captchamodel.NormalizeConfig(cfg)
 	rt := &captchaRuntime{cfg: cfg}
-	if cfg.Mode == CaptchaModeProvider {
+	if cfg.Mode == captchamodel.ModeProvider {
 		verifyURL := cfg.VerifyURL
 		if verifyURL == "" {
 			verifyURL = captcha.DefaultVerifyURL(cfg.Provider)
@@ -54,7 +44,7 @@ func (c *Core) SetCaptcha(cfg CaptchaConfig) {
 
 func (c *Core) captchaMode() string {
 	if c == nil || c.captcha == nil {
-		return CaptchaModeOff
+		return captchamodel.ModeOff
 	}
 	return c.captcha.cfg.Mode
 }
@@ -65,9 +55,9 @@ func (c *Core) CaptchaEnabled() bool {
 }
 
 // CaptchaPolicy returns the public captcha policy for the auth policy endpoint.
-func (c *Core) CaptchaPolicy() CaptchaPolicy {
+func (c *Core) CaptchaPolicy() captchamodel.Policy {
 	if c == nil || c.captcha == nil {
-		return captchamodel.PolicyForConfig(CaptchaConfig{})
+		return captchamodel.PolicyForConfig(captchamodel.Config{})
 	}
 	return captchamodel.PolicyForConfig(c.captcha.cfg)
 }
@@ -83,7 +73,7 @@ type CaptchaChallenge struct {
 // hashed answer with an expiry, and returns the challenge id + SVG. Only valid
 // in native mode.
 func (c *Core) IssueCaptchaChallenge() (*CaptchaChallenge, error) {
-	if c.captchaMode() != CaptchaModeNative {
+	if c.captchaMode() != captchamodel.ModeNative {
 		return nil, errors.New("native captcha not enabled")
 	}
 	now := nowMS()
@@ -107,13 +97,13 @@ func (c *Core) IssueCaptchaChallenge() (*CaptchaChallenge, error) {
 // disabled, returns ErrCaptchaRequired when enabled but unanswered, and
 // ErrCaptchaFailed on a bad/expired/unverifiable answer. Native challenges are
 // single-use. Provider verification fails closed on transport errors.
-func (c *Core) VerifyCaptcha(ctx context.Context, sub CaptchaSubmission) error {
+func (c *Core) VerifyCaptcha(ctx context.Context, sub captchamodel.Submission) error {
 	switch c.captchaMode() {
-	case CaptchaModeOff:
+	case captchamodel.ModeOff:
 		return nil
-	case CaptchaModeNative:
+	case captchamodel.ModeNative:
 		return c.verifyNativeCaptcha(sub)
-	case CaptchaModeProvider:
+	case captchamodel.ModeProvider:
 		if strings.TrimSpace(sub.Token) == "" {
 			return ErrCaptchaRequired
 		}
@@ -127,7 +117,7 @@ func (c *Core) VerifyCaptcha(ctx context.Context, sub CaptchaSubmission) error {
 	}
 }
 
-func (c *Core) verifyNativeCaptcha(sub CaptchaSubmission) error {
+func (c *Core) verifyNativeCaptcha(sub captchamodel.Submission) error {
 	if strings.TrimSpace(sub.ChallengeID) == "" {
 		return ErrCaptchaRequired
 	}

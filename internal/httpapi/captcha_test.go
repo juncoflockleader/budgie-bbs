@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/captchamodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 )
 
@@ -16,7 +16,7 @@ var svgCharRe = regexp.MustCompile(`>([A-Z2-9])</text>`)
 
 func TestSignupCaptchaFlow(t *testing.T) {
 	c := newHTTPTestCore(t)
-	c.SetCaptcha(core.CaptchaConfig{Mode: core.CaptchaModeNative, Secret: "http-test-hmac"})
+	c.SetCaptcha(captchamodel.Config{Mode: captchamodel.ModeNative, Secret: "http-test-hmac"})
 	h := httpapi.New(c, []byte("test-secret")).Handler()
 
 	do := func(method, path string, body any) *httptest.ResponseRecorder {

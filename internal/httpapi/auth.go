@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/captchamodel"
 )
 
 type registerRequest struct {
@@ -79,7 +80,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "name and password required", false)
 		return
 	}
-	if err := s.core.VerifyCaptcha(r.Context(), core.CaptchaSubmission{
+	if err := s.core.VerifyCaptcha(r.Context(), captchamodel.Submission{
 		ChallengeID: req.CaptchaChallengeID,
 		Answer:      req.CaptchaAnswer,
 		Token:       req.CaptchaToken,

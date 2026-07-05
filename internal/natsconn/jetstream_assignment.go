@@ -131,7 +131,7 @@ func (a *JetStreamCommandPartitionAssigner) AssignCommandPartition(ctx context.C
 	if err != nil {
 		return core.CommandPartitionAssignment{}, false, err
 	}
-	assigner := core.NewHashCommandPartitionAssignerWithOverrides(record.Members, decodeCommandAssignmentOverrides(record.Overrides), record.Generation)
+	assigner := logmodel.NewHashCommandPartitionAssignerWithOverrides(record.Members, decodeCommandAssignmentOverrides(record.Overrides), record.Generation)
 	return assigner.AssignCommandPartition(ctx, ownerID, partition)
 }
 

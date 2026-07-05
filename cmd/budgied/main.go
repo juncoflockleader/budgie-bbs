@@ -21,7 +21,9 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/captchamodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
@@ -1195,7 +1197,7 @@ func main() {
 	if capSecret == "" {
 		capSecret = string(secret)
 	}
-	c.SetCaptcha(core.CaptchaConfig{
+	c.SetCaptcha(captchamodel.Config{
 		Mode:      runconfig.ValueOrEnv(*captchaMode, "BUDGIE_CAPTCHA_MODE"),
 		Provider:  runconfig.ValueOrEnv(*captchaProvider, "BUDGIE_CAPTCHA_PROVIDER"),
 		SiteKey:   runconfig.ValueOrEnv(*captchaSiteKey, "BUDGIE_CAPTCHA_SITE_KEY"),
@@ -1272,7 +1274,7 @@ func main() {
 		case "sql-lease":
 			commandLogWorkerClaims = core.NewSQLCommandPartitionClaimer(c.DB)
 		case "hash-assignment":
-			assigner := core.NewHashCommandPartitionAssignerWithOverrides(commandLogWorkerGroupMemberIDs, commandLogWorkerOverrides, 1)
+			assigner := logmodel.NewHashCommandPartitionAssignerWithOverrides(commandLogWorkerGroupMemberIDs, commandLogWorkerOverrides, 1)
 			commandLogWorkerAssignments = assigner
 			commandLogWorkerGroupMemberIDs = assigner.Members()
 		case "nats-kv":
