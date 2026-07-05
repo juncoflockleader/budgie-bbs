@@ -1018,10 +1018,8 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		return Reply{Err: errDetail}
 	}
 
-	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRedacted, scopes, &proto.PostRedactedPayload{
-		ID: post.ID, Thread: post.Thread, By: actor.ID, Reason: p.Reason, TS: ts,
-	})
+	scopes, payload := commandevents.PostRedacted(post.ID, post.Thread, thread.Board, actor.ID, p.Reason, "", ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRedacted, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1038,8 +1036,8 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostRedacted, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostRedactedPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+	_, publicPayload := commandevents.PostRedacted(post.ID, post.Thread, thread.Board, actor.Name, p.Reason, "", ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostRedacted, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
@@ -1076,10 +1074,8 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 		return Reply{Err: errDetail}
 	}
 
-	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRestored, scopes, &proto.PostRestoredPayload{
-		ID: post.ID, Thread: post.Thread, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.PostRestored(post.ID, post.Thread, thread.Board, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRestored, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -1093,8 +1089,8 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostRestored, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostRestoredPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, TS: ts}, TS: ts})
+	_, publicPayload := commandevents.PostRestored(post.ID, post.Thread, thread.Board, actor.Name, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostRestored, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
@@ -1128,10 +1124,8 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 		if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "post is already redacted: "+postID); errDetail != nil {
 			return Reply{Err: errDetail}
 		}
-		scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRedacted, scopes, &proto.PostRedactedPayload{
-			ID: post.ID, Thread: post.Thread, By: actor.ID, Reason: p.Reason, TS: ts,
-		})
+		scopes, payload := commandevents.PostRedacted(post.ID, post.Thread, thread.Board, actor.ID, p.Reason, "", ts)
+		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRedacted, scopes, payload)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -1145,8 +1139,8 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 			return internalErr(err)
 		}
 		lastSeq = seq
-		published = append(published, proto.Event{Kind: proto.EvtPostRedacted, Seq: seq, Scopes: scopes,
-			Payload: &proto.PostRedactedPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+		_, publicPayload := commandevents.PostRedacted(post.ID, post.Thread, thread.Board, actor.Name, p.Reason, "", ts)
+		published = append(published, proto.Event{Kind: proto.EvtPostRedacted, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
@@ -1186,10 +1180,8 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 		if errDetail := commandrules.RequirePostRedacted(post.Redacted, "post is not redacted: "+postID); errDetail != nil {
 			return Reply{Err: errDetail}
 		}
-		scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRestored, scopes, &proto.PostRestoredPayload{
-			ID: post.ID, Thread: post.Thread, By: actor.ID, TS: ts,
-		})
+		scopes, payload := commandevents.PostRestored(post.ID, post.Thread, thread.Board, actor.ID, ts)
+		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRestored, scopes, payload)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -1200,8 +1192,8 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 			return internalErr(err)
 		}
 		lastSeq = seq
-		published = append(published, proto.Event{Kind: proto.EvtPostRestored, Seq: seq, Scopes: scopes,
-			Payload: &proto.PostRestoredPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, TS: ts}, TS: ts})
+		_, publicPayload := commandevents.PostRestored(post.ID, post.Thread, thread.Board, actor.Name, ts)
+		published = append(published, proto.Event{Kind: proto.EvtPostRestored, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
@@ -1241,10 +1233,8 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 		if ruleErr != nil {
 			return Reply{Err: ruleErr}
 		}
-		scopes := []string{"thread:" + threadID, "board:" + boardID}
-		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostDeletionCleared, scopes, &proto.PostDeletionClearedPayload{
-			ID: postID, Thread: threadID, Board: boardID, Kind: "junk", By: actor.ID, TS: ts,
-		})
+		scopes, payload := commandevents.PostDeletionCleared(postID, threadID, boardID, "junk", actor.ID, ts)
+		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostDeletionCleared, scopes, payload)
 		if err != nil {
 			return internalErr(err)
 		}
@@ -1252,8 +1242,8 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 			return internalErr(err)
 		}
 		lastSeq = seq
-		published = append(published, proto.Event{Kind: proto.EvtPostDeletionCleared, Seq: seq, Scopes: scopes,
-			Payload: &proto.PostDeletionClearedPayload{ID: postID, Thread: threadID, Board: boardID, Kind: "junk", By: actor.Name, TS: ts}, TS: ts})
+		_, publicPayload := commandevents.PostDeletionCleared(postID, threadID, boardID, "junk", actor.Name, ts)
+		published = append(published, proto.Event{Kind: proto.EvtPostDeletionCleared, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 	}
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)

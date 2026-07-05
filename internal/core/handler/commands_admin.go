@@ -529,10 +529,8 @@ func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostPurged, scopes, &proto.PostPurgedPayload{
-		ID: post.ID, Thread: post.Thread, By: actor.ID, Reason: p.Reason, TS: ts,
-	})
+	scopes, payload := commandevents.PostPurged(post.ID, post.Thread, thread.Board, actor.ID, p.Reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostPurged, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -547,8 +545,8 @@ func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostPurged, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostPurgedPayload{ID: post.ID, Thread: post.Thread, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+	_, publicPayload := commandevents.PostPurged(post.ID, post.Thread, thread.Board, actor.Name, p.Reason, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostPurged, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }

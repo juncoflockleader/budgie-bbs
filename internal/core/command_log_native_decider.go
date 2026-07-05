@@ -1145,13 +1145,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRedactPost(ctx context.Context,
 	if _, errDetail := commandrules.PlanPostRedaction(canModeratePosts, isAuthor, withinWindow); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	event := nativeEvent(record, 0, proto.EvtPostRedacted, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRedactedPayload{
-		ID:     post.ID,
-		Thread: post.Thread,
-		By:     actor.ID,
-		Reason: payload.Reason,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.PostRedacted(post.ID, post.Thread, thread.Board, actor.ID, payload.Reason, "", ts)
+	event := nativeEvent(record, 0, proto.EvtPostRedacted, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(post.ID, event), nil
 }
 
@@ -1189,12 +1184,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRestorePost(ctx context.Context
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtPostRestored, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRestoredPayload{
-		ID:     post.ID,
-		Thread: post.Thread,
-		By:     actor.ID,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.PostRestored(post.ID, post.Thread, thread.Board, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtPostRestored, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(post.ID, event), nil
 }
 
@@ -1221,14 +1212,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRedactPostRange(ctx context.Con
 		if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "post is already redacted: "+postID); errDetail != nil {
 			return nativeCommandDecision{}, errDetail
 		}
-		events = append(events, nativeEvent(record, i, proto.EvtPostRedacted, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRedactedPayload{
-			ID:           post.ID,
-			Thread:       post.Thread,
-			By:           actor.ID,
-			Reason:       payload.Reason,
-			DeletionKind: "recycle",
-			TS:           ts,
-		}, ts))
+		scopes, eventPayload := commandevents.PostRedacted(post.ID, post.Thread, thread.Board, actor.ID, payload.Reason, "recycle", ts)
+		events = append(events, nativeEvent(record, i, proto.EvtPostRedacted, scopes, eventPayload, ts))
 	}
 	return nativeDecisionAckEvents(strconv.Itoa(len(postIDs)), events), nil
 }
@@ -1256,12 +1241,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRestorePostRange(ctx context.Co
 		if errDetail := commandrules.RequirePostRedacted(post.Redacted, "post is not redacted: "+postID); errDetail != nil {
 			return nativeCommandDecision{}, errDetail
 		}
-		events = append(events, nativeEvent(record, i, proto.EvtPostRestored, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRestoredPayload{
-			ID:     post.ID,
-			Thread: post.Thread,
-			By:     actor.ID,
-			TS:     ts,
-		}, ts))
+		scopes, eventPayload := commandevents.PostRestored(post.ID, post.Thread, thread.Board, actor.ID, ts)
+		events = append(events, nativeEvent(record, i, proto.EvtPostRestored, scopes, eventPayload, ts))
 	}
 	return nativeDecisionAckEvents(strconv.Itoa(len(postIDs)), events), nil
 }
@@ -1289,14 +1270,8 @@ func (e *CommandLogNativeDecisionExecutor) decideClearBoardJunk(ctx context.Cont
 		if errDetail != nil {
 			return nativeCommandDecision{}, errDetail
 		}
-		events = append(events, nativeEvent(record, i, proto.EvtPostDeletionCleared, []string{"thread:" + threadID, "board:" + payload.Board}, &proto.PostDeletionClearedPayload{
-			ID:     postID,
-			Thread: threadID,
-			Board:  payload.Board,
-			Kind:   "junk",
-			By:     actor.ID,
-			TS:     ts,
-		}, ts))
+		scopes, eventPayload := commandevents.PostDeletionCleared(postID, threadID, payload.Board, "junk", actor.ID, ts)
+		events = append(events, nativeEvent(record, i, proto.EvtPostDeletionCleared, scopes, eventPayload, ts))
 	}
 	return nativeDecisionAckEvents(strconv.Itoa(len(postIDs)), events), nil
 }
@@ -1325,13 +1300,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePurgePost(ctx context.Context, 
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", "thread not found", true)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtPostPurged, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostPurgedPayload{
-		ID:     post.ID,
-		Thread: post.Thread,
-		By:     actor.ID,
-		Reason: payload.Reason,
-		TS:     ts,
-	}, ts)
+	scopes, eventPayload := commandevents.PostPurged(post.ID, post.Thread, thread.Board, actor.ID, payload.Reason, ts)
+	event := nativeEvent(record, 0, proto.EvtPostPurged, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(post.ID, event), nil
 }
 

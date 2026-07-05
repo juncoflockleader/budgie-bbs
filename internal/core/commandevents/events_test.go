@@ -104,3 +104,32 @@ func TestThreadModerationEvents(t *testing.T) {
 		t.Fatalf("ThreadMoved payload = %+v", moved)
 	}
 }
+
+func TestPostDeletionEvents(t *testing.T) {
+	scopes, redacted := PostRedacted("post_1", "thread_1", "general", "usr_mod", "reason", "recycle", 1234)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if redacted.ID != "post_1" || redacted.Thread != "thread_1" || redacted.By != "usr_mod" ||
+		redacted.Reason != "reason" || redacted.DeletionKind != "recycle" || redacted.TS != 1234 {
+		t.Fatalf("PostRedacted payload = %+v", redacted)
+	}
+
+	scopes, restored := PostRestored("post_1", "thread_1", "general", "usr_mod", 1235)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if restored.ID != "post_1" || restored.Thread != "thread_1" || restored.By != "usr_mod" || restored.TS != 1235 {
+		t.Fatalf("PostRestored payload = %+v", restored)
+	}
+
+	scopes, cleared := PostDeletionCleared("post_1", "thread_1", "general", "junk", "usr_mod", 1236)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if cleared.ID != "post_1" || cleared.Thread != "thread_1" || cleared.Board != "general" ||
+		cleared.Kind != "junk" || cleared.By != "usr_mod" || cleared.TS != 1236 {
+		t.Fatalf("PostDeletionCleared payload = %+v", cleared)
+	}
+
+	scopes, purged := PostPurged("post_1", "thread_1", "general", "usr_admin", "reason", 1237)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if purged.ID != "post_1" || purged.Thread != "thread_1" || purged.By != "usr_admin" ||
+		purged.Reason != "reason" || purged.TS != 1237 {
+		t.Fatalf("PostPurged payload = %+v", purged)
+	}
+}

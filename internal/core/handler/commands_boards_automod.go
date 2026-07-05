@@ -58,8 +58,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 		}
 		return []*proto.Event{{Kind: proto.EvtPostFlagged, Seq: seq, Scopes: scopes, Payload: payload, TS: ts}}, nil
 	case "redact":
-		scopes := []string{"thread:" + threadID, "board:" + boardID}
-		payload := &proto.PostRedactedPayload{ID: postID, Thread: threadID, By: by, Reason: reason, TS: ts}
+		scopes, payload := commandevents.PostRedacted(postID, threadID, boardID, by, reason, "", ts)
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRedacted, scopes, payload)
 		if err != nil {
 			return nil, err

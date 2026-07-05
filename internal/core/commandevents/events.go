@@ -128,6 +128,47 @@ func ThreadMoved(threadID, fromBoardID, toBoardID, by string, ts int64) ([]strin
 	}
 }
 
+func PostRedacted(postID, threadID, boardID, by, reason, deletionKind string, ts int64) ([]string, *proto.PostRedactedPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostRedactedPayload{
+		ID:           postID,
+		Thread:       threadID,
+		By:           by,
+		Reason:       reason,
+		DeletionKind: deletionKind,
+		TS:           ts,
+	}
+}
+
+func PostRestored(postID, threadID, boardID, by string, ts int64) ([]string, *proto.PostRestoredPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostRestoredPayload{
+		ID:     postID,
+		Thread: threadID,
+		By:     by,
+		TS:     ts,
+	}
+}
+
+func PostDeletionCleared(postID, threadID, boardID, kind, by string, ts int64) ([]string, *proto.PostDeletionClearedPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostDeletionClearedPayload{
+		ID:     postID,
+		Thread: threadID,
+		Board:  boardID,
+		Kind:   kind,
+		By:     by,
+		TS:     ts,
+	}
+}
+
+func PostPurged(postID, threadID, boardID, by, reason string, ts int64) ([]string, *proto.PostPurgedPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostPurgedPayload{
+		ID:     postID,
+		Thread: threadID,
+		By:     by,
+		Reason: reason,
+		TS:     ts,
+	}
+}
+
 func FavoriteFolderCreated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderCreatedPayload) {
 	payload := &proto.FavoriteFolderCreatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
 	return []string{"user:" + userID}, payload
