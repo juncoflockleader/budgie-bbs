@@ -274,10 +274,7 @@ func (c *Core) SendEmail2FACode(userID string) error {
 		return err
 	}
 	defer tx.Rollback() //nolint
-	if _, err := qExec(tx,
-		`INSERT INTO two_factor_email_codes (user_id, code_hash, created_at, expires_at) VALUES (?,?,?,?)
-		 ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash, created_at=excluded.created_at, expires_at=excluded.expires_at`,
-		userID, string(hash), now, exp); err != nil {
+	if err := twofactorstore.StoreEmailCode(tx, userID, string(hash), now, exp); err != nil {
 		return err
 	}
 	subject, body := accountmodel.Email2FACodeMessage(code)
@@ -289,31 +286,29 @@ func (c *Core) SendEmail2FACode(userID string) error {
 
 // VerifyEmail2FACode checks a single-use email code and consumes it on success.
 func (c *Core) VerifyEmail2FACode(userID, code string) error {
-	var hash string
-	var exp int64
-	err := qQueryRow(c.DB, `SELECT code_hash, expires_at FROM two_factor_email_codes WHERE user_id=?`, userID).Scan(&hash, &exp)
-	if err == sql.ErrNoRows {
-		return ErrTwoFactorInvalidCode
-	}
+	stored, found, err := twofactorstore.LoadEmailCode(c.DB, userID)
 	if err != nil {
 		return err
 	}
-	if nowMS() > exp {
-		_, _ = qExec(c.DB, `DELETE FROM two_factor_email_codes WHERE user_id=?`, userID)
+	if !found {
 		return ErrTwoFactorInvalidCode
 	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(strings.TrimSpace(code))) != nil {
+	if nowMS() > stored.ExpiresAt {
+		_ = twofactorstore.DeleteEmailCode(c.DB, userID)
+		return ErrTwoFactorInvalidCode
+	}
+	if bcrypt.CompareHashAndPassword([]byte(stored.CodeHash), []byte(strings.TrimSpace(code))) != nil {
 		return ErrTwoFactorInvalidCode
 	}
 	// Atomically claim the code so it cannot be redeemed twice by concurrent
 	// requests. Guarding on the exact stored hash means a wrong guess (rejected
 	// above) never consumes the code, while the correct code stays single-use
 	// under a race: exactly one deleter wins, the rest get 0 rows and fail.
-	res, err := qExec(c.DB, `DELETE FROM two_factor_email_codes WHERE user_id=? AND code_hash=?`, userID, hash)
+	claimed, err := twofactorstore.ClaimEmailCode(c.DB, userID, stored.CodeHash)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if !claimed {
 		return ErrTwoFactorInvalidCode
 	}
 	return nil

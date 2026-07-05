@@ -13,6 +13,11 @@ type BackupCode struct {
 	CreatedAt int64
 }
 
+type EmailCode struct {
+	CodeHash  string
+	ExpiresAt int64
+}
+
 func SecuritySettings(db *sql.DB) (*accountmodel.SecuritySettings, error) {
 	out := &accountmodel.SecuritySettings{}
 	var req int
@@ -78,6 +83,44 @@ func ClaimBackupCode(db *sql.DB, userID, codeHash string) (bool, error) {
 		`UPDATE two_factor_backup_codes SET used=1 WHERE user_id=? AND code_hash=? AND used=0`,
 		userID, codeHash,
 	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func StoreEmailCode(tx *sql.Tx, userID, codeHash string, createdAt, expiresAt int64) error {
+	_, err := sqlstore.Exec(tx,
+		`INSERT INTO two_factor_email_codes (user_id, code_hash, created_at, expires_at) VALUES (?,?,?,?)
+		 ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash, created_at=excluded.created_at, expires_at=excluded.expires_at`,
+		userID, codeHash, createdAt, expiresAt,
+	)
+	return err
+}
+
+func LoadEmailCode(db *sql.DB, userID string) (EmailCode, bool, error) {
+	var code EmailCode
+	err := sqlstore.QueryRow(db, `SELECT code_hash, expires_at FROM two_factor_email_codes WHERE user_id=?`, userID).Scan(&code.CodeHash, &code.ExpiresAt)
+	if err == sql.ErrNoRows {
+		return EmailCode{}, false, nil
+	}
+	if err != nil {
+		return EmailCode{}, false, err
+	}
+	return code, true, nil
+}
+
+func DeleteEmailCode(db *sql.DB, userID string) error {
+	_, err := sqlstore.Exec(db, `DELETE FROM two_factor_email_codes WHERE user_id=?`, userID)
+	return err
+}
+
+func ClaimEmailCode(db *sql.DB, userID, codeHash string) (bool, error) {
+	res, err := sqlstore.Exec(db, `DELETE FROM two_factor_email_codes WHERE user_id=? AND code_hash=?`, userID, codeHash)
 	if err != nil {
 		return false, err
 	}

@@ -1,12 +1,16 @@
 package core_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/mailer"
 	"github.com/juncoflockleader/budgie-bbs/internal/totp"
 )
+
+var email2FACodeRe = regexp.MustCompile(`verification code is ([0-9]{6})`)
 
 func TestTwoFactorTOTPEnrollAndVerify(t *testing.T) {
 	c, cancel := newTestCore(t)
@@ -136,6 +140,42 @@ func TestTwoFactorBackupCodes(t *testing.T) {
 	}
 	if got := c.BackupCodesRemaining(u.ID); got != 0 {
 		t.Fatalf("backup codes should be cleared when unenrolled, got %d", got)
+	}
+}
+
+func TestTwoFactorEmailCodeFlow(t *testing.T) {
+	c, cancel := newTestCore(t)
+	defer cancel()
+	fm := &captureMailer{ch: make(chan mailer.Message, 4)}
+	c.SetMailer(fm, "no-reply@budgie.test", false, "")
+
+	u := registerAndGetUser(t, c, "alice", "pw")
+	if err := c.StartEmailVerification(u.ID, "alice@dest.test"); err != nil {
+		t.Fatalf("start email verification: %v", err)
+	}
+	waitMail(t, fm.ch)
+
+	if err := c.EnableEmail2FA(u.ID); err != nil {
+		t.Fatalf("enable email 2fa: %v", err)
+	}
+	if err := c.SendEmail2FACode(u.ID); err != nil {
+		t.Fatalf("send email 2fa code: %v", err)
+	}
+	msg := waitMail(t, fm.ch)
+	match := email2FACodeRe.FindStringSubmatch(msg.Body)
+	if match == nil {
+		t.Fatalf("no email 2fa code in body: %q", msg.Body)
+	}
+	code := match[1]
+
+	if err := c.VerifyEmail2FACode(u.ID, "000000"); err == nil {
+		t.Fatal("wrong email 2fa code should fail")
+	}
+	if err := c.VerifyEmail2FACode(u.ID, code); err != nil {
+		t.Fatalf("correct email 2fa code should verify after wrong attempt: %v", err)
+	}
+	if err := c.VerifyEmail2FACode(u.ID, code); err == nil {
+		t.Fatal("email 2fa code should be single-use")
 	}
 }
 
