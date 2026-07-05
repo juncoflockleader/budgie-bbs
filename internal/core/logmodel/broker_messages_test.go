@@ -66,3 +66,12 @@ func TestDecodeBrokerCommandMessageRejectsMetadataMismatch(t *testing.T) {
 		t.Fatal("DecodeBrokerCommandMessage accepted wrong offset metadata")
 	}
 }
+
+func TestBrokerEventSequencePrefersCompatibilitySeq(t *testing.T) {
+	if got := BrokerEventSequence(BrokerEventRecord{CompatibilitySeq: 42}, BrokerEventLogMessage{StreamSeq: 100}); got != 42 {
+		t.Fatalf("BrokerEventSequence with compatibility seq = %d, want 42", got)
+	}
+	if got := BrokerEventSequence(BrokerEventRecord{}, BrokerEventLogMessage{StreamSeq: 100}); got != 100 {
+		t.Fatalf("BrokerEventSequence fallback = %d, want 100", got)
+	}
+}

@@ -56,3 +56,10 @@ func CloneBrokerEventLogMessage(msg BrokerEventLogMessage) BrokerEventLogMessage
 	msg.Data = append([]byte(nil), msg.Data...)
 	return msg
 }
+
+func BrokerEventSequence(record BrokerEventRecord, msg BrokerEventLogMessage) int64 {
+	if record.CompatibilitySeq > 0 {
+		return record.CompatibilitySeq
+	}
+	return msg.StreamSeq
+}

@@ -233,7 +233,7 @@ func DecodeBrokerEventMessage(msg BrokerEventLogMessage) (*proto.Event, error) {
 	return &proto.Event{
 		ID:              record.ID,
 		Kind:            record.Kind,
-		Seq:             brokerEventSequence(record, msg),
+		Seq:             logmodel.BrokerEventSequence(record, msg),
 		Payload:         payload,
 		TS:              record.TS,
 		PartitionKind:   partition.Kind,
@@ -241,13 +241,6 @@ func DecodeBrokerEventMessage(msg BrokerEventLogMessage) (*proto.Event, error) {
 		PartitionOffset: record.PartitionOffset,
 		Scopes:          append([]string(nil), record.Scopes...),
 	}, nil
-}
-
-func brokerEventSequence(record BrokerEventRecord, msg BrokerEventLogMessage) int64 {
-	if record.CompatibilitySeq > 0 {
-		return record.CompatibilitySeq
-	}
-	return msg.StreamSeq
 }
 
 func eventAppendTS(ts int64) int64 {
