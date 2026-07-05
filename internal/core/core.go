@@ -2615,11 +2615,11 @@ func (c *Core) DeleteUserPersonalFile(userID, name string) error {
 	return projections.DeleteUserPersonalFile(c.DB, userID, name)
 }
 
-func (c *Core) ListUserSignatures(userID string) (*UserSignatureBundle, error) {
+func (c *Core) ListUserSignatures(userID string) (*projections.UserSignatureBundle, error) {
 	return projections.ListUserSignatures(c.DB, userID)
 }
 
-func (c *Core) SaveUserSignature(userID, signatureID, label, body string, position int, active bool) (*UserSignature, error) {
+func (c *Core) SaveUserSignature(userID, signatureID, label, body string, position int, active bool) (*projections.UserSignature, error) {
 	if strings.TrimSpace(signatureID) == "" {
 		signatureID = newID("sig_")
 	}
@@ -2634,15 +2634,15 @@ func (c *Core) SetUserSignatureSettings(userID, selectedSignatureID string, rand
 	return projections.SetUserSignatureSettings(c.DB, userID, selectedSignatureID, randomEnabled)
 }
 
-func (c *Core) RecountUserSignatures(userID string) (*UserSignatureRecount, error) {
+func (c *Core) RecountUserSignatures(userID string) (*projections.UserSignatureRecount, error) {
 	return projections.RecountUserSignatures(c.DB, userID)
 }
 
-func (c *Core) ListUserLoginACL(userID, host string) (*UserLoginACLBundle, error) {
+func (c *Core) ListUserLoginACL(userID, host string) (*projections.UserLoginACLBundle, error) {
 	return projections.ListUserLoginACL(c.DB, userID, host)
 }
 
-func (c *Core) SaveUserLoginACLRule(userID, ruleID, pattern, note string, position int, active bool) (*UserLoginACLRule, error) {
+func (c *Core) SaveUserLoginACLRule(userID, ruleID, pattern, note string, position int, active bool) (*projections.UserLoginACLRule, error) {
 	if strings.TrimSpace(ruleID) == "" {
 		ruleID = newID("acl_")
 	}
