@@ -3,6 +3,7 @@ package commandrules
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -12,17 +13,17 @@ type ReactionCounter interface {
 }
 
 func RequireBoardMembershipApplicantNotMember(isMember bool) *proto.ErrorDetail {
-	if isMember {
+	if boardmodel.MembershipApplicantFailure(isMember) == boardmodel.MembershipApplicationAlreadyMember {
 		return newErrDetail(proto.ErrConflict, "already a board member", false)
 	}
 	return nil
 }
 
 func RequireBoardMembershipApplicationCanStart(latestStatus string) *proto.ErrorDetail {
-	switch latestStatus {
-	case "pending":
+	switch boardmodel.MembershipApplicationStartFailure(latestStatus) {
+	case boardmodel.MembershipApplicationAlreadyPending:
 		return newErrDetail(proto.ErrConflict, "membership application already pending", false)
-	case "blacklisted":
+	case boardmodel.MembershipApplicationBlocked:
 		return newErrDetail(proto.ErrForbidden, "membership application is blocked", false)
 	default:
 		return nil
@@ -30,7 +31,7 @@ func RequireBoardMembershipApplicationCanStart(latestStatus string) *proto.Error
 }
 
 func RequireBoardMembershipApplicationPending(status string) *proto.ErrorDetail {
-	if status != "pending" {
+	if boardmodel.MembershipApplicationReviewFailure(status) == boardmodel.MembershipApplicationAlreadyReviewed {
 		return newErrDetail(proto.ErrConflict, "membership application is already reviewed", false)
 	}
 	return nil
