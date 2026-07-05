@@ -3298,6 +3298,24 @@ func MarkBoardRead(db *sql.DB, userID, boardID string) error {
 	return err
 }
 
+func MarkBoardReadForAllUsersTx(tx *sql.Tx, boardID string, seq, ts int64) error {
+	_, err := QExec(tx,
+		`INSERT INTO board_read_markers (user_id, board_id, last_seq, previous_seq, updated_at)
+		 SELECT id, ?, ?,
+		        COALESCE((SELECT last_seq FROM board_read_markers existing WHERE existing.user_id=users.id AND existing.board_id=?), 0),
+		        ?
+		   FROM users
+		  WHERE 1=1
+		 ON CONFLICT(user_id, board_id)
+		 DO UPDATE SET
+		    last_seq=excluded.last_seq,
+		    previous_seq=excluded.previous_seq,
+		    updated_at=excluded.updated_at`,
+		boardID, seq, boardID, ts,
+	)
+	return err
+}
+
 func RestoreBoardRead(db *sql.DB, userID, boardID string) error {
 	res, err := QExec(db,
 		`UPDATE board_read_markers

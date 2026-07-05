@@ -1072,7 +1072,7 @@ func (c *Core) appendAccountLifecycleRecordTx(tx *sql.Tx, record accountmodel.Li
 		return nil, err
 	}
 	if record.MarkBoardReadForAllUsers {
-		if err := markBoardReadForAllUsersTx(tx, record.BoardID, pseq, ts); err != nil {
+		if err := projections.MarkBoardReadForAllUsersTx(tx, record.BoardID, pseq, ts); err != nil {
 			return nil, err
 		}
 	}
@@ -1083,24 +1083,6 @@ func (c *Core) appendAccountLifecycleRecordTx(tx *sql.Tx, record accountmodel.Li
 			Payload: &proto.PostAppendedPayload{ID: record.PostID, Thread: record.ThreadID, Author: record.AuthorName, AuthorID: record.AuthorID, Body: record.Body, RawBody: record.Body, ContentType: "markup", TS: ts}, TS: ts},
 	)
 	return out, nil
-}
-
-func markBoardReadForAllUsersTx(tx *sql.Tx, boardID string, seq, ts int64) error {
-	_, err := qExec(tx,
-		`INSERT INTO board_read_markers (user_id, board_id, last_seq, previous_seq, updated_at)
-		 SELECT id, ?, ?,
-		        COALESCE((SELECT last_seq FROM board_read_markers existing WHERE existing.user_id=users.id AND existing.board_id=?), 0),
-		        ?
-		   FROM users
-		  WHERE 1=1
-		 ON CONFLICT(user_id, board_id)
-		 DO UPDATE SET
-		    last_seq=excluded.last_seq,
-		    previous_seq=excluded.previous_seq,
-		    updated_at=excluded.updated_at`,
-		boardID, seq, boardID, ts,
-	)
-	return err
 }
 
 // dummyBcryptHash is compared against on the no-such-user login path so
@@ -1461,11 +1443,7 @@ func (c *Core) RecordLogout() error {
 
 // AddPubkey registers an SSH public key for the given user.
 func (c *Core) AddPubkey(userID, pubkey string) error {
-	_, err := qExec(c.DB,
-		`INSERT OR IGNORE INTO auth_pubkeys (user_id, pubkey) VALUES (?,?)`,
-		userID, pubkey,
-	)
-	return err
+	return accountstore.AddPubkey(c.DB, userID, pubkey)
 }
 
 // UserByPubkey looks up a user by their SSH public key fingerprint.

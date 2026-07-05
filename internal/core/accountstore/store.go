@@ -39,6 +39,14 @@ func RevokeSessions(db *sql.DB, userID string, validAfterSeconds int64) error {
 	return err
 }
 
+func AddPubkey(db *sql.DB, userID, pubkey string) error {
+	_, err := sqlstore.Exec(db,
+		`INSERT OR IGNORE INTO auth_pubkeys (user_id, pubkey) VALUES (?,?)`,
+		userID, pubkey,
+	)
+	return err
+}
+
 func DeactivateTx(tx *sql.Tx, userID, reason string, ts int64) error {
 	_, err := sqlstore.Exec(tx,
 		`UPDATE users SET deactivated_at=?, deactivated_by=?, deactivated_reason=? WHERE id=? AND deactivated_at=0`,
