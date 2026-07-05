@@ -235,11 +235,11 @@ type scriptedLatestFeedReadCache struct {
 	gets    int
 	puts    int
 	hit     bool
-	lastKey LatestFeedReadCacheKey
+	lastKey readmodel.LatestFeedKey
 	posts   []Post
 }
 
-func (c *scriptedLatestFeedReadCache) GetLatestFeedPosts(ctx context.Context, key LatestFeedReadCacheKey) ([]Post, bool, error) {
+func (c *scriptedLatestFeedReadCache) GetLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey) ([]Post, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -251,7 +251,7 @@ func (c *scriptedLatestFeedReadCache) GetLatestFeedPosts(ctx context.Context, ke
 	return readmodel.ClonePosts(c.posts), true, nil
 }
 
-func (c *scriptedLatestFeedReadCache) PutLatestFeedPosts(ctx context.Context, key LatestFeedReadCacheKey, posts []Post) error {
+func (c *scriptedLatestFeedReadCache) PutLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey, posts []Post) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

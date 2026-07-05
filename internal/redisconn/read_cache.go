@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 )
 
 type ReadCacheOptions struct {
@@ -23,7 +24,7 @@ type ReadCache struct {
 	ttl    time.Duration
 }
 
-var _ core.ReadCache = (*ReadCache)(nil)
+var _ readmodel.LatestFeedCache = (*ReadCache)(nil)
 
 func NewReadCache(client Commander, options ReadCacheOptions) *ReadCache {
 	prefix := strings.TrimSpace(options.Prefix)
@@ -41,7 +42,7 @@ func NewReadCache(client Commander, options ReadCacheOptions) *ReadCache {
 	}
 }
 
-func (c *ReadCache) GetLatestFeedPosts(ctx context.Context, key core.LatestFeedReadCacheKey) ([]core.Post, bool, error) {
+func (c *ReadCache) GetLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey) ([]projections.Post, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -55,14 +56,14 @@ func (c *ReadCache) GetLatestFeedPosts(ctx context.Context, key core.LatestFeedR
 	if reply == nil {
 		return nil, false, nil
 	}
-	var posts []core.Post
+	var posts []projections.Post
 	if err := json.Unmarshal([]byte(redisString(reply)), &posts); err != nil {
 		return nil, false, err
 	}
 	return posts, true, nil
 }
 
-func (c *ReadCache) PutLatestFeedPosts(ctx context.Context, key core.LatestFeedReadCacheKey, posts []core.Post) error {
+func (c *ReadCache) PutLatestFeedPosts(ctx context.Context, key readmodel.LatestFeedKey, posts []projections.Post) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -81,7 +82,7 @@ func (c *ReadCache) PutLatestFeedPosts(ctx context.Context, key core.LatestFeedR
 	return err
 }
 
-func (c *ReadCache) latestFeedKey(key core.LatestFeedReadCacheKey) string {
+func (c *ReadCache) latestFeedKey(key readmodel.LatestFeedKey) string {
 	data, _ := json.Marshal(key)
 	sum := sha256.Sum256(data)
 	return c.prefix + ":read-cache:latest-feed:" + hex.EncodeToString(sum[:])

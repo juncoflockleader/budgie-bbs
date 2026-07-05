@@ -100,7 +100,7 @@ type Core struct {
 	chatStore               ChatStore
 	chatStoreOverride       bool
 	postSearchIndex         PostSearchIndex
-	readCache               ReadCache
+	readCache               readmodel.LatestFeedCache
 	hotThreadSplitMu        sync.RWMutex
 	hotThreadSplits         map[string]int
 	hotThreadSplitOverrides map[string]int
@@ -121,7 +121,7 @@ type coreOptions struct {
 	presenceStore             PresenceStore
 	chatStore                 ChatStore
 	postSearchIndex           PostSearchIndex
-	readCache                 ReadCache
+	readCache                 readmodel.LatestFeedCache
 	asyncPostSearch           bool
 	asyncCommunityStatHistory bool
 	hotThreadSplits           map[string]int
@@ -208,7 +208,7 @@ func WithPostSearchIndex(index PostSearchIndex) Option {
 	}
 }
 
-func WithReadCache(cache ReadCache) Option {
+func WithReadCache(cache readmodel.LatestFeedCache) Option {
 	return func(opts *coreOptions) {
 		opts.readCache = cache
 	}
@@ -2354,17 +2354,17 @@ func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]Post, erro
 	return posts, nil
 }
 
-func (c *Core) latestFeedCacheKey(viewerID string, includePrivate bool, limit, offset int) (LatestFeedReadCacheKey, bool) {
+func (c *Core) latestFeedCacheKey(viewerID string, includePrivate bool, limit, offset int) (readmodel.LatestFeedKey, bool) {
 	if c == nil || c.readCache == nil {
-		return LatestFeedReadCacheKey{}, false
+		return readmodel.LatestFeedKey{}, false
 	}
 	appliedSeq, err := c.DerivedViewAppliedSeq(DerivedViewLatestFeed)
 	if err != nil {
-		return LatestFeedReadCacheKey{}, false
+		return readmodel.LatestFeedKey{}, false
 	}
 	headSeq, err := c.Head()
 	if err != nil {
-		return LatestFeedReadCacheKey{}, false
+		return readmodel.LatestFeedKey{}, false
 	}
 	return readmodel.NewLatestFeedKey(viewerID, includePrivate, limit, offset, appliedSeq, headSeq), true
 }

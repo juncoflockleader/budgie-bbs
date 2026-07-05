@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/natsconn"
 )
@@ -392,8 +393,8 @@ func TestOpenReadCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open memory read cache: %v", err)
 	}
-	if _, ok := cache.(*core.MemoryReadCache); !ok {
-		t.Fatalf("memory read cache = %T, want *core.MemoryReadCache", cache)
+	if _, ok := cache.(*readmodel.MemoryCache); !ok {
+		t.Fatalf("memory read cache = %T, want *readmodel.MemoryCache", cache)
 	}
 
 	cache, cleanup, err = openReadCache(t.Context(), "redis", "redis://:secret@redis.internal:6379/3", "budgie:test", time.Minute)

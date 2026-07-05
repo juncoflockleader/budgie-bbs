@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 )
 
 func TestCommandLogPartitionIndexTracksOffsetsWithRedisHashes(t *testing.T) {
@@ -61,13 +63,13 @@ func TestReadCacheStoresLatestFeedPostsInRedis(t *testing.T) {
 	ctx := context.Background()
 	redis := newFakeRedisCommander()
 	cache := NewReadCache(redis, ReadCacheOptions{Prefix: "test", TTL: 1500 * time.Millisecond})
-	key := core.LatestFeedReadCacheKey{
+	key := readmodel.LatestFeedKey{
 		ViewerID:   "usr_alice",
 		Limit:      10,
 		AppliedSeq: 5,
 		HeadSeq:    7,
 	}
-	posts := []core.Post{{
+	posts := []projections.Post{{
 		ID:         "post_1",
 		Thread:     "thread_1",
 		Board:      "general",

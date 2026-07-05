@@ -22,6 +22,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
@@ -2150,7 +2151,7 @@ func validateSameProcessNativeWriterProjectionStreams(roles map[string]bool, com
 	return nil
 }
 
-func openReadCache(ctx context.Context, mode, redisURL, prefix string, ttl time.Duration) (core.ReadCache, func(), error) {
+func openReadCache(ctx context.Context, mode, redisURL, prefix string, ttl time.Duration) (readmodel.LatestFeedCache, func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, func() {}, err
 	}
@@ -2158,7 +2159,7 @@ func openReadCache(ctx context.Context, mode, redisURL, prefix string, ttl time.
 	case "":
 		return nil, func() {}, nil
 	case "memory":
-		return core.NewMemoryReadCache(), func() {}, nil
+		return readmodel.NewMemoryCache(), func() {}, nil
 	case "redis":
 		client, err := redisconn.NewClient(redisURL)
 		if err != nil {
