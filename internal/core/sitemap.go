@@ -1,6 +1,9 @@
 package core
 
-import "github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
+import (
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
+)
 
 // Search-engine support: a sitemap of the publicly browsable surface and a
 // matching robots.txt. Only boards a guest may read are listed, mirroring the
@@ -11,7 +14,7 @@ const DefaultSitemapInterval = sitemodel.DefaultSitemapInterval
 
 // guest principal used for sitemap visibility checks: empty id, "guest" role, so
 // ActorCanReadBoard applies the GuestAccess override (default/hidden/public).
-func sitemapGuest() *User { return &User{Role: "guest"} }
+func sitemapGuest() *projections.User { return &projections.User{Role: "guest"} }
 
 // GenerateSitemap builds an XML sitemap of the guest-readable site rooted at
 // baseURL (e.g. "https://bbs.example.com"). Boards appear as /b/{id} and threads

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -57,7 +58,7 @@ func partitionFromScopes(scopes []string) (eventPartition, bool) {
 	return eventPartition{Kind: p.Kind, Key: p.Key}, true
 }
 
-func classifyCommandPartition(actor *User, name proto.CommandName, payload json.RawMessage) (eventPartition, bool) {
+func classifyCommandPartition(actor *projections.User, name proto.CommandName, payload json.RawMessage) (eventPartition, bool) {
 	actorID := ""
 	if actor != nil {
 		actorID = actor.ID

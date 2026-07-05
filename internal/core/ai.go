@@ -49,7 +49,7 @@ func (c *Core) BoardAIRuntime(boardID string) (*projections.BoardAIRuntime, erro
 // EnsureBoardAIBot creates (or finds) the board's AI bot account, forces it
 // approved, makes it a board member so it can post even in member-post boards,
 // and records its id in the board's AI config. Idempotent.
-func (c *Core) EnsureBoardAIBot(boardID string) (*User, error) {
+func (c *Core) EnsureBoardAIBot(boardID string) (*projections.User, error) {
 	if rt, err := c.BoardAIRuntime(boardID); err == nil && rt != nil && rt.BotUserID != "" {
 		if u, err := c.UserByID(rt.BotUserID); err == nil && u != nil {
 			return u, c.activateBoardAIBot(boardID, u.ID)

@@ -16,24 +16,24 @@ import (
 // centralized in boardmodel so all transports enforce the same rule.
 
 // ActorCanReadBoard reports whether actor may read the board described by info.
-func ActorCanReadBoard(actor *User, info *projections.BoardInfo) bool {
+func ActorCanReadBoard(actor *projections.User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorCanReadBoard(boardAccessActor(actor), boardAccessInfo(info))
 }
 
 // ActorModeratesBoard reports whether actor has site or board moderation scope.
-func ActorModeratesBoard(actor *User, info *projections.BoardInfo) bool {
+func ActorModeratesBoard(actor *projections.User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorModeratesBoard(boardAccessActor(actor), boardAccessInfo(info))
 }
 
 // ActorCanManageBoardMembers reports whether actor may review/manage board
 // membership using a loaded BoardInfo snapshot.
-func ActorCanManageBoardMembers(actor *User, info *projections.BoardInfo) bool {
+func ActorCanManageBoardMembers(actor *projections.User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorCanManageBoardMembers(boardAccessActor(actor), boardAccessInfo(info))
 }
 
 // ActorCanModerateBoardPosts reports whether actor may moderate posts using a
 // loaded BoardInfo snapshot.
-func ActorCanModerateBoardPosts(actor *User, info *projections.BoardInfo) bool {
+func ActorCanModerateBoardPosts(actor *projections.User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorCanModerateBoardPosts(boardAccessActor(actor), boardAccessInfo(info))
 }
 
@@ -41,14 +41,14 @@ func ActorCanModerateBoardPosts(actor *User, info *projections.BoardInfo) bool {
 // a site moderator/admin, a board moderator, or a member granted the
 // can_set_board_settings permission. Mirrors the handler-side check for use by
 // direct-DB endpoints (e.g. the AI config, which is not command-routed).
-func (c *Core) ActorCanSetBoardSettings(actor *User, boardID string) bool {
+func (c *Core) ActorCanSetBoardSettings(actor *projections.User, boardID string) bool {
 	ok, err := projections.ActorCanSetBoardSettings(c.DB, actor, boardID)
 	return err == nil && ok
 }
 
 // ActorCanReadBoardID loads the board and applies ActorCanReadBoard. A missing
 // board (or load error) is treated as not-readable.
-func (c *Core) ActorCanReadBoardID(actor *User, boardID string) (bool, error) {
+func (c *Core) ActorCanReadBoardID(actor *projections.User, boardID string) (bool, error) {
 	info, err := c.GetBoardInfo(boardID)
 	if err != nil || info == nil {
 		return false, err
@@ -62,7 +62,7 @@ func (c *Core) ActorCanReadBoardID(actor *User, boardID string) (bool, error) {
 // could subscribe to (or replay) another board's, user's, or moderation scope
 // and read data they cannot otherwise see. Returns a non-nil slice (possibly
 // empty — meaning "match nothing", never "match everything").
-func (c *Core) AuthorizedScopes(actor *User, requested []string) []string {
+func (c *Core) AuthorizedScopes(actor *projections.User, requested []string) []string {
 	allowed := make([]string, 0, len(requested))
 	for _, sc := range requested {
 		if c.scopeVisibleTo(actor, sc) {
@@ -72,7 +72,7 @@ func (c *Core) AuthorizedScopes(actor *User, requested []string) []string {
 	return allowed
 }
 
-func (c *Core) scopeVisibleTo(actor *User, scope string) bool {
+func (c *Core) scopeVisibleTo(actor *projections.User, scope string) bool {
 	switch {
 	case strings.HasPrefix(scope, "board:"):
 		ok, _ := c.ActorCanReadBoardID(actor, strings.TrimPrefix(scope, "board:"))
@@ -96,7 +96,7 @@ func (c *Core) scopeVisibleTo(actor *User, scope string) bool {
 	}
 }
 
-func boardAccessActor(actor *User) *boardmodel.AccessActor {
+func boardAccessActor(actor *projections.User) *boardmodel.AccessActor {
 	if actor == nil {
 		return nil
 	}

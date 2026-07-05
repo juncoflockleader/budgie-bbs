@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -33,7 +34,7 @@ type CommandStatus struct {
 	Error                *proto.ErrorDetail `json:"error,omitempty"`
 }
 
-func (c *Core) CommandStatus(ctx context.Context, actor *User, commandID string, partition LogPartition, offset int64) (*CommandStatus, error) {
+func (c *Core) CommandStatus(ctx context.Context, actor *projections.User, commandID string, partition LogPartition, offset int64) (*CommandStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

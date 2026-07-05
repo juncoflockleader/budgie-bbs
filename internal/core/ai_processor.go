@@ -237,7 +237,7 @@ func (p *AIProcessor) maybeReply(ctx context.Context, post *proto.PostAppendedPa
 
 // buildPrompt assembles the system prompt (board-mod reply prompt + a default
 // instruction) and a transcript of the recent thread for the user message.
-func (p *AIProcessor) buildPrompt(rt *projections.BoardAIRuntime, botName string, thread *Thread, triggering *proto.PostAppendedPayload) (system, prompt string) {
+func (p *AIProcessor) buildPrompt(rt *projections.BoardAIRuntime, botName string, thread *projections.Thread, triggering *proto.PostAppendedPayload) (system, prompt string) {
 	var sys strings.Builder
 	fmt.Fprintf(&sys, "You are %q, an AI participant on the %q board of a community forum. ", botName, thread.Board)
 	sys.WriteString("Write a single concise, helpful forum reply to the most recent message. Do not include a salutation or signature.")

@@ -112,7 +112,7 @@ func (c *Core) StartEmailVerification(userID, email string) error {
 
 // VerifyEmailToken consumes a verification token and marks the account verified.
 // Returns the verified user.
-func (c *Core) VerifyEmailToken(token string) (*User, error) {
+func (c *Core) VerifyEmailToken(token string) (*projections.User, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, ErrVerificationTokenInvalid

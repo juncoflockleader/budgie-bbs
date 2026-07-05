@@ -400,7 +400,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 				authorID = u
 			}
 		}
-		if err := projections.InsertThread(tx, &Thread{
+		if err := projections.InsertThread(tx, &projections.Thread{
 			ID:        evt.ID,
 			Board:     evt.Board,
 			Author:    evt.Author,
@@ -429,7 +429,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 		if pollBlock != nil && cleanBody != sourceBody {
 			postBody = cleanBody
 		}
-		if err := projections.InsertPost(tx, &Post{
+		if err := projections.InsertPost(tx, &projections.Post{
 			ID:             evt.ID,
 			Thread:         evt.Thread,
 			Author:         evt.Author,
