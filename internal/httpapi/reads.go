@@ -1038,7 +1038,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, core.DerivedViewPostSearch)})
 }
 
-func (s *Server) actorCanReadBoard(actor *core.User, boardID string) (bool, error) {
+func (s *Server) actorCanReadBoard(actor *projections.User, boardID string) (bool, error) {
 	info, err := s.core.GetBoardInfo(boardID)
 	if err != nil || info == nil {
 		return false, err
@@ -1046,7 +1046,7 @@ func (s *Server) actorCanReadBoard(actor *core.User, boardID string) (bool, erro
 	return actorCanReadBoardInfo(actor, info), nil
 }
 
-func (s *Server) maskPrivatePresenceLocations(actor *core.User, users []projections.SocialUser) {
+func (s *Server) maskPrivatePresenceLocations(actor *projections.User, users []projections.SocialUser) {
 	for i := range users {
 		if users[i].BoardID == "" {
 			continue
@@ -1067,7 +1067,7 @@ func (s *Server) maskPrivatePresenceLocations(actor *core.User, users []projecti
 	}
 }
 
-func actorCanReadBoardInfo(actor *core.User, info *projections.BoardInfo) bool {
+func actorCanReadBoardInfo(actor *projections.User, info *projections.BoardInfo) bool {
 	// Delegates to the canonical core implementation so every transport (HTTP,
 	// NNTP, SSH/TUI) enforces one read-access rule.
 	return core.ActorCanReadBoard(actor, info)

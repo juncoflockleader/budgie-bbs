@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -260,7 +260,7 @@ func writeSSEEvent(w http.ResponseWriter, evt *proto.Event) error {
 // requested scopes to those the actor is authorized to receive (private boards,
 // other users' account scopes, and moderation scopes are dropped). The result
 // is never nil, so replay/subscribe never degrade to "all events".
-func (s *Server) authorizedScopes(actor *core.User, requested []string) []string {
+func (s *Server) authorizedScopes(actor *projections.User, requested []string) []string {
 	if len(requested) == 0 {
 		return defaultScopes()
 	}

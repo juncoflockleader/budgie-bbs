@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -15,15 +15,15 @@ type contextKey int
 
 const ctxUser contextKey = 1
 
-func userFromCtx(ctx context.Context) *core.User {
-	u, _ := ctx.Value(ctxUser).(*core.User)
+func userFromCtx(ctx context.Context) *projections.User {
+	u, _ := ctx.Value(ctxUser).(*projections.User)
 	return u
 }
 
 // guestPrincipal is the sentinel actor for unauthenticated (guest) browsing.
 // Its empty ID and "guest" role mean board-read checks treat it as a guest and
 // IsAdmin/IsMod are false; per-user data (favorites, unread) comes back empty.
-func guestPrincipal() *core.User { return &core.User{Role: "guest"} }
+func guestPrincipal() *projections.User { return &projections.User{Role: "guest"} }
 
 // optionalAuth is middleware for the public browsing surface (boards, threads,
 // posts, categories). It attaches the valid session user when one is present and
@@ -48,7 +48,7 @@ func (s *Server) optionalAuth(next http.Handler) http.Handler {
 // guest. It mirrors requireAuth's validation (signature, type, revocation,
 // deactivation, registration status) but never writes an error response — any
 // failure simply yields nil.
-func (s *Server) resolveOptionalUser(r *http.Request) *core.User {
+func (s *Server) resolveOptionalUser(r *http.Request) *projections.User {
 	tok, _ := resolveToken(r)
 	if tok == "" {
 		return nil
@@ -163,7 +163,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 // an explicit "sign out everywhere". A token with an `iat` earlier than that
 // cutoff is revoked; a token without `iat` (pre-feature) or a user who has
 // neither changed their password nor revoked sessions is accepted.
-func tokenIssuedAfterRevocation(claims jwt.MapClaims, user *core.User) bool {
+func tokenIssuedAfterRevocation(claims jwt.MapClaims, user *projections.User) bool {
 	cutoff := user.PasswordChangedAt
 	if user.SessionsValidAfter > cutoff {
 		cutoff = user.SessionsValidAfter
