@@ -551,7 +551,7 @@ func (c *Core) enqueueAuthoritativeCommand(ctx context.Context, actor *User, nam
 	}
 	enqueuedAt := nowMS()
 	if strings.TrimSpace(cid) != "" {
-		enqueuedAt = deterministicCommandReceiptEnqueuedAt(partition.Normalize(), actorID, cid, name, payload)
+		enqueuedAt = logmodel.DeterministicCommandReceiptEnqueuedAt(partition, actorID, cid, name, payload)
 	}
 	record, err := c.commandLogAuthoritative.Produce(ctx, CommandLogRecord{
 		Partition:  partition.Normalize(),
@@ -597,7 +597,7 @@ func (c *Core) shadowCommand(ctx context.Context, actor *User, name proto.Comman
 	}
 	enqueuedAt := nowMS()
 	if strings.TrimSpace(cid) != "" {
-		enqueuedAt = deterministicCommandReceiptEnqueuedAt(partition.Normalize(), actorID, cid, name, payload)
+		enqueuedAt = logmodel.DeterministicCommandReceiptEnqueuedAt(partition, actorID, cid, name, payload)
 	}
 	record, err := c.commandLogShadow.Produce(ctx, CommandLogRecord{
 		Partition:  partition.Normalize(),
@@ -615,24 +615,6 @@ func (c *Core) shadowCommand(ctx context.Context, actor *User, name proto.Comman
 		return record.CID
 	}
 	return cid
-}
-
-func deterministicCommandReceiptEnqueuedAt(partition LogPartition, actorID, cid string, command proto.CommandName, payload []byte) int64 {
-	const baseUnixMS = int64(1704067200000) // 2024-01-01T00:00:00Z.
-	const tenYearsMS = uint64(10 * 365 * 24 * 60 * 60 * 1000)
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(partition.Kind))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(partition.Key))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(actorID))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(cid))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(command))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write(payload)
-	return baseUnixMS + int64(h.Sum64()%tenYearsMS) + 1
 }
 
 // ExecuteCommandLogRecord executes a command-log record through the current

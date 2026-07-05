@@ -2,7 +2,15 @@ package logmodel
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+)
+
+const (
+	deterministicCommandReceiptBaseUnixMS = int64(1704067200000) // 2024-01-01T00:00:00Z.
+	deterministicCommandReceiptWindowMS   = uint64(10 * 365 * 24 * 60 * 60 * 1000)
 )
 
 type CommandReceiptKey struct {
@@ -48,4 +56,21 @@ func CommandReceiptMessageID(prefix string, partition Partition, actorID, cid st
 		"." + EncodeSubjectToken(key.Partition.Key) +
 		"." + EncodeSubjectToken(key.ActorID) +
 		"." + EncodeSubjectToken(key.CID)
+}
+
+func DeterministicCommandReceiptEnqueuedAt(partition Partition, actorID, cid string, command proto.CommandName, payload []byte) int64 {
+	partition = partition.Normalize()
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(partition.Kind))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(partition.Key))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(actorID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(cid))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(command))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(payload)
+	return deterministicCommandReceiptBaseUnixMS + int64(h.Sum64()%deterministicCommandReceiptWindowMS) + 1
 }
