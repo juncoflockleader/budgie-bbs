@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -416,7 +417,7 @@ func TestMainMenuRendersConfiguredLayout(t *testing.T) {
 	m := newModel(c, actor, 80, 24, true, localeEN, "", nil, nil, "", false, false, r)
 	m.appearance = &core.SiteAppearance{
 		Tagline: "campus bbs over ssh",
-		MainMenuLayout: &core.TUIMainMenuLayout{Blocks: []core.TUIBlock{
+		MainMenuLayout: &sitemodel.TUIMainMenuLayout{Blocks: []sitemodel.TUIBlock{
 			{Type: "art", Stock: "budgie-bbs", Align: "center"},
 			{Type: "spacer", Lines: 1},
 			{Type: "text", Text: "", Align: "center", Color: "#58a6ff"},

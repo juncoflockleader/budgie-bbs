@@ -17,8 +17,8 @@ type SiteAppearance struct {
 	DefaultTheme  string `json:"defaultTheme"` // dark|dim|light|warm
 	// MainMenuLayout is the admin-configurable SSH/TUI main-menu composition.
 	// Nil means "use the built-in default layout".
-	MainMenuLayout *TUIMainMenuLayout `json:"mainMenuLayout,omitempty"`
-	UpdatedAt      int64              `json:"updatedAt"`
+	MainMenuLayout *sitemodel.TUIMainMenuLayout `json:"mainMenuLayout,omitempty"`
+	UpdatedAt      int64                        `json:"updatedAt"`
 }
 
 // SiteAppearance returns the current site appearance settings (sensible defaults
