@@ -24,6 +24,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	_ "modernc.org/sqlite"
@@ -711,7 +712,7 @@ func commandLogAppendPostPartitionMatchesTarget(command proto.CommandName, paylo
 	}
 	var raw map[string]any
 	_ = json.Unmarshal(payload, &raw)
-	threadID := jsonString(raw["thread"])
+	threadID := logmodel.JSONString(raw["thread"])
 	if threadID == "" {
 		return false
 	}

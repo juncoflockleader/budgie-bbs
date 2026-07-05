@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -184,7 +185,7 @@ func TestCommandPartitionSpecsCoverRoutedCommands(t *testing.T) {
 			t.Fatalf("routed command proto.%s has no constant value in proto/command.go", name)
 		}
 		cmd := proto.CommandName(value)
-		if _, ok := commandPartitionSpecs[cmd]; !ok {
+		if !logmodel.HasCommandPartitionSpec(cmd) {
 			t.Fatalf("missing command partition spec for proto.%s (%q)", name, cmd)
 		}
 	}
