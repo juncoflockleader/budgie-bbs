@@ -2,6 +2,7 @@ package commandrules
 
 import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/postmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -70,21 +71,15 @@ func ResolveBoardMailTargetBoard(boardID, threadBoardID string, hasThread bool) 
 }
 
 func ActorAuthoredBy(actor *projections.User, authorID, authorName string) bool {
-	if actor == nil {
-		return false
-	}
-	if authorID != "" {
-		return authorID == actor.ID
-	}
-	return authorName == actor.Name
+	return postmodel.AuthoredBy(postPolicyActor(actor), authorID, authorName)
 }
 
 func ActorAuthoredByID(actor *projections.User, authorID string) bool {
-	return actor != nil && authorID != "" && authorID == actor.ID
+	return postmodel.AuthoredByID(postPolicyActor(actor), authorID)
 }
 
 func WithinAuthorEditWindow(nowMS, createdAt, windowMS int64) bool {
-	return nowMS-createdAt < windowMS
+	return postmodel.WithinAuthorEditWindow(nowMS, createdAt, windowMS)
 }
 
 func AuthorEditWindowExpiredError() *proto.ErrorDetail {
@@ -92,7 +87,7 @@ func AuthorEditWindowExpiredError() *proto.ErrorDetail {
 }
 
 func RequirePostAuthorEditWindow(canBypassAuthorWindow, isAuthor, withinWindow bool) *proto.ErrorDetail {
-	if canBypassAuthorWindow || (isAuthor && withinWindow) {
+	if postmodel.AuthorEditAllowed(canBypassAuthorWindow, isAuthor, withinWindow) {
 		return nil
 	}
 	return AuthorEditWindowExpiredError()
@@ -193,73 +188,36 @@ func PlanReplyTarget(replyTo string, parent *projections.Post, threadID string, 
 	return plan, nil
 }
 
-type PostFlagPlan struct {
-	Marked                 bool
-	Recommended            bool
-	NoReply                bool
-	TeX                    bool
-	MailBack               bool
-	CuratorChange          bool
-	ThreadModerationChange bool
-	AuthorMetadataChange   bool
-}
+type PostFlagPlan = postmodel.FlagPlan
 
 func PlanPostFlagUpdate(post *projections.Post, payload proto.SetPostFlagPayload) PostFlagPlan {
-	plan := PostFlagPlan{
-		Marked:      post.Marked,
-		Recommended: post.Recommended,
-		NoReply:     post.NoReply,
-		TeX:         post.TeX,
-		MailBack:    post.MailBack,
-	}
-	if payload.Marked != nil {
-		plan.CuratorChange = plan.CuratorChange || *payload.Marked != post.Marked
-		plan.Marked = *payload.Marked
-	}
-	if payload.Recommended != nil {
-		plan.CuratorChange = plan.CuratorChange || *payload.Recommended != post.Recommended
-		plan.Recommended = *payload.Recommended
-	}
-	if payload.NoReply != nil {
-		plan.ThreadModerationChange = *payload.NoReply != post.NoReply
-		plan.NoReply = *payload.NoReply
-	}
-	if payload.TeX != nil {
-		plan.AuthorMetadataChange = plan.AuthorMetadataChange || *payload.TeX != post.TeX
-		plan.TeX = *payload.TeX
-	}
-	if payload.MailBack != nil {
-		plan.AuthorMetadataChange = plan.AuthorMetadataChange || *payload.MailBack != post.MailBack
-		plan.MailBack = *payload.MailBack
-	}
-	return plan
-}
-
-func (plan PostFlagPlan) HasChanges() bool {
-	return plan.CuratorChange || plan.ThreadModerationChange || plan.AuthorMetadataChange
+	return postmodel.PlanFlagUpdate(postPolicyFlags(post), postmodel.FlagPatch{
+		Marked:      payload.Marked,
+		Recommended: payload.Recommended,
+		NoReply:     payload.NoReply,
+		TeX:         payload.TeX,
+		MailBack:    payload.MailBack,
+	})
 }
 
 func RequirePostFlagPermissions(plan PostFlagPlan, actor *projections.User, post *projections.Post, canCurate, canModerateThread bool) *proto.ErrorDetail {
-	if plan.CuratorChange && !canCurate {
+	switch plan.PermissionFailure(postPolicyActor(actor), post.AuthorID, canCurate, canModerateThread) {
+	case postmodel.FlagPermissionCurator:
 		return newErrDetail(proto.ErrForbidden, "board curator permission required", false)
-	}
-	if plan.ThreadModerationChange && !canModerateThread {
+	case postmodel.FlagPermissionThreadModeration:
 		return newErrDetail(proto.ErrForbidden, "board thread moderation permission required", false)
-	}
-	if plan.AuthorMetadataChange && (actor == nil || (actor.ID != post.AuthorID && !canModerateThread)) {
+	case postmodel.FlagPermissionAuthorMetadata:
 		return newErrDetail(proto.ErrForbidden, "post author or board thread moderation permission required", false)
 	}
 	return nil
 }
 
 func PlanPostRedaction(canModeratePosts, isAuthor, withinWindow bool) (string, *proto.ErrorDetail) {
-	if !canModeratePosts && !(isAuthor && withinWindow) {
+	kind, ok := postmodel.RedactionKind(canModeratePosts, isAuthor, withinWindow)
+	if !ok {
 		return "", newErrDetail(proto.ErrForbidden, "insufficient permissions to redact this post", false)
 	}
-	if !canModeratePosts {
-		return "junk", nil
-	}
-	return "recycle", nil
+	return kind, nil
 }
 
 func RequirePostNotRedacted(redacted bool, message string) *proto.ErrorDetail {
@@ -356,6 +314,23 @@ func boardPostPolicySettings(settings *projections.BoardSettings) *boardmodel.Po
 		MailInAllowed:  settings.MailInAllowed,
 		MemberReadMode: settings.MemberReadMode,
 		MemberPostMode: settings.MemberPostMode,
+	}
+}
+
+func postPolicyActor(actor *projections.User) *postmodel.Actor {
+	if actor == nil {
+		return nil
+	}
+	return &postmodel.Actor{ID: actor.ID, Name: actor.Name}
+}
+
+func postPolicyFlags(post *projections.Post) postmodel.Flags {
+	return postmodel.Flags{
+		Marked:      post.Marked,
+		Recommended: post.Recommended,
+		NoReply:     post.NoReply,
+		TeX:         post.TeX,
+		MailBack:    post.MailBack,
 	}
 }
 
