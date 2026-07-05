@@ -69,31 +69,7 @@ type CommandPartitionLister interface {
 	ListCommandPartitions(ctx context.Context, limit int) ([]LogPartition, error)
 }
 
-type CommandPartitionOffset struct {
-	Partition       LogPartition
-	TailOffset      int64
-	CommittedOffset int64
-}
-
-func (offset CommandPartitionOffset) Normalize() CommandPartitionOffset {
-	offset.Partition = offset.Partition.Normalize()
-	if offset.TailOffset < 0 {
-		offset.TailOffset = 0
-	}
-	if offset.CommittedOffset < 0 {
-		offset.CommittedOffset = 0
-	}
-	if offset.CommittedOffset > offset.TailOffset {
-		offset.CommittedOffset = offset.TailOffset
-	}
-	return offset
-}
-
-// Lag returns normalized tail minus committed offset, never below zero.
-func (offset CommandPartitionOffset) Lag() int64 {
-	offset = offset.Normalize()
-	return offset.TailOffset - offset.CommittedOffset
-}
+type CommandPartitionOffset = logmodel.CommandPartitionOffset
 
 // CommandPartitionOffsetLister exposes command-log tail and committed offsets
 // so operators can see writer lag before promoting a partitioned command log.

@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 type CommandLogPartitionIndexer interface {
@@ -125,46 +126,12 @@ func (l *IndexedCommandLog) CommittedOffset(ctx context.Context, partition LogPa
 	return 0, nil
 }
 
-// CommandPartitionsByTailOffset returns the unique partitions in offsets
-// ordered by descending tail offset, then partition kind and key.
 func CommandPartitionsByTailOffset(offsets []CommandPartitionOffset, limit int) []LogPartition {
-	tails := map[LogPartition]int64{}
-	for _, offset := range offsets {
-		partition := offset.Partition.Normalize()
-		if _, ok := tails[partition]; !ok || offset.TailOffset > tails[partition] {
-			tails[partition] = offset.TailOffset
-		}
-	}
-	partitions := make([]LogPartition, 0, len(tails))
-	for partition := range tails {
-		partitions = append(partitions, partition)
-	}
-	sort.Slice(partitions, func(a, b int) bool {
-		if tails[partitions[a]] == tails[partitions[b]] {
-			return partitions[a].Less(partitions[b])
-		}
-		return tails[partitions[a]] > tails[partitions[b]]
-	})
-	if limit > 0 && len(partitions) > limit {
-		partitions = partitions[:limit]
-	}
-	return partitions
+	return logmodel.CommandPartitionsByTailOffset(offsets, limit)
 }
 
-// SortCommandPartitionOffsetsByLag orders offsets by descending uncommitted
-// lag, descending tail offset, then partition kind and key.
 func SortCommandPartitionOffsetsByLag(offsets []CommandPartitionOffset) {
-	sort.SliceStable(offsets, func(a, b int) bool {
-		la := offsets[a].Lag()
-		lb := offsets[b].Lag()
-		if la == lb {
-			if offsets[a].TailOffset == offsets[b].TailOffset {
-				return offsets[a].Partition.Less(offsets[b].Partition)
-			}
-			return offsets[a].TailOffset > offsets[b].TailOffset
-		}
-		return la > lb
-	})
+	logmodel.SortCommandPartitionOffsetsByLag(offsets)
 }
 
 func listCommandPartitionOffsetsWithLimit(ctx context.Context, lister CommandPartitionOffsetLister, limit int) ([]CommandPartitionOffset, bool, error) {
