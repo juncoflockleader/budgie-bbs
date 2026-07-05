@@ -13,7 +13,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-func (h *Handler) setBoardFavorite(actor *User, p proto.SetBoardFavoritePayload) Reply {
+func (h *Handler) setBoardFavorite(actor *projections.User, p proto.SetBoardFavoritePayload) Reply {
 	p, msg := proto.NormalizeSetBoardFavoritePayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -32,7 +32,7 @@ func (h *Handler) setBoardFavorite(actor *User, p proto.SetBoardFavoritePayload)
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) setBoardZap(actor *User, p proto.SetBoardZapPayload) Reply {
+func (h *Handler) setBoardZap(actor *projections.User, p proto.SetBoardZapPayload) Reply {
 	p, msg := proto.NormalizeSetBoardZapPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -55,7 +55,7 @@ func (h *Handler) setBoardZap(actor *User, p proto.SetBoardZapPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) createFavoriteFolder(actor *User, p proto.CreateFavoriteFolderPayload) Reply {
+func (h *Handler) createFavoriteFolder(actor *projections.User, p proto.CreateFavoriteFolderPayload) Reply {
 	p, msg := proto.NormalizeCreateFavoriteFolderPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -70,7 +70,7 @@ func (h *Handler) createFavoriteFolder(actor *User, p proto.CreateFavoriteFolder
 	return Reply{Result: &proto.AckResult{ID: folderID}}
 }
 
-func (h *Handler) updateFavoriteFolder(actor *User, p proto.UpdateFavoriteFolderPayload) Reply {
+func (h *Handler) updateFavoriteFolder(actor *projections.User, p proto.UpdateFavoriteFolderPayload) Reply {
 	p, msg := proto.NormalizeUpdateFavoriteFolderPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -97,7 +97,7 @@ func (h *Handler) updateFavoriteFolder(actor *User, p proto.UpdateFavoriteFolder
 	return Reply{Result: &proto.AckResult{ID: p.Folder}}
 }
 
-func (h *Handler) deleteFavoriteFolder(actor *User, p proto.DeleteFavoriteFolderPayload) Reply {
+func (h *Handler) deleteFavoriteFolder(actor *projections.User, p proto.DeleteFavoriteFolderPayload) Reply {
 	p, msg := proto.NormalizeDeleteFavoriteFolderPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -111,7 +111,7 @@ func (h *Handler) deleteFavoriteFolder(actor *User, p proto.DeleteFavoriteFolder
 	return Reply{Result: &proto.AckResult{ID: p.Folder}}
 }
 
-func (h *Handler) moveBoardFavorite(actor *User, p proto.MoveBoardFavoritePayload) Reply {
+func (h *Handler) moveBoardFavorite(actor *projections.User, p proto.MoveBoardFavoritePayload) Reply {
 	p, msg := proto.NormalizeMoveBoardFavoritePayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -128,7 +128,7 @@ func (h *Handler) moveBoardFavorite(actor *User, p proto.MoveBoardFavoritePayloa
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) importFavoriteTree(actor *User, p proto.ImportFavoriteTreePayload) Reply {
+func (h *Handler) importFavoriteTree(actor *projections.User, p proto.ImportFavoriteTreePayload) Reply {
 	p, msg := proto.NormalizeImportFavoriteTreePayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -144,7 +144,7 @@ func (h *Handler) importFavoriteTree(actor *User, p proto.ImportFavoriteTreePayl
 	return Reply{Result: &proto.AckResult{}}
 }
 
-func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload) Reply {
+func (h *Handler) setBoardSettings(actor *projections.User, p proto.SetBoardSettingsPayload) Reply {
 	p, msg := proto.NormalizeSetBoardSettingsPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -173,7 +173,7 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) setRecommendedBoard(actor *User, p proto.SetRecommendedBoardPayload) Reply {
+func (h *Handler) setRecommendedBoard(actor *projections.User, p proto.SetRecommendedBoardPayload) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -200,7 +200,7 @@ func (h *Handler) setRecommendedBoard(actor *User, p proto.SetRecommendedBoardPa
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayload) Reply {
+func (h *Handler) setBoardModerator(actor *projections.User, p proto.SetBoardModeratorPayload) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -233,7 +233,7 @@ func (h *Handler) setBoardModerator(actor *User, p proto.SetBoardModeratorPayloa
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Reply {
+func (h *Handler) setBoardMember(actor *projections.User, p proto.SetBoardMemberPayload) Reply {
 	p, msg := proto.NormalizeSetBoardMemberPayload(p)
 	if msg != "" && (p.Board == "" || p.User == "") {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -276,7 +276,7 @@ func (h *Handler) setBoardMember(actor *User, p proto.SetBoardMemberPayload) Rep
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) setBoardMemberRequirements(actor *User, p proto.SetBoardMemberRequirementsPayload) Reply {
+func (h *Handler) setBoardMemberRequirements(actor *projections.User, p proto.SetBoardMemberRequirementsPayload) Reply {
 	p, msg := proto.NormalizeSetBoardMemberRequirementsPayload(p)
 	if msg != "" && p.Board == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -296,7 +296,7 @@ func (h *Handler) setBoardMemberRequirements(actor *User, p proto.SetBoardMember
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembershipPayload) Reply {
+func (h *Handler) applyBoardMembership(actor *projections.User, p proto.ApplyBoardMembershipPayload) Reply {
 	p, msg := proto.NormalizeApplyBoardMembershipPayload(p)
 	if msg != "" && p.Board == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -340,7 +340,7 @@ func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembership
 	return Reply{Result: &proto.AckResult{ID: appID}}
 }
 
-func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembershipPayload) Reply {
+func (h *Handler) reviewBoardMembership(actor *projections.User, p proto.ReviewBoardMembershipPayload) Reply {
 	p, msg := proto.NormalizeReviewBoardMembershipTargetPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -382,7 +382,7 @@ func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembersh
 	return Reply{Result: &proto.AckResult{ID: p.Application}}
 }
 
-func (h *Handler) leaveBoardMembership(actor *User, p proto.LeaveBoardMembershipPayload) Reply {
+func (h *Handler) leaveBoardMembership(actor *projections.User, p proto.LeaveBoardMembershipPayload) Reply {
 	p, msg := proto.NormalizeLeaveBoardMembershipPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -399,7 +399,7 @@ func (h *Handler) leaveBoardMembership(actor *User, p proto.LeaveBoardMembership
 	return Reply{Result: &proto.AckResult{ID: p.Board}}
 }
 
-func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
+func (h *Handler) curatePost(actor *projections.User, p proto.CuratePostPayload) Reply {
 	p, msg := proto.NormalizeCuratePostTargetPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -486,7 +486,7 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: entryID, Seq: seq}}
 }
 
-func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
+func (h *Handler) curateThread(actor *projections.User, p proto.CurateThreadPayload) Reply {
 	p, msg := proto.NormalizeCurateThreadTargetPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -563,7 +563,7 @@ func (h *Handler) curateThread(actor *User, p proto.CurateThreadPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: entryID, Seq: seq}}
 }
 
-func (h *Handler) removeDigestEntry(actor *User, p proto.RemoveDigestEntryPayload) Reply {
+func (h *Handler) removeDigestEntry(actor *projections.User, p proto.RemoveDigestEntryPayload) Reply {
 	p, msg := proto.NormalizeRemoveDigestEntryPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -593,7 +593,7 @@ func (h *Handler) removeDigestEntry(actor *User, p proto.RemoveDigestEntryPayloa
 	return Reply{Result: &proto.AckResult{ID: entry.ID, Seq: seq}}
 }
 
-func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayload) Reply {
+func (h *Handler) updateDigestEntry(actor *projections.User, p proto.UpdateDigestEntryPayload) Reply {
 	p, msg := proto.NormalizeUpdateDigestEntryTargetPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -653,7 +653,7 @@ func (h *Handler) updateDigestEntry(actor *User, p proto.UpdateDigestEntryPayloa
 	return Reply{Result: &proto.AckResult{ID: entry.ID, Seq: seq}}
 }
 
-func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayload) Reply {
+func (h *Handler) setDigestEntryBody(actor *projections.User, p proto.SetDigestEntryBodyPayload) Reply {
 	p, msg := proto.NormalizeSetDigestEntryBodyPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -688,7 +688,7 @@ func (h *Handler) setDigestEntryBody(actor *User, p proto.SetDigestEntryBodyPayl
 	return Reply{Result: &proto.AckResult{ID: entry.ID, Seq: seq}}
 }
 
-func (h *Handler) createDigestDirectory(actor *User, p proto.CreateDigestDirectoryPayload) Reply {
+func (h *Handler) createDigestDirectory(actor *projections.User, p proto.CreateDigestDirectoryPayload) Reply {
 	boardID, kind, path, _, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.Path, "")
 	if errReply.Err != nil {
 		return errReply
@@ -715,7 +715,7 @@ func (h *Handler) createDigestDirectory(actor *User, p proto.CreateDigestDirecto
 	return Reply{Result: &proto.AckResult{ID: directoryID, Seq: seq}}
 }
 
-func (h *Handler) moveDigestPath(actor *User, p proto.MoveDigestPathPayload) Reply {
+func (h *Handler) moveDigestPath(actor *projections.User, p proto.MoveDigestPathPayload) Reply {
 	boardID, kind, fromPath, toPath, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.FromPath, p.ToPath)
 	if errReply.Err != nil {
 		return errReply
@@ -752,7 +752,7 @@ func (h *Handler) moveDigestPath(actor *User, p proto.MoveDigestPathPayload) Rep
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count), Seq: seq}}
 }
 
-func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Reply {
+func (h *Handler) copyDigestPath(actor *projections.User, p proto.CopyDigestPathPayload) Reply {
 	boardID, kind, fromPath, toPath, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.FromPath, p.ToPath)
 	if errReply.Err != nil {
 		return errReply
@@ -801,7 +801,7 @@ func (h *Handler) copyDigestPath(actor *User, p proto.CopyDigestPathPayload) Rep
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count), Seq: seq}}
 }
 
-func (h *Handler) deleteDigestPath(actor *User, p proto.DeleteDigestPathPayload) Reply {
+func (h *Handler) deleteDigestPath(actor *projections.User, p proto.DeleteDigestPathPayload) Reply {
 	boardID, kind, path, _, errReply := h.prepareDigestPathMutation(actor, p.Board, p.Kind, p.Path, "")
 	if errReply.Err != nil {
 		return errReply
@@ -829,7 +829,7 @@ func (h *Handler) deleteDigestPath(actor *User, p proto.DeleteDigestPathPayload)
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%s:%s:%d", boardID, kind, count), Seq: seq}}
 }
 
-func (h *Handler) markBoardRead(actor *User, p proto.MarkBoardReadPayload) Reply {
+func (h *Handler) markBoardRead(actor *projections.User, p proto.MarkBoardReadPayload) Reply {
 	p, msg := proto.NormalizeMarkBoardReadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -841,7 +841,7 @@ func (h *Handler) markBoardRead(actor *User, p proto.MarkBoardReadPayload) Reply
 	})
 }
 
-func (h *Handler) restoreBoardRead(actor *User, p proto.RestoreBoardReadPayload) Reply {
+func (h *Handler) restoreBoardRead(actor *projections.User, p proto.RestoreBoardReadPayload) Reply {
 	p, msg := proto.NormalizeRestoreBoardReadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -853,7 +853,7 @@ func (h *Handler) restoreBoardRead(actor *User, p proto.RestoreBoardReadPayload)
 	})
 }
 
-func (h *Handler) markFavoriteFolderRead(actor *User, p proto.MarkFavoriteFolderReadPayload) Reply {
+func (h *Handler) markFavoriteFolderRead(actor *projections.User, p proto.MarkFavoriteFolderReadPayload) Reply {
 	return h.applyReadMarker(p.Folder, func() *proto.ErrorDetail {
 		return commandrules.RequireFavoriteFolder(h.db, actor.ID, p.Folder)
 	}, func() error {
@@ -861,7 +861,7 @@ func (h *Handler) markFavoriteFolderRead(actor *User, p proto.MarkFavoriteFolder
 	})
 }
 
-func (h *Handler) restoreFavoriteFolderRead(actor *User, p proto.RestoreFavoriteFolderReadPayload) Reply {
+func (h *Handler) restoreFavoriteFolderRead(actor *projections.User, p proto.RestoreFavoriteFolderReadPayload) Reply {
 	return h.applyReadMarker(p.Folder, func() *proto.ErrorDetail {
 		return commandrules.RequireFavoriteFolder(h.db, actor.ID, p.Folder)
 	}, func() error {
@@ -869,7 +869,7 @@ func (h *Handler) restoreFavoriteFolderRead(actor *User, p proto.RestoreFavorite
 	})
 }
 
-func (h *Handler) markThreadRead(actor *User, p proto.MarkThreadReadPayload) Reply {
+func (h *Handler) markThreadRead(actor *projections.User, p proto.MarkThreadReadPayload) Reply {
 	p, msg := proto.NormalizeMarkThreadReadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -881,7 +881,7 @@ func (h *Handler) markThreadRead(actor *User, p proto.MarkThreadReadPayload) Rep
 	})
 }
 
-func (h *Handler) restoreThreadRead(actor *User, p proto.RestoreThreadReadPayload) Reply {
+func (h *Handler) restoreThreadRead(actor *projections.User, p proto.RestoreThreadReadPayload) Reply {
 	p, msg := proto.NormalizeRestoreThreadReadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -893,7 +893,7 @@ func (h *Handler) restoreThreadRead(actor *User, p proto.RestoreThreadReadPayloa
 	})
 }
 
-func (h *Handler) markPostRead(actor *User, p proto.MarkPostReadPayload) Reply {
+func (h *Handler) markPostRead(actor *projections.User, p proto.MarkPostReadPayload) Reply {
 	p, msg := proto.NormalizeMarkPostReadPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -909,7 +909,7 @@ func (h *Handler) applyReadMarker(targetID string, require func() *proto.ErrorDe
 	return replyFromCommandResult(commandrules.ApplyReadMarker(targetID, require, update))
 }
 
-func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*commandrules.DigestEntryForCommand, Reply) {
+func (h *Handler) digestEntryForCuration(actor *projections.User, entryID string) (*commandrules.DigestEntryForCommand, Reply) {
 	entry, errDetail := commandrules.DigestEntryForCuration(h.db, actor, entryID)
 	if errDetail != nil {
 		return nil, Reply{Err: errDetail}
@@ -917,7 +917,7 @@ func (h *Handler) digestEntryForCuration(actor *User, entryID string) (*commandr
 	return entry, Reply{}
 }
 
-func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath, toPath string) (string, string, string, string, Reply) {
+func (h *Handler) prepareDigestPathMutation(actor *projections.User, boardID, kind, fromPath, toPath string) (string, string, string, string, Reply) {
 	prepared, errDetail := commandrules.PrepareDigestPathMutation(h.db, actor, boardID, kind, fromPath, toPath)
 	if errDetail != nil {
 		return "", "", "", "", Reply{Err: errDetail}
@@ -925,7 +925,7 @@ func (h *Handler) prepareDigestPathMutation(actor *User, boardID, kind, fromPath
 	return prepared.BoardID, prepared.Kind, prepared.FromPath, prepared.ToPath, Reply{}
 }
 
-func (h *Handler) publishSystemNotice(actor *User, p proto.PublishSystemNoticePayload) Reply {
+func (h *Handler) publishSystemNotice(actor *projections.User, p proto.PublishSystemNoticePayload) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -940,7 +940,7 @@ func (h *Handler) publishSystemNotice(actor *User, p proto.PublishSystemNoticePa
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
-func (h *Handler) appendSystemNoticePost(actor *User, board proto.SystemNoticeBoard, title, noticeBody, source string, ts int64) (string, int64, error) {
+func (h *Handler) appendSystemNoticePost(actor *projections.User, board proto.SystemNoticeBoard, title, noticeBody, source string, ts int64) (string, int64, error) {
 	threadID := newID("notice_thr_")
 	postID := newID("notice_pst_")
 	body := proto.FormatSystemNoticeBody(board, title, noticeBody, source, actor.Name)
@@ -971,7 +971,7 @@ func (h *Handler) appendSystemNoticePost(actor *User, board proto.SystemNoticeBo
 	return threadID, events[len(events)-1].Seq, nil
 }
 
-func (h *Handler) ensureBlessingSystemPost(actor, target *User, blessingID, message string, ts int64) error {
+func (h *Handler) ensureBlessingSystemPost(actor, target *projections.User, blessingID, message string, ts int64) error {
 	threadID, postID := proto.BlessingSystemPostIDs(blessingID)
 	exists, err := projections.ThreadExists(h.db, threadID)
 	if err != nil {
@@ -1010,7 +1010,7 @@ func (h *Handler) ensureBlessingSystemPost(actor, target *User, blessingID, mess
 	return nil
 }
 
-func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshotPayload) Reply {
+func (h *Handler) publishStatsSnapshot(actor *projections.User, p proto.PublishStatsSnapshotPayload) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -1040,7 +1040,7 @@ func (h *Handler) publishStatsSnapshot(actor *User, p proto.PublishStatsSnapshot
 	return Reply{Result: &proto.AckResult{ID: plan.MainThreadID, Seq: seq}}
 }
 
-func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, body string, ts int64) (string, int64, error) {
+func (h *Handler) ensureStatsSystemPost(actor *projections.User, threadID, postID, title, body string, ts int64) (string, int64, error) {
 	tx, err := h.db.Begin()
 	if err != nil {
 		return "", 0, err
@@ -1067,17 +1067,17 @@ func (h *Handler) ensureStatsSystemPost(actor *User, threadID, postID, title, bo
 	return threadID, events[len(events)-1].Seq, nil
 }
 
-func (h *Handler) ensureAnnouncementSystemPost(actor *User, entryID string) error {
+func (h *Handler) ensureAnnouncementSystemPost(actor *projections.User, entryID string) error {
 	mirror, _ := projections.DigestMirrorSystemBoardForKind("announcement")
 	return h.ensureDigestMirrorSystemPost(actor, entryID, mirror)
 }
 
-func (h *Handler) ensureRecommendSystemPost(actor *User, entryID string) error {
+func (h *Handler) ensureRecommendSystemPost(actor *projections.User, entryID string) error {
 	mirror, _ := projections.DigestMirrorSystemBoardForKind("recommended")
 	return h.ensureDigestMirrorSystemPost(actor, entryID, mirror)
 }
 
-func (h *Handler) ensureDigestMirrorSystemPost(actor *User, entryID string, mirror projections.DigestMirrorSystemBoard) error {
+func (h *Handler) ensureDigestMirrorSystemPost(actor *projections.User, entryID string, mirror projections.DigestMirrorSystemBoard) error {
 	export, err := currentRuntime().GetDigestExport(h.db, entryID)
 	if err != nil || export == nil {
 		return err
@@ -1135,7 +1135,7 @@ func (h *Handler) ensureDigestMirrorSystemPost(actor *User, entryID string, mirr
 	return nil
 }
 
-func (h *Handler) ensureBoardRegistrationSystemPost(actor *User, applicationID, status, boardID, userID string) error {
+func (h *Handler) ensureBoardRegistrationSystemPost(actor *projections.User, applicationID, status, boardID, userID string) error {
 	boardIDOut, boardDescription, threadID, postID, ok := proto.BoardRegistrationSystemPlan(status, applicationID)
 	if !ok {
 		return nil
@@ -1197,7 +1197,7 @@ func (h *Handler) ensureBoardRegistrationSystemPost(actor *User, applicationID, 
 	return nil
 }
 
-func (h *Handler) ensureSyssecuritySystemPost(actor *User, title string, lines []string, sourceBoardID string) error {
+func (h *Handler) ensureSyssecuritySystemPost(actor *projections.User, title string, lines []string, sourceBoardID string) error {
 	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, sourceBoardID)
 	if err != nil {
 		return err
