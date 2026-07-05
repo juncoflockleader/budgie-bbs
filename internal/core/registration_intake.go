@@ -5,12 +5,10 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/policy"
 )
 
-type RegistrationIntake = accountmodel.RegistrationIntake
-
 // SaveRegistrationIntake persists the private signup fields and, when accepted,
 // stamps the privacy-policy acceptance time and version. It upserts only the
 // intake-owned columns, leaving registration_email to the verification flow.
-func (c *Core) SaveRegistrationIntake(userID string, in RegistrationIntake) error {
+func (c *Core) SaveRegistrationIntake(userID string, in accountmodel.RegistrationIntake) error {
 	now := nowMS()
 	intake := accountmodel.NormalizeRegistrationIntake(in, now)
 	_, err := qExec(c.DB,

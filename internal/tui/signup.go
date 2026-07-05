@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 )
 
 // signupStep enumerates the steps of the SSH self-registration wizard.
@@ -209,7 +209,7 @@ func (m *model) signupSubmit() tea.Cmd {
 		if err != nil {
 			return signupResultMsg{err: err}
 		}
-		if err := c.SaveRegistrationIntake(u.ID, core.RegistrationIntake{
+		if err := c.SaveRegistrationIntake(u.ID, accountmodel.RegistrationIntake{
 			RealName:       realName,
 			Affiliation:    affiliation,
 			Note:           note,

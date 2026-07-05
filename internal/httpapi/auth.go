@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 )
 
 type registerRequest struct {
@@ -112,7 +113,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "conflict", err.Error(), false)
 		return
 	}
-	if err := s.core.SaveRegistrationIntake(u.ID, core.RegistrationIntake{
+	if err := s.core.SaveRegistrationIntake(u.ID, accountmodel.RegistrationIntake{
 		RealName:       req.RealName,
 		Affiliation:    req.Affiliation,
 		Note:           req.Note,
