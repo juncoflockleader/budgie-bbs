@@ -288,14 +288,14 @@ func nativePartitionKeyOrGlobal(key string) string {
 	return partitionGlobal
 }
 
-func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActorForPartition(record CommandLogRecord, expected LogPartition) (*User, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActorForPartition(record CommandLogRecord, expected LogPartition) (*projections.User, *proto.ErrorDetail) {
 	if errDetail := nativeRequireCommandLogPartition(record, expected); errDetail != nil {
 		return nil, errDetail
 	}
 	return e.loadNativeDecisionActor(record.ActorID)
 }
 
-func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActorForOwnPartition(record CommandLogRecord, kind string) (*User, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActorForOwnPartition(record CommandLogRecord, kind string) (*projections.User, *proto.ErrorDetail) {
 	actor, errDetail := e.loadNativeDecisionActor(record.ActorID)
 	if errDetail != nil {
 		return nil, errDetail
@@ -303,7 +303,7 @@ func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActorForOwnPartitio
 	return actor, nativeRequireCommandLogPartition(record, LogPartition{Kind: kind, Key: actor.ID})
 }
 
-func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionAdminForPartition(record CommandLogRecord, expected LogPartition) (*User, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionAdminForPartition(record CommandLogRecord, expected LogPartition) (*projections.User, *proto.ErrorDetail) {
 	actor, errDetail := e.loadNativeDecisionActorForPartition(record, expected)
 	if errDetail != nil {
 		return nil, errDetail
@@ -535,9 +535,9 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 		return nativeCommandDecision{}, errDetail
 	}
 	effectiveReplyTo := ""
-	var quoteSource *Post
-	var mailBackTarget *Post
-	var parent *Post
+	var quoteSource *projections.Post
+	var mailBackTarget *projections.Post
+	var parent *projections.Post
 	if payload.ReplyTo != "" {
 		parent, err = projections.GetPost(e.core.DB, payload.ReplyTo)
 		if err != nil {
@@ -645,7 +645,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMail(ctx context.Conte
 		return nativeCommandDecision{}, errDetail
 	}
 	boardID := rawBoardID
-	var thread *Thread
+	var thread *projections.Thread
 	threadBoardID := ""
 	if threadID != "" {
 		var err error
@@ -700,7 +700,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMail(ctx context.Conte
 	return e.decideCreateThread(ctx, transformed)
 }
 
-func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record CommandLogRecord, actor *User, thread *Thread, body, contentType string, attachmentsIn []proto.AttachmentPayload) (nativeCommandDecision, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record CommandLogRecord, actor *projections.User, thread *projections.Thread, body, contentType string, attachmentsIn []proto.AttachmentPayload) (nativeCommandDecision, *proto.ErrorDetail) {
 	pollBlock, cleanBody := extractPoll(body)
 	pollStripped := pollBlock != nil && cleanBody != body
 	if pollStripped {
@@ -746,7 +746,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 	if errDetail := commandrules.RequireThreadStarterAcceptsReplies(rootReplyGuards.NoReply, canModerateThread); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	var mailBackTarget *Post
+	var mailBackTarget *projections.Post
 	if rootReplyGuards.MailBack {
 		root, err := projections.ThreadRootPost(e.core.DB, thread.ID)
 		if err != nil {
@@ -2675,7 +2675,7 @@ func (e *CommandLogNativeDecisionExecutor) decideCurateThread(ctx context.Contex
 	return e.decideDigestCuration(record, actor, thread, nil, "thread", thread.ID, payload.Kind, payload.Title, payload.Path, payload.Note)
 }
 
-func (e *CommandLogNativeDecisionExecutor) decideDigestCuration(record CommandLogRecord, actor *User, thread *Thread, post *Post, targetKind, targetID, rawKind, rawTitle, rawPath, rawNote string) (nativeCommandDecision, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) decideDigestCuration(record CommandLogRecord, actor *projections.User, thread *projections.Thread, post *projections.Post, targetKind, targetID, rawKind, rawTitle, rawPath, rawNote string) (nativeCommandDecision, *proto.ErrorDetail) {
 	if actor == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}
@@ -3180,7 +3180,7 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteMailRange(ctx context.Con
 	return nativeDecisionAckEvents(fmt.Sprintf("%d", len(mailIDs)), events), nil
 }
 
-func (e *CommandLogNativeDecisionExecutor) decideSendMailPayload(record CommandLogRecord, actor *User, payload proto.SendMailPayload) (nativeCommandDecision, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) decideSendMailPayload(record CommandLogRecord, actor *projections.User, payload proto.SendMailPayload) (nativeCommandDecision, *proto.ErrorDetail) {
 	recipientRefs, errDetail := commandrules.ExpandMailRecipients(e.core.DB, actor, payload)
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
@@ -3675,7 +3675,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardZap(ctx context.Context
 	return nativeDecisionAckEvent(boardID, event), nil
 }
 
-func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActor(actorID string) (*User, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActor(actorID string) (*projections.User, *proto.ErrorDetail) {
 	actorID = strings.TrimSpace(actorID)
 	if actorID == "" {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "command actor is required", false)
@@ -3691,7 +3691,7 @@ func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActor(actorID strin
 }
 
 type nativeCreateThreadContext struct {
-	Actor            *User
+	Actor            *projections.User
 	Settings         *projections.BoardSettings
 	CanModerateBoard bool
 	SanctionKind     string
@@ -3730,8 +3730,8 @@ func nativeCreateThreadDecisionContext(db *sql.DB, actorID, boardID string) (nat
 }
 
 type nativeAppendPostContext struct {
-	Actor             *User
-	Thread            *Thread
+	Actor             *projections.User
+	Thread            *projections.Thread
 	RootReplyGuards   projections.ThreadRootReplyGuards
 	Settings          *projections.BoardSettings
 	CanModerateBoard  bool
@@ -3835,7 +3835,7 @@ type nativeGeneratedSystemPostSpec struct {
 	BoardMode   nativeGeneratedBoardEventMode
 }
 
-func nativeGeneratedSystemPostEvents(db *sql.DB, record CommandLogRecord, actor *User, spec nativeGeneratedSystemPostSpec, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeGeneratedSystemPostEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, spec nativeGeneratedSystemPostSpec, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if actor == nil {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}
@@ -3901,12 +3901,12 @@ func nativeGeneratedSystemPostPosition(db *sql.DB, boardID string, mode nativeGe
 	return position, nil
 }
 
-func nativeGeneratedBoardCreatedEvent(record CommandLogRecord, actor *User, spec nativeGeneratedSystemPostSpec, position int, ts int64, eventIndex int) EventAppend {
+func nativeGeneratedBoardCreatedEvent(record CommandLogRecord, actor *projections.User, spec nativeGeneratedSystemPostSpec, position int, ts int64, eventIndex int) EventAppend {
 	scopes, payload := commandevents.BoardCreated(spec.BoardID, spec.BoardName, spec.Description, "", position, actor.ID, ts)
 	return nativeEvent(record, eventIndex, proto.EvtBoardCreated, scopes, payload, ts)
 }
 
-func (e *CommandLogNativeDecisionExecutor) loadNativeDigestEntryMutationActor(record CommandLogRecord, entryID string, allowRemoved bool) (*User, projections.DigestPathEntryRow, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) loadNativeDigestEntryMutationActor(record CommandLogRecord, entryID string, allowRemoved bool) (*projections.User, projections.DigestPathEntryRow, *proto.ErrorDetail) {
 	actor, errDetail := e.loadNativeDecisionActor(record.ActorID)
 	if errDetail != nil {
 		return nil, projections.DigestPathEntryRow{}, errDetail
@@ -3951,7 +3951,7 @@ func (e *CommandLogNativeDecisionExecutor) nativeDigestPathMutationBoardKind(rec
 	return boardID, normalizedKind, nil
 }
 
-func (e *CommandLogNativeDecisionExecutor) loadNativeDigestPathMutationActor(record CommandLogRecord, rawBoard, rawKind string) (*User, string, string, *proto.ErrorDetail) {
+func (e *CommandLogNativeDecisionExecutor) loadNativeDigestPathMutationActor(record CommandLogRecord, rawBoard, rawKind string) (*projections.User, string, string, *proto.ErrorDetail) {
 	boardID, kind, errDetail := e.nativeDigestPathMutationBoardKind(record, rawBoard, rawKind)
 	if errDetail != nil {
 		return nil, "", "", errDetail
@@ -3966,7 +3966,7 @@ func (e *CommandLogNativeDecisionExecutor) loadNativeDigestPathMutationActor(rec
 	return actor, boardID, kind, nil
 }
 
-func (e *CommandLogNativeDecisionExecutor) nativeRequireDigestPathMutation(actor *User, boardID, kind string) *proto.ErrorDetail {
+func (e *CommandLogNativeDecisionExecutor) nativeRequireDigestPathMutation(actor *projections.User, boardID, kind string) *proto.ErrorDetail {
 	settings, err := projections.GetBoardSettings(e.core.DB, boardID)
 	if err != nil {
 		return nativeDecisionErr("internal_error", err.Error(), true)
@@ -3999,7 +3999,7 @@ func nativeRequireBoardMembershipAdmission(c *Core, boardID, userID string, requ
 	return commandrules.RequireBoardMembershipAdmission(db, counterStore, boardID, userID, requirements)
 }
 
-func nativeBoardMembershipApplicationEvents(db *sql.DB, record CommandLogRecord, actor *User, applicationID, boardID, userID, note string, autoApprove bool, ts int64) ([]EventAppend, *proto.ErrorDetail) {
+func nativeBoardMembershipApplicationEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, applicationID, boardID, userID, note string, autoApprove bool, ts int64) ([]EventAppend, *proto.ErrorDetail) {
 	scopes, payload := commandevents.BoardMemberApplicationSubmitted(applicationID, boardID, userID, note, ts)
 	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardMemberApplicationSubmitted, scopes, payload, ts)}
 	if !autoApprove {
@@ -4015,7 +4015,7 @@ func nativeBoardMembershipApplicationEvents(db *sql.DB, record CommandLogRecord,
 	return events, nil
 }
 
-func nativeBoardMembershipReviewEvents(db *sql.DB, record CommandLogRecord, actor *User, applicationID, boardID, userID, status, title, note string, ts int64) ([]EventAppend, *proto.ErrorDetail) {
+func nativeBoardMembershipReviewEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, applicationID, boardID, userID, status, title, note string, ts int64) ([]EventAppend, *proto.ErrorDetail) {
 	scopes, payload := commandevents.BoardMemberApplicationReviewed(applicationID, boardID, userID, status, title, actor.ID, note, ts)
 	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardMemberApplicationReviewed, scopes, payload, ts)}
 	registryEvents, errDetail := nativeBoardRegistrationSystemLogEvents(db, record, actor, applicationID, status, boardID, userID, ts, 1)
@@ -4026,7 +4026,7 @@ func nativeBoardMembershipReviewEvents(db *sql.DB, record CommandLogRecord, acto
 	return events, nil
 }
 
-func nativeBoardRegistrationSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *User, applicationID, status, boardID, userID string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeBoardRegistrationSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, applicationID, status, boardID, userID string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	boardIDOut, boardDescription, threadID, postID, ok := proto.BoardRegistrationSystemPlan(status, applicationID)
 	if !ok {
 		return nil, nil
@@ -4070,7 +4070,7 @@ func nativeBoardRegistrationSystemLogEvents(db *sql.DB, record CommandLogRecord,
 	}, ts, startIndex)
 }
 
-func nativeSyssecuritySystemLogEvents(db *sql.DB, record CommandLogRecord, actor *User, title string, lines []string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeSyssecuritySystemLogEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, title string, lines []string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if actor == nil {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}
@@ -4090,7 +4090,7 @@ func nativeSyssecuritySystemLogEvents(db *sql.DB, record CommandLogRecord, actor
 	}, ts, startIndex)
 }
 
-func nativeSysmailSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *User, mailID, subject, mailBody string, recipientCount int, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeSysmailSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, mailID, subject, mailBody string, recipientCount int, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if actor == nil {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}
@@ -4118,7 +4118,7 @@ func nativeSysmailSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *Us
 	}, ts, startIndex)
 }
 
-func nativeBlessingSystemLogEvents(db *sql.DB, record CommandLogRecord, actor, target *User, blessingID, message string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeBlessingSystemLogEvents(db *sql.DB, record CommandLogRecord, actor, target *projections.User, blessingID, message string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if actor == nil {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}
@@ -4148,15 +4148,15 @@ func nativeBlessingSystemLogEvents(db *sql.DB, record CommandLogRecord, actor, t
 	}, ts, startIndex)
 }
 
-func nativeDenyPostSystemLogEvents(db *sql.DB, record CommandLogRecord, actor, target *User, sourceBoardID, sourceBoardName, kind, reason string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeDenyPostSystemLogEvents(db *sql.DB, record CommandLogRecord, actor, target *projections.User, sourceBoardID, sourceBoardName, kind, reason string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	return nativeSanctionSystemLogEvents(db, record, proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardDescription, actor, target, sourceBoardID, sourceBoardName, kind, reason, "Board posting denied", ts, startIndex)
 }
 
-func nativeUndenyPostSystemLogEvents(db *sql.DB, record CommandLogRecord, actor, target *User, sourceBoardID, sourceBoardName, kind, reason string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeUndenyPostSystemLogEvents(db *sql.DB, record CommandLogRecord, actor, target *projections.User, sourceBoardID, sourceBoardName, kind, reason string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	return nativeSanctionSystemLogEvents(db, record, proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardDescription, actor, target, sourceBoardID, sourceBoardName, kind, reason, "Board posting restored", ts, startIndex)
 }
 
-func nativeSanctionSystemLogEvents(db *sql.DB, record CommandLogRecord, systemBoardID, systemBoardName, systemBoardDescription string, actor, target *User, sourceBoardID, sourceBoardName, kind, reason, action string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeSanctionSystemLogEvents(db *sql.DB, record CommandLogRecord, systemBoardID, systemBoardName, systemBoardDescription string, actor, target *projections.User, sourceBoardID, sourceBoardName, kind, reason, action string, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if actor == nil {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}
@@ -4187,7 +4187,7 @@ func nativeSanctionSystemLogEvents(db *sql.DB, record CommandLogRecord, systemBo
 	}, ts, startIndex)
 }
 
-func nativeModerationSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *User, action, reviewID, postID, threadID, boardID string, publicBoard bool, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeModerationSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, action, reviewID, postID, threadID, boardID string, publicBoard bool, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if !publicBoard {
 		return nil, nil
 	}
@@ -4209,7 +4209,7 @@ func nativeModerationSystemLogEvents(db *sql.DB, record CommandLogRecord, actor 
 	}, ts, startIndex)
 }
 
-func nativeContentFilterReviewEvents(db *sql.DB, record CommandLogRecord, actor *User, publicAuthor string, filter *projections.ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeContentFilterReviewEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, publicAuthor string, filter *projections.ContentFilter, postID, threadID, boardID string, publicBoard bool, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if filter == nil {
 		return nil, nil
 	}
@@ -4259,7 +4259,7 @@ func nativeContentFilterReviewEvents(db *sql.DB, record CommandLogRecord, actor 
 	return events, nil
 }
 
-func nativeDigestEntryForCuration(db *sql.DB, actor *User, entryID string) (projections.DigestPathEntryRow, *proto.ErrorDetail) {
+func nativeDigestEntryForCuration(db *sql.DB, actor *projections.User, entryID string) (projections.DigestPathEntryRow, *proto.ErrorDetail) {
 	entry, found, err := projections.DigestPathEntryByID(db, entryID)
 	if err != nil {
 		return entry, nativeDecisionErr("internal_error", err.Error(), true)
@@ -4320,7 +4320,7 @@ func nativeStableDecisionIDSet(prefix string, record CommandLogRecord, count int
 	return ids
 }
 
-func nativeDigestMirrorSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *User, entryID string, export *projections.DigestExport, mirror projections.DigestMirrorSystemBoard, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeDigestMirrorSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *projections.User, entryID string, export *projections.DigestExport, mirror projections.DigestMirrorSystemBoard, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if actor == nil {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}
@@ -4408,7 +4408,7 @@ func nativeValidateStagedAttachmentBlob(db *sql.DB, expectedKind, stagedBlobID, 
 	return nil
 }
 
-func nativeArticleMailBackEvent(db *sql.DB, record CommandLogRecord, actor *User, authorName, authorID string, thread *Thread, target *Post, replyPostID, replyBody string, ts int64, eventIndex int) (*EventAppend, *proto.ErrorDetail) {
+func nativeArticleMailBackEvent(db *sql.DB, record CommandLogRecord, actor *projections.User, authorName, authorID string, thread *projections.Thread, target *projections.Post, replyPostID, replyBody string, ts int64, eventIndex int) (*EventAppend, *proto.ErrorDetail) {
 	if actor == nil || thread == nil || target == nil || !target.MailBack || target.Redacted {
 		return nil, nil
 	}
