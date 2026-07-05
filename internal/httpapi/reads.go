@@ -28,7 +28,7 @@ func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetCommunityStats(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewCommunityStats) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewCommunityStats) {
 		return
 	}
 	stats, err := s.core.GetCommunityStats()
@@ -38,12 +38,12 @@ func (s *Server) handleGetCommunityStats(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, communityStatsResponse{
 		CommunityStats: stats,
-		Meta:           s.projectionMetaForView(w, core.DerivedViewCommunityStats),
+		Meta:           s.projectionMetaForView(w, projections.DerivedViewCommunityStats),
 	})
 }
 
 func (s *Server) handleListCommunityStatHistory(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewCommunityStatHistory) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewCommunityStatHistory) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -52,7 +52,7 @@ func (s *Server) handleListCommunityStatHistory(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"days": history, "meta": s.projectionMetaForView(w, core.DerivedViewCommunityStatHistory)})
+	writeJSON(w, http.StatusOK, map[string]any{"days": history, "meta": s.projectionMetaForView(w, projections.DerivedViewCommunityStatHistory)})
 }
 
 func (s *Server) handleGetAccountRegistrationSettings(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +103,7 @@ func (s *Server) handleListPasswordRecoveryRequests(w http.ResponseWriter, r *ht
 
 func (s *Server) handleListBoardRankings(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewBoardRankings) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewBoardRankings) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -112,7 +112,7 @@ func (s *Server) handleListBoardRankings(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "meta": s.projectionMetaForView(w, core.DerivedViewBoardRankings)})
+	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "meta": s.projectionMetaForView(w, projections.DerivedViewBoardRankings)})
 }
 
 func (s *Server) handleListRecommendedBoards(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +141,7 @@ func (s *Server) handleListThreadRankings(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewThreadRankings) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewThreadRankings) {
 		return
 	}
 	threads, err := s.core.ListThreadRankings(actor, boardID, limit, offset)
@@ -149,12 +149,12 @@ func (s *Server) handleListThreadRankings(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"threads": threads, "meta": s.projectionMetaForView(w, core.DerivedViewThreadRankings)})
+	writeJSON(w, http.StatusOK, map[string]any{"threads": threads, "meta": s.projectionMetaForView(w, projections.DerivedViewThreadRankings)})
 }
 
 func (s *Server) handleListReplyRankings(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewReplyRankings) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewReplyRankings) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -163,11 +163,11 @@ func (s *Server) handleListReplyRankings(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"replies": replies, "meta": s.projectionMetaForView(w, core.DerivedViewReplyRankings)})
+	writeJSON(w, http.StatusOK, map[string]any{"replies": replies, "meta": s.projectionMetaForView(w, projections.DerivedViewReplyRankings)})
 }
 
 func (s *Server) handleListUserRankings(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewUserRankings) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewUserRankings) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -176,11 +176,11 @@ func (s *Server) handleListUserRankings(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users, "meta": s.projectionMetaForView(w, core.DerivedViewUserRankings)})
+	writeJSON(w, http.StatusOK, map[string]any{"users": users, "meta": s.projectionMetaForView(w, projections.DerivedViewUserRankings)})
 }
 
 func (s *Server) handleListBlessingRankings(w http.ResponseWriter, r *http.Request) {
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewBlessingRankings) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewBlessingRankings) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -189,12 +189,12 @@ func (s *Server) handleListBlessingRankings(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"blessings": blessings, "meta": s.projectionMetaForView(w, core.DerivedViewBlessingRankings)})
+	writeJSON(w, http.StatusOK, map[string]any{"blessings": blessings, "meta": s.projectionMetaForView(w, projections.DerivedViewBlessingRankings)})
 }
 
 func (s *Server) handleListArchiveRankings(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewArchiveRankings) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewArchiveRankings) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -203,7 +203,7 @@ func (s *Server) handleListArchiveRankings(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"archives": archives, "meta": s.projectionMetaForView(w, core.DerivedViewArchiveRankings)})
+	writeJSON(w, http.StatusOK, map[string]any{"archives": archives, "meta": s.projectionMetaForView(w, projections.DerivedViewArchiveRankings)})
 }
 
 func (s *Server) handleGetBoard(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +375,7 @@ func (s *Server) handleListDigestEntries(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusForbidden, proto.ErrForbidden, "board members only", false)
 		return
 	}
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewDigestSearch) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewDigestSearch) {
 		return
 	}
 	entries, err := s.core.ListDigestEntries(boardID, kind, path, limit, offset)
@@ -383,7 +383,7 @@ func (s *Server) handleListDigestEntries(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, core.DerivedViewDigestSearch)})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, projections.DerivedViewDigestSearch)})
 }
 
 func (s *Server) handleListDigestPathTree(w http.ResponseWriter, r *http.Request) {
@@ -417,7 +417,7 @@ func (s *Server) handleListSiteDigestEntries(w http.ResponseWriter, r *http.Requ
 	kind := r.URL.Query().Get("kind")
 	path := r.URL.Query().Get("path")
 
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewDigestSearch) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewDigestSearch) {
 		return
 	}
 	entries, err := s.core.ListSiteDigestEntries(actor, kind, path, limit, offset)
@@ -425,7 +425,7 @@ func (s *Server) handleListSiteDigestEntries(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, core.DerivedViewDigestSearch)})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, projections.DerivedViewDigestSearch)})
 }
 
 func (s *Server) handleListSiteAnnouncements(w http.ResponseWriter, r *http.Request) {
@@ -433,7 +433,7 @@ func (s *Server) handleListSiteAnnouncements(w http.ResponseWriter, r *http.Requ
 	limit, offset := paginate(r)
 	path := r.URL.Query().Get("path")
 
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewDigestSearch) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewDigestSearch) {
 		return
 	}
 	entries, err := s.core.ListSiteDigestEntries(actor, "announcement", path, limit, offset)
@@ -441,7 +441,7 @@ func (s *Server) handleListSiteAnnouncements(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, core.DerivedViewDigestSearch)})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, projections.DerivedViewDigestSearch)})
 }
 
 func (s *Server) handleSearchDigestEntries(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +462,7 @@ func (s *Server) handleSearchDigestEntries(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewDigestSearch) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewDigestSearch) {
 		return
 	}
 	entries, err := s.core.SearchDigestEntries(actor, boardID, r.URL.Query().Get("kind"), r.URL.Query().Get("path"), q, limit, offset)
@@ -470,7 +470,7 @@ func (s *Server) handleSearchDigestEntries(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, core.DerivedViewDigestSearch)})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries, "meta": s.projectionMetaForView(w, projections.DerivedViewDigestSearch)})
 }
 
 func (s *Server) handleListMail(w http.ResponseWriter, r *http.Request) {
@@ -764,7 +764,7 @@ func (s *Server) handleExportFavoriteTree(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleListBoardSummaries(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewBoardSummaries) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewBoardSummaries) {
 		return
 	}
 	boards, err := s.core.ListBoardSummaries(actor.ID, false, boardSummaryOptions(r))
@@ -772,12 +772,12 @@ func (s *Server) handleListBoardSummaries(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "meta": s.projectionMetaForView(w, core.DerivedViewBoardSummaries)})
+	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "meta": s.projectionMetaForView(w, projections.DerivedViewBoardSummaries)})
 }
 
 func (s *Server) handleListUnreadBoards(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewBoardSummaries) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewBoardSummaries) {
 		return
 	}
 	boards, err := s.core.ListBoardSummaries(actor.ID, true, boardSummaryOptions(r))
@@ -785,12 +785,12 @@ func (s *Server) handleListUnreadBoards(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "meta": s.projectionMetaForView(w, core.DerivedViewBoardSummaries)})
+	writeJSON(w, http.StatusOK, map[string]any{"boards": boards, "meta": s.projectionMetaForView(w, projections.DerivedViewBoardSummaries)})
 }
 
 func (s *Server) handleListResidentBoardPosts(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewResidentFeed) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewResidentFeed) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -799,12 +799,12 @@ func (s *Server) handleListResidentBoardPosts(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, core.DerivedViewResidentFeed)})
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, projections.DerivedViewResidentFeed)})
 }
 
 func (s *Server) handleListLatestFeedPosts(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewLatestFeed) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewLatestFeed) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -813,7 +813,7 @@ func (s *Server) handleListLatestFeedPosts(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, core.DerivedViewLatestFeed)})
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, projections.DerivedViewLatestFeed)})
 }
 
 func boardSummaryOptions(r *http.Request) projections.BoardSummaryOptions {
@@ -877,7 +877,7 @@ func (s *Server) handleListThreads(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListUnreadThreads(w http.ResponseWriter, r *http.Request) {
 	actor := userFromCtx(r.Context())
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewUnreadThreads) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewUnreadThreads) {
 		return
 	}
 	limit, offset := paginate(r)
@@ -888,7 +888,7 @@ func (s *Server) handleListUnreadThreads(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"threads": threads, "meta": s.projectionMetaForView(w, core.DerivedViewUnreadThreads)})
+	writeJSON(w, http.StatusOK, map[string]any{"threads": threads, "meta": s.projectionMetaForView(w, projections.DerivedViewUnreadThreads)})
 }
 
 func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
@@ -1023,7 +1023,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !s.ensureProjectionFreshForView(w, r, core.DerivedViewPostSearch) {
+	if !s.ensureProjectionFreshForView(w, r, projections.DerivedViewPostSearch) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -1035,7 +1035,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error(), true)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, core.DerivedViewPostSearch)})
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, projections.DerivedViewPostSearch)})
 }
 
 func (s *Server) actorCanReadBoard(actor *projections.User, boardID string) (bool, error) {

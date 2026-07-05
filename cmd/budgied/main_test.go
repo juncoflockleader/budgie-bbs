@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/natsconn"
@@ -427,32 +428,32 @@ func TestApplyDerivedViewProcessorSelectionEnablesGroups(t *testing.T) {
 	views, err := applyDerivedViewProcessorSelection(" search, feeds, rankings ",
 		derivedViewProcessorSpecialFlags{asyncPostSearch: &asyncPostSearch},
 		[]derivedViewProcessorSpec{
-			{view: core.DerivedViewPostSearch, enabled: &postSearch},
-			{view: core.DerivedViewDigestSearch, enabled: &digestSearch},
-			{view: core.DerivedViewLatestFeed, enabled: &latestFeed},
-			{view: core.DerivedViewResidentFeed, enabled: &residentFeed},
-			{view: core.DerivedViewBoardRankings, enabled: &boardRankings},
-			{view: core.DerivedViewThreadRankings, enabled: &threadRankings},
-			{view: core.DerivedViewReplyRankings, enabled: &replyRankings},
-			{view: core.DerivedViewUserRankings, enabled: &userRankings},
-			{view: core.DerivedViewBlessingRankings, enabled: &blessingRankings},
-			{view: core.DerivedViewArchiveRankings, enabled: &archiveRankings},
+			{view: projections.DerivedViewPostSearch, enabled: &postSearch},
+			{view: projections.DerivedViewDigestSearch, enabled: &digestSearch},
+			{view: projections.DerivedViewLatestFeed, enabled: &latestFeed},
+			{view: projections.DerivedViewResidentFeed, enabled: &residentFeed},
+			{view: projections.DerivedViewBoardRankings, enabled: &boardRankings},
+			{view: projections.DerivedViewThreadRankings, enabled: &threadRankings},
+			{view: projections.DerivedViewReplyRankings, enabled: &replyRankings},
+			{view: projections.DerivedViewUserRankings, enabled: &userRankings},
+			{view: projections.DerivedViewBlessingRankings, enabled: &blessingRankings},
+			{view: projections.DerivedViewArchiveRankings, enabled: &archiveRankings},
 		},
 	)
 	if err != nil {
 		t.Fatalf("apply derived view processor selection: %v", err)
 	}
 	for _, want := range []string{
-		core.DerivedViewPostSearch,
-		core.DerivedViewDigestSearch,
-		core.DerivedViewLatestFeed,
-		core.DerivedViewResidentFeed,
-		core.DerivedViewBoardRankings,
-		core.DerivedViewThreadRankings,
-		core.DerivedViewReplyRankings,
-		core.DerivedViewUserRankings,
-		core.DerivedViewBlessingRankings,
-		core.DerivedViewArchiveRankings,
+		projections.DerivedViewPostSearch,
+		projections.DerivedViewDigestSearch,
+		projections.DerivedViewLatestFeed,
+		projections.DerivedViewResidentFeed,
+		projections.DerivedViewBoardRankings,
+		projections.DerivedViewThreadRankings,
+		projections.DerivedViewReplyRankings,
+		projections.DerivedViewUserRankings,
+		projections.DerivedViewBlessingRankings,
+		projections.DerivedViewArchiveRankings,
 	} {
 		if !slices.Contains(views, want) {
 			t.Fatalf("resolved views %v missing %s", views, want)
@@ -471,12 +472,12 @@ func TestApplyDerivedViewProcessorSelectionEnablesCommunityHistory(t *testing.T)
 
 	views, err := applyDerivedViewProcessorSelection("community",
 		derivedViewProcessorSpecialFlags{asyncCommunityStatHistory: &asyncCommunityStatHistory},
-		[]derivedViewProcessorSpec{{view: core.DerivedViewCommunityStats, enabled: &communityStats}},
+		[]derivedViewProcessorSpec{{view: projections.DerivedViewCommunityStats, enabled: &communityStats}},
 	)
 	if err != nil {
 		t.Fatalf("apply community processors: %v", err)
 	}
-	if !slices.Contains(views, core.DerivedViewCommunityStats) || !slices.Contains(views, core.DerivedViewCommunityStatHistory) {
+	if !slices.Contains(views, projections.DerivedViewCommunityStats) || !slices.Contains(views, projections.DerivedViewCommunityStatHistory) {
 		t.Fatalf("community processor views = %v, want stats and stat-history", views)
 	}
 	if !communityStats || !asyncCommunityStatHistory {
@@ -505,13 +506,13 @@ func TestMissingDerivedViewProcessorWorkerRoleUsesRegistryOrder(t *testing.T) {
 func TestDerivedViewWatermarkOwnershipConflictUsesRegistry(t *testing.T) {
 	var digestSearch bool
 	processors := []derivedViewProcessorSpec{{
-		view:     core.DerivedViewDigestSearch,
+		view:     projections.DerivedViewDigestSearch,
 		label:    "digest search",
 		flagName: "digest-search-processor",
 		enabled:  &digestSearch,
 	}}
 	conflict, ok := derivedViewWatermarkOwnershipConflict(
-		[]string{core.DerivedViewDigestSearch},
+		[]string{projections.DerivedViewDigestSearch},
 		derivedViewProcessorSpecialFlags{},
 		processors,
 		"sql-fts",
@@ -521,7 +522,7 @@ func TestDerivedViewWatermarkOwnershipConflictUsesRegistry(t *testing.T) {
 	}
 	digestSearch = true
 	conflict, ok = derivedViewWatermarkOwnershipConflict(
-		[]string{core.DerivedViewDigestSearch},
+		[]string{projections.DerivedViewDigestSearch},
 		derivedViewProcessorSpecialFlags{},
 		processors,
 		"sql-fts",
@@ -534,7 +535,7 @@ func TestDerivedViewWatermarkOwnershipConflictUsesRegistry(t *testing.T) {
 	}
 
 	conflict, ok = derivedViewWatermarkOwnershipConflict(
-		[]string{core.DerivedViewPostSearch},
+		[]string{projections.DerivedViewPostSearch},
 		derivedViewProcessorSpecialFlags{},
 		nil,
 		"meilisearch",

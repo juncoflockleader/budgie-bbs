@@ -46,7 +46,7 @@ func (c *Core) StartThreadRankingsProcessor(ctx context.Context, interval time.D
 
 func (c *Core) ProcessThreadRankingsOnce(batchSize int) (ThreadRankingsProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:    DerivedViewThreadRankings,
+		view:    projections.DerivedViewThreadRankings,
 		rebuild: projections.RebuildThreadRankingStats,
 	})
 }

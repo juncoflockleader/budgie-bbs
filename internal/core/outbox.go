@@ -247,7 +247,7 @@ func processCommunityStatSnapshotJob(db *sql.DB, p communityStatSnapshotJob) err
 	if err != nil {
 		return err
 	}
-	return projections.RecordDerivedViewApplied(db, DerivedViewCommunityStatHistory, head, nowMS())
+	return projections.RecordDerivedViewApplied(db, projections.DerivedViewCommunityStatHistory, head, nowMS())
 }
 
 func processPostCommittedJob(db *sql.DB, bus Bus, p postCommittedJob) error {

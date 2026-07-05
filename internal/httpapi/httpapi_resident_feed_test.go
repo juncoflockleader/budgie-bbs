@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 func TestHTTPResidentBoardFeed(t *testing.T) {
@@ -85,7 +85,7 @@ func TestHTTPResidentBoardFeed(t *testing.T) {
 	if staleApplied < 0 {
 		staleApplied = 0
 	}
-	if err := c.RecordDerivedViewApplied(core.DerivedViewResidentFeed, staleApplied); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewResidentFeed, staleApplied); err != nil {
 		t.Fatalf("record stale resident feed watermark: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestHTTPResidentBoardFeed(t *testing.T) {
 	if feedRec.Code != http.StatusOK {
 		t.Fatalf("resident feed status: %d body=%s", feedRec.Code, feedRec.Body.String())
 	}
-	assertProjectionHeaders(t, feedRec, core.DerivedViewResidentFeed)
+	assertProjectionHeaders(t, feedRec, projections.DerivedViewResidentFeed)
 	feed := postsResponse{}
 	if err := json.Unmarshal(feedRec.Body.Bytes(), &feed); err != nil {
 		t.Fatalf("decode resident feed: %v", err)

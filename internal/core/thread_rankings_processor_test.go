@@ -92,7 +92,7 @@ func TestThreadRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewThreadRankings, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewThreadRankings, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessThreadRankingsOnce(100)
@@ -192,11 +192,11 @@ func TestThreadRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if rows := threadRankingStatsRows(t, c); rows != 0 {
 		t.Fatalf("thread ranking stats rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewThreadRankings}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewThreadRankings}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog rankings.threads: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewThreadRankings {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewThreadRankings {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := threadRankingStatsRows(t, c); rows < 4 {

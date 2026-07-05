@@ -48,7 +48,7 @@ func (c *Core) StartResidentFeedProcessor(ctx context.Context, interval time.Dur
 
 func (c *Core) ProcessResidentFeedOnce(batchSize int) (ResidentFeedProcessResult, error) {
 	return c.processFeedMaterializationOnce(batchSize, feedMaterializationSpec{
-		view:      DerivedViewResidentFeed,
+		view:      projections.DerivedViewResidentFeed,
 		errPrefix: "resident feed",
 		apply:     applyResidentFeedEvent,
 	})

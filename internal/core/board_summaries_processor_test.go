@@ -63,7 +63,7 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewBoardSummaries, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardSummaries, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessBoardSummariesOnce(100)
@@ -130,11 +130,11 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 	if rows := boardSummaryStatsRows(t, c); rows != 0 {
 		t.Fatalf("board summary stats rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewBoardSummaries}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewBoardSummaries}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog summaries.boards: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewBoardSummaries {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewBoardSummaries {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	repaired, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "posts"})

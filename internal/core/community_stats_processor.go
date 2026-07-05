@@ -46,7 +46,7 @@ func (c *Core) StartCommunityStatsProcessor(ctx context.Context, interval time.D
 
 func (c *Core) ProcessCommunityStatsOnce(batchSize int) (CommunityStatsProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:    DerivedViewCommunityStats,
+		view:    projections.DerivedViewCommunityStats,
 		rebuild: projections.RebuildCommunityStatsSnapshot,
 	})
 }

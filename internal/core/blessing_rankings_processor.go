@@ -46,7 +46,7 @@ func (c *Core) StartBlessingRankingsProcessor(ctx context.Context, interval time
 
 func (c *Core) ProcessBlessingRankingsOnce(batchSize int) (BlessingRankingsProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:     DerivedViewBlessingRankings,
+		view:     projections.DerivedViewBlessingRankings,
 		rebuild:  projections.RebuildBlessingRankingStats,
 		rowCount: projections.BlessingRankingStatsRowCount,
 	})

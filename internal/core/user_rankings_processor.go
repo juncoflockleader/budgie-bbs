@@ -46,7 +46,7 @@ func (c *Core) StartUserRankingsProcessor(ctx context.Context, interval time.Dur
 
 func (c *Core) ProcessUserRankingsOnce(batchSize int) (UserRankingsProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:    DerivedViewUserRankings,
+		view:    projections.DerivedViewUserRankings,
 		rebuild: projections.RebuildUserRankingStats,
 	})
 }

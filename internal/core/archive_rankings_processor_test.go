@@ -114,7 +114,7 @@ func TestArchiveRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewArchiveRankings, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewArchiveRankings, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessArchiveRankingsOnce(100)
@@ -188,11 +188,11 @@ func TestArchiveRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if rows := archiveRankingStatsRows(t, c); rows != 0 {
 		t.Fatalf("archive ranking stats rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewArchiveRankings}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewArchiveRankings}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog rankings.archives: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewArchiveRankings {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewArchiveRankings {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := archiveRankingStatsRows(t, c); rows < 4 {

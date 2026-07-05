@@ -62,7 +62,7 @@ func TestUnreadThreadSummariesProcessorMaterializesAndRebuildsSummaries(t *testi
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewUnreadThreads, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewUnreadThreads, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessUnreadThreadSummariesOnce(100)
@@ -124,11 +124,11 @@ func TestUnreadThreadSummariesProcessorMaterializesAndRebuildsSummaries(t *testi
 	if rows := unreadThreadSummaryStatsRows(t, c); rows != 0 {
 		t.Fatalf("unread thread summary stats rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewUnreadThreads}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewUnreadThreads}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog summaries.unread_threads: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewUnreadThreads {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewUnreadThreads {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	repaired, err := c.ListUnreadThreadSummaries(alice, false, "", 10, 0)

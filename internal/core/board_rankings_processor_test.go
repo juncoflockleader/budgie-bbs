@@ -84,7 +84,7 @@ func TestBoardRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewBoardRankings, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardRankings, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessBoardRankingsOnce(100)
@@ -144,11 +144,11 @@ func TestBoardRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if rows := boardRankingStatsRows(t, c); rows != 0 {
 		t.Fatalf("board ranking stats rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewBoardRankings}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewBoardRankings}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog rankings.boards: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewBoardRankings {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewBoardRankings {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := boardRankingStatsRows(t, c); rows < 4 {

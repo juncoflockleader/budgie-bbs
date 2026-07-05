@@ -46,7 +46,7 @@ func (c *Core) StartReplyRankingsProcessor(ctx context.Context, interval time.Du
 
 func (c *Core) ProcessReplyRankingsOnce(batchSize int) (ReplyRankingsProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:     DerivedViewReplyRankings,
+		view:     projections.DerivedViewReplyRankings,
 		rebuild:  projections.RebuildReplyRankingPosts,
 		rowCount: projections.ReplyRankingPostsRowCount,
 	})

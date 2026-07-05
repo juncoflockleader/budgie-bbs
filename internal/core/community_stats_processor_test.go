@@ -38,7 +38,7 @@ func TestCommunityStatsProcessorMaterializesAndRefreshesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewCommunityStats, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewCommunityStats, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessCommunityStatsOnce(100)
@@ -119,11 +119,11 @@ func TestCommunityStatsProcessorMaterializesAndRefreshesSnapshot(t *testing.T) {
 	if rows := communityStatsSnapshotRows(t, c); rows != 0 {
 		t.Fatalf("community stats snapshot rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewCommunityStats}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewCommunityStats}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog community_stats: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewCommunityStats {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewCommunityStats {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := communityStatsSnapshotRows(t, c); rows != 1 {

@@ -88,7 +88,7 @@ func TestAsyncPostSearchProcessorIndexesDurableEvents(t *testing.T) {
 		t.Fatalf("search after edit processor = %+v, want edited post %s", edited, posts[0].ID)
 	}
 
-	applied, err := c.DerivedViewAppliedSeq(DerivedViewPostSearch)
+	applied, err := c.DerivedViewAppliedSeq(projections.DerivedViewPostSearch)
 	if err != nil {
 		t.Fatalf("post search watermark: %v", err)
 	}
@@ -200,11 +200,11 @@ func TestExternalPostSearchIndexProcessesEventsAndBackfills(t *testing.T) {
 	if len(empty) != 0 {
 		t.Fatalf("search after index clear = %+v, want missing external index", empty)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewPostSearch}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewPostSearch}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog search.posts: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewPostSearch {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewPostSearch {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	repaired, err := c.SearchReadablePosts(admin, "rebuiltpostsearchtoken", "", 10)
@@ -214,7 +214,7 @@ func TestExternalPostSearchIndexProcessesEventsAndBackfills(t *testing.T) {
 	if len(repaired) != 1 || repaired[0].ID != posts[0].ID {
 		t.Fatalf("repaired search = %+v, want post %s", repaired, posts[0].ID)
 	}
-	applied, err := c.DerivedViewAppliedSeq(DerivedViewPostSearch)
+	applied, err := c.DerivedViewAppliedSeq(projections.DerivedViewPostSearch)
 	if err != nil {
 		t.Fatalf("post search watermark: %v", err)
 	}

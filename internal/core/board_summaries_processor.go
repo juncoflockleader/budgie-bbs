@@ -46,7 +46,7 @@ func (c *Core) StartBoardSummariesProcessor(ctx context.Context, interval time.D
 
 func (c *Core) ProcessBoardSummariesOnce(batchSize int) (BoardSummariesProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:     DerivedViewBoardSummaries,
+		view:     projections.DerivedViewBoardSummaries,
 		rebuild:  projections.RebuildBoardSummaryStats,
 		rowCount: projections.BoardSummaryStatsRowCount,
 	})

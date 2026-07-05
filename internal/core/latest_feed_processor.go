@@ -62,7 +62,7 @@ func (c *Core) StartLatestFeedProcessor(ctx context.Context, interval time.Durat
 
 func (c *Core) ProcessLatestFeedOnce(batchSize int) (LatestFeedProcessResult, error) {
 	return c.processFeedMaterializationOnce(batchSize, feedMaterializationSpec{
-		view:      DerivedViewLatestFeed,
+		view:      projections.DerivedViewLatestFeed,
 		errPrefix: "latest feed",
 		apply:     applyLatestFeedEvent,
 	})

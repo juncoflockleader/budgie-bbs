@@ -24,6 +24,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/captchamodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
@@ -242,7 +243,7 @@ func main() {
 	}
 	derivedViewProcessorSpecs := []derivedViewProcessorSpec{
 		{
-			view:       core.DerivedViewPostSearch,
+			view:       projections.DerivedViewPostSearch,
 			label:      "post search",
 			flagName:   "post-search-processor",
 			enabled:    postSearchProcessor,
@@ -251,23 +252,23 @@ func main() {
 			start:      derivedViewCoreStarter((*core.Core).StartPostSearchProcessor),
 			extraAttrs: func() []any { return []any{"asyncPostSearch", *asyncPostSearch} },
 		},
-		{view: core.DerivedViewDigestSearch, label: "digest search", flagName: "digest-search-processor", enabled: digestSearchProcessor, interval: digestSearchProcessorInterval, batchSize: digestSearchProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartDigestSearchProcessor)},
-		{view: core.DerivedViewCommunityStats, label: "community stats", flagName: "community-stats-processor", enabled: communityStatsProcessor, interval: communityStatsProcessorInterval, batchSize: communityStatsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartCommunityStatsProcessor)},
-		{view: core.DerivedViewLatestFeed, label: "latest feed", flagName: "latest-feed-processor", enabled: latestFeedProcessor, interval: latestFeedProcessorInterval, batchSize: latestFeedProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartLatestFeedProcessor)},
-		{view: core.DerivedViewResidentFeed, label: "resident feed", flagName: "resident-feed-processor", enabled: residentFeedProcessor, interval: residentFeedProcessorInterval, batchSize: residentFeedProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartResidentFeedProcessor)},
-		{view: core.DerivedViewBoardSummaries, label: "board summaries", flagName: "board-summaries-processor", enabled: boardSummariesProcessor, interval: boardSummariesProcessorInterval, batchSize: boardSummariesProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBoardSummariesProcessor)},
-		{view: core.DerivedViewUnreadThreads, label: "unread thread summaries", flagName: "unread-thread-summaries-processor", enabled: unreadThreadSummariesProcessor, interval: unreadThreadSummariesInterval, batchSize: unreadThreadSummariesBatchSize, start: derivedViewCoreStarter((*core.Core).StartUnreadThreadSummariesProcessor)},
-		{view: core.DerivedViewBoardRankings, label: "board rankings", flagName: "board-rankings-processor", enabled: boardRankingsProcessor, interval: boardRankingsProcessorInterval, batchSize: boardRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBoardRankingsProcessor)},
-		{view: core.DerivedViewThreadRankings, label: "thread rankings", flagName: "thread-rankings-processor", enabled: threadRankingsProcessor, interval: threadRankingsProcessorInterval, batchSize: threadRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartThreadRankingsProcessor)},
-		{view: core.DerivedViewReplyRankings, label: "reply rankings", flagName: "reply-rankings-processor", enabled: replyRankingsProcessor, interval: replyRankingsProcessorInterval, batchSize: replyRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartReplyRankingsProcessor)},
-		{view: core.DerivedViewUserRankings, label: "user rankings", flagName: "user-rankings-processor", enabled: userRankingsProcessor, interval: userRankingsProcessorInterval, batchSize: userRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartUserRankingsProcessor)},
-		{view: core.DerivedViewBlessingRankings, label: "blessing rankings", flagName: "blessing-rankings-processor", enabled: blessingRankingsProcessor, interval: blessingRankingsProcessorInterval, batchSize: blessingRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBlessingRankingsProcessor), afterAI: true},
-		{view: core.DerivedViewArchiveRankings, label: "archive rankings", flagName: "archive-rankings-processor", enabled: archiveRankingsProcessor, interval: archiveRankingsProcessorInterval, batchSize: archiveRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartArchiveRankingsProcessor), afterAI: true},
+		{view: projections.DerivedViewDigestSearch, label: "digest search", flagName: "digest-search-processor", enabled: digestSearchProcessor, interval: digestSearchProcessorInterval, batchSize: digestSearchProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartDigestSearchProcessor)},
+		{view: projections.DerivedViewCommunityStats, label: "community stats", flagName: "community-stats-processor", enabled: communityStatsProcessor, interval: communityStatsProcessorInterval, batchSize: communityStatsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartCommunityStatsProcessor)},
+		{view: projections.DerivedViewLatestFeed, label: "latest feed", flagName: "latest-feed-processor", enabled: latestFeedProcessor, interval: latestFeedProcessorInterval, batchSize: latestFeedProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartLatestFeedProcessor)},
+		{view: projections.DerivedViewResidentFeed, label: "resident feed", flagName: "resident-feed-processor", enabled: residentFeedProcessor, interval: residentFeedProcessorInterval, batchSize: residentFeedProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartResidentFeedProcessor)},
+		{view: projections.DerivedViewBoardSummaries, label: "board summaries", flagName: "board-summaries-processor", enabled: boardSummariesProcessor, interval: boardSummariesProcessorInterval, batchSize: boardSummariesProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBoardSummariesProcessor)},
+		{view: projections.DerivedViewUnreadThreads, label: "unread thread summaries", flagName: "unread-thread-summaries-processor", enabled: unreadThreadSummariesProcessor, interval: unreadThreadSummariesInterval, batchSize: unreadThreadSummariesBatchSize, start: derivedViewCoreStarter((*core.Core).StartUnreadThreadSummariesProcessor)},
+		{view: projections.DerivedViewBoardRankings, label: "board rankings", flagName: "board-rankings-processor", enabled: boardRankingsProcessor, interval: boardRankingsProcessorInterval, batchSize: boardRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBoardRankingsProcessor)},
+		{view: projections.DerivedViewThreadRankings, label: "thread rankings", flagName: "thread-rankings-processor", enabled: threadRankingsProcessor, interval: threadRankingsProcessorInterval, batchSize: threadRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartThreadRankingsProcessor)},
+		{view: projections.DerivedViewReplyRankings, label: "reply rankings", flagName: "reply-rankings-processor", enabled: replyRankingsProcessor, interval: replyRankingsProcessorInterval, batchSize: replyRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartReplyRankingsProcessor)},
+		{view: projections.DerivedViewUserRankings, label: "user rankings", flagName: "user-rankings-processor", enabled: userRankingsProcessor, interval: userRankingsProcessorInterval, batchSize: userRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartUserRankingsProcessor)},
+		{view: projections.DerivedViewBlessingRankings, label: "blessing rankings", flagName: "blessing-rankings-processor", enabled: blessingRankingsProcessor, interval: blessingRankingsProcessorInterval, batchSize: blessingRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartBlessingRankingsProcessor), afterAI: true},
+		{view: projections.DerivedViewArchiveRankings, label: "archive rankings", flagName: "archive-rankings-processor", enabled: archiveRankingsProcessor, interval: archiveRankingsProcessorInterval, batchSize: archiveRankingsProcessorBatchSize, start: derivedViewCoreStarter((*core.Core).StartArchiveRankingsProcessor), afterAI: true},
 	}
 	var derivedViewWatermarkViews []string
 	if strings.TrimSpace(*derivedViewWatermarks) != "" {
 		var err error
-		derivedViewWatermarkViews, err = core.ResolveDerivedViews([]string{*derivedViewWatermarks})
+		derivedViewWatermarkViews, err = projections.ResolveDerivedViews([]string{*derivedViewWatermarks})
 		if err != nil {
 			slog.Error("invalid derived view watermark selection", "views", *derivedViewWatermarks, "err", err)
 			os.Exit(1)
@@ -413,7 +414,7 @@ func main() {
 	}
 
 	if strings.TrimSpace(*derivedViewBackfill) != "" {
-		views, err := core.ResolveDerivedViews([]string{*derivedViewBackfill})
+		views, err := projections.ResolveDerivedViews([]string{*derivedViewBackfill})
 		if err != nil {
 			slog.Error("invalid derived view backfill selection", "views", *derivedViewBackfill, "err", err)
 			os.Exit(1)
@@ -1806,15 +1807,15 @@ func derivedViewCoreStarter[T any](start func(*core.Core, context.Context, time.
 }
 
 func applyDerivedViewProcessorSelection(raw string, specialFlags derivedViewProcessorSpecialFlags, processors []derivedViewProcessorSpec) ([]string, error) {
-	resolved, err := core.ResolveDerivedViews([]string{raw})
+	resolved, err := projections.ResolveDerivedViews([]string{raw})
 	if err != nil {
 		return nil, err
 	}
 	for _, view := range resolved {
 		switch view {
-		case core.DerivedViewPostSearch:
+		case projections.DerivedViewPostSearch:
 			setBool(specialFlags.asyncPostSearch, true)
-		case core.DerivedViewCommunityStatHistory:
+		case projections.DerivedViewCommunityStatHistory:
 			setBool(specialFlags.asyncCommunityStatHistory, true)
 		}
 		for _, processor := range processors {
@@ -1837,19 +1838,19 @@ func missingDerivedViewProcessorWorkerRole(processors []derivedViewProcessorSpec
 }
 
 func derivedViewWatermarkOwnershipConflict(views []string, specialFlags derivedViewProcessorSpecialFlags, processors []derivedViewProcessorSpec, postSearchIndexMode string) (derivedViewWatermarkConflict, bool) {
-	postSearchOwned := boolValue(specialFlags.asyncPostSearch) || derivedViewProcessorEnabled(processors, core.DerivedViewPostSearch) || postSearchIndexMode != "sql-fts"
-	if postSearchOwned && slices.Contains(views, core.DerivedViewPostSearch) {
-		return derivedViewProcessorWatermarkConflict("post search", core.DerivedViewPostSearch, "post-search-processor"), true
+	postSearchOwned := boolValue(specialFlags.asyncPostSearch) || derivedViewProcessorEnabled(processors, projections.DerivedViewPostSearch) || postSearchIndexMode != "sql-fts"
+	if postSearchOwned && slices.Contains(views, projections.DerivedViewPostSearch) {
+		return derivedViewProcessorWatermarkConflict("post search", projections.DerivedViewPostSearch, "post-search-processor"), true
 	}
 	for _, processor := range processors {
-		if processor.view == core.DerivedViewPostSearch {
+		if processor.view == projections.DerivedViewPostSearch {
 			continue
 		}
 		if boolValue(processor.enabled) && slices.Contains(views, processor.view) {
 			return derivedViewProcessorWatermarkConflict(processor.label, processor.view, processor.flagName), true
 		}
 	}
-	if boolValue(specialFlags.asyncCommunityStatHistory) && slices.Contains(views, core.DerivedViewCommunityStatHistory) {
+	if boolValue(specialFlags.asyncCommunityStatHistory) && slices.Contains(views, projections.DerivedViewCommunityStatHistory) {
 		return derivedViewWatermarkConflict{
 			message: "community stat history ownership cannot use compatibility watermark sync for community_stat_history",
 			hint:    "remove community_stat_history from -derived-view-watermarks; queued snapshot jobs advance the view watermark",

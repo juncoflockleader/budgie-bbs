@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -46,7 +46,7 @@ func TestGlobalProjectionReadsCarryConsistencyMeta(t *testing.T) {
 	if statsRec.Code != http.StatusOK {
 		t.Fatalf("stats status: %d body=%s", statsRec.Code, statsRec.Body.String())
 	}
-	assertProjectionHeaders(t, statsRec, core.DerivedViewCommunityStats)
+	assertProjectionHeaders(t, statsRec, projections.DerivedViewCommunityStats)
 	var stats struct {
 		HeadSeq int64             `json:"headSeq"`
 		Meta    projectionMetaDTO `json:"meta"`
@@ -67,7 +67,7 @@ func TestGlobalProjectionReadsCarryConsistencyMeta(t *testing.T) {
 	if staleApplied < 0 {
 		staleApplied = 0
 	}
-	if err := c.RecordDerivedViewApplied(core.DerivedViewBoardRankings, staleApplied); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardRankings, staleApplied); err != nil {
 		t.Fatalf("record stale board ranking watermark: %v", err)
 	}
 
@@ -75,7 +75,7 @@ func TestGlobalProjectionReadsCarryConsistencyMeta(t *testing.T) {
 	if rankingsRec.Code != http.StatusOK {
 		t.Fatalf("rankings status: %d body=%s", rankingsRec.Code, rankingsRec.Body.String())
 	}
-	assertProjectionHeaders(t, rankingsRec, core.DerivedViewBoardRankings)
+	assertProjectionHeaders(t, rankingsRec, projections.DerivedViewBoardRankings)
 	var rankings struct {
 		Boards []json.RawMessage `json:"boards"`
 		Meta   projectionMetaDTO `json:"meta"`
@@ -91,14 +91,14 @@ func TestGlobalProjectionReadsCarryConsistencyMeta(t *testing.T) {
 		t.Fatalf("ranking lag = %d, want %d", rankings.Meta.LagEvents, head-staleApplied)
 	}
 
-	if err := c.RecordDerivedViewApplied(core.DerivedViewPostSearch, staleApplied); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewPostSearch, staleApplied); err != nil {
 		t.Fatalf("record stale post search watermark: %v", err)
 	}
 	searchRec := getWithToken(t, handler, "/api/v1/search?q=projection", token)
 	if searchRec.Code != http.StatusOK {
 		t.Fatalf("search status: %d body=%s", searchRec.Code, searchRec.Body.String())
 	}
-	assertProjectionHeaders(t, searchRec, core.DerivedViewPostSearch)
+	assertProjectionHeaders(t, searchRec, projections.DerivedViewPostSearch)
 	var search struct {
 		Posts []json.RawMessage `json:"posts"`
 		Meta  projectionMetaDTO `json:"meta"`
@@ -114,14 +114,14 @@ func TestGlobalProjectionReadsCarryConsistencyMeta(t *testing.T) {
 		t.Fatalf("post search lag = %d, want %d", search.Meta.LagEvents, head-staleApplied)
 	}
 
-	if err := c.RecordDerivedViewApplied(core.DerivedViewDigestSearch, staleApplied); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewDigestSearch, staleApplied); err != nil {
 		t.Fatalf("record stale digest search watermark: %v", err)
 	}
 	digestRec := getWithToken(t, handler, "/api/v1/digest/search?q=projection", token)
 	if digestRec.Code != http.StatusOK {
 		t.Fatalf("digest search status: %d body=%s", digestRec.Code, digestRec.Body.String())
 	}
-	assertProjectionHeaders(t, digestRec, core.DerivedViewDigestSearch)
+	assertProjectionHeaders(t, digestRec, projections.DerivedViewDigestSearch)
 	var digest struct {
 		Entries []json.RawMessage `json:"entries"`
 		Meta    projectionMetaDTO `json:"meta"`
@@ -158,7 +158,7 @@ func TestProjectionReadsCanRequireMinimumSequence(t *testing.T) {
 	if staleApplied < 0 {
 		staleApplied = 0
 	}
-	if err := c.RecordDerivedViewApplied(core.DerivedViewBoardRankings, staleApplied); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardRankings, staleApplied); err != nil {
 		t.Fatalf("record stale board ranking watermark: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestProjectionReadsCanRequireMinimumSequence(t *testing.T) {
 	if staleRec.Code != 425 {
 		t.Fatalf("stale projection status: %d body=%s", staleRec.Code, staleRec.Body.String())
 	}
-	assertProjectionHeaders(t, staleRec, core.DerivedViewBoardRankings)
+	assertProjectionHeaders(t, staleRec, projections.DerivedViewBoardRankings)
 	if got := staleRec.Header().Get("X-Budgie-Min-Seq"); got != minSeq {
 		t.Fatalf("X-Budgie-Min-Seq = %q, want %q", got, minSeq)
 	}
@@ -191,7 +191,7 @@ func TestProjectionReadsCanRequireMinimumSequence(t *testing.T) {
 	}
 	assertStaleProjectionMeta(t, stale.Meta, staleApplied, head)
 
-	if err := c.RecordDerivedViewApplied(core.DerivedViewBoardRankings, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardRankings, head); err != nil {
 		t.Fatalf("record fresh board ranking watermark: %v", err)
 	}
 	freshRec := getWithTokenAndHeaders(t, handler, "/api/v1/rankings/boards", token, map[string]string{
@@ -200,7 +200,7 @@ func TestProjectionReadsCanRequireMinimumSequence(t *testing.T) {
 	if freshRec.Code != http.StatusOK {
 		t.Fatalf("fresh projection status: %d body=%s", freshRec.Code, freshRec.Body.String())
 	}
-	assertProjectionHeaders(t, freshRec, core.DerivedViewBoardRankings)
+	assertProjectionHeaders(t, freshRec, projections.DerivedViewBoardRankings)
 	if got := freshRec.Header().Get("X-Budgie-Read-Your-Writes"); got != "satisfied" {
 		t.Fatalf("fresh X-Budgie-Read-Your-Writes = %q, want satisfied", got)
 	}
@@ -246,7 +246,7 @@ func TestProjectionLagChaosBackfillRecoversReadYourWrites(t *testing.T) {
 	if staleApplied < 0 {
 		staleApplied = 0
 	}
-	if err := c.RecordDerivedViewApplied(core.DerivedViewBoardRankings, staleApplied); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardRankings, staleApplied); err != nil {
 		t.Fatalf("record stale board ranking watermark: %v", err)
 	}
 
@@ -257,7 +257,7 @@ func TestProjectionLagChaosBackfillRecoversReadYourWrites(t *testing.T) {
 	if staleRec.Code != 425 {
 		t.Fatalf("stale projection status: %d body=%s", staleRec.Code, staleRec.Body.String())
 	}
-	assertProjectionHeaders(t, staleRec, core.DerivedViewBoardRankings)
+	assertProjectionHeaders(t, staleRec, projections.DerivedViewBoardRankings)
 	if got := staleRec.Header().Get("X-Budgie-Read-Your-Writes"); got != "stale" {
 		t.Fatalf("stale X-Budgie-Read-Your-Writes = %q, want stale", got)
 	}
@@ -277,11 +277,11 @@ func TestProjectionLagChaosBackfillRecoversReadYourWrites(t *testing.T) {
 		t.Fatalf("canonical posts X-Budgie-Read-Your-Writes = %q, want satisfied", got)
 	}
 
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{core.DerivedViewBoardRankings}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewBoardRankings}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog rankings.boards: %v", err)
 	}
-	if backfill.HeadSeq != head || len(backfill.Views) != 1 || backfill.Views[0] != core.DerivedViewBoardRankings {
+	if backfill.HeadSeq != head || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewBoardRankings {
 		t.Fatalf("backfill result = %+v, want rankings.boards through head %d", backfill, head)
 	}
 
@@ -291,7 +291,7 @@ func TestProjectionLagChaosBackfillRecoversReadYourWrites(t *testing.T) {
 	if recoveredRec.Code != http.StatusOK {
 		t.Fatalf("recovered projection status: %d body=%s", recoveredRec.Code, recoveredRec.Body.String())
 	}
-	assertProjectionHeaders(t, recoveredRec, core.DerivedViewBoardRankings)
+	assertProjectionHeaders(t, recoveredRec, projections.DerivedViewBoardRankings)
 	if got := recoveredRec.Header().Get("X-Budgie-Read-Your-Writes"); got != "satisfied" {
 		t.Fatalf("recovered X-Budgie-Read-Your-Writes = %q, want satisfied", got)
 	}

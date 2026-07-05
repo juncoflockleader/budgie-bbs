@@ -46,7 +46,7 @@ func (c *Core) StartBoardRankingsProcessor(ctx context.Context, interval time.Du
 
 func (c *Core) ProcessBoardRankingsOnce(batchSize int) (BoardRankingsProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:     DerivedViewBoardRankings,
+		view:     projections.DerivedViewBoardRankings,
 		rebuild:  projections.RebuildBoardRankingStats,
 		rowCount: projections.BoardRankingStatsRowCount,
 	})

@@ -134,11 +134,11 @@ func TestLatestFeedProcessorMaterializesAndRebuildsFeed(t *testing.T) {
 	if _, err := c.DB.Exec(`DELETE FROM latest_feed_posts`); err != nil {
 		t.Fatalf("delete latest feed rows: %v", err)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewLatestFeed}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewLatestFeed}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog feeds.latest: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewLatestFeed {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewLatestFeed {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	repaired, err := c.ListLatestFeedPosts(alice, 10, 0)

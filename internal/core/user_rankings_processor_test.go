@@ -87,7 +87,7 @@ func TestUserRankingsProcessorMaterializesAndRefreshesSideStoreStats(t *testing.
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewUserRankings, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewUserRankings, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessUserRankingsOnce(100)
@@ -192,11 +192,11 @@ func TestUserRankingsProcessorMaterializesAndRefreshesSideStoreStats(t *testing.
 	if rows := userRankingStatsRows(t, c); rows != 0 {
 		t.Fatalf("user ranking stats rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewUserRankings}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewUserRankings}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog rankings.users: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewUserRankings {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewUserRankings {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := userRankingStatsRows(t, c); rows < 4 {

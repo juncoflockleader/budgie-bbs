@@ -118,11 +118,11 @@ func TestResidentFeedProcessorMaterializesAndRebuildsFeed(t *testing.T) {
 	if rows := residentFeedRowCount(t, c); rows != 0 {
 		t.Fatalf("resident feed rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewResidentFeed}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewResidentFeed}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog feeds.resident: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewResidentFeed {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewResidentFeed {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := residentFeedRowCount(t, c); rows != rowsAfterRedact {

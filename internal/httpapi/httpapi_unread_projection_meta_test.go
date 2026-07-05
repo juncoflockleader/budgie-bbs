@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 func TestUnreadSummaryReadsCarryConsistencyMeta(t *testing.T) {
@@ -29,7 +29,7 @@ func TestUnreadSummaryReadsCarryConsistencyMeta(t *testing.T) {
 	if staleApplied < 0 {
 		staleApplied = 0
 	}
-	for _, view := range []string{core.DerivedViewBoardSummaries, core.DerivedViewUnreadThreads} {
+	for _, view := range []string{projections.DerivedViewBoardSummaries, projections.DerivedViewUnreadThreads} {
 		if err := c.RecordDerivedViewApplied(view, staleApplied); err != nil {
 			t.Fatalf("record stale %s watermark: %v", view, err)
 		}
@@ -39,7 +39,7 @@ func TestUnreadSummaryReadsCarryConsistencyMeta(t *testing.T) {
 	if summaryRec.Code != http.StatusOK {
 		t.Fatalf("board summary status: %d body=%s", summaryRec.Code, summaryRec.Body.String())
 	}
-	assertProjectionHeaders(t, summaryRec, core.DerivedViewBoardSummaries)
+	assertProjectionHeaders(t, summaryRec, projections.DerivedViewBoardSummaries)
 	var summary struct {
 		Boards []json.RawMessage `json:"boards"`
 		Meta   projectionMetaDTO `json:"meta"`
@@ -56,7 +56,7 @@ func TestUnreadSummaryReadsCarryConsistencyMeta(t *testing.T) {
 	if unreadBoardsRec.Code != http.StatusOK {
 		t.Fatalf("unread boards status: %d body=%s", unreadBoardsRec.Code, unreadBoardsRec.Body.String())
 	}
-	assertProjectionHeaders(t, unreadBoardsRec, core.DerivedViewBoardSummaries)
+	assertProjectionHeaders(t, unreadBoardsRec, projections.DerivedViewBoardSummaries)
 	var unreadBoards struct {
 		Boards []json.RawMessage `json:"boards"`
 		Meta   projectionMetaDTO `json:"meta"`
@@ -73,7 +73,7 @@ func TestUnreadSummaryReadsCarryConsistencyMeta(t *testing.T) {
 	if unreadThreadsRec.Code != http.StatusOK {
 		t.Fatalf("unread threads status: %d body=%s", unreadThreadsRec.Code, unreadThreadsRec.Body.String())
 	}
-	assertProjectionHeaders(t, unreadThreadsRec, core.DerivedViewUnreadThreads)
+	assertProjectionHeaders(t, unreadThreadsRec, projections.DerivedViewUnreadThreads)
 	var unreadThreads struct {
 		Threads []json.RawMessage `json:"threads"`
 		Meta    projectionMetaDTO `json:"meta"`

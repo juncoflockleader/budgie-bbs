@@ -3,6 +3,8 @@ package core
 import (
 	"testing"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 func TestAsyncCommunityStatHistorySnapshotsUseCoalescedOutbox(t *testing.T) {
@@ -18,7 +20,7 @@ func TestAsyncCommunityStatHistorySnapshotsUseCoalescedOutbox(t *testing.T) {
 	if head == 0 {
 		t.Fatal("head = 0, want registration to create durable events")
 	}
-	applied, err := c.DerivedViewAppliedSeq(DerivedViewCommunityStatHistory)
+	applied, err := c.DerivedViewAppliedSeq(projections.DerivedViewCommunityStatHistory)
 	if err != nil {
 		t.Fatalf("initial stat-history watermark: %v", err)
 	}
@@ -72,7 +74,7 @@ func TestAsyncCommunityStatHistorySnapshotsUseCoalescedOutbox(t *testing.T) {
 	if historyRows != 1 {
 		t.Fatalf("history rows after worker = %d, want one materialized snapshot", historyRows)
 	}
-	applied, err = c.DerivedViewAppliedSeq(DerivedViewCommunityStatHistory)
+	applied, err = c.DerivedViewAppliedSeq(projections.DerivedViewCommunityStatHistory)
 	if err != nil {
 		t.Fatalf("final stat-history watermark: %v", err)
 	}

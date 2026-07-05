@@ -46,7 +46,7 @@ func (c *Core) StartArchiveRankingsProcessor(ctx context.Context, interval time.
 
 func (c *Core) ProcessArchiveRankingsOnce(batchSize int) (ArchiveRankingsProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:     DerivedViewArchiveRankings,
+		view:     projections.DerivedViewArchiveRankings,
 		rebuild:  projections.RebuildArchiveRankingStats,
 		rowCount: projections.ArchiveRankingStatsRowCount,
 	})

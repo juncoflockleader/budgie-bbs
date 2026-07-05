@@ -10,25 +10,6 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
-const (
-	DerivedViewCommunityStats       = projections.DerivedViewCommunityStats
-	DerivedViewCommunityStatHistory = projections.DerivedViewCommunityStatHistory
-	DerivedViewLatestFeed           = projections.DerivedViewLatestFeed
-	DerivedViewResidentFeed         = projections.DerivedViewResidentFeed
-	DerivedViewBoardSummaries       = projections.DerivedViewBoardSummaries
-	DerivedViewUnreadThreads        = projections.DerivedViewUnreadThreads
-	DerivedViewBoardRankings        = projections.DerivedViewBoardRankings
-	DerivedViewThreadRankings       = projections.DerivedViewThreadRankings
-	DerivedViewReplyRankings        = projections.DerivedViewReplyRankings
-	DerivedViewUserRankings         = projections.DerivedViewUserRankings
-	DerivedViewBlessingRankings     = projections.DerivedViewBlessingRankings
-	DerivedViewArchiveRankings      = projections.DerivedViewArchiveRankings
-	DerivedViewPostSearch           = projections.DerivedViewPostSearch
-	DerivedViewDigestSearch         = projections.DerivedViewDigestSearch
-)
-
-type DerivedViewWatermark = projections.DerivedViewWatermark
-
 type DerivedViewBackfillResult struct {
 	Views   []string
 	HeadSeq int64
@@ -45,24 +26,12 @@ type DerivedViewWatermarkWorker struct {
 	Interval time.Duration
 }
 
-func KnownDerivedViews() []string {
-	return projections.KnownDerivedViews()
-}
-
-func DerivedViewGroups() map[string][]string {
-	return projections.DerivedViewGroups()
-}
-
-func ResolveDerivedViews(views []string) ([]string, error) {
-	return projections.ResolveDerivedViews(views)
-}
-
 // DerivedViewAppliedSeq returns the applied durable position for a derived
 // global view. Missing watermarks resolve to the current event head so today's
 // synchronous projections keep reporting zero lag until a stream processor
 // explicitly owns and advances the view.
 func (c *Core) DerivedViewAppliedSeq(view string) (int64, error) {
-	view = normalizeDerivedView(view)
+	view = projections.NormalizeDerivedView(view)
 	if view == "" {
 		return c.Head()
 	}
@@ -80,19 +49,19 @@ func (c *Core) RecordDerivedViewApplied(view string, appliedSeq int64) error {
 	return projections.RecordDerivedViewApplied(c.DB, view, appliedSeq, nowMS())
 }
 
-func (c *Core) ListDerivedViewWatermarks() ([]DerivedViewWatermark, error) {
+func (c *Core) ListDerivedViewWatermarks() ([]projections.DerivedViewWatermark, error) {
 	return projections.ListDerivedViewWatermarks(c.DB)
 }
 
 func (c *Core) BackfillDerivedViewsFromEventLog(views []string, fromSeq int64) (DerivedViewBackfillResult, error) {
-	resolved, err := ResolveDerivedViews(views)
+	resolved, err := projections.ResolveDerivedViews(views)
 	if err != nil {
 		return DerivedViewBackfillResult{}, err
 	}
 	if err := c.RebuildProjectionsFromEventLog(fromSeq); err != nil {
 		return DerivedViewBackfillResult{}, err
 	}
-	if containsDerivedView(resolved, DerivedViewPostSearch) {
+	if projections.ContainsDerivedView(resolved, projections.DerivedViewPostSearch) {
 		if _, err := c.rebuildExternalPostSearchIndex(context.Background()); err != nil {
 			return DerivedViewBackfillResult{}, err
 		}
@@ -108,7 +77,7 @@ func (c *Core) BackfillDerivedViewsFromEventLog(views []string, fromSeq int64) (
 }
 
 func (c *Core) BackfillDerivedViewsFromEventStore(ctx context.Context, store EventStore, views []string, fromSeq int64) (DerivedViewBackfillResult, error) {
-	resolved, err := ResolveDerivedViews(views)
+	resolved, err := projections.ResolveDerivedViews(views)
 	if err != nil {
 		return DerivedViewBackfillResult{}, err
 	}
@@ -118,7 +87,7 @@ func (c *Core) BackfillDerivedViewsFromEventStore(ctx context.Context, store Eve
 	if err := c.RebuildProjectionsFromEventStore(ctx, store, fromSeq); err != nil {
 		return DerivedViewBackfillResult{}, err
 	}
-	if containsDerivedView(resolved, DerivedViewPostSearch) {
+	if projections.ContainsDerivedView(resolved, projections.DerivedViewPostSearch) {
 		if _, err := c.rebuildExternalPostSearchIndex(ctx); err != nil {
 			return DerivedViewBackfillResult{}, err
 		}
@@ -134,7 +103,7 @@ func (c *Core) BackfillDerivedViewsFromEventStore(ctx context.Context, store Eve
 }
 
 func (c *Core) SyncDerivedViewsToHead(views []string) (DerivedViewWatermarkSyncResult, error) {
-	resolved, err := ResolveDerivedViews(views)
+	resolved, err := projections.ResolveDerivedViews(views)
 	if err != nil {
 		return DerivedViewWatermarkSyncResult{}, err
 	}
@@ -152,7 +121,7 @@ func NewDerivedViewWatermarkWorker(c *Core, views []string, interval time.Durati
 	if c == nil {
 		return nil, fmt.Errorf("derived view watermark worker: nil core")
 	}
-	resolved, err := ResolveDerivedViews(views)
+	resolved, err := projections.ResolveDerivedViews(views)
 	if err != nil {
 		return nil, err
 	}
@@ -216,12 +185,4 @@ func (c *Core) markDerivedViewsApplied(views []string, head int64) error {
 		}
 	}
 	return nil
-}
-
-func containsDerivedView(views []string, want string) bool {
-	return projections.ContainsDerivedView(views, want)
-}
-
-func normalizeDerivedView(view string) string {
-	return projections.NormalizeDerivedView(view)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -51,7 +52,7 @@ func (c *Core) StartDigestSearchProcessor(ctx context.Context, interval time.Dur
 }
 
 func (c *Core) ProcessDigestSearchOnce(batchSize int) (DigestSearchProcessResult, error) {
-	batch, err := c.replayDerivedViewEventBatch(DerivedViewDigestSearch, batchSize)
+	batch, err := c.replayDerivedViewEventBatch(projections.DerivedViewDigestSearch, batchSize)
 	result := DigestSearchProcessResult{
 		FromSeq:    batch.FromSeq,
 		AppliedSeq: batch.AppliedSeq,

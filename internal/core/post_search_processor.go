@@ -58,7 +58,7 @@ func (c *Core) ProcessPostSearchOnce(batchSize int) (PostSearchProcessResult, er
 	if c.postSearchIndex != nil {
 		return c.processExternalPostSearchOnce(batchSize)
 	}
-	batch, err := c.replayDerivedViewEventBatch(DerivedViewPostSearch, batchSize)
+	batch, err := c.replayDerivedViewEventBatch(projections.DerivedViewPostSearch, batchSize)
 	result := PostSearchProcessResult{
 		FromSeq:    batch.FromSeq,
 		AppliedSeq: batch.AppliedSeq,
@@ -93,7 +93,7 @@ func postSearchRunProgress(result PostSearchProcessResult) processorRunProgress 
 }
 
 func (c *Core) processExternalPostSearchOnce(batchSize int) (PostSearchProcessResult, error) {
-	batch, err := c.replayDerivedViewEventBatch(DerivedViewPostSearch, batchSize)
+	batch, err := c.replayDerivedViewEventBatch(projections.DerivedViewPostSearch, batchSize)
 	result := PostSearchProcessResult{
 		FromSeq:    batch.FromSeq,
 		AppliedSeq: batch.AppliedSeq,

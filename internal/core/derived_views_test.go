@@ -29,7 +29,7 @@ func TestDerivedViewWatermarkDefaultsAndMetrics(t *testing.T) {
 		t.Fatal("expected seeded user event to advance head")
 	}
 
-	applied, err := c.DerivedViewAppliedSeq(DerivedViewBoardRankings)
+	applied, err := c.DerivedViewAppliedSeq(projections.DerivedViewBoardRankings)
 	if err != nil {
 		t.Fatalf("default derived view applied seq: %v", err)
 	}
@@ -37,10 +37,10 @@ func TestDerivedViewWatermarkDefaultsAndMetrics(t *testing.T) {
 		t.Fatalf("default applied seq = %d, want head %d", applied, head)
 	}
 
-	if err := c.RecordDerivedViewApplied(DerivedViewBoardRankings, head-1); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardRankings, head-1); err != nil {
 		t.Fatalf("record watermark: %v", err)
 	}
-	applied, err = c.DerivedViewAppliedSeq(DerivedViewBoardRankings)
+	applied, err = c.DerivedViewAppliedSeq(projections.DerivedViewBoardRankings)
 	if err != nil {
 		t.Fatalf("explicit derived view applied seq: %v", err)
 	}
@@ -52,35 +52,35 @@ func TestDerivedViewWatermarkDefaultsAndMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("derivedViewWatermarkSamples: %v", err)
 	}
-	if got := derivedViewMetricValue(samples, "budgie_derived_view_applied_seq", DerivedViewBoardRankings); got != float64(head-1) {
+	if got := derivedViewMetricValue(samples, "budgie_derived_view_applied_seq", projections.DerivedViewBoardRankings); got != float64(head-1) {
 		t.Fatalf("applied sample = %v, want %d", got, head-1)
 	}
-	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", DerivedViewBoardRankings); got != 1 {
+	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", projections.DerivedViewBoardRankings); got != 1 {
 		t.Fatalf("lag sample = %v, want 1", got)
 	}
-	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", DerivedViewPostSearch); got != 0 {
+	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", projections.DerivedViewPostSearch); got != 0 {
 		t.Fatalf("default search lag sample = %v, want 0", got)
 	}
-	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", DerivedViewResidentFeed); got != 0 {
+	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", projections.DerivedViewResidentFeed); got != 0 {
 		t.Fatalf("default resident feed lag sample = %v, want 0", got)
 	}
-	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", DerivedViewLatestFeed); got != 0 {
+	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", projections.DerivedViewLatestFeed); got != 0 {
 		t.Fatalf("default latest feed lag sample = %v, want 0", got)
 	}
-	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", DerivedViewBoardSummaries); got != 0 {
+	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", projections.DerivedViewBoardSummaries); got != 0 {
 		t.Fatalf("default board summaries lag sample = %v, want 0", got)
 	}
-	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", DerivedViewUnreadThreads); got != 0 {
+	if got := derivedViewMetricValue(samples, "budgie_derived_view_lag_events", projections.DerivedViewUnreadThreads); got != 0 {
 		t.Fatalf("default unread threads lag sample = %v, want 0", got)
 	}
 }
 
 func TestResolveDerivedViews(t *testing.T) {
-	views, err := ResolveDerivedViews([]string{" rankings.threads ", DerivedViewBoardRankings, "rankings.threads"})
+	views, err := projections.ResolveDerivedViews([]string{" rankings.threads ", projections.DerivedViewBoardRankings, "rankings.threads"})
 	if err != nil {
-		t.Fatalf("ResolveDerivedViews: %v", err)
+		t.Fatalf("projections.ResolveDerivedViews: %v", err)
 	}
-	want := []string{DerivedViewBoardRankings, DerivedViewThreadRankings}
+	want := []string{projections.DerivedViewBoardRankings, projections.DerivedViewThreadRankings}
 	if len(views) != len(want) {
 		t.Fatalf("views = %v, want %v", views, want)
 	}
@@ -90,45 +90,45 @@ func TestResolveDerivedViews(t *testing.T) {
 		}
 	}
 
-	all, err := ResolveDerivedViews([]string{"all"})
+	all, err := projections.ResolveDerivedViews([]string{"all"})
 	if err != nil {
-		t.Fatalf("ResolveDerivedViews all: %v", err)
+		t.Fatalf("projections.ResolveDerivedViews all: %v", err)
 	}
-	if len(all) != len(KnownDerivedViews()) {
-		t.Fatalf("all view count = %d, want %d", len(all), len(KnownDerivedViews()))
+	if len(all) != len(projections.KnownDerivedViews()) {
+		t.Fatalf("all view count = %d, want %d", len(all), len(projections.KnownDerivedViews()))
 	}
 
-	search, err := ResolveDerivedViews([]string{"search"})
+	search, err := projections.ResolveDerivedViews([]string{"search"})
 	if err != nil {
-		t.Fatalf("ResolveDerivedViews search: %v", err)
+		t.Fatalf("projections.ResolveDerivedViews search: %v", err)
 	}
-	assertDerivedViews(t, search, []string{DerivedViewDigestSearch, DerivedViewPostSearch})
+	assertDerivedViews(t, search, []string{projections.DerivedViewDigestSearch, projections.DerivedViewPostSearch})
 
-	rankings, err := ResolveDerivedViews([]string{"rankings"})
+	rankings, err := projections.ResolveDerivedViews([]string{"rankings"})
 	if err != nil {
-		t.Fatalf("ResolveDerivedViews rankings: %v", err)
+		t.Fatalf("projections.ResolveDerivedViews rankings: %v", err)
 	}
 	assertDerivedViews(t, rankings, []string{
-		DerivedViewArchiveRankings,
-		DerivedViewBlessingRankings,
-		DerivedViewBoardRankings,
-		DerivedViewReplyRankings,
-		DerivedViewThreadRankings,
-		DerivedViewUserRankings,
+		projections.DerivedViewArchiveRankings,
+		projections.DerivedViewBlessingRankings,
+		projections.DerivedViewBoardRankings,
+		projections.DerivedViewReplyRankings,
+		projections.DerivedViewThreadRankings,
+		projections.DerivedViewUserRankings,
 	})
 
-	mixed, err := ResolveDerivedViews([]string{"search, summaries.boards", "summaries"})
+	mixed, err := projections.ResolveDerivedViews([]string{"search, summaries.boards", "summaries"})
 	if err != nil {
-		t.Fatalf("ResolveDerivedViews mixed groups: %v", err)
+		t.Fatalf("projections.ResolveDerivedViews mixed groups: %v", err)
 	}
 	assertDerivedViews(t, mixed, []string{
-		DerivedViewDigestSearch,
-		DerivedViewPostSearch,
-		DerivedViewBoardSummaries,
-		DerivedViewUnreadThreads,
+		projections.DerivedViewDigestSearch,
+		projections.DerivedViewPostSearch,
+		projections.DerivedViewBoardSummaries,
+		projections.DerivedViewUnreadThreads,
 	})
 
-	groups := DerivedViewGroups()
+	groups := projections.DerivedViewGroups()
 	if len(groups["search"]) != 2 {
 		t.Fatalf("search group = %v, want two views", groups["search"])
 	}
@@ -136,11 +136,11 @@ func TestResolveDerivedViews(t *testing.T) {
 		t.Fatalf("feeds group = %v, want two views", groups["feeds"])
 	}
 	groups["search"][0] = "mutated"
-	if again := DerivedViewGroups()["search"][0]; again == "mutated" {
-		t.Fatalf("DerivedViewGroups returned mutable backing slice")
+	if again := projections.DerivedViewGroups()["search"][0]; again == "mutated" {
+		t.Fatalf("projections.DerivedViewGroups returned mutable backing slice")
 	}
 
-	if _, err := ResolveDerivedViews([]string{"rankings.unknown"}); err == nil {
+	if _, err := projections.ResolveDerivedViews([]string{"rankings.unknown"}); err == nil {
 		t.Fatal("expected unknown derived view to fail")
 	}
 }
@@ -177,12 +177,12 @@ func TestBackfillDerivedViewsFromEventLogAdvancesSelectedWatermarks(t *testing.T
 	}
 
 	stale := head - 1
-	for _, view := range []string{DerivedViewBoardRankings, DerivedViewPostSearch, DerivedViewUserRankings} {
+	for _, view := range []string{projections.DerivedViewBoardRankings, projections.DerivedViewPostSearch, projections.DerivedViewUserRankings} {
 		if err := c.RecordDerivedViewApplied(view, stale); err != nil {
 			t.Fatalf("record stale watermark %s: %v", view, err)
 		}
 	}
-	if got, err := c.DerivedViewAppliedSeq(DerivedViewBoardRankings); err != nil || got != stale {
+	if got, err := c.DerivedViewAppliedSeq(projections.DerivedViewBoardRankings); err != nil || got != stale {
 		t.Fatalf("stale board ranking watermark = %d err=%v, want %d", got, err, stale)
 	}
 
@@ -195,17 +195,17 @@ func TestBackfillDerivedViewsFromEventLogAdvancesSelectedWatermarks(t *testing.T
 		t.Fatalf("local post read should not depend on search freshness: posts=%d err=%v", len(posts), err)
 	}
 
-	result, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewBoardRankings, DerivedViewPostSearch}, 0)
+	result, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewBoardRankings, projections.DerivedViewPostSearch}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog: %v", err)
 	}
 	if result.HeadSeq != head {
 		t.Fatalf("backfill head = %d, want %d", result.HeadSeq, head)
 	}
-	if len(result.Views) != 2 || result.Views[0] != DerivedViewBoardRankings || result.Views[1] != DerivedViewPostSearch {
+	if len(result.Views) != 2 || result.Views[0] != projections.DerivedViewBoardRankings || result.Views[1] != projections.DerivedViewPostSearch {
 		t.Fatalf("backfilled views = %v", result.Views)
 	}
-	for _, view := range []string{DerivedViewBoardRankings, DerivedViewPostSearch} {
+	for _, view := range []string{projections.DerivedViewBoardRankings, projections.DerivedViewPostSearch} {
 		applied, err := c.DerivedViewAppliedSeq(view)
 		if err != nil {
 			t.Fatalf("applied %s: %v", view, err)
@@ -214,7 +214,7 @@ func TestBackfillDerivedViewsFromEventLogAdvancesSelectedWatermarks(t *testing.T
 			t.Fatalf("applied %s = %d, want %d", view, applied, head)
 		}
 	}
-	userRankingApplied, err := c.DerivedViewAppliedSeq(DerivedViewUserRankings)
+	userRankingApplied, err := c.DerivedViewAppliedSeq(projections.DerivedViewUserRankings)
 	if err != nil {
 		t.Fatalf("user rankings applied: %v", err)
 	}
@@ -255,23 +255,23 @@ func TestSyncDerivedViewsToHeadAdvancesSelectedWatermarks(t *testing.T) {
 	}
 
 	stale := head - 1
-	for _, view := range []string{DerivedViewBoardRankings, DerivedViewPostSearch, DerivedViewUserRankings} {
+	for _, view := range []string{projections.DerivedViewBoardRankings, projections.DerivedViewPostSearch, projections.DerivedViewUserRankings} {
 		if err := c.RecordDerivedViewApplied(view, stale); err != nil {
 			t.Fatalf("record stale watermark %s: %v", view, err)
 		}
 	}
 
-	result, err := c.SyncDerivedViewsToHead([]string{DerivedViewPostSearch, DerivedViewBoardRankings})
+	result, err := c.SyncDerivedViewsToHead([]string{projections.DerivedViewPostSearch, projections.DerivedViewBoardRankings})
 	if err != nil {
 		t.Fatalf("SyncDerivedViewsToHead: %v", err)
 	}
 	if result.HeadSeq != head {
 		t.Fatalf("sync head = %d, want %d", result.HeadSeq, head)
 	}
-	if len(result.Views) != 2 || result.Views[0] != DerivedViewBoardRankings || result.Views[1] != DerivedViewPostSearch {
+	if len(result.Views) != 2 || result.Views[0] != projections.DerivedViewBoardRankings || result.Views[1] != projections.DerivedViewPostSearch {
 		t.Fatalf("synced views = %v", result.Views)
 	}
-	for _, view := range []string{DerivedViewBoardRankings, DerivedViewPostSearch} {
+	for _, view := range []string{projections.DerivedViewBoardRankings, projections.DerivedViewPostSearch} {
 		applied, err := c.DerivedViewAppliedSeq(view)
 		if err != nil {
 			t.Fatalf("applied %s: %v", view, err)
@@ -280,7 +280,7 @@ func TestSyncDerivedViewsToHeadAdvancesSelectedWatermarks(t *testing.T) {
 			t.Fatalf("applied %s = %d, want %d", view, applied, head)
 		}
 	}
-	userRankingApplied, err := c.DerivedViewAppliedSeq(DerivedViewUserRankings)
+	userRankingApplied, err := c.DerivedViewAppliedSeq(projections.DerivedViewUserRankings)
 	if err != nil {
 		t.Fatalf("user rankings applied: %v", err)
 	}
@@ -299,12 +299,12 @@ func TestDerivedViewWatermarkWorkerTracksHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register user: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewBoardRankings, 0); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBoardRankings, 0); err != nil {
 		t.Fatalf("record stale watermark: %v", err)
 	}
 
 	workerCtx, stopWorker := context.WithCancel(ctx)
-	worker, err := c.StartDerivedViewWatermarkWorker(workerCtx, []string{DerivedViewBoardRankings}, 10*time.Millisecond)
+	worker, err := c.StartDerivedViewWatermarkWorker(workerCtx, []string{projections.DerivedViewBoardRankings}, 10*time.Millisecond)
 	if err != nil {
 		t.Fatalf("StartDerivedViewWatermarkWorker: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestDerivedViewWatermarkWorkerTracksHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	waitForDerivedViewApplied(t, c, DerivedViewBoardRankings, head)
+	waitForDerivedViewApplied(t, c, projections.DerivedViewBoardRankings, head)
 	stopWorker()
 }
 

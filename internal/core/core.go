@@ -324,7 +324,7 @@ func New(dbPath string, options ...Option) (*Core, error) {
 		hotThreadSplitOverrides: hotThreadSplitOverrides,
 	}
 	if opts.asyncCommunityStatHistory {
-		if err := c.RecordDerivedViewApplied(DerivedViewCommunityStatHistory, 0); err != nil {
+		if err := c.RecordDerivedViewApplied(projections.DerivedViewCommunityStatHistory, 0); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize async community stat history watermark: %w", err)
 		}
@@ -447,7 +447,7 @@ func NewPostgres(dsn string, options ...Option) (*Core, error) {
 		hotThreadSplitOverrides: hotThreadSplitOverrides,
 	}
 	if opts.asyncCommunityStatHistory {
-		if err := c.RecordDerivedViewApplied(DerivedViewCommunityStatHistory, 0); err != nil {
+		if err := c.RecordDerivedViewApplied(projections.DerivedViewCommunityStatHistory, 0); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize async community stat history watermark: %w", err)
 		}
@@ -2364,7 +2364,7 @@ func (c *Core) latestFeedCacheKey(viewerID string, includePrivate bool, limit, o
 	if c == nil || c.readCache == nil {
 		return readmodel.LatestFeedKey{}, false
 	}
-	appliedSeq, err := c.DerivedViewAppliedSeq(DerivedViewLatestFeed)
+	appliedSeq, err := c.DerivedViewAppliedSeq(projections.DerivedViewLatestFeed)
 	if err != nil {
 		return readmodel.LatestFeedKey{}, false
 	}

@@ -57,7 +57,7 @@ func TestBlessingRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) 
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewBlessingRankings, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewBlessingRankings, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessBlessingRankingsOnce(100)
@@ -110,11 +110,11 @@ func TestBlessingRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) 
 	if rows := blessingRankingStatsRows(t, c); rows != 0 {
 		t.Fatalf("blessing ranking stats rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewBlessingRankings}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewBlessingRankings}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog rankings.blessings: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewBlessingRankings {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewBlessingRankings {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := blessingRankingStatsRows(t, c); rows < 2 {

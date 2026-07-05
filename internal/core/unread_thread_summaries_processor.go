@@ -46,7 +46,7 @@ func (c *Core) StartUnreadThreadSummariesProcessor(ctx context.Context, interval
 
 func (c *Core) ProcessUnreadThreadSummariesOnce(batchSize int) (UnreadThreadSummariesProcessResult, error) {
 	return c.processDerivedRebuildOnce(batchSize, derivedRebuildSpec{
-		view:     DerivedViewUnreadThreads,
+		view:     projections.DerivedViewUnreadThreads,
 		rebuild:  projections.RebuildUnreadThreadSummaryStats,
 		rowCount: projections.UnreadThreadSummaryStatsRowCount,
 	})

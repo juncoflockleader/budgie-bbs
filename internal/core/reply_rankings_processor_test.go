@@ -89,7 +89,7 @@ func TestReplyRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("head: %v", err)
 	}
-	if err := c.RecordDerivedViewApplied(DerivedViewReplyRankings, head); err != nil {
+	if err := c.RecordDerivedViewApplied(projections.DerivedViewReplyRankings, head); err != nil {
 		t.Fatalf("seed compatibility watermark: %v", err)
 	}
 	result, err := c.ProcessReplyRankingsOnce(100)
@@ -147,11 +147,11 @@ func TestReplyRankingsProcessorMaterializesAndRebuildsRankings(t *testing.T) {
 	if rows := replyRankingPostsRows(t, c); rows != 0 {
 		t.Fatalf("reply ranking rows after delete = %d, want 0", rows)
 	}
-	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{DerivedViewReplyRankings}, 0)
+	backfill, err := c.BackfillDerivedViewsFromEventLog([]string{projections.DerivedViewReplyRankings}, 0)
 	if err != nil {
 		t.Fatalf("BackfillDerivedViewsFromEventLog rankings.replies: %v", err)
 	}
-	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewReplyRankings {
+	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != projections.DerivedViewReplyRankings {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
 	if rows := replyRankingPostsRows(t, c); rows < 4 {
