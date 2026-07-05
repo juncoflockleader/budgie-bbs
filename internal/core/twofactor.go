@@ -27,12 +27,9 @@ const (
 	outboxEmail2FACode = "email.2fa"
 )
 
-type SecuritySettings = accountmodel.SecuritySettings
-type TwoFactorStatus = accountmodel.TwoFactorStatus
-
 // SecuritySettings returns the site security settings (zero value if unset).
-func (c *Core) SecuritySettings() (*SecuritySettings, error) {
-	out := &SecuritySettings{}
+func (c *Core) SecuritySettings() (*accountmodel.SecuritySettings, error) {
+	out := &accountmodel.SecuritySettings{}
 	var req int
 	err := qQueryRow(c.DB, `SELECT staff_2fa_required, updated_at FROM security_settings WHERE id='default'`).Scan(&req, &out.UpdatedAt)
 	if err == sql.ErrNoRows {
@@ -46,7 +43,7 @@ func (c *Core) SecuritySettings() (*SecuritySettings, error) {
 }
 
 // SetSecuritySettings toggles whether staff (admin/moderator) must complete 2FA.
-func (c *Core) SetSecuritySettings(staff2FARequired bool) (*SecuritySettings, error) {
+func (c *Core) SetSecuritySettings(staff2FARequired bool) (*accountmodel.SecuritySettings, error) {
 	if _, err := qExec(c.DB,
 		`INSERT INTO security_settings (id, staff_2fa_required, updated_at) VALUES ('default', ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET staff_2fa_required=excluded.staff_2fa_required, updated_at=excluded.updated_at`,
@@ -57,8 +54,8 @@ func (c *Core) SetSecuritySettings(staff2FARequired bool) (*SecuritySettings, er
 }
 
 // TwoFactorStatus returns a user's enrollment state.
-func (c *Core) TwoFactorStatus(userID string) (TwoFactorStatus, error) {
-	var st TwoFactorStatus
+func (c *Core) TwoFactorStatus(userID string) (accountmodel.TwoFactorStatus, error) {
+	var st accountmodel.TwoFactorStatus
 	var totpEnrolled, emailEnrolled int
 	err := qQueryRow(c.DB, `SELECT totp_enrolled, email_enrolled FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&totpEnrolled, &emailEnrolled)
 	if err == sql.ErrNoRows {
