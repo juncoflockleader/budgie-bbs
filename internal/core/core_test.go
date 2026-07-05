@@ -14,6 +14,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	"github.com/juncoflockleader/budgie-bbs/internal/runconfig"
@@ -1669,7 +1670,7 @@ func TestBoardDirectoryHierarchy(t *testing.T) {
 		t.Fatalf("rejected board should not create a category, got %+v", byID["orphan"])
 	}
 
-	updated, err := c.UpdateCategory(admin.ID, "sports", core.CategoryUpdate{
+	updated, err := c.UpdateCategory(admin.ID, "sports", categorymodel.UpdatePatch{
 		Name:        stringPtr("Athletics"),
 		Description: stringPtr("Sports desk"),
 		ParentID:    stringPtr("clubs"),
@@ -1698,7 +1699,7 @@ func TestBoardDirectoryHierarchy(t *testing.T) {
 			t.Fatalf("staff category should be hidden from normal users, got %+v", visible)
 		}
 	}
-	if _, err := c.UpdateCategory(admin.ID, "clubs", core.CategoryUpdate{ParentID: stringPtr("music")}); err == nil {
+	if _, err := c.UpdateCategory(admin.ID, "clubs", categorymodel.UpdatePatch{ParentID: stringPtr("music")}); err == nil {
 		t.Fatalf("expected category cycle to be rejected")
 	}
 }

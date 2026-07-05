@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -1210,7 +1211,7 @@ func (s *Server) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
 		return
 	}
-	category, err := s.core.UpdateCategory(actor.ID, r.PathValue("category"), core.CategoryUpdate{
+	category, err := s.core.UpdateCategory(actor.ID, r.PathValue("category"), categorymodel.UpdatePatch{
 		Name:        req.Name,
 		Description: req.Description,
 		ParentID:    req.ParentID,

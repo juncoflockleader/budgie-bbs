@@ -1704,8 +1704,6 @@ func (c *Core) ListBoards() ([]Board, error)        { return projections.ListBoa
 func (c *Core) ListCategories() ([]Category, error) { return projections.ListCategories(c.DB) }
 func (c *Core) GetBoard(id string) (*Board, error)  { return projections.GetBoard(c.DB, id) }
 
-type CategoryUpdate = categorymodel.UpdatePatch
-
 func (c *Core) ListCategoriesForUser(viewer *User) ([]Category, error) {
 	categories, err := c.ListCategories()
 	if err != nil {
@@ -1741,7 +1739,7 @@ func categoryModelCategory(category Category) categorymodel.Category {
 	}
 }
 
-func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) (*Category, error) {
+func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.UpdatePatch) (*Category, error) {
 	actorID = strings.TrimSpace(actorID)
 	categoryID = strings.TrimSpace(categoryID)
 	if actorID == "" || categoryID == "" {
