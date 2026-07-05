@@ -5,17 +5,15 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-type ChatLineInput = chatmodel.LineInput
-
-func NormalizeChatLine(room, text string) (ChatLineInput, *proto.ErrorDetail) {
+func NormalizeChatLine(room, text string) (chatmodel.LineInput, *proto.ErrorDetail) {
 	line, failure := chatmodel.NormalizeLine(room, text)
 	switch failure {
 	case chatmodel.LineMissing:
-		return ChatLineInput{}, newErrDetail(proto.ErrValidationFailed, "room and text are required", false)
+		return chatmodel.LineInput{}, newErrDetail(proto.ErrValidationFailed, "room and text are required", false)
 	case chatmodel.LineInvalidRoom:
-		return ChatLineInput{}, newErrDetail(proto.ErrValidationFailed, "chat room must use letters, numbers, underscore, or hyphen", false)
+		return chatmodel.LineInput{}, newErrDetail(proto.ErrValidationFailed, "chat room must use letters, numbers, underscore, or hyphen", false)
 	case chatmodel.LineTextTooLong:
-		return ChatLineInput{}, newErrDetail(proto.ErrValidationFailed, "chat text is too long", false)
+		return chatmodel.LineInput{}, newErrDetail(proto.ErrValidationFailed, "chat text is too long", false)
 	}
 	return line, nil
 }

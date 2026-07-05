@@ -175,9 +175,7 @@ func PlanReplyTarget(replyTo string, parent *projections.Post, threadID string, 
 	return plan, nil
 }
 
-type PostFlagPlan = postmodel.FlagPlan
-
-func PlanPostFlagUpdate(post *projections.Post, payload proto.SetPostFlagPayload) PostFlagPlan {
+func PlanPostFlagUpdate(post *projections.Post, payload proto.SetPostFlagPayload) postmodel.FlagPlan {
 	return postmodel.PlanFlagUpdate(postPolicyFlags(post), postmodel.FlagPatch{
 		Marked:      payload.Marked,
 		Recommended: payload.Recommended,
@@ -187,7 +185,7 @@ func PlanPostFlagUpdate(post *projections.Post, payload proto.SetPostFlagPayload
 	})
 }
 
-func RequirePostFlagPermissions(plan PostFlagPlan, actor *projections.User, post *projections.Post, canCurate, canModerateThread bool) *proto.ErrorDetail {
+func RequirePostFlagPermissions(plan postmodel.FlagPlan, actor *projections.User, post *projections.Post, canCurate, canModerateThread bool) *proto.ErrorDetail {
 	switch plan.PermissionFailure(postPolicyActor(actor), post.AuthorID, canCurate, canModerateThread) {
 	case postmodel.FlagPermissionCurator:
 		return newErrDetail(proto.ErrForbidden, "board curator permission required", false)
