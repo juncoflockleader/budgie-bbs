@@ -1015,12 +1015,9 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 		return internalErr(err)
 	}
 	canModeratePosts := commandrules.ActorCanModerateBoardPosts(tx, actor, thread.Board)
-	if !canModeratePosts && !(isAuthor && withinWindow) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "insufficient permissions to redact this post", false)}
-	}
-	deletionKind := "recycle"
-	if !canModeratePosts && isAuthor && withinWindow {
-		deletionKind = "junk"
+	deletionKind, errDetail := commandrules.PlanPostRedaction(canModeratePosts, isAuthor, withinWindow)
+	if errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}

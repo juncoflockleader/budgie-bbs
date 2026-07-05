@@ -1142,8 +1142,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRedactPost(ctx context.Context,
 	ts := nativeCommandTimestamp(record)
 	isAuthor := commandrules.ActorAuthoredByID(actor, post.AuthorID)
 	withinWindow := commandrules.WithinAuthorEditWindow(ts, post.CreatedAt, nativeAuthorEditWindow.Milliseconds())
-	if !canModeratePosts && !(isAuthor && withinWindow) {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "insufficient permissions to redact this post", false)
+	if _, errDetail := commandrules.PlanPostRedaction(canModeratePosts, isAuthor, withinWindow); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	event := nativeEvent(record, 0, proto.EvtPostRedacted, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRedactedPayload{
 		ID:     post.ID,

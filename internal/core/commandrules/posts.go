@@ -220,6 +220,16 @@ func RequirePostFlagPermissions(plan PostFlagPlan, actor *projections.User, post
 	return nil
 }
 
+func PlanPostRedaction(canModeratePosts, isAuthor, withinWindow bool) (string, *proto.ErrorDetail) {
+	if !canModeratePosts && !(isAuthor && withinWindow) {
+		return "", newErrDetail(proto.ErrForbidden, "insufficient permissions to redact this post", false)
+	}
+	if !canModeratePosts {
+		return "junk", nil
+	}
+	return "recycle", nil
+}
+
 func requireMemberBoardReadAccess(settings *projections.BoardSettings, message string, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
 	if !boardRequiresReadMembership(settings) {
 		return nil
