@@ -23,3 +23,10 @@ func RequireMinTrustForPoll(db *sql.DB, actor *projections.User, minLevel int, a
 	}
 	return nil
 }
+
+func RequirePollResultPublisher(canManagePolls, isPostAuthor, isThreadAuthor bool) *proto.ErrorDetail {
+	if canManagePolls || isPostAuthor || isThreadAuthor {
+		return nil
+	}
+	return newErrDetail(proto.ErrForbidden, "poll author or board poll manager required", false)
+}

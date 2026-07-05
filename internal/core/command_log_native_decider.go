@@ -1564,8 +1564,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePublishPollResult(ctx context.C
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !canManagePolls && post.AuthorID != actor.ID && thread.AuthorID != actor.ID {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "poll author or board poll manager required", false)
+	if errDetail := commandrules.RequirePollResultPublisher(canManagePolls, post.AuthorID == actor.ID, thread.AuthorID == actor.ID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	emit, err := projections.BoardAllowsPublicSystemPost(e.core.DB, thread.Board)
 	if err != nil {

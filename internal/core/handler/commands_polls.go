@@ -88,8 +88,9 @@ func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayloa
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
-	if !commandrules.ActorCanManageBoardPolls(h.db, actor, thread.Board) && post.AuthorID != actor.ID && thread.AuthorID != actor.ID {
-		return Reply{Err: errDetail(proto.ErrForbidden, "poll author or board poll manager required", false)}
+	canManagePolls := commandrules.ActorCanManageBoardPolls(h.db, actor, thread.Board)
+	if errDetail := commandrules.RequirePollResultPublisher(canManagePolls, post.AuthorID == actor.ID, thread.AuthorID == actor.ID); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, thread.Board)
 	if err != nil {
