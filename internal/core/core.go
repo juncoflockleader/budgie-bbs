@@ -25,6 +25,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/categorystore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
@@ -1547,7 +1548,7 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.Up
 	if actor == nil || !actor.IsAdmin() {
 		return nil, fmt.Errorf("%w: admin role required", ErrAccountDeleteForbidden)
 	}
-	category, err := getCategoryTx(tx, categoryID)
+	category, err := categorystore.GetTx(tx, categoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -1560,7 +1561,7 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.Up
 		return nil, err
 	}
 	if plan.ParentChanged {
-		if err := validateCategoryParentTx(tx, categoryID, plan.ParentID); err != nil {
+		if err := categorystore.ValidateParentTx(tx, categoryID, plan.ParentID); err != nil {
 			return nil, err
 		}
 	}
@@ -1572,18 +1573,10 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.Up
 	}
 
 	ts := nowMS()
-	if _, err := qExec(tx,
-		`UPDATE categories
-		    SET name=?, description=?, parent_id=?, position=?, visibility=?, updated_at=?
-		  WHERE id=?`,
-		plan.Name, plan.Description, plan.ParentID, plan.Position, plan.Visibility, ts, categoryID,
-	); err != nil {
+	if err := categorystore.UpdateTx(tx, categoryID, plan, ts); err != nil {
 		return nil, err
 	}
-	if _, err := qExec(tx, `UPDATE boards SET name=?, description=? WHERE id=?`, plan.Name, plan.Description, categoryID); err != nil {
-		return nil, err
-	}
-	updated, err := getCategoryTx(tx, categoryID)
+	updated, err := categorystore.GetTx(tx, categoryID)
 	if err != nil {
 		return nil, err
 	}
@@ -1591,39 +1584,6 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch categorymodel.Up
 		return nil, err
 	}
 	return updated, nil
-}
-
-func getCategoryTx(tx *sql.Tx, categoryID string) (*projections.Category, error) {
-	var category projections.Category
-	err := qQueryRow(tx,
-		`SELECT id, name, description, parent_id, position, visibility, created_at, updated_at
-		   FROM categories WHERE id=?`,
-		categoryID,
-	).Scan(&category.ID, &category.Name, &category.Description, &category.ParentID, &category.Position, &category.Visibility, &category.CreatedAt, &category.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return &category, err
-}
-
-func validateCategoryParentTx(tx *sql.Tx, categoryID, parentID string) error {
-	seen := map[string]bool{categoryID: true}
-	for parentID != "" {
-		if seen[parentID] {
-			return fmt.Errorf("category parent would create a cycle")
-		}
-		seen[parentID] = true
-		var next string
-		err := qQueryRow(tx, `SELECT parent_id FROM categories WHERE id=?`, parentID).Scan(&next)
-		if err == sql.ErrNoRows {
-			return sql.ErrNoRows
-		}
-		if err != nil {
-			return err
-		}
-		parentID = next
-	}
-	return nil
 }
 
 func (c *Core) GetCommunityStats() (*projections.CommunityStats, error) {
