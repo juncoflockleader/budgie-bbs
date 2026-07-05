@@ -161,7 +161,6 @@ type PresenceStore = presencestore.Store
 type PresenceStats = presencestore.Stats
 type ChatStore = chatstore.Store
 
-type User = projections.User
 type Poll = projections.Poll
 type SocialUser = projections.SocialUser
 type ChatRoom = projections.ChatRoom
@@ -216,7 +215,7 @@ type Reply = commandexec.Reply
 // cmdEnvelope is the internal queue message for the command dispatcher.
 type cmdEnvelope struct {
 	ctx       context.Context // caller context; used for lock timeout and cancellation
-	actor     *User
+	actor     *projections.User
 	name      proto.CommandName
 	payload   json.RawMessage
 	cid       string
@@ -333,11 +332,11 @@ func (h *Handler) dispatchWithLock(env cmdEnvelope) Reply {
 }
 
 // Execute submits a command and blocks until it is processed.
-func (h *Handler) Execute(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string) Reply {
+func (h *Handler) Execute(ctx context.Context, actor *projections.User, name proto.CommandName, payload json.RawMessage, cid string) Reply {
 	return h.ExecutePartition(ctx, actor, name, payload, cid, commandexec.Partition{})
 }
 
-func (h *Handler) ExecutePartition(ctx context.Context, actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition commandexec.Partition) Reply {
+func (h *Handler) ExecutePartition(ctx context.Context, actor *projections.User, name proto.CommandName, payload json.RawMessage, cid string, partition commandexec.Partition) Reply {
 	replyCh := make(chan Reply, 1)
 	env := cmdEnvelope{
 		ctx:       ctx,

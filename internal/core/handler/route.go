@@ -5,12 +5,13 @@ import (
 	"fmt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 // --- Idempotency wrapper ---
 
-func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.RawMessage, cid string, partition commandexec.Partition) Reply {
+func (h *Handler) dispatch(actor *projections.User, name proto.CommandName, payload json.RawMessage, cid string, partition commandexec.Partition) Reply {
 	actorID := ""
 	if actor != nil {
 		actorID = actor.ID
@@ -41,7 +42,7 @@ func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.Raw
 	return reply
 }
 
-func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMessage) Reply {
+func (h *Handler) route(actor *projections.User, name proto.CommandName, payload json.RawMessage) Reply {
 	switch name {
 	case proto.CmdCreateThread:
 		var p proto.CreateThreadPayload
