@@ -74,10 +74,6 @@ SELECT owner_id, expires_at
  WHERE partition_kind=? AND partition_key=?`), partition.Kind, partition.Key).Scan(&claimOwner, &claimExpiresAt); err != nil {
 		return CommandPartitionClaim{}, false, err
 	}
-	claim := commandPartitionClaimForOwner(partition, claimOwner, claimExpiresAt)
+	claim := logmodel.NewCommandPartitionClaim(partition, claimOwner, claimExpiresAt)
 	return claim, claim.OwnerID == ownerID && claim.ExpiresAt >= expiresAt, nil
-}
-
-func commandPartitionClaimForOwner(partition LogPartition, ownerID string, expiresAt int64) CommandPartitionClaim {
-	return logmodel.NewCommandPartitionClaim(partition, ownerID, expiresAt)
 }

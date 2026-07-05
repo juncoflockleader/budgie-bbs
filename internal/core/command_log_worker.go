@@ -432,7 +432,7 @@ func (w *CommandLogWorker) Run(ctx context.Context) {
 }
 
 func (w *CommandLogWorker) claimPartition(ctx context.Context, partition LogPartition) (CommandPartitionClaim, bool, error) {
-	claim := commandPartitionClaimForOwner(partition, w.ownerID, 0)
+	claim := logmodel.NewCommandPartitionClaim(partition, w.ownerID, 0)
 	if w.claims == nil {
 		return claim, true, nil
 	}
