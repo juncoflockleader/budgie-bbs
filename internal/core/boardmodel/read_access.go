@@ -1,9 +1,37 @@
 package boardmodel
 
-import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+type AccessActor struct {
+	ID   string
+	Role string
+}
+
+func (a AccessActor) IsMod() bool {
+	return a.Role == "moderator" || a.Role == "admin"
+}
+
+type AccessSettings struct {
+	MemberReadMode bool
+	GuestAccess    string
+}
+
+type AccessModerator struct {
+	UserID string
+}
+
+type AccessMember struct {
+	UserID           string
+	CanManageMembers bool
+	CanModeratePosts bool
+}
+
+type AccessInfo struct {
+	Settings   AccessSettings
+	Moderators []AccessModerator
+	Members    []AccessMember
+}
 
 // ActorCanReadBoard reports whether actor may read the board described by info.
-func ActorCanReadBoard(actor *projections.User, info *projections.BoardInfo) bool {
+func ActorCanReadBoard(actor *AccessActor, info *AccessInfo) bool {
 	if info == nil {
 		return false
 	}
@@ -29,12 +57,12 @@ func ActorCanReadBoard(actor *projections.User, info *projections.BoardInfo) boo
 // actorIsGuest reports whether actor is the unauthenticated web guest principal.
 // A nil actor (internal/system reads such as NNTP or relay) is deliberately not
 // a guest, so those paths keep their world-readable behavior.
-func actorIsGuest(actor *projections.User) bool {
+func actorIsGuest(actor *AccessActor) bool {
 	return actor != nil && actor.Role == "guest"
 }
 
 // ActorModeratesBoard reports whether actor has site or board moderation scope.
-func ActorModeratesBoard(actor *projections.User, info *projections.BoardInfo) bool {
+func ActorModeratesBoard(actor *AccessActor, info *AccessInfo) bool {
 	if actor == nil || info == nil {
 		return false
 	}
@@ -49,7 +77,7 @@ func ActorModeratesBoard(actor *projections.User, info *projections.BoardInfo) b
 	return false
 }
 
-func actorIsBoardMember(actor *projections.User, info *projections.BoardInfo) bool {
+func actorIsBoardMember(actor *AccessActor, info *AccessInfo) bool {
 	if actor == nil || info == nil {
 		return false
 	}
@@ -63,7 +91,7 @@ func actorIsBoardMember(actor *projections.User, info *projections.BoardInfo) bo
 
 // ActorCanManageBoardMembers reports whether actor may review/manage board
 // membership using a loaded BoardInfo snapshot.
-func ActorCanManageBoardMembers(actor *projections.User, info *projections.BoardInfo) bool {
+func ActorCanManageBoardMembers(actor *AccessActor, info *AccessInfo) bool {
 	if ActorModeratesBoard(actor, info) {
 		return true
 	}
@@ -80,7 +108,7 @@ func ActorCanManageBoardMembers(actor *projections.User, info *projections.Board
 
 // ActorCanModerateBoardPosts reports whether actor may moderate posts using a
 // loaded BoardInfo snapshot.
-func ActorCanModerateBoardPosts(actor *projections.User, info *projections.BoardInfo) bool {
+func ActorCanModerateBoardPosts(actor *AccessActor, info *AccessInfo) bool {
 	if ActorModeratesBoard(actor, info) {
 		return true
 	}

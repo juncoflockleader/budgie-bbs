@@ -17,7 +17,12 @@ import (
 
 // ActorCanReadBoard reports whether actor may read the board described by info.
 func ActorCanReadBoard(actor *User, info *BoardInfo) bool {
-	return boardmodel.ActorCanReadBoard(actor, info)
+	return boardmodel.ActorCanReadBoard(boardAccessActor(actor), boardAccessInfo(info))
+}
+
+// ActorModeratesBoard reports whether actor has site or board moderation scope.
+func ActorModeratesBoard(actor *User, info *BoardInfo) bool {
+	return boardmodel.ActorModeratesBoard(boardAccessActor(actor), boardAccessInfo(info))
 }
 
 // ActorCanSetBoardSettings reports whether actor may manage a board's settings:
@@ -77,4 +82,39 @@ func (c *Core) scopeVisibleTo(actor *User, scope string) bool {
 		// chat:, presence:, and other non-sensitive broadcast scopes.
 		return true
 	}
+}
+
+func boardAccessActor(actor *User) *boardmodel.AccessActor {
+	if actor == nil {
+		return nil
+	}
+	return &boardmodel.AccessActor{
+		ID:   actor.ID,
+		Role: actor.Role,
+	}
+}
+
+func boardAccessInfo(info *BoardInfo) *boardmodel.AccessInfo {
+	if info == nil {
+		return nil
+	}
+	out := &boardmodel.AccessInfo{
+		Settings: boardmodel.AccessSettings{
+			MemberReadMode: info.Settings.MemberReadMode,
+			GuestAccess:    info.Settings.GuestAccess,
+		},
+		Moderators: make([]boardmodel.AccessModerator, 0, len(info.Moderators)),
+		Members:    make([]boardmodel.AccessMember, 0, len(info.Members)),
+	}
+	for _, mod := range info.Moderators {
+		out.Moderators = append(out.Moderators, boardmodel.AccessModerator{UserID: mod.UserID})
+	}
+	for _, member := range info.Members {
+		out.Members = append(out.Members, boardmodel.AccessMember{
+			UserID:           member.UserID,
+			CanManageMembers: member.CanManageMembers,
+			CanModeratePosts: member.CanModeratePosts,
+		})
+	}
+	return out
 }

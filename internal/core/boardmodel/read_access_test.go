@@ -1,28 +1,24 @@
 package boardmodel
 
-import (
-	"testing"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
-)
+import "testing"
 
 func TestActorCanReadBoard(t *testing.T) {
-	public := &projections.BoardInfo{}
+	public := &AccessInfo{}
 	public.Settings.MemberReadMode = false
 
-	private := &projections.BoardInfo{
-		Moderators: []projections.BoardModerator{{UserID: "mod1"}},
-		Members:    []projections.BoardMember{{UserID: "member1"}},
+	private := &AccessInfo{
+		Moderators: []AccessModerator{{UserID: "mod1"}},
+		Members:    []AccessMember{{UserID: "member1"}},
 	}
 	private.Settings.MemberReadMode = true
 
-	admin := &projections.User{ID: "a", Role: "admin"}
-	mod := &projections.User{ID: "mod1", Role: "user"}
-	member := &projections.User{ID: "member1", Role: "user"}
-	stranger := &projections.User{ID: "x", Role: "user"}
+	admin := &AccessActor{ID: "a", Role: "admin"}
+	mod := &AccessActor{ID: "mod1", Role: "user"}
+	member := &AccessActor{ID: "member1", Role: "user"}
+	stranger := &AccessActor{ID: "x", Role: "user"}
 
 	// Public board: readable by anyone, including a nil/internal actor.
-	for _, u := range []*projections.User{nil, admin, mod, member, stranger} {
+	for _, u := range []*AccessActor{nil, admin, mod, member, stranger} {
 		if !ActorCanReadBoard(u, public) {
 			t.Fatalf("public board should be readable by %v", u)
 		}
@@ -35,7 +31,7 @@ func TestActorCanReadBoard(t *testing.T) {
 	if ActorCanReadBoard(nil, private) {
 		t.Fatal("a nil/internal actor must not read a member-read-mode board")
 	}
-	for _, u := range []*projections.User{admin, mod, member} {
+	for _, u := range []*AccessActor{admin, mod, member} {
 		if !ActorCanReadBoard(u, private) {
 			t.Fatalf("%s should be able to read the private board", u.ID)
 		}
@@ -43,15 +39,15 @@ func TestActorCanReadBoard(t *testing.T) {
 }
 
 func TestActorCanReadBoardGuestAccess(t *testing.T) {
-	guest := &projections.User{Role: "guest"}
-	private := &projections.BoardInfo{}
+	guest := &AccessActor{Role: "guest"}
+	private := &AccessInfo{}
 	private.Settings.MemberReadMode = true
 	private.Settings.GuestAccess = "public"
 	if !ActorCanReadBoard(guest, private) {
 		t.Fatal("guest public override should grant access")
 	}
 
-	public := &projections.BoardInfo{}
+	public := &AccessInfo{}
 	public.Settings.GuestAccess = "hidden"
 	if ActorCanReadBoard(guest, public) {
 		t.Fatal("guest hidden override should deny access")
@@ -59,24 +55,24 @@ func TestActorCanReadBoardGuestAccess(t *testing.T) {
 }
 
 func TestBoardInfoPermissions(t *testing.T) {
-	info := &projections.BoardInfo{
-		Moderators: []projections.BoardModerator{{UserID: "mod1"}},
-		Members: []projections.BoardMember{
+	info := &AccessInfo{
+		Moderators: []AccessModerator{{UserID: "mod1"}},
+		Members: []AccessMember{
 			{UserID: "member1"},
 			{UserID: "manager", CanManageMembers: true},
 			{UserID: "postmod", CanModeratePosts: true},
 		},
 	}
-	if !ActorModeratesBoard(&projections.User{ID: "mod1", Role: "user"}, info) {
+	if !ActorModeratesBoard(&AccessActor{ID: "mod1", Role: "user"}, info) {
 		t.Fatal("board moderator should moderate board")
 	}
-	if !ActorCanManageBoardMembers(&projections.User{ID: "manager", Role: "user"}, info) {
+	if !ActorCanManageBoardMembers(&AccessActor{ID: "manager", Role: "user"}, info) {
 		t.Fatal("member manager should manage board members")
 	}
-	if !ActorCanModerateBoardPosts(&projections.User{ID: "postmod", Role: "user"}, info) {
+	if !ActorCanModerateBoardPosts(&AccessActor{ID: "postmod", Role: "user"}, info) {
 		t.Fatal("post moderator should moderate board posts")
 	}
-	if ActorCanManageBoardMembers(&projections.User{ID: "member1", Role: "user"}, info) {
+	if ActorCanManageBoardMembers(&AccessActor{ID: "member1", Role: "user"}, info) {
 		t.Fatal("plain member should not manage board members")
 	}
 }
