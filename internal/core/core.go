@@ -2150,13 +2150,13 @@ func (c *Core) ImportFavoriteTree(userID string, tree *projections.FavoriteTree,
 func (c *Core) ListThreads(board string, limit, offset int) ([]Thread, error) {
 	return projections.ListThreads(c.DB, board, limit, offset)
 }
-func (c *Core) ListThreadSummaries(userID, board string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
+func (c *Core) ListThreadSummaries(userID, board string, limit, offset int, unreadOnly bool) ([]projections.ThreadSummary, error) {
 	return projections.ListThreadSummariesFiltered(c.DB, userID, board, "", "", limit, offset, unreadOnly)
 }
-func (c *Core) ListThreadSummariesFiltered(userID, board, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]ThreadSummary, error) {
+func (c *Core) ListThreadSummariesFiltered(userID, board, titleQuery, authorQuery string, limit, offset int, unreadOnly bool) ([]projections.ThreadSummary, error) {
 	return projections.ListThreadSummariesFiltered(c.DB, userID, board, titleQuery, authorQuery, limit, offset, unreadOnly)
 }
-func (c *Core) ListUnreadThreadSummaries(actor *User, favoritesOnly bool, folderID string, limit, offset int) ([]ThreadSummary, error) {
+func (c *Core) ListUnreadThreadSummaries(actor *User, favoritesOnly bool, folderID string, limit, offset int) ([]projections.ThreadSummary, error) {
 	rows, err := projections.UnreadThreadSummaryStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err
@@ -2187,7 +2187,7 @@ func (c *Core) ListReplyTreePosts(rootPostID string, limit, offset int) ([]Post,
 	}
 	return posts, nil
 }
-func (c *Core) GetPostAttachment(attachmentID string) (*PostAttachment, error) {
+func (c *Core) GetPostAttachment(attachmentID string) (*projections.PostAttachment, error) {
 	return projections.GetPostAttachment(c.DB, attachmentID)
 }
 func (c *Core) GetAttachmentBlob(attachmentID string) ([]byte, string, error) {
@@ -2373,7 +2373,7 @@ func (c *Core) latestFeedCacheKey(viewerID string, includePrivate bool, limit, o
 	return readmodel.NewLatestFeedKey(viewerID, includePrivate, limit, offset, appliedSeq, headSeq), true
 }
 
-func (c *Core) ListBoardDeletedPosts(boardID, kind string, limit, offset int) ([]PostDeletion, error) {
+func (c *Core) ListBoardDeletedPosts(boardID, kind string, limit, offset int) ([]projections.PostDeletion, error) {
 	return projections.ListBoardDeletedPosts(c.DB, boardID, kind, limit, offset)
 }
 

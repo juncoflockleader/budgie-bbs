@@ -177,7 +177,7 @@ func TestRebuildPostViewShowsTitleAuthorTimeAndMetadata(t *testing.T) {
 			ContentType:   "markup",
 			Version:       2,
 			ReactionCount: 3,
-			Attachments:   []core.PostAttachment{{Filename: "notes.txt"}},
+			Attachments:   []projections.PostAttachment{{Filename: "notes.txt"}},
 			CreatedSeq:    41,
 			UpdatedSeq:    47,
 			CreatedAt:     created,

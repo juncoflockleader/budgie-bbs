@@ -6532,7 +6532,7 @@ func TestReplyTreePostsReturnRootAndDescendants(t *testing.T) {
 	}
 }
 
-func hasThread(threads []core.ThreadSummary, threadID string) bool {
+func hasThread(threads []projections.ThreadSummary, threadID string) bool {
 	for _, thread := range threads {
 		if thread.ID == threadID {
 			return true
@@ -6541,7 +6541,7 @@ func hasThread(threads []core.ThreadSummary, threadID string) bool {
 	return false
 }
 
-func boardNameForThread(threads []core.ThreadSummary, threadID string) string {
+func boardNameForThread(threads []projections.ThreadSummary, threadID string) string {
 	for _, thread := range threads {
 		if thread.ID == threadID {
 			return thread.BoardName

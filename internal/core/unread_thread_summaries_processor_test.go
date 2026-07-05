@@ -151,21 +151,21 @@ func unreadThreadSummaryStatsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func assertThreadPresent(t *testing.T, threads []ThreadSummary, threadID string) {
+func assertThreadPresent(t *testing.T, threads []projections.ThreadSummary, threadID string) {
 	t.Helper()
 	if !hasUnreadThread(threads, threadID) {
 		t.Fatalf("thread %s missing from unread summaries: %+v", threadID, threads)
 	}
 }
 
-func assertThreadAbsent(t *testing.T, threads []ThreadSummary, threadID string) {
+func assertThreadAbsent(t *testing.T, threads []projections.ThreadSummary, threadID string) {
 	t.Helper()
 	if hasUnreadThread(threads, threadID) {
 		t.Fatalf("thread %s unexpectedly present in unread summaries: %+v", threadID, threads)
 	}
 }
 
-func hasUnreadThread(threads []ThreadSummary, threadID string) bool {
+func hasUnreadThread(threads []projections.ThreadSummary, threadID string) bool {
 	for _, thread := range threads {
 		if thread.ID == threadID {
 			return true
@@ -174,7 +174,7 @@ func hasUnreadThread(threads []ThreadSummary, threadID string) bool {
 	return false
 }
 
-func boardNameForUnreadThread(threads []ThreadSummary, threadID string) string {
+func boardNameForUnreadThread(threads []projections.ThreadSummary, threadID string) string {
 	for _, thread := range threads {
 		if thread.ID == threadID {
 			return thread.BoardName
