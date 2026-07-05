@@ -407,7 +407,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRecommendedBoard(t *testing.T) 
 		t.Fatalf("commit board setup: %v", err)
 	}
 	memberReadMode := true
-	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberReadMode}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", projections.BoardSettingsPatch{MemberReadMode: &memberReadMode}); err != nil {
 		t.Fatalf("set secret board settings: %v", err)
 	}
 
@@ -666,7 +666,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMemberRequirements(t *test
 	bob := registerNativeDecisionTestUser(t, c, "bob")
 	minPostCount := 4
 	minBoardMarkCount := 2
-	if err := projections.SetBoardMemberRequirements(c.DB, "general", BoardMemberRequirementsPatch{
+	if err := projections.SetBoardMemberRequirements(c.DB, "general", projections.BoardMemberRequirementsPatch{
 		MinPostCount:      &minPostCount,
 		MinBoardMarkCount: &minBoardMarkCount,
 	}); err != nil {
@@ -825,7 +825,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardModerator(t *testing.T) {
 		t.Fatalf("commit secret board: %v", err)
 	}
 	memberRead := true
-	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", projections.BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read: %v", err)
 	}
 
@@ -1015,7 +1015,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMember(t *testing.T) {
 	alice := registerNativeDecisionTestUser(t, c, "alice")
 	bob := registerNativeDecisionTestUser(t, c, "bob")
 	manager := true
-	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanManageMembers: &manager}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, projections.BoardMemberPatch{CanManageMembers: &manager}); err != nil {
 		t.Fatalf("seed delegated board member manager: %v", err)
 	}
 
@@ -1199,7 +1199,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipLeave(t *testing
 	c := newCoreTestCore(t)
 	registerNativeDecisionTestUser(t, c, "admin")
 	bob := registerNativeDecisionTestUser(t, c, "bob")
-	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{Title: "Resident"}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, projections.BoardMemberPatch{Title: "Resident"}); err != nil {
 		t.Fatalf("seed bob board membership: %v", err)
 	}
 
@@ -1371,7 +1371,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipApplication(t *t
 		t.Fatalf("seed auto board: %v", err)
 	}
 	approvalMode := "auto"
-	if err := projections.SetBoardMemberRequirements(c.DB, "autoclub", BoardMemberRequirementsPatch{
+	if err := projections.SetBoardMemberRequirements(c.DB, "autoclub", projections.BoardMemberRequirementsPatch{
 		ApprovalMode: &approvalMode,
 	}); err != nil {
 		t.Fatalf("seed auto approval requirements: %v", err)
@@ -1470,7 +1470,7 @@ func TestNativeCommandLogDecisionExecutorProjectsBoardMembershipReview(t *testin
 	alice := registerNativeDecisionTestUser(t, c, "alice")
 	bob := registerNativeDecisionTestUser(t, c, "bob")
 	manager := true
-	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanManageMembers: &manager}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, projections.BoardMemberPatch{CanManageMembers: &manager}); err != nil {
 		t.Fatalf("seed delegated board member manager: %v", err)
 	}
 	if err := projections.InsertBoardMemberApplication(c.DB, "app_review_bob", "general", bob.ID, "private application note"); err != nil {
@@ -1895,7 +1895,7 @@ func TestNativeCommandLogDecisionExecutorReusesExecutedDecisionForEvents(t *test
 	}
 
 	readOnly := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
 		t.Fatalf("set board read-only: %v", err)
 	}
 
@@ -2286,7 +2286,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostBoardMail(t *testing.T) {
 	}, proto.ErrForbidden, "board mail-in is disabled")
 
 	mailInAllowed := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{MailInAllowed: &mailInAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{MailInAllowed: &mailInAllowed}); err != nil {
 		t.Fatalf("enable mail-in: %v", err)
 	}
 	createPayload := marshalCoreTestJSON(t, "marshal create mail payload", proto.PostBoardMailPayload{
@@ -2646,7 +2646,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	}
 
 	readOnly := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{ReadOnly: &readOnly}); err != nil {
 		t.Fatalf("set read-only board: %v", err)
 	}
 	createPayload := proto.CreateThreadPayload{
@@ -2667,7 +2667,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	threadPartition := LogPartition{Kind: partitionThread, Key: threadEvent.ID}
 	noReply := true
 	readOnly = false
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{ReadOnly: &readOnly, NoReply: &noReply}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{ReadOnly: &readOnly, NoReply: &noReply}); err != nil {
 		t.Fatalf("set no-reply board: %v", err)
 	}
 	expectNativeErr(bob, threadPartition, proto.CmdAppendPost, proto.AppendPostPayload{
@@ -2704,7 +2704,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	}
 
 	noReply = false
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{NoReply: &noReply}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{NoReply: &noReply}); err != nil {
 		t.Fatalf("clear no-reply board: %v", err)
 	}
 	if _, err := qExec(c.DB, `UPDATE threads SET locked=0 WHERE id=?`, threadEvent.ID); err != nil {
@@ -2753,7 +2753,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 	}
 
 	memberMode := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{MemberReadMode: &memberMode, MemberPostMode: &memberMode}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{MemberReadMode: &memberMode, MemberPostMode: &memberMode}); err != nil {
 		t.Fatalf("set member board modes: %v", err)
 	}
 	memberCreatePayload := proto.CreateThreadPayload{
@@ -2762,7 +2762,7 @@ func TestNativeCommandLogDecisionExecutorHonorsBoardPostingPolicy(t *testing.T) 
 		Body:  "member can create through member board policy",
 	}
 	expectNativeErr(carol, boardPartition, proto.CmdCreateThread, memberCreatePayload, proto.ErrForbidden)
-	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, projections.BoardMemberPatch{}); err != nil {
 		t.Fatalf("set bob board member: %v", err)
 	}
 	produceAndDrain(bob, boardPartition, proto.CmdCreateThread, memberCreatePayload, "cid-native-policy-member-create", 6234)
@@ -2920,7 +2920,7 @@ func TestNativeCommandLogDecisionExecutorProjectsInlineAttachmentMetadata(t *tes
 	c := newCoreTestCore(t)
 	alice := registerNativeDecisionTestUser(t, c, "alice")
 	attachmentsAllowed := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
 		t.Fatalf("enable attachments: %v", err)
 	}
 
@@ -3012,7 +3012,7 @@ func TestNativeCommandLogDecisionExecutorProjectsAttachPostMetadata(t *testing.T
 	c := newCoreTestCore(t)
 	alice := registerNativeDecisionTestUser(t, c, "alice")
 	attachmentsAllowed := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{AttachmentsAllowed: &attachmentsAllowed}); err != nil {
 		t.Fatalf("enable attachments: %v", err)
 	}
 
@@ -3322,7 +3322,7 @@ func TestNativeCommandLogDecisionExecutorProjectsThreadTitleAndLock(t *testing.T
 	})
 	requireNativeDecisionTerminalError(t, lockReply, proto.ErrForbidden, "lock reply without permission")
 	canModerateThreads := true
-	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, projections.BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
 		t.Fatalf("grant bob thread moderation: %v", err)
 	}
 	produceDrainNativeDecisionCommand(t, ctx, commandLog, worker, "lock", CommandLogRecord{
@@ -3415,7 +3415,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 	requireNativeDecisionTerminalError(t, forbidden, proto.ErrForbidden, "forbidden flag reply")
 
 	canCurate := true
-	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanCurate: &canCurate}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, projections.BoardMemberPatch{CanCurate: &canCurate}); err != nil {
 		t.Fatalf("grant alice curate: %v", err)
 	}
 	recommended := true
@@ -3467,7 +3467,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostFlags(t *testing.T) {
 	}
 
 	canModerateThreads := true
-	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, projections.BoardMemberPatch{CanModerateThreads: &canModerateThreads}); err != nil {
 		t.Fatalf("grant bob thread moderation: %v", err)
 	}
 	noReply := true
@@ -3599,7 +3599,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRelayDeliveries(t *testing.T) {
 	c := newCoreTestCore(t)
 	bob := registerNativeDecisionTestUser(t, c, "bob")
 	relayEnabled := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{RelayEnabled: &relayEnabled}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{RelayEnabled: &relayEnabled}); err != nil {
 		t.Fatalf("enable relay board setting: %v", err)
 	}
 
@@ -4065,7 +4065,7 @@ func TestNativeCommandLogDecisionExecutorProjectsUserSanctions(t *testing.T) {
 		t.Fatalf("commit secret board: %v", err)
 	}
 	memberRead := true
-	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", projections.BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
 	secretPayload := marshalCoreTestJSON(t, "marshal secret sanction payload", proto.SanctionUserPayload{
@@ -4750,7 +4750,7 @@ func TestNativeCommandLogDecisionExecutorProjectsMailPostAuthor(t *testing.T) {
 		t.Fatalf("commit secret board setup: %v", err)
 	}
 	memberRead := true
-	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", projections.BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
 	secretPayload := marshalCoreTestJSON(t, "marshal private source payload", proto.CreateThreadPayload{
@@ -5794,7 +5794,7 @@ func TestNativeCommandLogDecisionExecutorProjectsSendDigestEntryMail(t *testing.
 		t.Fatalf("commit secret board setup: %v", err)
 	}
 	memberRead := true
-	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", projections.BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
 	secretPayload := marshalCoreTestJSON(t, "marshal private source payload", proto.CreateThreadPayload{
@@ -7647,7 +7647,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRepostPost(t *testing.T) {
 		t.Fatalf("commit secret board setup: %v", err)
 	}
 	memberRead := true
-	if err := projections.SetBoardSettings(c.DB, "secret", BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "secret", projections.BoardSettingsPatch{MemberReadMode: &memberRead}); err != nil {
 		t.Fatalf("set secret member-read mode: %v", err)
 	}
 	secretPayload := marshalCoreTestJSON(t, "marshal private source create payload", proto.CreateThreadPayload{
@@ -8344,7 +8344,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPollResultRecords(t *testing.T)
 	})
 	requireNativeDecisionTerminalError(t, denied, proto.ErrForbidden, "publish reply without permission")
 	canManagePolls := true
-	if err := projections.SetBoardMember(c.DB, "general", carol.ID, true, BoardMemberPatch{CanManagePolls: &canManagePolls}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", carol.ID, true, projections.BoardMemberPatch{CanManagePolls: &canManagePolls}); err != nil {
 		t.Fatalf("set carol poll manager: %v", err)
 	}
 	votePartition := LogPartition{Kind: partitionBoard, Key: proto.VoteSystemBoardID}
@@ -8506,7 +8506,7 @@ func TestNativeCommandLogDecisionExecutorProjectsRedactAndRestorePost(t *testing
 	})
 	requireNativeDecisionTerminalError(t, restoreDenied, proto.ErrForbidden, "restore denied reply")
 	canModeratePosts := true
-	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, projections.BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
 		t.Fatalf("grant bob post moderation: %v", err)
 	}
 	_, events = produceDrainReplayNativeDecisionEvents(t, ctx, commandLog, eventStore, worker, "restore", partition, 0, 10, CommandLogRecord{
@@ -8579,7 +8579,7 @@ func TestNativeCommandLogDecisionExecutorProjectsPostRangeRedactAndRestore(t *te
 	firstPostID := posts[0].ID
 	secondPostID := posts[1].ID
 	canModeratePosts := true
-	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", bob.ID, true, projections.BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
 		t.Fatalf("grant bob post moderation: %v", err)
 	}
 
@@ -8718,7 +8718,7 @@ func TestNativeCommandLogDecisionExecutorProjectsClearBoardJunk(t *testing.T) {
 	bob := registerNativeDecisionTestUser(t, c, "bob")
 	carol := registerNativeDecisionTestUser(t, c, "carol")
 	canModeratePosts := true
-	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
+	if err := projections.SetBoardMember(c.DB, "general", alice.ID, true, projections.BoardMemberPatch{CanModeratePosts: &canModeratePosts}); err != nil {
 		t.Fatalf("grant alice post moderation: %v", err)
 	}
 
@@ -9243,7 +9243,7 @@ func TestNativeCommandLogDecisionExecutorProjectsAnonymousPosts(t *testing.T) {
 		t.Fatalf("update alice profile signature: %v", err)
 	}
 	anonymousAllowed := true
-	if err := projections.SetBoardSettings(c.DB, "general", BoardSettingsPatch{AnonymousAllowed: &anonymousAllowed}); err != nil {
+	if err := projections.SetBoardSettings(c.DB, "general", projections.BoardSettingsPatch{AnonymousAllowed: &anonymousAllowed}); err != nil {
 		t.Fatalf("enable anonymous posting: %v", err)
 	}
 
