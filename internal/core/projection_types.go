@@ -39,7 +39,5 @@ type UserSignatureRecount = projections.UserSignatureRecount
 type UserLoginACLRule = projections.UserLoginACLRule
 type UserLoginACLSettings = projections.UserLoginACLSettings
 type UserLoginACLBundle = projections.UserLoginACLBundle
-type ModerationReview = projections.ModerationReview
-type UserSanction = projections.UserSanction
 type Poll = projections.Poll
 type PollOption = projections.PollOption

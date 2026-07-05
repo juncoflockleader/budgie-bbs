@@ -2657,7 +2657,7 @@ func (c *Core) SetUserLoginACLSettings(userID string, enabled bool) error {
 	return projections.SetUserLoginACLSettings(c.DB, userID, enabled)
 }
 
-func (c *Core) ListModerationReviews(status string, limit, offset int) ([]ModerationReview, error) {
+func (c *Core) ListModerationReviews(status string, limit, offset int) ([]projections.ModerationReview, error) {
 	return projections.ListModerationReviews(c.DB, status, limit, offset)
 }
 
@@ -2680,7 +2680,7 @@ func (c *Core) UserCanModerateBoard(userID, role, boardID string) (bool, error) 
 	return projections.ActorCanModerateBoardContent(c.DB, &User{ID: userID, Role: role}, boardID)
 }
 
-func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]UserSanction, error) {
+func (c *Core) ListUserSanctions(userID string, limit, offset int) ([]projections.UserSanction, error) {
 	return projections.ListUserSanctions(c.DB, userID, limit, offset)
 }
 

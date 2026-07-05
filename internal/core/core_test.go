@@ -9138,7 +9138,7 @@ type forumSnapshot struct {
 	pollQuestion    string
 	pollOptionTexts []string
 	pollVoteTotal   int
-	reviews         []core.ModerationReview
+	reviews         []projections.ModerationReview
 }
 
 type sanctionRow struct {
@@ -9246,8 +9246,8 @@ func loadSanctionsForTest(t *testing.T, c *core.Core) map[int64]sanctionRow {
 	return out
 }
 
-func reviewsMap(in []core.ModerationReview) map[string]core.ModerationReview {
-	out := map[string]core.ModerationReview{}
+func reviewsMap(in []projections.ModerationReview) map[string]projections.ModerationReview {
+	out := map[string]projections.ModerationReview{}
 	for _, r := range in {
 		out[r.ID] = r
 	}
