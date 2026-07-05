@@ -149,8 +149,8 @@ func (h *Handler) setBoardSettings(actor *User, p proto.SetBoardSettingsPayload)
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if !commandrules.ActorCanSetBoardSettings(h.db, actor, p.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
+	if errDetail := commandrules.RequireBoardSettingsPermission(commandrules.ActorCanSetBoardSettings(h.db, actor, p.Board)); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	if err := currentRuntime().SetBoardSettings(h.db, p.Board, projections.BoardSettingsPatchFromPayload(p)); err != nil {
 		return internalErr(err)
@@ -281,8 +281,8 @@ func (h *Handler) setBoardMemberRequirements(actor *User, p proto.SetBoardMember
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if !commandrules.ActorCanSetBoardSettings(h.db, actor, p.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board settings permission required", false)}
+	if errDetail := commandrules.RequireBoardSettingsPermission(commandrules.ActorCanSetBoardSettings(h.db, actor, p.Board)); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}

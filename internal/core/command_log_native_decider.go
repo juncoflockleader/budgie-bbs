@@ -1940,8 +1940,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardSettings(ctx context.Co
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !canSet {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board settings permission required", false)
+	if errDetail := commandrules.RequireBoardSettingsPermission(canSet); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	projections.ApplyBoardSettingsPatch(settings, projections.BoardSettingsPatchFromPayload(payload))
 	ts := nativeCommandTimestamp(record)
@@ -2002,8 +2002,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardMemberRequirements(ctx 
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !canSet {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board settings permission required", false)
+	if errDetail := commandrules.RequireBoardSettingsPermission(canSet); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if payloadMsg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, payloadMsg, false)

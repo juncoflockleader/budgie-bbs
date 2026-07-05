@@ -1,6 +1,9 @@
 package commandrules
 
-import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+import (
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+)
 
 func BoardPermissionAllowed(ok bool, err error) bool {
 	return err == nil && ok
@@ -20,6 +23,13 @@ func ActorCanManageBoardMembers(queryable Queryable, actor *projections.User, bo
 
 func ActorCanSetBoardSettings(queryable Queryable, actor *projections.User, boardID string) bool {
 	return BoardPermissionAllowed(projections.ActorCanSetBoardSettings(queryable, actor, boardID))
+}
+
+func RequireBoardSettingsPermission(canSetBoardSettings bool) *proto.ErrorDetail {
+	if !canSetBoardSettings {
+		return newErrDetail(proto.ErrForbidden, "board settings permission required", false)
+	}
+	return nil
 }
 
 func ActorCanCurateBoard(queryable Queryable, actor *projections.User, boardID string) bool {
