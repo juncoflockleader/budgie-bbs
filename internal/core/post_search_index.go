@@ -236,26 +236,5 @@ func actorCanReadBoardForSearch(db *sql.DB, actor *User, boardID string, memberR
 	if !memberRead {
 		return true, nil
 	}
-	if actor == nil {
-		return false, nil
-	}
-	if actor.IsMod() {
-		return true, nil
-	}
-	var found int
-	err := qQueryRow(db,
-		`SELECT 1
-		   FROM board_members
-		  WHERE board_id=? AND user_id=?
-		  UNION
-		 SELECT 1
-		   FROM board_moderators
-		  WHERE board_id=? AND user_id=?
-		  LIMIT 1`,
-		boardID, actor.ID, boardID, actor.ID,
-	).Scan(&found)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
+	return projections.ActorCanUseMemberBoard(db, actor, boardID)
 }
