@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"hash/fnv"
-	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -30,8 +29,7 @@ func NormalizePartition(partition Partition) Partition {
 }
 
 func NormalizePartitionFields(kind, key string) (string, string) {
-	partition := logmodel.Partition{Kind: strings.TrimSpace(kind), Key: strings.TrimSpace(key)}.Normalize()
-	return partition.Kind, partition.Key
+	return logmodel.NormalizePartitionFields(kind, key)
 }
 
 func PartitionLaneIndex(partition Partition, lanes int) int {

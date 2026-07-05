@@ -1,6 +1,9 @@
 package logmodel
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 const (
 	PartitionGlobal = "global"
@@ -28,6 +31,14 @@ func (p Partition) Normalize() Partition {
 		p.Key = PartitionGlobal
 	}
 	return p
+}
+
+func NormalizePartitionFields(kind, key string) (string, string) {
+	partition := Partition{
+		Kind: strings.TrimSpace(kind),
+		Key:  strings.TrimSpace(key),
+	}.Normalize()
+	return partition.Kind, partition.Key
 }
 
 func (p Partition) Less(other Partition) bool {
