@@ -22,6 +22,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -1011,7 +1012,7 @@ func (c *Core) registerUserInternal(name, password string) (*User, error) {
 	user := &User{ID: id, Name: name, Role: role, Created: ts, RegistrationStatus: status}
 	events := []*proto.Event{}
 	if status == "approved" {
-		events, err = c.appendNewcomerSystemPostTx(tx, user, ts)
+		events, err = c.appendAccountLifecycleRecordTx(tx, accountmodel.NewcomerLifecycleRecord(user), ts)
 		if err != nil {
 			return nil, fmt.Errorf("create newcomer record: %w", err)
 		}
@@ -1036,11 +1037,8 @@ func seedDefaultFavorites(db sqlLike, userID string, ts int64) error {
 	return err
 }
 
-func (c *Core) appendNewcomerSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*proto.Event, error) {
-	const boardID = "newcomers"
-	threadID := "newcomer_thr_" + user.ID
-	postID := "newcomer_pst_" + user.ID
-	exists, err := projections.ThreadExists(tx, threadID)
+func (c *Core) appendAccountLifecycleRecordTx(tx *sql.Tx, record accountmodel.LifecycleRecord, ts int64) ([]*proto.Event, error) {
+	exists, err := projections.ThreadExists(tx, record.ThreadID)
 	if err != nil {
 		return nil, err
 	}
@@ -1049,7 +1047,7 @@ func (c *Core) appendNewcomerSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*
 	}
 
 	out := []*proto.Event{}
-	exists, err = projections.BoardExists(tx, boardID)
+	exists, err = projections.BoardExists(tx, record.BoardID)
 	if err != nil {
 		return nil, err
 	}
@@ -1058,68 +1056,67 @@ func (c *Core) appendNewcomerSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*
 		if err != nil {
 			return nil, err
 		}
-		boardScopes := []string{"board:" + boardID}
+		boardScopes := []string{"board:" + record.BoardID}
 		boardSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          boardID,
-			Name:        "newcomers",
-			Description: "Generated new-user registration records",
+			ID:          record.BoardID,
+			Name:        record.BoardName,
+			Description: record.BoardDescription,
 			Position:    position,
-			By:          user.ID,
+			By:          record.AuthorID,
 			TS:          ts,
 		})
 		if err != nil {
 			return nil, err
 		}
-		if err := projections.InsertBoard(tx, boardID, "newcomers", "Generated new-user registration records", "", position); err != nil {
+		if err := projections.InsertBoard(tx, record.BoardID, record.BoardName, record.BoardDescription, "", position); err != nil {
 			return nil, err
 		}
 		out = append(out, &proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: boardScopes,
-			Payload: &proto.BoardCreatedPayload{ID: boardID, Name: "newcomers", Description: "Generated new-user registration records", By: user.Name, TS: ts}, TS: ts})
+			Payload: &proto.BoardCreatedPayload{ID: record.BoardID, Name: record.BoardName, Description: record.BoardDescription, By: record.AuthorName, TS: ts}, TS: ts})
 	}
 
-	title := "New user: " + user.Name
-	body := fmt.Sprintf("# %s\n\n- User: %s\n- Role: %s\n- Status: registered\n\nThis generated newcomer record contains public account information only.\n",
-		title, user.Name, user.Role)
-	scopes := []string{"board:" + boardID}
+	scopes := []string{"board:" + record.BoardID}
 	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title, TS: ts,
+		ID: record.ThreadID, Board: record.BoardID, Author: record.AuthorName, AuthorID: record.AuthorID, Title: record.Title, TS: ts,
 	})
 	if err != nil {
 		return nil, err
 	}
-	threadScopes := append(scopes, "thread:"+threadID)
+	threadScopes := append(scopes, "thread:"+record.ThreadID)
 	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
+		ID: record.PostID, Thread: record.ThreadID, Author: record.AuthorName, AuthorID: record.AuthorID, Body: record.Body, RawBody: record.Body, ContentType: "markup", TS: ts,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if err := projections.InsertThread(tx, &Thread{
-		ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title,
+		ID: record.ThreadID, Board: record.BoardID, Author: record.AuthorName, AuthorID: record.AuthorID, Title: record.Title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
 	if err := projections.InsertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
+		ID: record.PostID, Thread: record.ThreadID, Author: record.AuthorName, AuthorID: record.AuthorID,
+		Body: record.Body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
-	if err := projections.BumpThread(tx, threadID, pseq); err != nil {
+	if err := projections.BumpThread(tx, record.ThreadID, pseq); err != nil {
 		return nil, err
 	}
-	if err := commandFtsInsertPost(tx, postID, threadID, boardID, user.Name, body); err != nil {
+	if err := commandFtsInsertPost(tx, record.PostID, record.ThreadID, record.BoardID, record.AuthorName, record.Body); err != nil {
 		return nil, err
 	}
-	if err := markBoardReadForAllUsersTx(tx, boardID, pseq, ts); err != nil {
-		return nil, err
+	if record.MarkBoardReadForAllUsers {
+		if err := markBoardReadForAllUsersTx(tx, record.BoardID, pseq, ts); err != nil {
+			return nil, err
+		}
 	}
 	out = append(out,
 		&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-			Payload: &proto.ThreadNewPayload{ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title, TS: ts}, TS: ts},
+			Payload: &proto.ThreadNewPayload{ID: record.ThreadID, Board: record.BoardID, Author: record.AuthorName, AuthorID: record.AuthorID, Title: record.Title, TS: ts}, TS: ts},
 		&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-			Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts},
+			Payload: &proto.PostAppendedPayload{ID: record.PostID, Thread: record.ThreadID, Author: record.AuthorName, AuthorID: record.AuthorID, Body: record.Body, RawBody: record.Body, ContentType: "markup", TS: ts}, TS: ts},
 	)
 	return out, nil
 }
@@ -1307,7 +1304,7 @@ func (c *Core) DeactivateAccount(userID, password, reason string) error {
 	); err != nil {
 		return err
 	}
-	events, err := c.appendGoodbyeSystemPostTx(tx, u, ts)
+	events, err := c.appendAccountLifecycleRecordTx(tx, accountmodel.GoodbyeLifecycleRecord(u), ts)
 	if err != nil {
 		return err
 	}
@@ -1666,91 +1663,6 @@ func purgeUserTx(tx *sql.Tx, actorID string, target *User, ts int64) error {
 		}
 	}
 	return nil
-}
-
-func (c *Core) appendGoodbyeSystemPostTx(tx *sql.Tx, user *User, ts int64) ([]*proto.Event, error) {
-	const boardID = "Goodbye"
-	threadID := "goodbye_thr_" + user.ID
-	postID := "goodbye_pst_" + user.ID
-	exists, err := projections.ThreadExists(tx, threadID)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, nil
-	}
-
-	out := []*proto.Event{}
-	exists, err = projections.BoardExists(tx, boardID)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		position, err := projections.NextCategoryPosition(tx, "")
-		if err != nil {
-			return nil, err
-		}
-		boardScopes := []string{"board:" + boardID}
-		boardSeq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, boardScopes, &proto.BoardCreatedPayload{
-			ID:          boardID,
-			Name:        "Goodbye",
-			Description: "Generated account deactivation notices",
-			Position:    position,
-			By:          user.ID,
-			TS:          ts,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if err := projections.InsertBoard(tx, boardID, "Goodbye", "Generated account deactivation notices", "", position); err != nil {
-			return nil, err
-		}
-		out = append(out, &proto.Event{Kind: proto.EvtBoardCreated, Seq: boardSeq, Scopes: boardScopes,
-			Payload: &proto.BoardCreatedPayload{ID: boardID, Name: "Goodbye", Description: "Generated account deactivation notices", By: user.Name, TS: ts}, TS: ts})
-	}
-
-	title := "Goodbye: " + user.Name
-	body := fmt.Sprintf("# %s\n\n- User: %s\n- Status: deactivated\n\nThe account holder closed this account. Private deactivation notes are not published.\n",
-		title, user.Name)
-	scopes := []string{"board:" + boardID}
-	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title, TS: ts,
-	})
-	if err != nil {
-		return nil, err
-	}
-	threadScopes := append(scopes, "thread:"+threadID)
-	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err := projections.InsertThread(tx, &Thread{
-		ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title,
-		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return nil, err
-	}
-	if err := projections.InsertPost(tx, &Post{
-		ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID,
-		Body: body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
-	}); err != nil {
-		return nil, err
-	}
-	if err := projections.BumpThread(tx, threadID, pseq); err != nil {
-		return nil, err
-	}
-	if err := commandFtsInsertPost(tx, postID, threadID, boardID, user.Name, body); err != nil {
-		return nil, err
-	}
-	out = append(out,
-		&proto.Event{Kind: proto.EvtThreadNew, Seq: tseq, Scopes: scopes,
-			Payload: &proto.ThreadNewPayload{ID: threadID, Board: boardID, Author: user.Name, AuthorID: user.ID, Title: title, TS: ts}, TS: ts},
-		&proto.Event{Kind: proto.EvtPostAppended, Seq: pseq, Scopes: threadScopes,
-			Payload: &proto.PostAppendedPayload{ID: postID, Thread: threadID, Author: user.Name, AuthorID: user.ID, Body: body, RawBody: body, ContentType: "markup", TS: ts}, TS: ts},
-	)
-	return out, nil
 }
 
 func (c *Core) RecordLogin(userID string) error {
@@ -2667,7 +2579,7 @@ func (c *Core) ReviewAccountRegistration(userID, reviewerID, decision, reason st
 			if err != nil {
 				return nil, err
 			}
-			events, err := c.appendNewcomerSystemPostTx(tx, user, nowMS())
+			events, err := c.appendAccountLifecycleRecordTx(tx, accountmodel.NewcomerLifecycleRecord(user), nowMS())
 			if err != nil {
 				_ = tx.Rollback()
 				return nil, err
