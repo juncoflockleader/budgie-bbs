@@ -561,10 +561,8 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	if _, found, err := projections.BoardName(tx, p.Board); err != nil {
-		return internalErr(err)
-	} else if !found {
-		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
+	if errDetail := commandrules.RequireDestinationBoard(tx, p.Board); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	scopes := []string{"board:" + p.Board}
@@ -1397,10 +1395,8 @@ func (h *Handler) moveThread(actor *User, p proto.MoveThreadPayload) Reply {
 		return Reply{Err: errDetail}
 	}
 
-	if _, found, err := projections.BoardName(tx, p.ToBoard); err != nil {
-		return internalErr(err)
-	} else if !found {
-		return Reply{Err: errDetail(proto.ErrNotFound, "destination board not found", false)}
+	if errDetail := commandrules.RequireDestinationBoard(tx, p.ToBoard); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	scopes := []string{"board:" + thread.Board, "board:" + p.ToBoard}

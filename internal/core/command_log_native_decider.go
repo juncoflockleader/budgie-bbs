@@ -1429,10 +1429,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveThread(ctx context.Context,
 	if errDetail := commandrules.RequireThreadModeration(canModerateThread); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if _, found, err := projections.BoardName(e.core.DB, payload.ToBoard); err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	} else if !found {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "destination board not found", false)
+	if errDetail := commandrules.RequireDestinationBoard(e.core.DB, payload.ToBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	event := nativeEvent(record, 0, proto.EvtThreadMoved, []string{"board:" + thread.Board, "board:" + payload.ToBoard}, &proto.ThreadMovedPayload{

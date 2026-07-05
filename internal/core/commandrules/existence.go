@@ -27,6 +27,17 @@ func RequireBoard(queryable Queryable, boardID string) *proto.ErrorDetail {
 	return nil
 }
 
+func RequireDestinationBoard(queryable Queryable, boardID string) *proto.ErrorDetail {
+	exists, err := projections.BoardExists(queryable, boardID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if !exists {
+		return newErrDetail(proto.ErrNotFound, "destination board not found", false)
+	}
+	return nil
+}
+
 func RequirePost(queryable Queryable, postID string) *proto.ErrorDetail {
 	exists, err := projections.PostExists(queryable, postID)
 	if err != nil {
