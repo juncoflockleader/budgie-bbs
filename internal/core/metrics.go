@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 )
@@ -631,15 +631,12 @@ func gatewayDropHotPartitionSamples(dropSamples []metrics.Sample) []metrics.Samp
 }
 
 func hotThreadSplitSamples(splits map[string]int) []metrics.Sample {
+	splits = logmodel.NormalizeHotThreadSplits(splits)
 	if len(splits) == 0 {
 		return nil
 	}
 	threadIDs := make([]string, 0, len(splits))
-	for threadID, shards := range splits {
-		threadID = strings.TrimSpace(threadID)
-		if threadID == "" || shards <= 1 {
-			continue
-		}
+	for threadID := range splits {
 		threadIDs = append(threadIDs, threadID)
 	}
 	sort.Strings(threadIDs)

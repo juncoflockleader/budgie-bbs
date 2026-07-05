@@ -12,10 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -231,7 +229,7 @@ func WithAsyncCommunityStatHistory() Option {
 
 func WithHotThreadSplits(splits map[string]int) Option {
 	return func(opts *coreOptions) {
-		opts.hotThreadSplits = normalizeHotThreadSplits(splits)
+		opts.hotThreadSplits = logmodel.NormalizeHotThreadSplits(splits)
 	}
 }
 
@@ -276,7 +274,7 @@ func New(dbPath string, options ...Option) (*Core, error) {
 		db.Close()
 		return nil, fmt.Errorf("load hot thread splits: %w", err)
 	}
-	hotThreadSplitOverrides := normalizeHotThreadSplits(opts.hotThreadSplits)
+	hotThreadSplitOverrides := logmodel.NormalizeHotThreadSplits(opts.hotThreadSplits)
 	counterStore := opts.counterStore
 	counterStoreOverride := counterStore != nil
 	if counterStore == nil {
@@ -315,7 +313,7 @@ func New(dbPath string, options ...Option) (*Core, error) {
 		chatStoreOverride:       chatStoreOverride,
 		postSearchIndex:         opts.postSearchIndex,
 		readCache:               opts.readCache,
-		hotThreadSplits:         mergeHotThreadSplits(persistedHotThreadSplits, hotThreadSplitOverrides),
+		hotThreadSplits:         logmodel.MergeHotThreadSplits(persistedHotThreadSplits, hotThreadSplitOverrides),
 		hotThreadSplitOverrides: hotThreadSplitOverrides,
 	}
 	if opts.asyncCommunityStatHistory {
@@ -413,7 +411,7 @@ func NewPostgres(dsn string, options ...Option) (*Core, error) {
 		db.Close()
 		return nil, fmt.Errorf("load hot thread splits: %w", err)
 	}
-	hotThreadSplitOverrides := normalizeHotThreadSplits(opts.hotThreadSplits)
+	hotThreadSplitOverrides := logmodel.NormalizeHotThreadSplits(opts.hotThreadSplits)
 	c := &Core{
 		DB:                      db,
 		Bus:                     bus,
@@ -438,7 +436,7 @@ func NewPostgres(dsn string, options ...Option) (*Core, error) {
 		chatStoreOverride:       chatStoreOverride,
 		postSearchIndex:         opts.postSearchIndex,
 		readCache:               opts.readCache,
-		hotThreadSplits:         mergeHotThreadSplits(persistedHotThreadSplits, hotThreadSplitOverrides),
+		hotThreadSplits:         logmodel.MergeHotThreadSplits(persistedHotThreadSplits, hotThreadSplitOverrides),
 		hotThreadSplitOverrides: hotThreadSplitOverrides,
 	}
 	if opts.asyncCommunityStatHistory {
@@ -687,7 +685,7 @@ func commandLogAppendPostPartitionMatchesTarget(command proto.CommandName, paylo
 	if actual.Key == threadID {
 		return true
 	}
-	baseThreadID, ok := hotThreadSplitPartitionThread(actual.Key)
+	baseThreadID, ok := logmodel.HotThreadSplitPartitionThread(actual.Key)
 	return ok && baseThreadID == threadID
 }
 
@@ -701,8 +699,8 @@ func (c *Core) classifyCommandPartition(actor *User, name proto.CommandName, pay
 	if shards <= 1 {
 		return partition, ok
 	}
-	shard := hotThreadReplyShard(actorID(actor), payload, shards)
-	return eventPartition{Kind: partitionThread, Key: hotThreadSplitPartitionKey(threadID, shard)}, true
+	shard := logmodel.HotThreadReplyShard(actorID(actor), payload, shards)
+	return eventPartition{Kind: partitionThread, Key: logmodel.HotThreadSplitPartitionKey(threadID, shard)}, true
 }
 
 func (c *Core) SetHotThreadSplit(threadID string, shards int) {
@@ -733,7 +731,7 @@ func (c *Core) HotThreadSplits() map[string]int {
 	}
 	c.hotThreadSplitMu.RLock()
 	defer c.hotThreadSplitMu.RUnlock()
-	return normalizeHotThreadSplits(c.hotThreadSplits)
+	return logmodel.NormalizeHotThreadSplits(c.hotThreadSplits)
 }
 
 func (c *Core) hotThreadSplitShards(threadID string) int {
@@ -786,7 +784,7 @@ func (c *Core) HotThreadSplitBlockingLag(ctx context.Context, threadID string, n
 	if err != nil {
 		return nil, err
 	}
-	affected := hotThreadSplitPartitionSet(threadID, c.hotThreadSplitShards(threadID), nextShards)
+	affected := logmodel.HotThreadSplitPartitionSet(threadID, c.hotThreadSplitShards(threadID), nextShards)
 	blocking := make([]CommandPartitionOffset, 0)
 	for _, offset := range offsets {
 		if _, ok := affected[offset.Partition]; !ok {
@@ -814,7 +812,7 @@ func (c *Core) ReloadHotThreadSplits() error {
 func (c *Core) applyPersistedHotThreadSplits(persisted map[string]int) {
 	c.hotThreadSplitMu.Lock()
 	defer c.hotThreadSplitMu.Unlock()
-	c.hotThreadSplits = mergeHotThreadSplits(persisted, c.hotThreadSplitOverrides)
+	c.hotThreadSplits = logmodel.MergeHotThreadSplits(persisted, c.hotThreadSplitOverrides)
 }
 
 func (c *Core) startHotThreadSplitConfigPoller(ctx context.Context) {
@@ -864,75 +862,6 @@ func loadPersistedHotThreadSplits(db *sql.DB) (map[string]int, error) {
 		return nil, nil
 	}
 	return out, nil
-}
-
-func hotThreadSplitPartitionSet(threadID string, currentShards, nextShards int) map[LogPartition]struct{} {
-	out := map[LogPartition]struct{}{
-		{Kind: partitionThread, Key: threadID}: {},
-	}
-	for shard := 0; shard < currentShards; shard++ {
-		out[LogPartition{Kind: partitionThread, Key: hotThreadSplitPartitionKey(threadID, shard)}] = struct{}{}
-	}
-	for shard := 0; shard < nextShards; shard++ {
-		out[LogPartition{Kind: partitionThread, Key: hotThreadSplitPartitionKey(threadID, shard)}] = struct{}{}
-	}
-	return out
-}
-
-func normalizeHotThreadSplits(splits map[string]int) map[string]int {
-	out := map[string]int{}
-	for threadID, shards := range splits {
-		threadID = strings.TrimSpace(threadID)
-		if threadID == "" || shards <= 1 {
-			continue
-		}
-		out[threadID] = shards
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func mergeHotThreadSplits(persisted, overrides map[string]int) map[string]int {
-	out := map[string]int{}
-	for threadID, shards := range normalizeHotThreadSplits(persisted) {
-		out[threadID] = shards
-	}
-	for threadID, shards := range normalizeHotThreadSplits(overrides) {
-		out[threadID] = shards
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func hotThreadSplitPartitionKey(threadID string, shard int) string {
-	return fmt.Sprintf("%s#reply-%d", threadID, shard)
-}
-
-func hotThreadSplitPartitionThread(partitionKey string) (string, bool) {
-	base, shardText, ok := strings.Cut(partitionKey, "#reply-")
-	if !ok || base == "" || shardText == "" {
-		return "", false
-	}
-	shard, err := strconv.Atoi(shardText)
-	if err != nil || shard < 0 {
-		return "", false
-	}
-	return base, true
-}
-
-func hotThreadReplyShard(actorID string, payload json.RawMessage, shards int) int {
-	if shards <= 1 {
-		return 0
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(actorID))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write(payload)
-	return int(h.Sum64() % uint64(shards))
 }
 
 func actorID(actor *User) string {
