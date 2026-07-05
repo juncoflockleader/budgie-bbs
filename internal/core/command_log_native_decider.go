@@ -1929,14 +1929,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardModerator(ctx context.C
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardModeratorSet, []string{"board:" + boardID, "user:" + target.ID}, &proto.BoardModeratorSetPayload{
-		Board:     boardID,
-		User:      target.ID,
-		Moderator: payload.Moderator,
-		Position:  position,
-		By:        actor.ID,
-		TS:        ts,
-	}, ts)}
+	scopes, eventPayload := commandevents.BoardModeratorSet(boardID, target.ID, payload.Moderator, position, actor.ID, ts)
+	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardModeratorSet, scopes, eventPayload, ts)}
 	emitAudit, err := projections.BoardAllowsPublicSystemPost(e.core.DB, boardID)
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
@@ -2020,7 +2014,7 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardMember(ctx context.Cont
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardMemberSet, []string{"board:" + boardID, "user:" + target.ID}, &proto.BoardMemberSetPayload{
+	scopes, eventPayload := commandevents.BoardMemberSet(commandevents.BoardMemberSetSpec{
 		Board:               boardID,
 		User:                target.ID,
 		Member:              payload.Member,
@@ -2035,7 +2029,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardMember(ctx context.Cont
 		CanSetBoardSettings: member.CanSetBoardSettings,
 		By:                  actor.ID,
 		TS:                  ts,
-	}, ts)
+	})
+	event := nativeEvent(record, 0, proto.EvtBoardMemberSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(boardID, event), nil
 }
 
@@ -2057,13 +2052,14 @@ func (e *CommandLogNativeDecisionExecutor) decideLeaveBoardMembership(ctx contex
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardMemberSet, []string{"board:" + boardID, "user:" + actor.ID}, &proto.BoardMemberSetPayload{
+	scopes, eventPayload := commandevents.BoardMemberSet(commandevents.BoardMemberSetSpec{
 		Board:  boardID,
 		User:   actor.ID,
 		Member: false,
 		By:     actor.ID,
 		TS:     ts,
-	}, ts)
+	})
+	event := nativeEvent(record, 0, proto.EvtBoardMemberSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(boardID, event), nil
 }
 

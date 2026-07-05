@@ -52,6 +52,39 @@ func TestBoardCreated(t *testing.T) {
 	}
 }
 
+func TestBoardRoleMembershipEvents(t *testing.T) {
+	scopes, moderator := BoardModeratorSet("general", "usr_alice", true, 4, "usr_admin", 1234)
+	requireScopes(t, scopes, "board:general", "user:usr_alice")
+	if moderator.Board != "general" || moderator.User != "usr_alice" || !moderator.Moderator ||
+		moderator.Position != 4 || moderator.By != "usr_admin" || moderator.TS != 1234 {
+		t.Fatalf("BoardModeratorSet payload = %+v", moderator)
+	}
+
+	scopes, member := BoardMemberSet(BoardMemberSetSpec{
+		Board:               "general",
+		User:                "usr_alice",
+		Member:              true,
+		Title:               "Regular",
+		Position:            5,
+		CanManageMembers:    true,
+		CanCurate:           true,
+		CanModeratePosts:    true,
+		CanModerateThreads:  true,
+		CanAnnounce:         true,
+		CanManagePolls:      true,
+		CanSetBoardSettings: true,
+		By:                  "usr_admin",
+		TS:                  1235,
+	})
+	requireScopes(t, scopes, "board:general", "user:usr_alice")
+	if member.Board != "general" || member.User != "usr_alice" || !member.Member ||
+		member.Title != "Regular" || member.Position != 5 || !member.CanManageMembers || !member.CanCurate ||
+		!member.CanModeratePosts || !member.CanModerateThreads || !member.CanAnnounce ||
+		!member.CanManagePolls || !member.CanSetBoardSettings || member.By != "usr_admin" || member.TS != 1235 {
+		t.Fatalf("BoardMemberSet payload = %+v", member)
+	}
+}
+
 func TestBoardMemberApplicationEvents(t *testing.T) {
 	scopes, submitted := BoardMemberApplicationSubmitted("app_1", "general", "usr_alice", "please", 1234)
 	requireScopes(t, scopes, "board:general", "user:usr_alice")

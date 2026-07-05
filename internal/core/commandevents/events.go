@@ -59,6 +59,24 @@ func BoardCreated(boardID, name, description, parentID string, position int, by 
 	}
 }
 
+func BoardModeratorSet(boardID, userID string, moderator bool, position int, by string, ts int64) ([]string, *proto.BoardModeratorSetPayload) {
+	return []string{"board:" + boardID, "user:" + userID}, &proto.BoardModeratorSetPayload{
+		Board:     boardID,
+		User:      userID,
+		Moderator: moderator,
+		Position:  position,
+		By:        by,
+		TS:        ts,
+	}
+}
+
+type BoardMemberSetSpec proto.BoardMemberSetPayload
+
+func BoardMemberSet(spec BoardMemberSetSpec) ([]string, *proto.BoardMemberSetPayload) {
+	payload := proto.BoardMemberSetPayload(spec)
+	return []string{"board:" + payload.Board, "user:" + payload.User}, &payload
+}
+
 func BoardMemberApplicationSubmitted(applicationID, boardID, userID, note string, ts int64) ([]string, *proto.BoardMemberApplicationSubmittedPayload) {
 	return []string{"board:" + boardID, "user:" + userID}, &proto.BoardMemberApplicationSubmittedPayload{
 		ID:    applicationID,
