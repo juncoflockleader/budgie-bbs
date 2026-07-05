@@ -41,6 +41,7 @@ func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
 	modelPackages := []string{
 		"./internal/core/accountmodel",
 		"./internal/core/boardmodel",
+		"./internal/core/chatmodel",
 		"./internal/core/categorymodel",
 		"./internal/core/postmodel",
 		"./internal/core/threadmodel",
