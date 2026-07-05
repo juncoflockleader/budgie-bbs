@@ -1408,7 +1408,7 @@ func (c *Core) snapshotUserCounterIdentityTx(tx *sql.Tx, userID string) (counter
 	identity := counterstore.UserIdentity{}
 	var err error
 	if isSQLCounterStore(c.counterStore) {
-		identity, err = snapshotSQLUserCounterIdentityTx(tx, userID)
+		identity, err = counterstore.UserCounterIdentity(tx, userID)
 	} else {
 		identity, err = c.counterStore.UserCounterIdentity(userID)
 	}
@@ -1436,50 +1436,6 @@ func (c *Core) snapshotUserCounterIdentityTx(tx *sql.Tx, userID string) (counter
 	return identity, authors, nil
 }
 
-func snapshotSQLUserCounterIdentityTx(tx *sql.Tx, userID string) (counterstore.UserIdentity, error) {
-	identity := counterstore.UserIdentity{}
-	reactionRows, err := qQuery(tx, `SELECT post_id, user_id, emoji, ts FROM post_reactions WHERE user_id=? ORDER BY post_id`, userID)
-	if err != nil {
-		return identity, err
-	}
-	for reactionRows.Next() {
-		var row counterstore.ReactionIdentity
-		if err := reactionRows.Scan(&row.PostID, &row.UserID, &row.Emoji, &row.TS); err != nil {
-			_ = reactionRows.Close()
-			return identity, err
-		}
-		identity.Reactions = append(identity.Reactions, row)
-	}
-	if err := reactionRows.Err(); err != nil {
-		_ = reactionRows.Close()
-		return identity, err
-	}
-	if err := reactionRows.Close(); err != nil {
-		return identity, err
-	}
-
-	voteRows, err := qQuery(tx, `SELECT poll_id, option_id, user_id, ts FROM poll_votes WHERE user_id=? ORDER BY poll_id`, userID)
-	if err != nil {
-		return identity, err
-	}
-	for voteRows.Next() {
-		var row counterstore.PollVoteIdentity
-		if err := voteRows.Scan(&row.PollID, &row.OptionID, &row.UserID, &row.TS); err != nil {
-			_ = voteRows.Close()
-			return identity, err
-		}
-		identity.PollVotes = append(identity.PollVotes, row)
-	}
-	if err := voteRows.Err(); err != nil {
-		_ = voteRows.Close()
-		return identity, err
-	}
-	if err := voteRows.Close(); err != nil {
-		return identity, err
-	}
-	return identity, nil
-}
-
 func isSQLCounterStore(store counterstore.Store) bool {
 	_, ok := store.(sqlCounterStore)
 	return ok
@@ -1501,8 +1457,7 @@ func cleanupUserCounterIdentityTx(tx *sql.Tx, userID string, identity countersto
 			return err
 		}
 	}
-	_, err := qExec(tx, `UPDATE user_activity SET reactions_recv=0 WHERE user_id=?`, userID)
-	return err
+	return counterstore.ClearReactionReceived(tx, userID)
 }
 
 func (c *Core) cleanupDeletedUserCounterIdentity(userID string, identity counterstore.UserIdentity, reactionAuthors map[string]string) error {

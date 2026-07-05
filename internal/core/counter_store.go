@@ -20,73 +20,15 @@ func (s sqlCounterStore) ReactionCount(postID string) (int, error) {
 }
 
 func (s sqlCounterStore) PollOptionVoteCount(pollID, optionID string) (int, error) {
-	var n sql.NullInt64
-	err := qQueryRow(s.db, `SELECT SUM(count_value) FROM poll_vote_count_shards WHERE poll_id=? AND option_id=?`, pollID, optionID).Scan(&n)
-	if err != nil {
-		return 0, err
-	}
-	if n.Valid {
-		return int(n.Int64), nil
-	}
-	var count int
-	err = qQueryRow(s.db, `SELECT COUNT(*) FROM poll_votes WHERE poll_id=? AND option_id=?`, pollID, optionID).Scan(&count)
-	return count, err
+	return counterstore.PollOptionVoteCount(s.db, pollID, optionID)
 }
 
 func (s sqlCounterStore) PollVote(pollID, userID string) (string, bool, error) {
-	var optionID string
-	err := qQueryRow(s.db, `SELECT option_id FROM poll_votes WHERE poll_id=? AND user_id=?`, pollID, userID).Scan(&optionID)
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	return optionID, true, nil
+	return counterstore.PollVote(s.db, pollID, userID)
 }
 
 func (s sqlCounterStore) UserCounterIdentity(userID string) (counterstore.UserIdentity, error) {
-	identity := counterstore.UserIdentity{}
-	reactionRows, err := qQuery(s.db, `SELECT post_id, user_id, emoji, ts FROM post_reactions WHERE user_id=? ORDER BY post_id`, userID)
-	if err != nil {
-		return identity, err
-	}
-	for reactionRows.Next() {
-		var row counterstore.ReactionIdentity
-		if err := reactionRows.Scan(&row.PostID, &row.UserID, &row.Emoji, &row.TS); err != nil {
-			_ = reactionRows.Close()
-			return identity, err
-		}
-		identity.Reactions = append(identity.Reactions, row)
-	}
-	if err := reactionRows.Err(); err != nil {
-		_ = reactionRows.Close()
-		return identity, err
-	}
-	if err := reactionRows.Close(); err != nil {
-		return identity, err
-	}
-
-	voteRows, err := qQuery(s.db, `SELECT poll_id, option_id, user_id, ts FROM poll_votes WHERE user_id=? ORDER BY poll_id`, userID)
-	if err != nil {
-		return identity, err
-	}
-	for voteRows.Next() {
-		var row counterstore.PollVoteIdentity
-		if err := voteRows.Scan(&row.PollID, &row.OptionID, &row.UserID, &row.TS); err != nil {
-			_ = voteRows.Close()
-			return identity, err
-		}
-		identity.PollVotes = append(identity.PollVotes, row)
-	}
-	if err := voteRows.Err(); err != nil {
-		_ = voteRows.Close()
-		return identity, err
-	}
-	if err := voteRows.Close(); err != nil {
-		return identity, err
-	}
-	return identity, nil
+	return counterstore.UserCounterIdentity(s.db, userID)
 }
 
 func (s sqlCounterStore) BeginMutation() (counterstore.Mutation, error) {
@@ -155,8 +97,7 @@ func (m *sqlCounterMutation) ClearReactionReceived(userID string) error {
 	if m == nil || m.tx == nil {
 		return sql.ErrTxDone
 	}
-	_, err := qExec(m.tx, `UPDATE user_activity SET reactions_recv=0 WHERE user_id=?`, userID)
-	return err
+	return counterstore.ClearReactionReceived(m.tx, userID)
 }
 
 func (m *sqlCounterMutation) Commit() error {
