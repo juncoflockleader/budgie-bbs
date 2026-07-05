@@ -7,6 +7,19 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
+func TestNewCommandReceiptKeyNormalizesPartitionAndRejectsBlankCID(t *testing.T) {
+	key, ok := NewCommandReceiptKey(Partition{}, "usr_alice", " cid_1 ")
+	if !ok {
+		t.Fatal("NewCommandReceiptKey rejected non-empty cid")
+	}
+	if key.Partition != (Partition{Kind: PartitionGlobal, Key: PartitionGlobal}) || key.ActorID != "usr_alice" || key.CID != "cid_1" {
+		t.Fatalf("receipt key = %+v, want normalized partition and trimmed cid", key)
+	}
+	if _, ok := NewCommandReceiptKey(Partition{}, "usr_alice", " "); ok {
+		t.Fatal("NewCommandReceiptKey accepted blank cid")
+	}
+}
+
 func TestEffectiveCommandLogCIDUsesExplicitOrSyntheticID(t *testing.T) {
 	partition := Partition{Kind: "thread", Key: "thr_1"}
 

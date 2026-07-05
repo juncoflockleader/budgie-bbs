@@ -859,14 +859,14 @@ func (s *MemoryEventStore) ListEventPartitions(ctx context.Context, limit int) (
 type MemoryCommandLog struct {
 	mu        sync.Mutex
 	records   map[LogPartition][]CommandLogRecord
-	byReceipt map[commandReceiptKey]CommandLogRecord
+	byReceipt map[logmodel.CommandReceiptKey]CommandLogRecord
 	committed map[LogPartition]int64
 }
 
 func NewMemoryCommandLog() *MemoryCommandLog {
 	return &MemoryCommandLog{
 		records:   map[LogPartition][]CommandLogRecord{},
-		byReceipt: map[commandReceiptKey]CommandLogRecord{},
+		byReceipt: map[logmodel.CommandReceiptKey]CommandLogRecord{},
 		committed: map[LogPartition]int64{},
 	}
 }
@@ -886,7 +886,7 @@ func (l *MemoryCommandLog) Produce(ctx context.Context, record CommandLogRecord)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if key, ok := newCommandReceiptKey(record.Partition, record.ActorID, record.CID); ok {
+	if key, ok := logmodel.NewCommandReceiptKey(record.Partition, record.ActorID, record.CID); ok {
 		if existing, ok := l.byReceipt[key]; ok {
 			if !logmodel.SameCommandLogRecordIdentity(existing, record) {
 				return CommandLogRecord{}, fmt.Errorf("memory command log: duplicate command receipt %q has different content", record.CID)
@@ -899,7 +899,7 @@ func (l *MemoryCommandLog) Produce(ctx context.Context, record CommandLogRecord)
 		record.CID = SyntheticCommandLogCID(record.Partition, record.Offset)
 	}
 	l.records[record.Partition] = append(l.records[record.Partition], record)
-	if key, ok := newCommandReceiptKey(record.Partition, record.ActorID, record.CID); ok {
+	if key, ok := logmodel.NewCommandReceiptKey(record.Partition, record.ActorID, record.CID); ok {
 		l.byReceipt[key] = cloneCommandLogRecord(record)
 	}
 	return cloneCommandLogRecord(record), nil

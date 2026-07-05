@@ -180,7 +180,7 @@ type MemoryBrokerCommandLogClient struct {
 	mu        sync.Mutex
 	messages  map[LogPartition][]BrokerCommandLogMessage
 	tails     map[LogPartition]int64
-	byReceipt map[commandReceiptKey]BrokerCommandLogMessage
+	byReceipt map[logmodel.CommandReceiptKey]BrokerCommandLogMessage
 	committed map[LogPartition]int64
 	head      int64
 }
@@ -189,7 +189,7 @@ func NewMemoryBrokerCommandLogClient() *MemoryBrokerCommandLogClient {
 	return &MemoryBrokerCommandLogClient{
 		messages:  map[LogPartition][]BrokerCommandLogMessage{},
 		tails:     map[LogPartition]int64{},
-		byReceipt: map[commandReceiptKey]BrokerCommandLogMessage{},
+		byReceipt: map[logmodel.CommandReceiptKey]BrokerCommandLogMessage{},
 		committed: map[LogPartition]int64{},
 	}
 }
@@ -210,7 +210,7 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 	defer c.mu.Unlock()
 	record.PartitionKind = partition.Kind
 	record.PartitionKey = partition.Key
-	if key, ok := newCommandReceiptKey(partition, record.ActorID, record.CID); ok {
+	if key, ok := logmodel.NewCommandReceiptKey(partition, record.ActorID, record.CID); ok {
 		if existing, ok := c.byReceipt[key]; ok {
 			existingRecord, err := DecodeBrokerCommandRecord(existing.Data)
 			if err != nil {
@@ -243,7 +243,7 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 	}
 	c.tails[partition] = offset
 	c.messages[partition] = append(c.messages[partition], logmodel.CloneBrokerCommandLogMessage(msg))
-	if key, ok := newCommandReceiptKey(partition, record.ActorID, record.CID); ok {
+	if key, ok := logmodel.NewCommandReceiptKey(partition, record.ActorID, record.CID); ok {
 		c.byReceipt[key] = logmodel.CloneBrokerCommandLogMessage(msg)
 	}
 	return logmodel.CloneBrokerCommandLogMessage(msg), nil
