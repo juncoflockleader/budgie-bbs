@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -13,7 +12,7 @@ import (
 // and unauthenticated so the login page and anonymous visitors get the title,
 // banner, accent, and default theme.
 type siteAppearanceResponse struct {
-	*core.SiteAppearance
+	*sitemodel.Appearance
 	// AssetBaseURL is the external base (CDN/bucket) for uploaded images, or ""
 	// when the app serves them. AssetVersions is each asset's version (0 = unset)
 	// so the client can build cache-busting / CDN URLs.
@@ -28,9 +27,9 @@ func (s *Server) handleGetSiteAppearance(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, siteAppearanceResponse{
-		SiteAppearance: a,
-		AssetBaseURL:   s.core.AssetPublicBaseURL(),
-		AssetVersions:  s.core.SiteAssetVersions(),
+		Appearance:    a,
+		AssetBaseURL:  s.core.AssetPublicBaseURL(),
+		AssetVersions: s.core.SiteAssetVersions(),
 	})
 }
 
@@ -51,7 +50,7 @@ func (s *Server) handleSetSiteAppearance(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusForbidden, proto.ErrForbidden, "admin role required", false)
 		return
 	}
-	var req core.SiteAppearance
+	var req sitemodel.Appearance
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "invalid body", false)
 		return

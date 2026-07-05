@@ -416,7 +416,7 @@ func TestMainMenuRendersConfiguredLayout(t *testing.T) {
 	r := lipgloss.NewRenderer(io.Discard)
 	r.SetColorProfile(termenv.ANSI256)
 	m := newModel(c, actor, 80, 24, true, localeEN, "", nil, nil, "", false, false, r)
-	m.appearance = &core.SiteAppearance{
+	m.appearance = &sitemodel.Appearance{
 		Tagline: "campus bbs over ssh",
 		MainMenuLayout: &sitemodel.TUIMainMenuLayout{Blocks: []sitemodel.TUIBlock{
 			{Type: "art", Stock: "budgie-bbs", Align: "center"},

@@ -188,7 +188,7 @@ type model struct {
 
 	// appearance is the admin-configured site branding + main-menu layout,
 	// snapshotted at login. nil falls back to built-in defaults.
-	appearance *core.SiteAppearance
+	appearance *sitemodel.Appearance
 
 	// SSH self-registration (opt-in via -allow-ssh-registration).
 	allowRegistration bool

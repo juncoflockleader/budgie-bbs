@@ -29,6 +29,41 @@ type AppearanceFields struct {
 	DefaultTheme  string
 }
 
+// Appearance holds admin-configurable site-wide branding/appearance. All fields
+// are public so anonymous users can receive them for the login page and header.
+type Appearance struct {
+	SiteTitle     string `json:"siteTitle"`
+	Logo          string `json:"logo"`
+	Tagline       string `json:"tagline"`
+	BannerMessage string `json:"bannerMessage"`
+	AccentColor   string `json:"accentColor"`
+	DefaultTheme  string `json:"defaultTheme"`
+	// MainMenuLayout is the admin-configurable SSH/TUI main-menu composition.
+	// Nil means "use the built-in default layout".
+	MainMenuLayout *TUIMainMenuLayout `json:"mainMenuLayout,omitempty"`
+	UpdatedAt      int64              `json:"updatedAt"`
+}
+
+func (a Appearance) Fields() AppearanceFields {
+	return AppearanceFields{
+		SiteTitle:     a.SiteTitle,
+		Logo:          a.Logo,
+		Tagline:       a.Tagline,
+		BannerMessage: a.BannerMessage,
+		AccentColor:   a.AccentColor,
+		DefaultTheme:  a.DefaultTheme,
+	}
+}
+
+func (a *Appearance) ApplyFields(fields AppearanceFields) {
+	a.SiteTitle = fields.SiteTitle
+	a.Logo = fields.Logo
+	a.Tagline = fields.Tagline
+	a.BannerMessage = fields.BannerMessage
+	a.AccentColor = fields.AccentColor
+	a.DefaultTheme = fields.DefaultTheme
+}
+
 func DefaultAppearanceFields() AppearanceFields {
 	return AppearanceFields{
 		SiteTitle:    DefaultSiteTitle,
