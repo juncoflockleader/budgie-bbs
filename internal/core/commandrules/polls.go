@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strconv"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/pollmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -18,21 +19,21 @@ func RequireMinTrustForPoll(db *sql.DB, actor *projections.User, minLevel int, a
 	if err != nil {
 		return internalErr(err)
 	}
-	if trustLevel < minLevel {
+	if !pollmodel.CreationTrustAllowed(false, trustLevel, minLevel) {
 		return newErrDetail(proto.ErrForbidden, action+" with poll requires trust level "+strconv.Itoa(minLevel), false)
 	}
 	return nil
 }
 
 func RequirePollResultPublisher(canManagePolls, isPostAuthor, isThreadAuthor bool) *proto.ErrorDetail {
-	if canManagePolls || isPostAuthor || isThreadAuthor {
+	if pollmodel.ResultPublisherAllowed(canManagePolls, isPostAuthor, isThreadAuthor) {
 		return nil
 	}
 	return newErrDetail(proto.ErrForbidden, "poll author or board poll manager required", false)
 }
 
 func RequirePollResultPublicBoard(emitPublicSystemPost bool) *proto.ErrorDetail {
-	if emitPublicSystemPost {
+	if pollmodel.PublicResultAllowed(emitPublicSystemPost) {
 		return nil
 	}
 	return newErrDetail(proto.ErrForbidden, "member-read poll results stay on the source board", false)
