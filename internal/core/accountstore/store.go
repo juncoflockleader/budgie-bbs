@@ -22,3 +22,8 @@ func SaveRegistrationIntake(db *sql.DB, userID string, intake accountmodel.Norma
 	)
 	return err
 }
+
+func ApproveUser(db *sql.DB, userID string) error {
+	_, err := sqlstore.Exec(db, `UPDATE users SET registration_status='approved' WHERE id=?`, userID)
+	return err
+}

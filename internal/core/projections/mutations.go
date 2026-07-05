@@ -1819,6 +1819,16 @@ func InsertBoardMemberApplicationTx(execable sqlLike, id, boardID, userID, note 
 	return err
 }
 
+func EnsureBoardMember(db *sql.DB, boardID, userID, title string, createdAt, updatedAt int64) error {
+	_, err := QExec(db,
+		`INSERT INTO board_members (board_id, user_id, title, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(board_id, user_id) DO NOTHING`,
+		boardID, userID, strings.TrimSpace(title), createdAt, updatedAt,
+	)
+	return err
+}
+
 func ReviewBoardMemberApplication(db *sql.DB, applicationID, reviewerID, status, title, reviewNote string) error {
 	ts := NowMS()
 	tx, err := db.Begin()

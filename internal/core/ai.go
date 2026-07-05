@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
@@ -77,14 +78,10 @@ func (c *Core) EnsureBoardAIBot(boardID string) (*projections.User, error) {
 // stores the bot id on the config.
 func (c *Core) activateBoardAIBot(boardID, botUserID string) error {
 	ts := nowMS()
-	if _, err := qExec(c.DB, `UPDATE users SET registration_status='approved' WHERE id=?`, botUserID); err != nil {
+	if err := accountstore.ApproveUser(c.DB, botUserID); err != nil {
 		return err
 	}
-	if _, err := qExec(c.DB,
-		`INSERT INTO board_members (board_id, user_id, title, created_at, updated_at)
-		 VALUES (?, ?, 'AI bot', ?, ?)
-		 ON CONFLICT(board_id, user_id) DO NOTHING`,
-		boardID, botUserID, ts, ts); err != nil {
+	if err := projections.EnsureBoardMember(c.DB, boardID, botUserID, "AI bot", ts, ts); err != nil {
 		return err
 	}
 	return projections.SetBoardAIBotUser(c.DB, boardID, botUserID)
