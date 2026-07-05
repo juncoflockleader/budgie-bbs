@@ -4,10 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"sort"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -30,17 +30,11 @@ func (h *Handler) lockMailboxes(tx *sql.Tx, copyCounts map[string]int) error {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, mailboxAdvisoryKey(k)); err != nil {
+		if _, err := tx.Exec(`SELECT pg_advisory_xact_lock($1)`, commandexec.MailboxAdvisoryLockKey(k)); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func mailboxAdvisoryKey(mailbox string) int64 {
-	hsh := fnv.New64a()
-	_, _ = hsh.Write([]byte("mailbox:" + mailbox))
-	return int64(hsh.Sum64())
 }
 
 func (h *Handler) sendMail(actor *User, p proto.SendMailPayload) Reply {

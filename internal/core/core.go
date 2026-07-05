@@ -24,6 +24,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -461,7 +462,7 @@ func pgPartitionLockFn(db *sql.DB) func(ctx context.Context, partition CommandPa
 		}
 		lockCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		partitionKey := pgPartitionAdvisoryLockKey(partition)
+		partitionKey := commandexec.PartitionAdvisoryLockKey(partition)
 		if _, err := conn.ExecContext(lockCtx, `SELECT pg_advisory_lock($1)`, partitionKey); err != nil {
 			_ = conn.Close()
 			return nil, fmt.Errorf("advisory lock: partition pg_advisory_lock: %w", err)
@@ -471,21 +472,6 @@ func pgPartitionLockFn(db *sql.DB) func(ctx context.Context, partition CommandPa
 			_ = conn.Close()
 		}, nil
 	}
-}
-
-func pgPartitionAdvisoryLockKey(partition CommandPartition) int64 {
-	if partition.Kind == "" {
-		partition.Kind = partitionGlobal
-	}
-	if partition.Key == "" {
-		partition.Key = partitionGlobal
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte("budgie:partition-writer:"))
-	_, _ = h.Write([]byte(partition.Kind))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(partition.Key))
-	return int64(0x4000000000000000 | (h.Sum64() & 0x3fffffffffffffff))
 }
 
 // Run starts the command dispatcher. Returns when ctx is cancelled.

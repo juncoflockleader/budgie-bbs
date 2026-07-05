@@ -62,3 +62,36 @@ func TestPartitionLaneIndexNormalizesInput(t *testing.T) {
 		t.Fatalf("lane should ignore surrounding whitespace: %q", strings.TrimSpace(b.Key))
 	}
 }
+
+func TestPartitionAdvisoryLockKeyIsDeterministic(t *testing.T) {
+	a := PartitionAdvisoryLockKey(Partition{Kind: "board", Key: "general"})
+	b := PartitionAdvisoryLockKey(Partition{Kind: "board", Key: "general"})
+	if a == 0 {
+		t.Fatal("lock key should not be zero")
+	}
+	if a != b {
+		t.Fatalf("lock key changed from %d to %d", a, b)
+	}
+	if c := PartitionAdvisoryLockKey(Partition{Kind: "board", Key: "life"}); c == a {
+		t.Fatalf("different partitions produced same lock key: %d", a)
+	}
+	fallback := PartitionAdvisoryLockKey(Partition{})
+	global := PartitionAdvisoryLockKey(Partition{Kind: GlobalPartition, Key: GlobalPartition})
+	if fallback != global {
+		t.Fatalf("empty partition key = %d, want global %d", fallback, global)
+	}
+}
+
+func TestMailboxAdvisoryLockKeyIsDeterministic(t *testing.T) {
+	a := MailboxAdvisoryLockKey("alice")
+	b := MailboxAdvisoryLockKey("alice")
+	if a == 0 {
+		t.Fatal("mailbox lock key should not be zero")
+	}
+	if a != b {
+		t.Fatalf("mailbox lock key changed from %d to %d", a, b)
+	}
+	if c := MailboxAdvisoryLockKey("bob"); c == a {
+		t.Fatalf("different mailboxes produced same lock key: %d", a)
+	}
+}

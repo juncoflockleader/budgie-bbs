@@ -12,6 +12,12 @@ import (
 
 const GlobalPartition = "global"
 
+const (
+	partitionAdvisoryLockNamespace = "budgie:partition-writer:"
+	partitionAdvisoryLockHighBits  = uint64(0x4000000000000000)
+	partitionAdvisoryLockLowMask   = uint64(0x3fffffffffffffff)
+)
+
 func HashCommand(name proto.CommandName, payload json.RawMessage) string {
 	sum := sha256.Sum256(append([]byte(name+"\x00"), payload...))
 	return hex.EncodeToString(sum[:])
@@ -44,4 +50,20 @@ func PartitionLaneIndex(partition Partition, lanes int) int {
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(partition.Key))
 	return int(h.Sum64() % uint64(lanes))
+}
+
+func PartitionAdvisoryLockKey(partition Partition) int64 {
+	partition = NormalizePartition(partition)
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(partitionAdvisoryLockNamespace))
+	_, _ = h.Write([]byte(partition.Kind))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(partition.Key))
+	return int64(partitionAdvisoryLockHighBits | (h.Sum64() & partitionAdvisoryLockLowMask))
+}
+
+func MailboxAdvisoryLockKey(mailbox string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("mailbox:" + mailbox))
+	return int64(h.Sum64())
 }
