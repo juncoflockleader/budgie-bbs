@@ -455,7 +455,7 @@ func assertJetStreamPollOptionVoteCount(t *testing.T, store *JetStreamCounterSto
 	}
 }
 
-func registerNATSCounterStoreUser(t *testing.T, c *core.Core, name string) *core.User {
+func registerNATSCounterStoreUser(t *testing.T, c *core.Core, name string) *projections.User {
 	t.Helper()
 	u, err := c.RegisterUser(name, "pw")
 	if err != nil {
@@ -464,7 +464,7 @@ func registerNATSCounterStoreUser(t *testing.T, c *core.Core, name string) *core
 	return u
 }
 
-func execNATSCounterStoreCommand(t *testing.T, c *core.Core, actor *core.User, cmd proto.CommandName, payload any) *proto.AckResult {
+func execNATSCounterStoreCommand(t *testing.T, c *core.Core, actor *projections.User, cmd proto.CommandName, payload any) *proto.AckResult {
 	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {
