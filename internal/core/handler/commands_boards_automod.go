@@ -5,6 +5,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -106,7 +107,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 // setBoardAutomodRule creates or updates a board automod rule. Authorization is
 // per action: global sanctions require admin, thread actions require thread
 // moderation, and the rest require post moderation on that board.
-func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePayload) Reply {
+func (h *Handler) setBoardAutomodRule(actor *projections.User, p proto.SetBoardAutomodRulePayload) Reply {
 	p, actions, msg := proto.NormalizeSetBoardAutomodRulePayload(p)
 	board := p.Board
 	if msg != "" {
@@ -172,7 +173,7 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 
 // deleteBoardAutomodRule removes a board automod rule. Any moderator of the
 // board (post or thread) may delete a rule.
-func (h *Handler) deleteBoardAutomodRule(actor *User, p proto.DeleteBoardAutomodRulePayload) Reply {
+func (h *Handler) deleteBoardAutomodRule(actor *projections.User, p proto.DeleteBoardAutomodRulePayload) Reply {
 	var msg string
 	p, msg = proto.NormalizeDeleteBoardAutomodRulePayload(p)
 	if msg != "" {

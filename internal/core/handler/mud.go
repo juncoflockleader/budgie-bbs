@@ -185,7 +185,7 @@ func (h *Handler) mudPublishView(userID string, v *proto.MUDViewPayload, now tim
 // executeMUDCommand parses and runs a single MUD command line for the actor.
 // Effects are delivered as events: room actions broadcast to mud:room:<id>;
 // the actor's own view/feedback goes privately to mud:user:<id>.
-func (h *Handler) executeMUDCommand(actor *User, p proto.MUDCommandPayload) Reply {
+func (h *Handler) executeMUDCommand(actor *projections.User, p proto.MUDCommandPayload) Reply {
 	if actor == nil || strings.TrimSpace(actor.ID) == "" {
 		return Reply{Err: errDetail(proto.ErrForbidden, "sign in to enter the world", false)}
 	}
@@ -251,13 +251,13 @@ func (h *Handler) executeMUDCommand(actor *User, p proto.MUDCommandPayload) Repl
 
 // mudEnsurePresence registers the actor into the room, announcing an arrival the
 // first time they appear there.
-func (h *Handler) mudEnsurePresence(actor *User, roomID string, now time.Time) {
+func (h *Handler) mudEnsurePresence(actor *projections.User, roomID string, now time.Time) {
 	if mudOccupancy().touch(actor.ID, actor.Name, roomID, now) {
 		h.mudBroadcast(roomID, "enter", actor.Name, actor.Name+" is here.", now)
 	}
 }
 
-func (h *Handler) mudMove(actor *User, fromRoom, rawDir string, now time.Time) {
+func (h *Handler) mudMove(actor *projections.User, fromRoom, rawDir string, now time.Time) {
 	dir, ok := mudDirAliases[strings.ToLower(strings.TrimSpace(rawDir))]
 	if !ok {
 		h.mudPublishView(actor.ID, commandevents.MUDViewLines("Go where? Try a direction like north, south, east, west."), now)
