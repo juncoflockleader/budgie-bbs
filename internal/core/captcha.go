@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/captcha"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/captchamodel"
 )
 
 var (
@@ -19,23 +20,14 @@ var (
 )
 
 const (
-	CaptchaModeOff      = "off"
-	CaptchaModeNative   = "native"
-	CaptchaModeProvider = "provider"
-
-	defaultCaptchaTTL = 5 * time.Minute
+	CaptchaModeOff      = captchamodel.ModeOff
+	CaptchaModeNative   = captchamodel.ModeNative
+	CaptchaModeProvider = captchamodel.ModeProvider
 )
 
-// CaptchaConfig configures signup captcha. Secret is server-side only (a
-// provider secret, or the HMAC key for native challenges); it is never exposed.
-type CaptchaConfig struct {
-	Mode      string // off | native | provider
-	Provider  string // provider mode: recaptcha | hcaptcha | turnstile
-	SiteKey   string // public site key, exposed via the auth policy endpoint
-	Secret    string // provider secret OR native HMAC key
-	VerifyURL string // provider verify URL (optional; defaults per provider)
-	TTL       time.Duration
-}
+type CaptchaConfig = captchamodel.Config
+type CaptchaPolicy = captchamodel.Policy
+type CaptchaSubmission = captchamodel.Submission
 
 type captchaRuntime struct {
 	cfg      CaptchaConfig
@@ -45,13 +37,7 @@ type captchaRuntime struct {
 // SetCaptcha configures signup captcha. Call once at startup. Mode "off" (the
 // default) disables it. Safe to call on a nil-captcha Core.
 func (c *Core) SetCaptcha(cfg CaptchaConfig) {
-	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
-	if cfg.Mode == "" {
-		cfg.Mode = CaptchaModeOff
-	}
-	if cfg.TTL <= 0 {
-		cfg.TTL = defaultCaptchaTTL
-	}
+	cfg = captchamodel.NormalizeConfig(cfg)
 	rt := &captchaRuntime{cfg: cfg}
 	if cfg.Mode == CaptchaModeProvider {
 		verifyURL := cfg.VerifyURL
@@ -75,26 +61,15 @@ func (c *Core) captchaMode() string {
 
 // CaptchaEnabled reports whether signup captcha is active.
 func (c *Core) CaptchaEnabled() bool {
-	m := c.captchaMode()
-	return m == CaptchaModeNative || m == CaptchaModeProvider
-}
-
-// CaptchaPolicy is the public (unauthenticated) view of captcha configuration —
-// never includes the secret.
-type CaptchaPolicy struct {
-	Enabled  bool   `json:"enabled"`
-	Mode     string `json:"mode"`
-	Provider string `json:"provider,omitempty"`
-	SiteKey  string `json:"siteKey,omitempty"`
+	return captchamodel.EnabledMode(c.captchaMode())
 }
 
 // CaptchaPolicy returns the public captcha policy for the auth policy endpoint.
 func (c *Core) CaptchaPolicy() CaptchaPolicy {
-	if !c.CaptchaEnabled() {
-		return CaptchaPolicy{Enabled: false, Mode: CaptchaModeOff}
+	if c == nil || c.captcha == nil {
+		return captchamodel.PolicyForConfig(CaptchaConfig{})
 	}
-	cfg := c.captcha.cfg
-	return CaptchaPolicy{Enabled: true, Mode: cfg.Mode, Provider: cfg.Provider, SiteKey: cfg.SiteKey}
+	return captchamodel.PolicyForConfig(c.captcha.cfg)
 }
 
 // CaptchaChallenge is a freshly issued native challenge.
@@ -126,14 +101,6 @@ func (c *Core) IssueCaptchaChallenge() (*CaptchaChallenge, error) {
 		return nil, err
 	}
 	return &CaptchaChallenge{ID: id, SVG: captcha.RenderSVG(code), ExpiresAt: exp}, nil
-}
-
-// CaptchaSubmission carries what a signup form sends for captcha verification.
-type CaptchaSubmission struct {
-	ChallengeID string // native
-	Answer      string // native
-	Token       string // provider
-	RemoteIP    string
 }
 
 // VerifyCaptcha enforces the configured captcha. It is a no-op when captcha is
