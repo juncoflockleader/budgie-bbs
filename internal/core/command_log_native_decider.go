@@ -4124,25 +4124,13 @@ func nativeRequireBoardMembershipAdmission(c *Core, boardID, userID string, requ
 }
 
 func nativeBoardMembershipApplicationEvents(db *sql.DB, record CommandLogRecord, actor *User, applicationID, boardID, userID, note string, autoApprove bool, ts int64) ([]EventAppend, *proto.ErrorDetail) {
-	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardMemberApplicationSubmitted, []string{"board:" + boardID, "user:" + userID}, &proto.BoardMemberApplicationSubmittedPayload{
-		ID:    applicationID,
-		Board: boardID,
-		User:  userID,
-		Note:  note,
-		TS:    ts,
-	}, ts)}
+	scopes, payload := commandevents.BoardMemberApplicationSubmitted(applicationID, boardID, userID, note, ts)
+	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardMemberApplicationSubmitted, scopes, payload, ts)}
 	if !autoApprove {
 		return events, nil
 	}
-	events = append(events, nativeEvent(record, 1, proto.EvtBoardMemberApplicationReviewed, []string{"board:" + boardID, "user:" + userID}, &proto.BoardMemberApplicationReviewedPayload{
-		Application: applicationID,
-		Board:       boardID,
-		User:        userID,
-		Status:      "approved",
-		Reviewer:    actor.ID,
-		ReviewNote:  proto.BoardMembershipAutoApprovalNote,
-		TS:          ts,
-	}, ts))
+	scopes, reviewPayload := commandevents.BoardMemberApplicationReviewed(applicationID, boardID, userID, "approved", "", actor.ID, proto.BoardMembershipAutoApprovalNote, ts)
+	events = append(events, nativeEvent(record, 1, proto.EvtBoardMemberApplicationReviewed, scopes, reviewPayload, ts))
 	registryEvents, errDetail := nativeBoardRegistrationSystemLogEvents(db, record, actor, applicationID, "approved", boardID, userID, ts, 2)
 	if errDetail != nil {
 		return nil, errDetail
@@ -4152,16 +4140,8 @@ func nativeBoardMembershipApplicationEvents(db *sql.DB, record CommandLogRecord,
 }
 
 func nativeBoardMembershipReviewEvents(db *sql.DB, record CommandLogRecord, actor *User, applicationID, boardID, userID, status, title, note string, ts int64) ([]EventAppend, *proto.ErrorDetail) {
-	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardMemberApplicationReviewed, []string{"board:" + boardID, "user:" + userID}, &proto.BoardMemberApplicationReviewedPayload{
-		Application: applicationID,
-		Board:       boardID,
-		User:        userID,
-		Status:      status,
-		Title:       title,
-		Reviewer:    actor.ID,
-		ReviewNote:  note,
-		TS:          ts,
-	}, ts)}
+	scopes, payload := commandevents.BoardMemberApplicationReviewed(applicationID, boardID, userID, status, title, actor.ID, note, ts)
+	events := []EventAppend{nativeEvent(record, 0, proto.EvtBoardMemberApplicationReviewed, scopes, payload, ts)}
 	registryEvents, errDetail := nativeBoardRegistrationSystemLogEvents(db, record, actor, applicationID, status, boardID, userID, ts, 1)
 	if errDetail != nil {
 		return nil, errDetail

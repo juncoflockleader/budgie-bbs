@@ -59,6 +59,29 @@ func BoardCreated(boardID, name, description, parentID string, position int, by 
 	}
 }
 
+func BoardMemberApplicationSubmitted(applicationID, boardID, userID, note string, ts int64) ([]string, *proto.BoardMemberApplicationSubmittedPayload) {
+	return []string{"board:" + boardID, "user:" + userID}, &proto.BoardMemberApplicationSubmittedPayload{
+		ID:    applicationID,
+		Board: boardID,
+		User:  userID,
+		Note:  note,
+		TS:    ts,
+	}
+}
+
+func BoardMemberApplicationReviewed(applicationID, boardID, userID, status, title, reviewer, note string, ts int64) ([]string, *proto.BoardMemberApplicationReviewedPayload) {
+	return []string{"board:" + boardID, "user:" + userID}, &proto.BoardMemberApplicationReviewedPayload{
+		Application: applicationID,
+		Board:       boardID,
+		User:        userID,
+		Status:      status,
+		Title:       title,
+		Reviewer:    reviewer,
+		ReviewNote:  note,
+		TS:          ts,
+	}
+}
+
 func PostFlagged(reviewID, kind, postID, threadID, reporter, reason string, ts int64) ([]string, *proto.PostFlaggedPayload) {
 	return []string{"moderation:global"}, &proto.PostFlaggedPayload{
 		ReviewID: reviewID,

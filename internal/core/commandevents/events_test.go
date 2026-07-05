@@ -52,6 +52,23 @@ func TestBoardCreated(t *testing.T) {
 	}
 }
 
+func TestBoardMemberApplicationEvents(t *testing.T) {
+	scopes, submitted := BoardMemberApplicationSubmitted("app_1", "general", "usr_alice", "please", 1234)
+	requireScopes(t, scopes, "board:general", "user:usr_alice")
+	if submitted.ID != "app_1" || submitted.Board != "general" || submitted.User != "usr_alice" ||
+		submitted.Note != "please" || submitted.TS != 1234 {
+		t.Fatalf("BoardMemberApplicationSubmitted payload = %+v", submitted)
+	}
+
+	scopes, reviewed := BoardMemberApplicationReviewed("app_1", "general", "usr_alice", "approved", "Regular", "usr_mod", "ok", 1235)
+	requireScopes(t, scopes, "board:general", "user:usr_alice")
+	if reviewed.Application != "app_1" || reviewed.Board != "general" || reviewed.User != "usr_alice" ||
+		reviewed.Status != "approved" || reviewed.Title != "Regular" || reviewed.Reviewer != "usr_mod" ||
+		reviewed.ReviewNote != "ok" || reviewed.TS != 1235 {
+		t.Fatalf("BoardMemberApplicationReviewed payload = %+v", reviewed)
+	}
+}
+
 func TestPostFlagged(t *testing.T) {
 	scopes, payload := PostFlagged("rev_1", "post_flag", "post_1", "thread_1", "usr_reporter", "reason", 1234)
 	requireScopes(t, scopes, "moderation:global")
