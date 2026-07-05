@@ -23,6 +23,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -1711,22 +1712,7 @@ func (c *Core) ListCategoriesForUser(viewer *User) ([]Category, error) {
 	if err != nil {
 		return nil, err
 	}
-	if viewer != nil && viewer.IsAdmin() {
-		return categories, nil
-	}
-	out := make([]Category, 0, len(categories))
-	for _, category := range categories {
-		visibility := strings.TrimSpace(strings.ToLower(category.Visibility))
-		switch visibility {
-		case "", "public":
-			out = append(out, category)
-		case "staff":
-			if viewer != nil && viewer.IsMod() {
-				out = append(out, category)
-			}
-		}
-	}
-	return out, nil
+	return categorymodel.FilterVisible(categories, viewer), nil
 }
 
 func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) (*Category, error) {
@@ -1793,15 +1779,11 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) 
 		}
 	}
 	if patch.Visibility != nil {
-		visibility = strings.TrimSpace(strings.ToLower(*patch.Visibility))
-		if visibility == "" {
-			visibility = "public"
+		normalized, err := categorymodel.NormalizeVisibility(*patch.Visibility)
+		if err != nil {
+			return nil, err
 		}
-		switch visibility {
-		case "public", "staff", "hidden":
-		default:
-			return nil, fmt.Errorf(`visibility must be "public", "staff", or "hidden"`)
-		}
+		visibility = normalized
 	}
 
 	ts := nowMS()
