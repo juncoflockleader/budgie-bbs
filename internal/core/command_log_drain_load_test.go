@@ -723,25 +723,6 @@ func TestCommandLogDrainLoadOffsetSnapshotClampsAndCopiesOffsets(t *testing.T) {
 	}
 }
 
-func TestCommandLogDrainLoadLaggingPartitionOffsetsNormalizesAndDeduplicates(t *testing.T) {
-	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
-	board := LogPartition{Kind: partitionBoard, Key: "board-a"}.Normalize()
-	got := commandLogDrainLoadLaggingPartitionOffsets([]CommandPartitionOffset{
-		{Partition: LogPartition{}, TailOffset: 3, CommittedOffset: 1},
-		{Partition: LogPartition{Kind: partitionBoard, Key: "board-a"}, TailOffset: 5, CommittedOffset: 5},
-		{Partition: LogPartition{Kind: partitionBoard, Key: "board-a"}, TailOffset: 7, CommittedOffset: 4},
-		{Partition: LogPartition{Kind: partitionBoard, Key: "board-a"}, TailOffset: 9, CommittedOffset: 2},
-		{Partition: LogPartition{Kind: partitionThread, Key: "thread-a"}, TailOffset: -1, CommittedOffset: -2},
-	})
-	want := []CommandPartitionOffset{
-		{Partition: global, TailOffset: 3, CommittedOffset: 1},
-		{Partition: board, TailOffset: 7, CommittedOffset: 4},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("lagging offsets = %+v, want %+v", got, want)
-	}
-}
-
 func TestCommandLogDrainLoadRejectsUnsupportedAssignmentMode(t *testing.T) {
 	c := newCoreTestCore(t)
 	ctx, cancel := context.WithCancel(context.Background())

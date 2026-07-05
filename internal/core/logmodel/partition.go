@@ -124,6 +124,23 @@ func SortCommandPartitionOffsetsByLag(offsets []CommandPartitionOffset) {
 	})
 }
 
+func LaggingCommandPartitionOffsets(offsets []CommandPartitionOffset) []CommandPartitionOffset {
+	lagging := make([]CommandPartitionOffset, 0, len(offsets))
+	seen := map[Partition]bool{}
+	for _, offset := range offsets {
+		offset = offset.Normalize()
+		if offset.Lag() <= 0 {
+			continue
+		}
+		if seen[offset.Partition] {
+			continue
+		}
+		seen[offset.Partition] = true
+		lagging = append(lagging, offset)
+	}
+	return lagging
+}
+
 type EventPartitionOffset struct {
 	Partition  Partition
 	LastOffset int64

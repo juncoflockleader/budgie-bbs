@@ -703,27 +703,10 @@ func commandLogDrainLoadMemberPartitionCursors(ctx context.Context, commandLog C
 	return cursors, nil
 }
 
-func commandLogDrainLoadLaggingPartitionOffsets(offsets []CommandPartitionOffset) []CommandPartitionOffset {
-	lagging := make([]CommandPartitionOffset, 0, len(offsets))
-	seen := map[LogPartition]bool{}
-	for _, offset := range offsets {
-		offset = offset.Normalize()
-		if offset.Lag() <= 0 {
-			continue
-		}
-		if seen[offset.Partition] {
-			continue
-		}
-		seen[offset.Partition] = true
-		lagging = append(lagging, offset)
-	}
-	return lagging
-}
-
 func commandLogDrainLoadAssignedLaggingPartitionOffsets(ctx context.Context, offsets []CommandPartitionOffset, assigner CommandPartitionAssigner, ownerID string) ([]CommandPartitionOffset, error) {
 	ownerID = strings.TrimSpace(ownerID)
 	assignedOffsets := make([]CommandPartitionOffset, 0, len(offsets))
-	for _, offset := range commandLogDrainLoadLaggingPartitionOffsets(offsets) {
+	for _, offset := range logmodel.LaggingCommandPartitionOffsets(offsets) {
 		assignment, assigned, err := assigner.AssignCommandPartition(ctx, ownerID, offset.Partition)
 		if err != nil {
 			return nil, err
@@ -803,28 +786,12 @@ func newCommandLogDrainLoadAssigner(ctx context.Context, commandLog CommandLog, 
 			return nil, err
 		}
 		return commandLogDrainLoadSnapshotAssigner{
-			SnapshotCommandPartitionAssigner: NewSnapshotCommandPartitionAssigner(commandLogDrainLoadAssignmentSnapshot(snapshot, members)),
+			SnapshotCommandPartitionAssigner: NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshotForLaggingOffsets(snapshot, members, 1)),
 			offsets:                          snapshot,
 			partitionLimit:                   partitionLimit,
 		}, nil
 	default:
 		return nil, fmt.Errorf("command log drain load: unsupported assignment mode %q", config.AssignmentMode)
-	}
-}
-
-func commandLogDrainLoadAssignmentSnapshot(offsets []CommandPartitionOffset, members []string) CommandPartitionAssignmentSnapshot {
-	members = logmodel.NormalizeCommandPartitionAssignmentMembers(members)
-	owners := map[LogPartition]string{}
-	for _, offset := range commandLogDrainLoadLaggingPartitionOffsets(offsets) {
-		if len(members) == 0 {
-			break
-		}
-		partition := offset.Partition.Normalize()
-		owners[partition] = members[logmodel.CommandPartitionAssignmentIndex(partition, len(members))]
-	}
-	return CommandPartitionAssignmentSnapshot{
-		Generation: 1,
-		Owners:     owners,
 	}
 }
 

@@ -64,6 +64,22 @@ type CommandPartitionAssignmentSnapshot struct {
 	Owners     map[Partition]string
 }
 
+func CommandPartitionAssignmentSnapshotForLaggingOffsets(offsets []CommandPartitionOffset, members []string, generation int64) CommandPartitionAssignmentSnapshot {
+	members = NormalizeCommandPartitionAssignmentMembers(members)
+	owners := map[Partition]string{}
+	for _, offset := range LaggingCommandPartitionOffsets(offsets) {
+		if len(members) == 0 {
+			break
+		}
+		partition := offset.Partition.Normalize()
+		owners[partition] = members[CommandPartitionAssignmentIndex(partition, len(members))]
+	}
+	return CommandPartitionAssignmentSnapshot{
+		Generation: generation,
+		Owners:     owners,
+	}
+}
+
 func NormalizeCommandPartitionAssignmentOwners(assignments map[Partition]string) map[Partition]string {
 	out := map[Partition]string{}
 	for partition, ownerID := range assignments {
