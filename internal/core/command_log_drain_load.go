@@ -795,9 +795,7 @@ func newCommandLogDrainLoadAssigner(ctx context.Context, commandLog CommandLog, 
 	}
 }
 
-type commandLogDrainLoadPartitionOffsetSnapshot []CommandPartitionOffset
-
-func snapshotCommandLogDrainLoadPartitionOffsets(ctx context.Context, lister CommandPartitionOffsetLister, limit int) (commandLogDrainLoadPartitionOffsetSnapshot, error) {
+func snapshotCommandLogDrainLoadPartitionOffsets(ctx context.Context, lister CommandPartitionOffsetLister, limit int) (logmodel.CommandPartitionOffsetSnapshot, error) {
 	if lister == nil {
 		return nil, fmt.Errorf("command log drain load: nil partition offsets")
 	}
@@ -805,25 +803,7 @@ func snapshotCommandLogDrainLoadPartitionOffsets(ctx context.Context, lister Com
 	if err != nil {
 		return nil, err
 	}
-	return commandLogDrainLoadPartitionOffsetSnapshot(offsets).clone(limit), nil
-}
-
-func (s commandLogDrainLoadPartitionOffsetSnapshot) ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return s.clone(limit), nil
-}
-
-func (s commandLogDrainLoadPartitionOffsetSnapshot) clone(limit int) commandLogDrainLoadPartitionOffsetSnapshot {
-	if limit > 0 && len(s) > limit {
-		s = s[:limit]
-	}
-	out := make(commandLogDrainLoadPartitionOffsetSnapshot, 0, len(s))
-	for _, offset := range s {
-		out = append(out, offset.Normalize())
-	}
-	return out
+	return logmodel.NewCommandPartitionOffsetSnapshot(offsets, limit), nil
 }
 
 type commandLogDrainLoadSnapshotAssigner struct {

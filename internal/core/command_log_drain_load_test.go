@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"reflect"
 	"sync"
 	"testing"
 
@@ -688,38 +687,6 @@ func TestCommandLogDrainLoadSnapshotAssignerListsOnlyLaggingPartitions(t *testin
 	}
 	if assignment, assigned, err := assigner.AssignCommandPartition(ctx, owner, lagging); err != nil || !assigned || assignment.OwnerID != owner {
 		t.Fatalf("AssignCommandPartition lagging = %+v assigned=%v err=%v, want owner %q", assignment, assigned, err, owner)
-	}
-}
-
-func TestCommandLogDrainLoadOffsetSnapshotClampsAndCopiesOffsets(t *testing.T) {
-	ctx := context.Background()
-	board := LogPartition{Kind: partitionBoard, Key: "board-a"}.Normalize()
-	thread := LogPartition{Kind: partitionThread, Key: "thread-a"}.Normalize()
-	source := commandLogDrainLoadPartitionOffsetSnapshot{
-		{Partition: board, TailOffset: 2, CommittedOffset: 5},
-		{Partition: thread, TailOffset: -1, CommittedOffset: -2},
-	}
-
-	listed, err := source.ListCommandPartitionOffsets(ctx, 1)
-	if err != nil {
-		t.Fatalf("ListCommandPartitionOffsets: %v", err)
-	}
-	want := []CommandPartitionOffset{{Partition: board, TailOffset: 2, CommittedOffset: 2}}
-	if !reflect.DeepEqual(listed, want) {
-		t.Fatalf("listed = %+v, want %+v", listed, want)
-	}
-	listed[0].CommittedOffset = 0
-
-	again, err := source.ListCommandPartitionOffsets(ctx, 0)
-	if err != nil {
-		t.Fatalf("second ListCommandPartitionOffsets: %v", err)
-	}
-	wantAll := []CommandPartitionOffset{
-		{Partition: board, TailOffset: 2, CommittedOffset: 2},
-		{Partition: thread, TailOffset: 0, CommittedOffset: 0},
-	}
-	if !reflect.DeepEqual(again, wantAll) {
-		t.Fatalf("second listed = %+v, want unclobbered snapshot %+v", again, wantAll)
 	}
 }
 
