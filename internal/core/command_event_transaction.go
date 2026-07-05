@@ -270,11 +270,11 @@ func validateCommandEventTransactionBatch(records []CommandLogRecord) error {
 // successful call must prove both durable event appends and advancement of the
 // consumed command offset.
 type BrokerCommandEventTransactionClient interface {
-	AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, events []BrokerEventRecord) (BrokerCommandEventTransactionResult, error)
+	AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, events []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error)
 }
 
 type BrokerCommandEventTransactionResult struct {
-	Messages           []BrokerEventLogMessage
+	Messages           []logmodel.BrokerEventLogMessage
 	CommittedPartition LogPartition
 	CommittedOffset    int64
 }
@@ -283,11 +283,11 @@ type BrokerCommandEventTransactionResult struct {
 // of command/event decisions into one backend transaction. Messages must be
 // returned in the same order as the flattened requested events.
 type BrokerCommandEventTransactionBatchClient interface {
-	AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, events []BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error)
+	AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, events []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error)
 }
 
 type BrokerCommandEventTransactionBatchResult struct {
-	Messages []BrokerEventLogMessage
+	Messages []logmodel.BrokerEventLogMessage
 	Commits  []CommandLogCommitPosition
 }
 
@@ -323,7 +323,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Con
 	if err := command.Validate(); err != nil {
 		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: %w", err)
 	}
-	records := make([]BrokerEventRecord, 0, len(tx.Events))
+	records := make([]logmodel.BrokerEventRecord, 0, len(tx.Events))
 	for _, event := range tx.Events {
 		record, err := brokerEventTransactionRecord(event)
 		if err != nil {
@@ -390,7 +390,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 	}
 	commands := make([]CommandLogCommitPosition, 0, len(txs))
 	eventRanges := make([]eventRange, len(txs))
-	records := []BrokerEventRecord{}
+	records := []logmodel.BrokerEventRecord{}
 	for i, tx := range txs {
 		command := CommandLogCommitPosition{
 			Partition:      tx.CommandPartition,
@@ -453,7 +453,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 	return results, nil
 }
 
-func validateBrokerCommandEventTransactionMessages(records []BrokerEventRecord, messages []BrokerEventLogMessage, options BrokerCommandEventTransactionStoreOptions) ([]*proto.Event, error) {
+func validateBrokerCommandEventTransactionMessages(records []logmodel.BrokerEventRecord, messages []logmodel.BrokerEventLogMessage, options BrokerCommandEventTransactionStoreOptions) ([]*proto.Event, error) {
 	if len(messages) != len(records) {
 		return nil, fmt.Errorf("broker command event transaction store: transaction returned %d events for %d requested events", len(messages), len(records))
 	}
@@ -461,7 +461,7 @@ func validateBrokerCommandEventTransactionMessages(records []BrokerEventRecord, 
 	var lastSeq int64
 	partitionOffsets := map[LogPartition]int64{}
 	for _, msg := range messages {
-		record, err := DecodeBrokerEventRecord(msg.Data)
+		record, err := logmodel.DecodeBrokerEventRecord(msg.Data)
 		if err != nil {
 			return nil, err
 		}
@@ -496,22 +496,22 @@ func validateBrokerCommandEventTransactionMessages(records []BrokerEventRecord, 
 	return events, nil
 }
 
-func brokerEventTransactionRecord(event EventAppend) (BrokerEventRecord, error) {
+func brokerEventTransactionRecord(event EventAppend) (logmodel.BrokerEventRecord, error) {
 	if strings.TrimSpace(event.ID) == "" {
-		return BrokerEventRecord{}, fmt.Errorf("broker command event transaction store: event id is required")
+		return logmodel.BrokerEventRecord{}, fmt.Errorf("broker command event transaction store: event id is required")
 	}
 	if event.TS <= 0 {
-		return BrokerEventRecord{}, fmt.Errorf("broker command event transaction store: event timestamp is required")
+		return logmodel.BrokerEventRecord{}, fmt.Errorf("broker command event transaction store: event timestamp is required")
 	}
 	payload, err := json.Marshal(event.Payload)
 	if err != nil {
-		return BrokerEventRecord{}, err
+		return logmodel.BrokerEventRecord{}, err
 	}
 	if _, err := unmarshalPayload(event.Kind, payload); err != nil {
-		return BrokerEventRecord{}, err
+		return logmodel.BrokerEventRecord{}, err
 	}
 	partition := logPartitionFromEventPartition(eventPartitionFor(event.Kind, event.Scopes))
-	return BrokerEventRecord{
+	return logmodel.BrokerEventRecord{
 		Version:          brokerEventRecordVersion,
 		ID:               event.ID,
 		Kind:             event.Kind,
@@ -525,8 +525,8 @@ func brokerEventTransactionRecord(event EventAppend) (BrokerEventRecord, error) 
 }
 
 type memoryPendingBrokerEvent struct {
-	message BrokerEventLogMessage
-	record  BrokerEventRecord
+	message logmodel.BrokerEventLogMessage
+	record  logmodel.BrokerEventRecord
 	new     bool
 }
 
@@ -541,7 +541,7 @@ func NewMemoryBrokerCommandEventTransactionClient(commands *MemoryBrokerCommandL
 	return &MemoryBrokerCommandEventTransactionClient{commands: commands, events: events}
 }
 
-func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -559,7 +559,7 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 	}, nil
 }
 
-func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
+func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionBatchResult{}, err
 	}
@@ -606,7 +606,7 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 				return BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("memory broker command event transaction: duplicate event id %q belongs to %s/%s, not %s/%s",
 					record.ID, existing.Partition.Kind, existing.Partition.Key, partition.Kind, partition.Key)
 			}
-			existingRecord, err := DecodeBrokerEventRecord(existing.Data)
+			existingRecord, err := logmodel.DecodeBrokerEventRecord(existing.Data)
 			if err != nil {
 				return BrokerCommandEventTransactionBatchResult{}, err
 			}
@@ -626,12 +626,12 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 		pendingCounts[partition]++
 		pendingHead++
 		record.PartitionOffset = offset
-		data, err := EncodeBrokerEventRecord(record)
+		data, err := logmodel.EncodeBrokerEventRecord(record)
 		if err != nil {
 			return BrokerCommandEventTransactionBatchResult{}, err
 		}
 		appendEvent := memoryPendingBrokerEvent{
-			message: BrokerEventLogMessage{
+			message: logmodel.BrokerEventLogMessage{
 				Partition: partition,
 				Offset:    offset,
 				StreamSeq: pendingHead,
@@ -644,7 +644,7 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 		pendingByID[record.ID] = appendEvent
 	}
 
-	out := make([]BrokerEventLogMessage, 0, len(pending))
+	out := make([]logmodel.BrokerEventLogMessage, 0, len(pending))
 	for _, appendEvent := range pending {
 		msg := appendEvent.message
 		if appendEvent.new {

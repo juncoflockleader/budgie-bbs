@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -435,11 +436,11 @@ type shortBatchBrokerEventLogClient struct {
 	max   int
 }
 
-func (c *shortBatchBrokerEventLogClient) AppendEvent(ctx context.Context, partition LogPartition, record BrokerEventRecord) (BrokerEventLogMessage, error) {
+func (c *shortBatchBrokerEventLogClient) AppendEvent(ctx context.Context, partition LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	return c.inner.AppendEvent(ctx, partition, record)
 }
 
-func (c *shortBatchBrokerEventLogClient) FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerEventLogMessage, error) {
+func (c *shortBatchBrokerEventLogClient) FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerEventLogMessage, error) {
 	if c.max > 0 && (limit <= 0 || limit > c.max) {
 		limit = c.max
 	}
@@ -462,13 +463,13 @@ type partitionOnlyBrokerEventLogClient struct {
 	inner *MemoryBrokerEventLogClient
 }
 
-func (c *partitionOnlyBrokerEventLogClient) AppendEvent(ctx context.Context, partition LogPartition, record BrokerEventRecord) (BrokerEventLogMessage, error) {
+func (c *partitionOnlyBrokerEventLogClient) AppendEvent(ctx context.Context, partition LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	msg, err := c.inner.AppendEvent(ctx, partition, record)
 	msg.StreamSeq = 0
 	return msg, err
 }
 
-func (c *partitionOnlyBrokerEventLogClient) FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerEventLogMessage, error) {
+func (c *partitionOnlyBrokerEventLogClient) FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerEventLogMessage, error) {
 	messages, err := c.inner.FetchEvents(ctx, partition, afterOffset, limit)
 	if err != nil {
 		return nil, err

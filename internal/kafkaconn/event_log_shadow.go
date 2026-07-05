@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -41,27 +42,27 @@ func NewEventLogShadowStore(client *kgo.Client, options EventLogOptions, replayO
 	return core.NewBrokerEventStore(NewFranzEventLogShadowClient(client, options, replayOptions))
 }
 
-func (c *FranzEventLogShadowClient) AppendEvent(ctx context.Context, partition core.LogPartition, record core.BrokerEventRecord) (core.BrokerEventLogMessage, error) {
+func (c *FranzEventLogShadowClient) AppendEvent(ctx context.Context, partition core.LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	if c == nil || c.producer == nil {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: nil producer")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: nil producer")
 	}
 	partition = partition.Normalize()
 	record.PartitionKind = partition.Kind
 	record.PartitionKey = partition.Key
 	if record.ID == "" {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: event id is required")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: event id is required")
 	}
 	if record.TS <= 0 {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: event timestamp is required")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: event timestamp is required")
 	}
 	if record.CompatibilitySeq <= 0 {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: compatibility seq is required")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: compatibility seq is required")
 	}
 	if record.PartitionOffset <= 0 {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: partition offset is required")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: partition offset is required")
 	}
 	topic := c.options.EventTopic
 	if topic == "" {
@@ -70,30 +71,30 @@ func (c *FranzEventLogShadowClient) AppendEvent(ctx context.Context, partition c
 	key := LogicalPartitionKey(partition)
 	appendRecord, err := NewKafkaEventRecord(topic, record)
 	if err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	results := c.producer.ProduceSync(ctx, cloneKafkaRecord(appendRecord))
 	if len(results) == 0 {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: produce returned no result")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: produce returned no result")
 	}
 	produced, err := results.First()
 	if err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	if produced == nil {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: produce returned nil record")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: produce returned nil record")
 	}
 	result, err := kafkaEventAppendResultFromRecord(cloneKafkaRecord(produced))
 	if err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	if err := validateEventAppendResult(topic, key, partition, record, result); err != nil {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: %w", err)
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log shadow: %w", err)
 	}
 	return result.Message, nil
 }
 
-func (c *FranzEventLogShadowClient) FetchEvents(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]core.BrokerEventLogMessage, error) {
+func (c *FranzEventLogShadowClient) FetchEvents(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerEventLogMessage, error) {
 	if c == nil || c.replay == nil {
 		return nil, fmt.Errorf("kafka event log shadow: nil replay client")
 	}

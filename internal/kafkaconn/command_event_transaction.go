@@ -27,8 +27,8 @@ type TransactionBeginner interface {
 }
 
 type Transaction interface {
-	AllocateEventPositions(ctx context.Context, records []core.BrokerEventRecord) ([]EventPositionAllocation, error)
-	AppendEvent(ctx context.Context, topic, key string, record core.BrokerEventRecord) (EventAppendResult, error)
+	AllocateEventPositions(ctx context.Context, records []logmodel.BrokerEventRecord) ([]EventPositionAllocation, error)
+	AppendEvent(ctx context.Context, topic, key string, record logmodel.BrokerEventRecord) (EventAppendResult, error)
 	CommitCommandOffset(ctx context.Context, commit CommandOffsetCommit) error
 	Commit(ctx context.Context) error
 	Abort(ctx context.Context) error
@@ -43,7 +43,7 @@ type EventPositionAllocation struct {
 type EventAppendResult struct {
 	Topic   string
 	Key     string
-	Message core.BrokerEventLogMessage
+	Message logmodel.BrokerEventLogMessage
 }
 
 type CommandOffsetCommit struct {
@@ -72,7 +72,7 @@ func NewCommandEventTransactionClient(transactions TransactionBeginner, options 
 	}
 }
 
-func (c *CommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command core.CommandLogCommitPosition, records []core.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
+func (c *CommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command core.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return core.BrokerCommandEventTransactionResult{}, err
 	}
@@ -119,7 +119,7 @@ func (c *CommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context
 		}
 	}
 
-	messages := make([]core.BrokerEventLogMessage, 0, len(records))
+	messages := make([]logmodel.BrokerEventLogMessage, 0, len(records))
 	for _, record := range records {
 		partition := core.LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
 		key := LogicalPartitionKey(partition)
@@ -172,11 +172,11 @@ func commandOffsetCommit(options CommandEventTransactionOptions, command core.Co
 	}, nil
 }
 
-func assignTransactionEventPositions(records []core.BrokerEventRecord, allocations []EventPositionAllocation, options CommandEventTransactionOptions) ([]core.BrokerEventRecord, error) {
+func assignTransactionEventPositions(records []logmodel.BrokerEventRecord, allocations []EventPositionAllocation, options CommandEventTransactionOptions) ([]logmodel.BrokerEventRecord, error) {
 	if len(allocations) != len(records) {
 		return nil, fmt.Errorf("kafka command/event transaction: allocated %d event positions for %d events", len(allocations), len(records))
 	}
-	assigned := make([]core.BrokerEventRecord, 0, len(records))
+	assigned := make([]logmodel.BrokerEventRecord, 0, len(records))
 	var lastSeq int64
 	partitionOffsets := map[core.LogPartition]int64{}
 	for i, record := range records {
@@ -222,7 +222,7 @@ func assignTransactionEventPositions(records []core.BrokerEventRecord, allocatio
 	return assigned, nil
 }
 
-func validateEventAppendResult(topic, key string, partition core.LogPartition, expected core.BrokerEventRecord, result EventAppendResult) error {
+func validateEventAppendResult(topic, key string, partition core.LogPartition, expected logmodel.BrokerEventRecord, result EventAppendResult) error {
 	if strings.TrimSpace(result.Topic) != topic {
 		return fmt.Errorf("kafka command/event transaction: appended event returned topic %q for requested topic %q", result.Topic, topic)
 	}
@@ -242,7 +242,7 @@ func validateEventAppendResult(topic, key string, partition core.LogPartition, e
 		return fmt.Errorf("kafka command/event transaction: appended event returned logical partition offset %d for allocated offset %d",
 			event.PartitionOffset, expected.PartitionOffset)
 	}
-	record, err := core.DecodeBrokerEventRecord(result.Message.Data)
+	record, err := logmodel.DecodeBrokerEventRecord(result.Message.Data)
 	if err != nil {
 		return err
 	}

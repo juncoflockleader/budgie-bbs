@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -253,7 +254,7 @@ func TestRebuildProjectionsFromBrokerEventStore(t *testing.T) {
 }
 
 func TestDecodeBrokerEventMessageRejectsOffsetMismatch(t *testing.T) {
-	record := BrokerEventRecord{
+	record := logmodel.BrokerEventRecord{
 		Version:         brokerEventRecordVersion,
 		Kind:            proto.EvtThreadNew,
 		Scopes:          []string{"board:general"},
@@ -263,11 +264,11 @@ func TestDecodeBrokerEventMessageRejectsOffsetMismatch(t *testing.T) {
 		PartitionKey:    "general",
 		PartitionOffset: 7,
 	}
-	data, err := EncodeBrokerEventRecord(record)
+	data, err := logmodel.EncodeBrokerEventRecord(record)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	_, err = DecodeBrokerEventMessage(BrokerEventLogMessage{
+	_, err = DecodeBrokerEventMessage(logmodel.BrokerEventLogMessage{
 		Partition: LogPartition{Kind: partitionBoard, Key: "general"},
 		Offset:    8,
 		Data:      data,

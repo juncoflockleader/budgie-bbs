@@ -7,12 +7,13 @@ import (
 	"sync"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type EventPositionAllocator interface {
-	AllocateEventPositions(ctx context.Context, records []core.BrokerEventRecord) ([]EventPositionAllocation, error)
+	AllocateEventPositions(ctx context.Context, records []logmodel.BrokerEventRecord) ([]EventPositionAllocation, error)
 }
 
 type franzCommandEventTransactionRuntime interface {
@@ -75,7 +76,7 @@ type franzCommandEventTransaction struct {
 
 var _ Transaction = (*franzCommandEventTransaction)(nil)
 
-func (tx *franzCommandEventTransaction) AllocateEventPositions(ctx context.Context, records []core.BrokerEventRecord) ([]EventPositionAllocation, error) {
+func (tx *franzCommandEventTransaction) AllocateEventPositions(ctx context.Context, records []logmodel.BrokerEventRecord) ([]EventPositionAllocation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (tx *franzCommandEventTransaction) AllocateEventPositions(ctx context.Conte
 	return append([]EventPositionAllocation(nil), allocations...), nil
 }
 
-func (tx *franzCommandEventTransaction) AppendEvent(ctx context.Context, topic, key string, record core.BrokerEventRecord) (EventAppendResult, error) {
+func (tx *franzCommandEventTransaction) AppendEvent(ctx context.Context, topic, key string, record logmodel.BrokerEventRecord) (EventAppendResult, error) {
 	if err := ctx.Err(); err != nil {
 		return EventAppendResult{}, err
 	}
@@ -103,7 +104,7 @@ func (tx *franzCommandEventTransaction) AppendEvent(ctx context.Context, topic, 
 	if key == "" {
 		return EventAppendResult{}, fmt.Errorf("franz command/event transaction: event key is required")
 	}
-	data, err := core.EncodeBrokerEventRecord(record)
+	data, err := logmodel.EncodeBrokerEventRecord(record)
 	if err != nil {
 		return EventAppendResult{}, err
 	}
@@ -241,7 +242,7 @@ func kafkaEventAppendResultFromRecord(record *kgo.Record) (EventAppendResult, er
 	if record == nil {
 		return EventAppendResult{}, fmt.Errorf("franz command/event transaction: event produce returned nil record")
 	}
-	decoded, err := core.DecodeBrokerEventRecord(record.Value)
+	decoded, err := logmodel.DecodeBrokerEventRecord(record.Value)
 	if err != nil {
 		return EventAppendResult{}, err
 	}
@@ -249,7 +250,7 @@ func kafkaEventAppendResultFromRecord(record *kgo.Record) (EventAppendResult, er
 	return EventAppendResult{
 		Topic: record.Topic,
 		Key:   string(record.Key),
-		Message: core.BrokerEventLogMessage{
+		Message: logmodel.BrokerEventLogMessage{
 			Partition: partition,
 			Offset:    decoded.PartitionOffset,
 			StreamSeq: decoded.CompatibilitySeq,

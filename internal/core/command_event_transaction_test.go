@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -70,7 +71,7 @@ func TestBrokerCommandEventTransactionStoreRejectsMismatchedReturnedEvent(t *tes
 	requested := commandEventTransactionTestEventWithID("evt_transaction_requested", "Requested")
 	returned := commandEventTransactionTestEventWithID("evt_transaction_returned", "Returned")
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{
+		messages: []logmodel.BrokerEventLogMessage{
 			commandEventTransactionBrokerMessage(t, returned, 1),
 		},
 	})
@@ -88,7 +89,7 @@ func TestBrokerCommandEventTransactionStoreRejectsTimestampDrift(t *testing.T) {
 	returned := requested
 	returned.TS = requested.TS + 1000
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{
+		messages: []logmodel.BrokerEventLogMessage{
 			commandEventTransactionBrokerMessage(t, returned, 1),
 		},
 	})
@@ -106,7 +107,7 @@ func TestBrokerCommandEventTransactionStoreRejectsReturnedEventWithoutSequence(t
 	message := commandEventTransactionBrokerMessage(t, requested, 1)
 	message.StreamSeq = 0
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{message},
+		messages: []logmodel.BrokerEventLogMessage{message},
 	})
 	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
@@ -122,7 +123,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsPartitionOnlyReturnedEventWith
 	message := commandEventTransactionBrokerMessage(t, requested, 1)
 	message.StreamSeq = 0
 	store := NewBrokerCommandEventTransactionStoreWithOptions(
-		fakeBrokerCommandEventTransactionClient{messages: []BrokerEventLogMessage{message}},
+		fakeBrokerCommandEventTransactionClient{messages: []logmodel.BrokerEventLogMessage{message}},
 		BrokerCommandEventTransactionStoreOptions{AllowPartitionOnlyEvents: true},
 	)
 	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
@@ -147,7 +148,7 @@ func TestBrokerCommandEventTransactionStoreUsesBatchClient(t *testing.T) {
 	second.Scopes = []string{"board:life"}
 	second.Payload.(*proto.ThreadNewPayload).Board = "life"
 	client := &recordingBatchBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{
+		messages: []logmodel.BrokerEventLogMessage{
 			commandEventTransactionBrokerMessage(t, first, 1),
 			commandEventTransactionBrokerMessageForPartition(t, second, life, 1, 2),
 		},
@@ -208,7 +209,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsCompatibilitySequence(t *testi
 	message := commandEventTransactionBrokerMessage(t, requested, 1)
 	message.StreamSeq = 0
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{message},
+		messages: []logmodel.BrokerEventLogMessage{message},
 	})
 	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
@@ -230,7 +231,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsAdapterAssignedCompatibilitySe
 	message.StreamSeq = 0
 	message = commandEventTransactionMessageWithCompatibilitySeq(t, message, 42)
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{message},
+		messages: []logmodel.BrokerEventLogMessage{message},
 	})
 	result, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
@@ -253,7 +254,7 @@ func TestBrokerCommandEventTransactionStoreRejectsReturnedCompatibilitySequenceD
 	message.StreamSeq = 0
 	message = commandEventTransactionMessageWithCompatibilitySeq(t, message, 43)
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{message},
+		messages: []logmodel.BrokerEventLogMessage{message},
 	})
 	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
@@ -267,7 +268,7 @@ func TestBrokerCommandEventTransactionStoreRejectsNonIncreasingReturnedSequence(
 	ctx := context.Background()
 	first := commandEventTransactionTestEventWithID("evt_transaction_first_seq", "First sequence")
 	second := commandEventTransactionTestEventWithID("evt_transaction_second_seq", "Second sequence")
-	messages := []BrokerEventLogMessage{
+	messages := []logmodel.BrokerEventLogMessage{
 		commandEventTransactionBrokerMessage(t, first, 1),
 		commandEventTransactionBrokerMessage(t, second, 2),
 	}
@@ -290,7 +291,7 @@ func TestBrokerCommandEventTransactionStoreAcceptsOrderedCompatibilitySequenceBa
 	second := commandEventTransactionTestEventWithID("evt_transaction_compat_seq_second", "Compatibility sequence second")
 	first.CompatibilitySeq = 41
 	second.CompatibilitySeq = 42
-	messages := []BrokerEventLogMessage{
+	messages := []logmodel.BrokerEventLogMessage{
 		commandEventTransactionBrokerMessage(t, first, 1),
 		commandEventTransactionBrokerMessage(t, second, 2),
 	}
@@ -316,7 +317,7 @@ func TestBrokerCommandEventTransactionStoreRejectsNonIncreasingReturnedPartition
 	ctx := context.Background()
 	first := commandEventTransactionTestEventWithID("evt_transaction_first_partition_offset", "First partition offset")
 	second := commandEventTransactionTestEventWithID("evt_transaction_second_partition_offset", "Second partition offset")
-	messages := []BrokerEventLogMessage{
+	messages := []logmodel.BrokerEventLogMessage{
 		commandEventTransactionBrokerMessage(t, first, 10),
 		commandEventTransactionBrokerMessage(t, second, 9),
 	}
@@ -337,7 +338,7 @@ func TestBrokerCommandEventTransactionStoreRejectsStaleCommittedOffset(t *testin
 	ctx := context.Background()
 	requested := commandEventTransactionTestEventWithID("evt_transaction_stale_commit", "Stale commit")
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{
+		messages: []logmodel.BrokerEventLogMessage{
 			commandEventTransactionBrokerMessage(t, requested, 1),
 		},
 		committedOffset: 4,
@@ -354,7 +355,7 @@ func TestBrokerCommandEventTransactionStoreRejectsWrongCommittedPartition(t *tes
 	ctx := context.Background()
 	requested := commandEventTransactionTestEventWithID("evt_transaction_wrong_commit_partition", "Wrong partition")
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{
+		messages: []logmodel.BrokerEventLogMessage{
 			commandEventTransactionBrokerMessage(t, requested, 1),
 		},
 		committedPartition: LogPartition{Kind: partitionBoard, Key: "other"},
@@ -372,7 +373,7 @@ func TestBrokerCommandEventTransactionStoreRejectsMissingCommittedPartition(t *t
 	ctx := context.Background()
 	requested := commandEventTransactionTestEventWithID("evt_transaction_missing_commit_partition", "Missing partition")
 	store := NewBrokerCommandEventTransactionStore(fakeBrokerCommandEventTransactionClient{
-		messages: []BrokerEventLogMessage{
+		messages: []logmodel.BrokerEventLogMessage{
 			commandEventTransactionBrokerMessage(t, requested, 1),
 		},
 		committedPartitionMissing: true,
@@ -418,7 +419,7 @@ func TestMemoryBrokerCommandEventTransactionClientRequiresEventTimestamp(t *test
 	record.TS = 0
 	client := NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient)
 
-	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []BrokerEventRecord{record})
+	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []logmodel.BrokerEventRecord{record})
 	requireErrorContains(t, err, "event timestamp is required")
 	requireCommandEventTransactionRollback(t, ctx, commandLog, NewBrokerEventStore(eventClient), partition, "missing timestamp")
 }
@@ -438,7 +439,7 @@ func TestMemoryBrokerCommandEventTransactionClientRejectsDuplicateEventIDInOneBa
 	}
 	client := NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient)
 
-	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []BrokerEventRecord{record, record})
+	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []logmodel.BrokerEventRecord{record, record})
 	requireErrorContains(t, err, `duplicate event id "evt_memory_transaction_duplicate" in one transaction`)
 	requireCommandEventTransactionRollback(t, ctx, commandLog, eventStore, partition, "duplicate event batch")
 }
@@ -758,7 +759,7 @@ func commandEventTransactionTestEventWithID(id, title string) EventAppend {
 	}
 }
 
-func commandEventTransactionBrokerMessage(t *testing.T, event EventAppend, offset int64) BrokerEventLogMessage {
+func commandEventTransactionBrokerMessage(t *testing.T, event EventAppend, offset int64) logmodel.BrokerEventLogMessage {
 	t.Helper()
 	record, err := brokerEventTransactionRecord(event)
 	if err != nil {
@@ -768,7 +769,7 @@ func commandEventTransactionBrokerMessage(t *testing.T, event EventAppend, offse
 	return commandEventTransactionBrokerMessageForRecord(t, record, partition, offset, offset)
 }
 
-func commandEventTransactionBrokerMessageForPartition(t *testing.T, event EventAppend, partition LogPartition, offset, seq int64) BrokerEventLogMessage {
+func commandEventTransactionBrokerMessageForPartition(t *testing.T, event EventAppend, partition LogPartition, offset, seq int64) logmodel.BrokerEventLogMessage {
 	t.Helper()
 	record, err := brokerEventTransactionRecord(event)
 	if err != nil {
@@ -780,14 +781,14 @@ func commandEventTransactionBrokerMessageForPartition(t *testing.T, event EventA
 	return commandEventTransactionBrokerMessageForRecord(t, record, partition, offset, seq)
 }
 
-func commandEventTransactionBrokerMessageForRecord(t *testing.T, record BrokerEventRecord, partition LogPartition, offset, seq int64) BrokerEventLogMessage {
+func commandEventTransactionBrokerMessageForRecord(t *testing.T, record logmodel.BrokerEventRecord, partition LogPartition, offset, seq int64) logmodel.BrokerEventLogMessage {
 	t.Helper()
 	record.PartitionOffset = offset
-	data, err := EncodeBrokerEventRecord(record)
+	data, err := logmodel.EncodeBrokerEventRecord(record)
 	if err != nil {
-		t.Fatalf("EncodeBrokerEventRecord: %v", err)
+		t.Fatalf("logmodel.EncodeBrokerEventRecord: %v", err)
 	}
-	return BrokerEventLogMessage{
+	return logmodel.BrokerEventLogMessage{
 		Partition: partition,
 		Offset:    offset,
 		StreamSeq: seq,
@@ -795,34 +796,34 @@ func commandEventTransactionBrokerMessageForRecord(t *testing.T, record BrokerEv
 	}
 }
 
-func commandEventTransactionMessageWithCompatibilitySeq(t *testing.T, message BrokerEventLogMessage, seq int64) BrokerEventLogMessage {
+func commandEventTransactionMessageWithCompatibilitySeq(t *testing.T, message logmodel.BrokerEventLogMessage, seq int64) logmodel.BrokerEventLogMessage {
 	t.Helper()
-	record, err := DecodeBrokerEventRecord(message.Data)
+	record, err := logmodel.DecodeBrokerEventRecord(message.Data)
 	if err != nil {
-		t.Fatalf("DecodeBrokerEventRecord: %v", err)
+		t.Fatalf("logmodel.DecodeBrokerEventRecord: %v", err)
 	}
 	record.CompatibilitySeq = seq
-	data, err := EncodeBrokerEventRecord(record)
+	data, err := logmodel.EncodeBrokerEventRecord(record)
 	if err != nil {
-		t.Fatalf("EncodeBrokerEventRecord: %v", err)
+		t.Fatalf("logmodel.EncodeBrokerEventRecord: %v", err)
 	}
 	message.Data = data
 	return message
 }
 
 type fakeBrokerCommandEventTransactionClient struct {
-	messages                  []BrokerEventLogMessage
+	messages                  []logmodel.BrokerEventLogMessage
 	committedPartition        LogPartition
 	committedPartitionMissing bool
 	committedOffset           int64
 }
 
-func (c fakeBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c fakeBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
 	command = command.Normalize()
-	out := make([]BrokerEventLogMessage, len(c.messages))
+	out := make([]logmodel.BrokerEventLogMessage, len(c.messages))
 	copy(out, c.messages)
 	committedOffset := c.committedOffset
 	if committedOffset == 0 {
@@ -846,7 +847,7 @@ type countingBrokerCommandEventTransactionClient struct {
 	calls int
 }
 
-func (c *countingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *countingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -863,7 +864,7 @@ type recordingBrokerCommandEventTransactionClient struct {
 	command CommandLogCommitPosition
 }
 
-func (c *recordingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *recordingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -880,24 +881,24 @@ type recordingBatchBrokerCommandEventTransactionClient struct {
 	batchCalls  int
 	command     CommandLogCommitPosition
 	commands    []CommandLogCommitPosition
-	records     []BrokerEventRecord
-	messages    []BrokerEventLogMessage
+	records     []logmodel.BrokerEventRecord
+	messages    []logmodel.BrokerEventLogMessage
 }
 
-func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
 	c.singleCalls++
 	c.command = command.Normalize()
 	return BrokerCommandEventTransactionResult{
-		Messages:           append([]BrokerEventLogMessage(nil), c.messages...),
+		Messages:           append([]logmodel.BrokerEventLogMessage(nil), c.messages...),
 		CommittedPartition: c.command.Partition,
 		CommittedOffset:    c.command.Offset,
 	}, nil
 }
 
-func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
+func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionBatchResult{}, err
 	}
@@ -906,13 +907,13 @@ func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommi
 	for i := range c.commands {
 		c.commands[i] = c.commands[i].Normalize()
 	}
-	c.records = append([]BrokerEventRecord(nil), records...)
+	c.records = append([]logmodel.BrokerEventRecord(nil), records...)
 	commits := make([]CommandLogCommitPosition, 0, len(c.commands))
 	for _, command := range c.commands {
 		commits = append(commits, command.Normalize())
 	}
 	return BrokerCommandEventTransactionBatchResult{
-		Messages: append([]BrokerEventLogMessage(nil), c.messages...),
+		Messages: append([]logmodel.BrokerEventLogMessage(nil), c.messages...),
 		Commits:  commits,
 	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -739,14 +740,14 @@ type countingBatchBrokerCommandEventTransactionClient struct {
 	batchCommandCounts []int
 }
 
-func (c *countingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *countingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	c.mu.Lock()
 	c.singleCalls++
 	c.mu.Unlock()
 	return c.inner.AppendEventsAndCommitCommand(ctx, command, records)
 }
 
-func (c *countingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
+func (c *countingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
 	c.mu.Lock()
 	c.batchCalls++
 	c.batchCommandCounts = append(c.batchCommandCounts, len(commands))

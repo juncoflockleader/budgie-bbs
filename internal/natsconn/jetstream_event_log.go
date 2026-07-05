@@ -81,18 +81,18 @@ func NewJetStreamEventLogClient(ctx context.Context, conn *Conn, options JetStre
 	return client, nil
 }
 
-func (c *JetStreamEventLogClient) AppendEvent(ctx context.Context, partition core.LogPartition, record core.BrokerEventRecord) (core.BrokerEventLogMessage, error) {
+func (c *JetStreamEventLogClient) AppendEvent(ctx context.Context, partition core.LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	if c == nil || c.js == nil {
-		return core.BrokerEventLogMessage{}, fmt.Errorf("nats event log: nil client")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("nats event log: nil client")
 	}
 	partition = partition.Normalize()
 	return c.appendEvent(ctx, partition, record, nil)
 }
 
-func (c *JetStreamEventLogClient) AppendEvents(ctx context.Context, records []core.BrokerEventRecord) ([]core.BrokerEventLogMessage, error) {
+func (c *JetStreamEventLogClient) AppendEvents(ctx context.Context, records []logmodel.BrokerEventRecord) ([]logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func (c *JetStreamEventLogClient) AppendEvents(ctx context.Context, records []co
 		return nil, fmt.Errorf("nats event log: nil client")
 	}
 	tails := map[core.LogPartition]jetStreamPartitionTail{}
-	messages := make([]core.BrokerEventLogMessage, 0, len(records))
+	messages := make([]logmodel.BrokerEventLogMessage, 0, len(records))
 	for _, record := range records {
 		partition := core.LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
 		msg, err := c.appendEvent(ctx, partition, record, tails)
@@ -112,7 +112,7 @@ func (c *JetStreamEventLogClient) AppendEvents(ctx context.Context, records []co
 	return messages, nil
 }
 
-func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition core.LogPartition, record core.BrokerEventRecord, tails map[core.LogPartition]jetStreamPartitionTail) (core.BrokerEventLogMessage, error) {
+func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition core.LogPartition, record logmodel.BrokerEventRecord, tails map[core.LogPartition]jetStreamPartitionTail) (logmodel.BrokerEventLogMessage, error) {
 	subject := core.BrokerEventSubject(partition)
 	requestedOffset := record.PartitionOffset
 
@@ -123,7 +123,7 @@ func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition cor
 			var err error
 			tail, err = c.partitionTail(ctx, partition, subject)
 			if err != nil {
-				return core.BrokerEventLogMessage{}, err
+				return logmodel.BrokerEventLogMessage{}, err
 			}
 		}
 		record.PartitionKind = partition.Kind
@@ -135,15 +135,15 @@ func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition cor
 				return c.findEventByID(ctx, partition, subject, record.ID, record)
 			}
 			if requestedOffset != nextOffset {
-				return core.BrokerEventLogMessage{}, fmt.Errorf("nats event log: partition offset %d for %s/%s must follow current tail %d",
+				return logmodel.BrokerEventLogMessage{}, fmt.Errorf("nats event log: partition offset %d for %s/%s must follow current tail %d",
 					requestedOffset, partition.Kind, partition.Key, tail.logicalOffset)
 			}
 		} else {
 			record.PartitionOffset = nextOffset
 		}
-		data, err := core.EncodeBrokerEventRecord(record)
+		data, err := logmodel.EncodeBrokerEventRecord(record)
 		if err != nil {
-			return core.BrokerEventLogMessage{}, err
+			return logmodel.BrokerEventLogMessage{}, err
 		}
 		baseOpts := []nats.PubOpt{
 			nats.Context(ctx),
@@ -160,11 +160,11 @@ func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition cor
 				lastErr = err
 				delete(tails, partition)
 				if err := waitJetStreamCASRetry(ctx, attempt, jetStreamEventLogAppendRetries); err != nil {
-					return core.BrokerEventLogMessage{}, err
+					return logmodel.BrokerEventLogMessage{}, err
 				}
 				continue
 			}
-			return core.BrokerEventLogMessage{}, err
+			return logmodel.BrokerEventLogMessage{}, err
 		}
 		if ack.Duplicate && record.ID != "" {
 			existing, err := c.findEventByID(ctx, partition, subject, record.ID, record)
@@ -172,7 +172,7 @@ func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition cor
 				return existing, nil
 			}
 			if !isJetStreamDuplicateEventNotFound(err) {
-				return core.BrokerEventLogMessage{}, err
+				return logmodel.BrokerEventLogMessage{}, err
 			}
 			ack, err = c.js.PublishMsg(&nats.Msg{Subject: subject, Data: data}, baseOpts...)
 			if err != nil {
@@ -180,14 +180,14 @@ func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition cor
 					lastErr = err
 					delete(tails, partition)
 					if err := waitJetStreamCASRetry(ctx, attempt, jetStreamEventLogAppendRetries); err != nil {
-						return core.BrokerEventLogMessage{}, err
+						return logmodel.BrokerEventLogMessage{}, err
 					}
 					continue
 				}
-				return core.BrokerEventLogMessage{}, err
+				return logmodel.BrokerEventLogMessage{}, err
 			}
 			if ack.Duplicate {
-				return core.BrokerEventLogMessage{}, fmt.Errorf("nats event log: duplicate event id %q was not recoverable", record.ID)
+				return logmodel.BrokerEventLogMessage{}, fmt.Errorf("nats event log: duplicate event id %q was not recoverable", record.ID)
 			}
 		}
 		c.rememberEventPosition(partition, record.PartitionOffset, ack.Sequence)
@@ -197,17 +197,17 @@ func (c *JetStreamEventLogClient) appendEvent(ctx context.Context, partition cor
 				logicalOffset: record.PartitionOffset,
 			}
 		}
-		return core.BrokerEventLogMessage{
+		return logmodel.BrokerEventLogMessage{
 			Partition: partition,
 			Offset:    record.PartitionOffset,
 			StreamSeq: int64(ack.Sequence),
 			Data:      data,
 		}, nil
 	}
-	return core.BrokerEventLogMessage{}, fmt.Errorf("nats event log: append CAS failed after %d attempts: %w", jetStreamEventLogAppendRetries, lastErr)
+	return logmodel.BrokerEventLogMessage{}, fmt.Errorf("nats event log: append CAS failed after %d attempts: %w", jetStreamEventLogAppendRetries, lastErr)
 }
 
-func (c *JetStreamEventLogClient) FetchEvents(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]core.BrokerEventLogMessage, error) {
+func (c *JetStreamEventLogClient) FetchEvents(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ func (c *JetStreamEventLogClient) FetchEvents(ctx context.Context, partition cor
 	if want > limit {
 		want = limit
 	}
-	out := make([]core.BrokerEventLogMessage, 0, limit)
+	out := make([]logmodel.BrokerEventLogMessage, 0, limit)
 	seq := c.knownStreamSequenceAfterOffset(partition, afterOffset)
 	for len(out) < want {
 		raw, err := c.js.GetMsg(c.stream, seq, nats.Context(ctx), nats.DirectGetNext(subject))
@@ -241,7 +241,7 @@ func (c *JetStreamEventLogClient) FetchEvents(ctx context.Context, partition cor
 			return nil, err
 		}
 		seq = raw.Sequence + 1
-		record, err := core.DecodeBrokerEventRecord(raw.Data)
+		record, err := logmodel.DecodeBrokerEventRecord(raw.Data)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +249,7 @@ func (c *JetStreamEventLogClient) FetchEvents(ctx context.Context, partition cor
 		if record.PartitionOffset <= afterOffset {
 			continue
 		}
-		out = append(out, core.BrokerEventLogMessage{
+		out = append(out, logmodel.BrokerEventLogMessage{
 			Partition: partition,
 			Offset:    record.PartitionOffset,
 			StreamSeq: int64(raw.Sequence),
@@ -370,7 +370,7 @@ func (c *JetStreamEventLogClient) validateStream(ctx context.Context) error {
 	return validateJetStreamStream(ctx, c.js, c.stream, "nats event log", []string{core.BrokerEventSubjectWildcard()})
 }
 
-func (c *JetStreamEventLogClient) findEventByID(ctx context.Context, partition core.LogPartition, subject, id string, requested core.BrokerEventRecord) (core.BrokerEventLogMessage, error) {
+func (c *JetStreamEventLogClient) findEventByID(ctx context.Context, partition core.LogPartition, subject, id string, requested logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	var seq uint64
 	for {
 		raw, err := c.js.GetMsg(c.stream, seq, nats.Context(ctx), nats.DirectGetNext(subject))
@@ -378,28 +378,28 @@ func (c *JetStreamEventLogClient) findEventByID(ctx context.Context, partition c
 			break
 		}
 		if err != nil {
-			return core.BrokerEventLogMessage{}, err
+			return logmodel.BrokerEventLogMessage{}, err
 		}
 		seq = raw.Sequence + 1
-		record, err := core.DecodeBrokerEventRecord(raw.Data)
+		record, err := logmodel.DecodeBrokerEventRecord(raw.Data)
 		if err != nil {
-			return core.BrokerEventLogMessage{}, err
+			return logmodel.BrokerEventLogMessage{}, err
 		}
 		if record.ID != id {
 			continue
 		}
 		if !logmodel.SameBrokerEventRecordIdentity(record, requested) {
-			return core.BrokerEventLogMessage{}, fmt.Errorf("nats event log: duplicate event id %q has different content", id)
+			return logmodel.BrokerEventLogMessage{}, fmt.Errorf("nats event log: duplicate event id %q has different content", id)
 		}
 		c.rememberEventPosition(partition, record.PartitionOffset, raw.Sequence)
-		return core.BrokerEventLogMessage{
+		return logmodel.BrokerEventLogMessage{
 			Partition: partition.Normalize(),
 			Offset:    record.PartitionOffset,
 			StreamSeq: int64(raw.Sequence),
 			Data:      append([]byte(nil), raw.Data...),
 		}, nil
 	}
-	return core.BrokerEventLogMessage{}, fmt.Errorf("nats event log: duplicate event id %q was not found in partition %s/%s", id, partition.Kind, partition.Key)
+	return logmodel.BrokerEventLogMessage{}, fmt.Errorf("nats event log: duplicate event id %q was not found in partition %s/%s", id, partition.Kind, partition.Key)
 }
 
 func isJetStreamDuplicateEventNotFound(err error) bool {
@@ -416,7 +416,7 @@ func (c *JetStreamEventLogClient) partitionTail(ctx context.Context, partition c
 	if err != nil {
 		return jetStreamPartitionTail{}, err
 	}
-	record, err := core.DecodeBrokerEventRecord(raw.Data)
+	record, err := logmodel.DecodeBrokerEventRecord(raw.Data)
 	if err != nil {
 		return jetStreamPartitionTail{}, err
 	}

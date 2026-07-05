@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -122,7 +123,7 @@ func TestEventLogListPartitionsAndHeadDelegateDurablePositionReaders(t *testing.
 
 	_, err = NewEventLog(&fakeEventLogClient{}, EventLogOptions{}).ListEventPartitions(ctx, 5)
 	requireErrorContains(t, err, "partition listing requires event position reader")
-	_, err = log.AppendEvent(ctx, partitions[0], core.BrokerEventRecord{})
+	_, err = log.AppendEvent(ctx, partitions[0], logmodel.BrokerEventRecord{})
 	requireErrorContains(t, err, "append requires command/event transaction")
 }
 
@@ -130,7 +131,7 @@ func TestFranzEventLogShadowClientAppendsPositionedSQLMirrorEvent(t *testing.T) 
 	ctx := context.Background()
 	topic := "budgie.events"
 	partition := core.LogPartition{Kind: "board", Key: "general"}.Normalize()
-	record := core.BrokerEventRecord{
+	record := logmodel.BrokerEventRecord{
 		Version:          1,
 		ID:               "evt_sql_shadow",
 		Kind:             proto.EvtThreadNew,
@@ -174,7 +175,7 @@ func TestFranzEventLogShadowClientAppendsPositionedSQLMirrorEvent(t *testing.T) 
 func TestFranzEventLogShadowClientRequiresSQLPositionEvidence(t *testing.T) {
 	ctx := context.Background()
 	partition := core.LogPartition{Kind: "board", Key: "general"}.Normalize()
-	base := core.BrokerEventRecord{
+	base := logmodel.BrokerEventRecord{
 		Version:          1,
 		ID:               "evt_sql_shadow",
 		Kind:             proto.EvtThreadNew,
@@ -188,13 +189,13 @@ func TestFranzEventLogShadowClientRequiresSQLPositionEvidence(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		edit func(*core.BrokerEventRecord)
+		edit func(*logmodel.BrokerEventRecord)
 		want string
 	}{
-		{name: "id", edit: func(r *core.BrokerEventRecord) { r.ID = "" }, want: "event id"},
-		{name: "timestamp", edit: func(r *core.BrokerEventRecord) { r.TS = 0 }, want: "timestamp"},
-		{name: "seq", edit: func(r *core.BrokerEventRecord) { r.CompatibilitySeq = 0 }, want: "compatibility seq"},
-		{name: "offset", edit: func(r *core.BrokerEventRecord) { r.PartitionOffset = 0 }, want: "partition offset"},
+		{name: "id", edit: func(r *logmodel.BrokerEventRecord) { r.ID = "" }, want: "event id"},
+		{name: "timestamp", edit: func(r *logmodel.BrokerEventRecord) { r.TS = 0 }, want: "timestamp"},
+		{name: "seq", edit: func(r *logmodel.BrokerEventRecord) { r.CompatibilitySeq = 0 }, want: "compatibility seq"},
+		{name: "offset", edit: func(r *logmodel.BrokerEventRecord) { r.PartitionOffset = 0 }, want: "partition offset"},
 	}
 	for _, tt := range tests {
 		record := base
@@ -253,7 +254,7 @@ func (f eventLogHeadReaderFunc) Head(ctx context.Context) (int64, error) {
 func testKafkaEventLogRecord(t *testing.T, topic string, partition core.LogPartition, physicalPartition int32, physicalOffset, partitionOffset, compatibilitySeq int64, id string) *kgo.Record {
 	t.Helper()
 	partition = partition.Normalize()
-	record, err := NewKafkaEventRecord(topic, core.BrokerEventRecord{
+	record, err := NewKafkaEventRecord(topic, logmodel.BrokerEventRecord{
 		Version:          1,
 		ID:               id,
 		Kind:             proto.EvtThreadNew,

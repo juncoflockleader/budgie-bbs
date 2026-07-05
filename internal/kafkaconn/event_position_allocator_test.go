@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -19,7 +20,7 @@ func TestSQLEventPositionAllocatorAllocatesDurablePositions(t *testing.T) {
 	t.Cleanup(func() { c.DB.Close() })
 	allocator := NewSQLEventPositionAllocator(c.DB, SQLEventPositionAllocatorOptions{})
 
-	first, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	first, err := allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_general_1", "general", 0),
 		eventPositionAllocatorRecord("evt_position_general_2", "general", 0),
 		eventPositionAllocatorRecord("evt_position_life_1", "life", 0),
@@ -36,7 +37,7 @@ func TestSQLEventPositionAllocatorAllocatesDurablePositions(t *testing.T) {
 		t.Fatalf("first allocations = %+v, want %+v", first, wantFirst)
 	}
 
-	next, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	next, err := allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_general_3", "general", 0),
 	})
 	if err != nil {
@@ -75,7 +76,7 @@ func TestSQLEventPositionAllocatorSeedsScalarFromExistingSQLEvents(t *testing.T)
 	}
 	allocator := NewSQLEventPositionAllocator(c.DB, SQLEventPositionAllocatorOptions{})
 
-	allocations, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	allocations, err := allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_after_sql_seed", "general", 0),
 	})
 	if err != nil {
@@ -98,11 +99,11 @@ func TestSQLEventPositionAllocatorRollsBackRequestedSequenceMismatch(t *testing.
 	t.Cleanup(func() { c.DB.Close() })
 	allocator := NewSQLEventPositionAllocator(c.DB, SQLEventPositionAllocatorOptions{})
 
-	_, err = allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	_, err = allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_bad_requested_seq", "general", 99),
 	})
 	requireErrorContains(t, err, "does not match next reserved sequence 1")
-	allocations, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	allocations, err := allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_after_bad_request", "general", 0),
 	})
 	if err != nil {
@@ -125,12 +126,12 @@ func TestSQLEventPositionAllocatorDisablesScalarCompatibility(t *testing.T) {
 	t.Cleanup(func() { c.DB.Close() })
 	allocator := NewSQLEventPositionAllocator(c.DB, SQLEventPositionAllocatorOptions{DisableCompatibilitySeq: true})
 
-	_, err = allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	_, err = allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_partition_only_requested_seq", "general", 7),
 	})
 	requireErrorContains(t, err, "scalar sequence 7 while scalar compatibility allocation is disabled")
 
-	allocations, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	allocations, err := allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_partition_only_general_1", "general", 0),
 		eventPositionAllocatorRecord("evt_position_partition_only_general_2", "general", 0),
 		eventPositionAllocatorRecord("evt_position_partition_only_life_1", "life", 0),
@@ -159,7 +160,7 @@ func TestSQLEventPositionAllocatorListsPartitionsAndHead(t *testing.T) {
 	t.Cleanup(func() { c.DB.Close() })
 	allocator := NewSQLEventPositionAllocator(c.DB, SQLEventPositionAllocatorOptions{})
 
-	if _, err := allocator.AllocateEventPositions(ctx, []core.BrokerEventRecord{
+	if _, err := allocator.AllocateEventPositions(ctx, []logmodel.BrokerEventRecord{
 		eventPositionAllocatorRecord("evt_position_general_1", "general", 0),
 		eventPositionAllocatorRecord("evt_position_general_2", "general", 0),
 		eventPositionAllocatorRecord("evt_position_life_1", "life", 0),
@@ -194,8 +195,8 @@ func TestSQLEventPositionAllocatorListsPartitionsAndHead(t *testing.T) {
 	}
 }
 
-func eventPositionAllocatorRecord(id, board string, compatibilitySeq int64) core.BrokerEventRecord {
-	return core.BrokerEventRecord{
+func eventPositionAllocatorRecord(id, board string, compatibilitySeq int64) logmodel.BrokerEventRecord {
+	return logmodel.BrokerEventRecord{
 		Version:          1,
 		ID:               id,
 		Kind:             proto.EvtThreadNew,

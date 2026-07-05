@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -30,7 +31,7 @@ func TestFranzCommandEventTransactionRuntimeCommitsExactCommandOffset(t *testing
 	command := testKafkaCommandCommit(partition, 7)
 	record := testBrokerEventRecord(t, "evt_franz_transaction_runtime_success", "Franz transaction runtime")
 
-	result, err := client.AppendEventsAndCommitCommand(ctx, command, []core.BrokerEventRecord{record})
+	result, err := client.AppendEventsAndCommitCommand(ctx, command, []logmodel.BrokerEventRecord{record})
 	if err != nil {
 		t.Fatalf("AppendEventsAndCommitCommand: %v", err)
 	}
@@ -47,7 +48,7 @@ func TestFranzCommandEventTransactionRuntimeCommitsExactCommandOffset(t *testing
 	if produced.Topic != DefaultEventTopic || string(produced.Key) != LogicalPartitionKey(partition) {
 		t.Fatalf("produced topic/key = %s/%s, want %s/%s", produced.Topic, produced.Key, DefaultEventTopic, LogicalPartitionKey(partition))
 	}
-	producedRecord, err := core.DecodeBrokerEventRecord(produced.Value)
+	producedRecord, err := logmodel.DecodeBrokerEventRecord(produced.Value)
 	if err != nil {
 		t.Fatalf("DecodeBrokerEventRecord: %v", err)
 	}
@@ -127,7 +128,7 @@ func TestFranzCommandEventTransactionRuntimeDoesNotSetOffsetsWhenCommitAborts(t 
 		CommandEventTransactionOptions{},
 	)
 
-	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
+	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []logmodel.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_franz_transaction_runtime_aborted_commit", "Aborted commit"),
 	})
 	requireErrorContains(t, err, "transaction aborted before commit")
@@ -150,7 +151,7 @@ func TestFranzCommandEventTransactionRuntimeSurfacesProduceFailureAndAborts(t *t
 		CommandEventTransactionOptions{},
 	)
 
-	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []core.BrokerEventRecord{
+	_, err := client.AppendEventsAndCommitCommand(ctx, testKafkaCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 3), []logmodel.BrokerEventRecord{
 		testBrokerEventRecord(t, "evt_franz_transaction_runtime_produce_fail", "Produce failure"),
 	})
 	if !errors.Is(err, wantErr) {
@@ -269,17 +270,17 @@ func commandOffsetCommitForTest(t *testing.T, command core.CommandLogCommitPosit
 
 type fakeEventPositionAllocator struct {
 	calls       int
-	records     [][]core.BrokerEventRecord
+	records     [][]logmodel.BrokerEventRecord
 	allocations []EventPositionAllocation
 	err         error
 }
 
-func (a *fakeEventPositionAllocator) AllocateEventPositions(ctx context.Context, records []core.BrokerEventRecord) ([]EventPositionAllocation, error) {
+func (a *fakeEventPositionAllocator) AllocateEventPositions(ctx context.Context, records []logmodel.BrokerEventRecord) ([]EventPositionAllocation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	a.calls++
-	a.records = append(a.records, append([]core.BrokerEventRecord(nil), records...))
+	a.records = append(a.records, append([]logmodel.BrokerEventRecord(nil), records...))
 	if a.err != nil {
 		return nil, a.err
 	}

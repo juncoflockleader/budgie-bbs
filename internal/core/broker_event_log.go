@@ -15,17 +15,11 @@ const (
 	brokerEventSubjectPrefix = "budgie.eventlog"
 )
 
-// BrokerEventRecord is an alias for the durable broker event record model.
-type BrokerEventRecord = logmodel.BrokerEventRecord
-
-// BrokerEventLogMessage is an alias for the broker event message envelope.
-type BrokerEventLogMessage = logmodel.BrokerEventLogMessage
-
 // BrokerEventLogClient is the minimal durable broker boundary needed to shadow
 // SQL events before the broker becomes the authoritative event log.
 type BrokerEventLogClient interface {
-	AppendEvent(ctx context.Context, partition LogPartition, record BrokerEventRecord) (BrokerEventLogMessage, error)
-	FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerEventLogMessage, error)
+	AppendEvent(ctx context.Context, partition LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error)
+	FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerEventLogMessage, error)
 	Head(ctx context.Context) (int64, error)
 }
 
@@ -66,7 +60,7 @@ func (s *BrokerEventStore) Append(ctx context.Context, event EventAppend) (*prot
 		return nil, fmt.Errorf("broker event store: event timestamp is required when event id is set")
 	}
 	partition := logPartitionFromEventPartition(eventPartitionFor(event.Kind, event.Scopes))
-	msg, err := s.client.AppendEvent(ctx, partition, BrokerEventRecord{
+	msg, err := s.client.AppendEvent(ctx, partition, logmodel.BrokerEventRecord{
 		Version:          brokerEventRecordVersion,
 		ID:               id,
 		Kind:             event.Kind,
@@ -206,16 +200,8 @@ func (s *BrokerEventStore) SeedEventPartitionOffset(ctx context.Context, partiti
 	return seeder.SeedEventPartitionOffset(ctx, partition, offset)
 }
 
-func EncodeBrokerEventRecord(record BrokerEventRecord) ([]byte, error) {
-	return logmodel.EncodeBrokerEventRecord(record)
-}
-
-func DecodeBrokerEventRecord(data []byte) (BrokerEventRecord, error) {
-	return logmodel.DecodeBrokerEventRecord(data)
-}
-
-func DecodeBrokerEventMessage(msg BrokerEventLogMessage) (*proto.Event, error) {
-	record, err := DecodeBrokerEventRecord(msg.Data)
+func DecodeBrokerEventMessage(msg logmodel.BrokerEventLogMessage) (*proto.Event, error) {
+	record, err := logmodel.DecodeBrokerEventRecord(msg.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -260,26 +246,26 @@ func ParseBrokerEventSubject(subject string) (LogPartition, bool) {
 // encoded records a real broker backend persists.
 type MemoryBrokerEventLogClient struct {
 	mu       sync.Mutex
-	messages map[LogPartition][]BrokerEventLogMessage
+	messages map[LogPartition][]logmodel.BrokerEventLogMessage
 	tails    map[LogPartition]int64
-	byID     map[string]BrokerEventLogMessage
+	byID     map[string]logmodel.BrokerEventLogMessage
 	head     int64
 }
 
 func NewMemoryBrokerEventLogClient() *MemoryBrokerEventLogClient {
 	return &MemoryBrokerEventLogClient{
-		messages: map[LogPartition][]BrokerEventLogMessage{},
+		messages: map[LogPartition][]logmodel.BrokerEventLogMessage{},
 		tails:    map[LogPartition]int64{},
-		byID:     map[string]BrokerEventLogMessage{},
+		byID:     map[string]logmodel.BrokerEventLogMessage{},
 	}
 }
 
-func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition LogPartition, record BrokerEventRecord) (BrokerEventLogMessage, error) {
+func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
-		return BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	if c == nil {
-		return BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: nil receiver")
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: nil receiver")
 	}
 	partition = partition.Normalize()
 
@@ -290,15 +276,15 @@ func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition 
 	if record.ID != "" {
 		if existing, ok := c.byID[record.ID]; ok {
 			if existing.Partition.Normalize() != partition {
-				return BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: duplicate event id %q belongs to %s/%s, not %s/%s",
+				return logmodel.BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: duplicate event id %q belongs to %s/%s, not %s/%s",
 					record.ID, existing.Partition.Kind, existing.Partition.Key, partition.Kind, partition.Key)
 			}
-			existingRecord, err := DecodeBrokerEventRecord(existing.Data)
+			existingRecord, err := logmodel.DecodeBrokerEventRecord(existing.Data)
 			if err != nil {
-				return BrokerEventLogMessage{}, err
+				return logmodel.BrokerEventLogMessage{}, err
 			}
 			if !logmodel.SameBrokerEventRecordIdentity(existingRecord, record) {
-				return BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: duplicate event id %q has different content", record.ID)
+				return logmodel.BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: duplicate event id %q has different content", record.ID)
 			}
 			return logmodel.CloneBrokerEventLogMessage(existing), nil
 		}
@@ -306,19 +292,19 @@ func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition 
 	offset := c.tails[partition] + 1
 	if record.PartitionOffset > 0 {
 		if record.PartitionOffset != offset {
-			return BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: partition offset %d for %s/%s must follow current tail %d",
+			return logmodel.BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: partition offset %d for %s/%s must follow current tail %d",
 				record.PartitionOffset, partition.Kind, partition.Key, c.tails[partition])
 		}
 		offset = record.PartitionOffset
 	} else {
 		record.PartitionOffset = offset
 	}
-	data, err := EncodeBrokerEventRecord(record)
+	data, err := logmodel.EncodeBrokerEventRecord(record)
 	if err != nil {
-		return BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	c.head++
-	msg := BrokerEventLogMessage{
+	msg := logmodel.BrokerEventLogMessage{
 		Partition: partition,
 		Offset:    offset,
 		StreamSeq: c.head,
@@ -332,7 +318,7 @@ func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition 
 	return logmodel.CloneBrokerEventLogMessage(msg), nil
 }
 
-func (c *MemoryBrokerEventLogClient) FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerEventLogMessage, error) {
+func (c *MemoryBrokerEventLogClient) FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -344,7 +330,7 @@ func (c *MemoryBrokerEventLogClient) FetchEvents(ctx context.Context, partition 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	source := c.messages[partition]
-	out := make([]BrokerEventLogMessage, 0, len(source))
+	out := make([]logmodel.BrokerEventLogMessage, 0, len(source))
 	for _, msg := range source {
 		if msg.Offset <= afterOffset {
 			continue

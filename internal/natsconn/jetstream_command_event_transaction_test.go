@@ -24,7 +24,7 @@ func TestJetStreamCommandEventTransactionAppendsEventsBeforeCommit(t *testing.T)
 	client := newJetStreamCommandEventTransactionClient(commands, events)
 	commandPartition := core.LogPartition{Kind: "board", Key: "general"}
 
-	result, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 3), []core.BrokerEventRecord{
+	result, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 3), []logmodel.BrokerEventRecord{
 		testTransactionBrokerEvent("evt_nats_transaction_before_commit", "Before commit"),
 	})
 	if err != nil {
@@ -65,7 +65,7 @@ func TestJetStreamCommandEventTransactionCommitsCommandBatch(t *testing.T) {
 	result, err := client.AppendEventsAndCommitCommands(ctx, []core.CommandLogCommitPosition{
 		testCommandCommit(general, 3),
 		testCommandCommit(life, 4),
-	}, []core.BrokerEventRecord{generalEvent, lifeEvent})
+	}, []logmodel.BrokerEventRecord{generalEvent, lifeEvent})
 	if err != nil {
 		t.Fatalf("AppendEventsAndCommitCommands: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestJetStreamCommandEventTransactionReplaysEventAppendAfterCommitFailure(t 
 	commandPartition := core.LogPartition{Kind: "board", Key: "general"}
 	record := testTransactionBrokerEvent("evt_nats_transaction_replay", "Replay transaction")
 
-	if _, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 4), []core.BrokerEventRecord{record}); err == nil {
+	if _, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 4), []logmodel.BrokerEventRecord{record}); err == nil {
 		t.Fatalf("first AppendEventsAndCommitCommand succeeded, want commit failure")
 	}
 	if got := events.storedCount(); got != 1 {
@@ -102,7 +102,7 @@ func TestJetStreamCommandEventTransactionReplaysEventAppendAfterCommitFailure(t 
 		t.Fatalf("committed offset after failed commit = %d, want 0", commands.committedOffset)
 	}
 
-	result, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 4), []core.BrokerEventRecord{record})
+	result, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 4), []logmodel.BrokerEventRecord{record})
 	if err != nil {
 		t.Fatalf("second AppendEventsAndCommitCommand: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestJetStreamCommandEventTransactionReplaysPartialMultiEventAppend(t *testi
 	first := testTransactionBrokerEvent("evt_nats_transaction_partial_first", "Partial first")
 	second := testTransactionBrokerEvent("evt_nats_transaction_partial_second", "Partial second")
 
-	if _, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 5), []core.BrokerEventRecord{first, second}); err == nil {
+	if _, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 5), []logmodel.BrokerEventRecord{first, second}); err == nil {
 		t.Fatalf("first AppendEventsAndCommitCommand succeeded, want ambiguous append failure")
 	}
 	if got := events.storedCount(); got != 2 {
@@ -144,7 +144,7 @@ func TestJetStreamCommandEventTransactionReplaysPartialMultiEventAppend(t *testi
 		t.Fatalf("commit after partial append failure = calls %d offset %d, want no command commit", commands.commits, commands.committedOffset)
 	}
 
-	result, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 5), []core.BrokerEventRecord{first, second})
+	result, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(commandPartition, 5), []logmodel.BrokerEventRecord{first, second})
 	if err != nil {
 		t.Fatalf("second AppendEventsAndCommitCommand: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestJetStreamCommandEventTransactionRejectsInvalidBatchBeforeAppend(t *test
 	first := testTransactionBrokerEvent("evt_nats_transaction_conflict", "First")
 	second := testTransactionBrokerEvent("evt_nats_transaction_conflict", "Second")
 
-	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []core.BrokerEventRecord{first, second})
+	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []logmodel.BrokerEventRecord{first, second})
 	requireErrorContains(t, err, "different content")
 	if got := events.storedCount(); got != 0 {
 		t.Fatalf("stored events = %d, want no append after invalid batch", got)
@@ -191,7 +191,7 @@ func TestJetStreamCommandEventTransactionRejectsDuplicateEventIDInOneBatchBefore
 	client := newJetStreamCommandEventTransactionClient(commands, events)
 	record := testTransactionBrokerEvent("evt_nats_transaction_duplicate", "Duplicate")
 
-	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []core.BrokerEventRecord{record, record})
+	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []logmodel.BrokerEventRecord{record, record})
 	requireErrorContains(t, err, `duplicate event id "evt_nats_transaction_duplicate" in one transaction`)
 	if got := events.storedCount(); got != 0 {
 		t.Fatalf("stored events = %d, want no append after duplicate batch", got)
@@ -209,7 +209,7 @@ func TestJetStreamCommandEventTransactionRejectsMissingTimestampBeforeAppend(t *
 	record := testTransactionBrokerEvent("evt_nats_transaction_missing_ts", "Missing timestamp")
 	record.TS = 0
 
-	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []core.BrokerEventRecord{record})
+	_, err := client.AppendEventsAndCommitCommand(ctx, testCommandCommit(core.LogPartition{Kind: "board", Key: "general"}, 5), []logmodel.BrokerEventRecord{record})
 	requireErrorContains(t, err, "event timestamp is required")
 	if got := events.storedCount(); got != 0 {
 		t.Fatalf("stored events = %d, want no append after invalid timestamp", got)
@@ -256,8 +256,8 @@ func (c *fakeTransactionCommandCommitter) CommitPartition(ctx context.Context, p
 
 type fakeTransactionEventAppender struct {
 	tails              map[core.LogPartition]int64
-	messages           map[core.LogPartition][]core.BrokerEventLogMessage
-	byID               map[string]core.BrokerEventLogMessage
+	messages           map[core.LogPartition][]logmodel.BrokerEventLogMessage
+	byID               map[string]logmodel.BrokerEventLogMessage
 	failAfterStoreByID map[string]int
 	head               int64
 	batchCalls         int
@@ -266,15 +266,15 @@ type fakeTransactionEventAppender struct {
 func newFakeTransactionEventAppender() *fakeTransactionEventAppender {
 	return &fakeTransactionEventAppender{
 		tails:              map[core.LogPartition]int64{},
-		messages:           map[core.LogPartition][]core.BrokerEventLogMessage{},
-		byID:               map[string]core.BrokerEventLogMessage{},
+		messages:           map[core.LogPartition][]logmodel.BrokerEventLogMessage{},
+		byID:               map[string]logmodel.BrokerEventLogMessage{},
 		failAfterStoreByID: map[string]int{},
 	}
 }
 
-func (a *fakeTransactionEventAppender) AppendEvents(ctx context.Context, records []core.BrokerEventRecord) ([]core.BrokerEventLogMessage, error) {
+func (a *fakeTransactionEventAppender) AppendEvents(ctx context.Context, records []logmodel.BrokerEventRecord) ([]logmodel.BrokerEventLogMessage, error) {
 	a.batchCalls++
-	messages := make([]core.BrokerEventLogMessage, 0, len(records))
+	messages := make([]logmodel.BrokerEventLogMessage, 0, len(records))
 	for _, record := range records {
 		partition := core.LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
 		msg, err := a.AppendEvent(ctx, partition, record)
@@ -286,31 +286,31 @@ func (a *fakeTransactionEventAppender) AppendEvents(ctx context.Context, records
 	return messages, nil
 }
 
-func (a *fakeTransactionEventAppender) AppendEvent(ctx context.Context, partition core.LogPartition, record core.BrokerEventRecord) (core.BrokerEventLogMessage, error) {
+func (a *fakeTransactionEventAppender) AppendEvent(ctx context.Context, partition core.LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
 	partition = partition.Normalize()
 	record.PartitionKind = partition.Kind
 	record.PartitionKey = partition.Key
 	if existing, ok := a.byID[record.ID]; ok {
-		existingRecord, err := core.DecodeBrokerEventRecord(existing.Data)
+		existingRecord, err := logmodel.DecodeBrokerEventRecord(existing.Data)
 		if err != nil {
-			return core.BrokerEventLogMessage{}, err
+			return logmodel.BrokerEventLogMessage{}, err
 		}
 		if !logmodel.SameBrokerEventRecordIdentity(existingRecord, record) {
-			return core.BrokerEventLogMessage{}, fmt.Errorf("duplicate event id %q has different content", record.ID)
+			return logmodel.BrokerEventLogMessage{}, fmt.Errorf("duplicate event id %q has different content", record.ID)
 		}
 		return cloneTransactionBrokerEventMessage(existing), nil
 	}
 	a.tails[partition]++
 	a.head++
 	record.PartitionOffset = a.tails[partition]
-	data, err := core.EncodeBrokerEventRecord(record)
+	data, err := logmodel.EncodeBrokerEventRecord(record)
 	if err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
-	msg := core.BrokerEventLogMessage{
+	msg := logmodel.BrokerEventLogMessage{
 		Partition: partition,
 		Offset:    record.PartitionOffset,
 		StreamSeq: a.head,
@@ -320,7 +320,7 @@ func (a *fakeTransactionEventAppender) AppendEvent(ctx context.Context, partitio
 	a.byID[record.ID] = cloneTransactionBrokerEventMessage(msg)
 	if a.failAfterStoreByID[record.ID] > 0 {
 		a.failAfterStoreByID[record.ID]--
-		return core.BrokerEventLogMessage{}, fmt.Errorf("injected ambiguous append failure after storing %s", record.ID)
+		return logmodel.BrokerEventLogMessage{}, fmt.Errorf("injected ambiguous append failure after storing %s", record.ID)
 	}
 	return cloneTransactionBrokerEventMessage(msg), nil
 }
@@ -333,8 +333,8 @@ func (a *fakeTransactionEventAppender) storedCount() int {
 	return count
 }
 
-func testTransactionBrokerEvent(id, title string) core.BrokerEventRecord {
-	return core.BrokerEventRecord{
+func testTransactionBrokerEvent(id, title string) logmodel.BrokerEventRecord {
+	return logmodel.BrokerEventRecord{
 		Version:       1,
 		ID:            id,
 		Kind:          proto.EvtThreadNew,
@@ -346,7 +346,7 @@ func testTransactionBrokerEvent(id, title string) core.BrokerEventRecord {
 	}
 }
 
-func cloneTransactionBrokerEventMessage(msg core.BrokerEventLogMessage) core.BrokerEventLogMessage {
+func cloneTransactionBrokerEventMessage(msg logmodel.BrokerEventLogMessage) logmodel.BrokerEventLogMessage {
 	msg.Partition = msg.Partition.Normalize()
 	msg.Data = append([]byte(nil), msg.Data...)
 	return msg

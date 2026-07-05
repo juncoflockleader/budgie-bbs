@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -113,7 +113,7 @@ func (c *FranzEventLogClient) takeBufferedLocked(request EventFetchRequest) ([]*
 	})
 	type bufferedEventRecord struct {
 		record *kgo.Record
-		msg    core.BrokerEventLogMessage
+		msg    logmodel.BrokerEventLogMessage
 	}
 	candidates := make([]bufferedEventRecord, 0, len(records))
 	kept := records[:0]

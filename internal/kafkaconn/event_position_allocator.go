@@ -37,7 +37,7 @@ func NewSQLEventPositionAllocator(db *sql.DB, options SQLEventPositionAllocatorO
 	return &SQLEventPositionAllocator{db: db, options: options}
 }
 
-func (a *SQLEventPositionAllocator) AllocateEventPositions(ctx context.Context, records []core.BrokerEventRecord) ([]EventPositionAllocation, error) {
+func (a *SQLEventPositionAllocator) AllocateEventPositions(ctx context.Context, records []logmodel.BrokerEventRecord) ([]EventPositionAllocation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

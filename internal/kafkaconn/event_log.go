@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -66,14 +67,14 @@ func (l *EventLog) RequiresEventStoreProjectionWatermarkSeed() bool {
 	return true
 }
 
-func (l *EventLog) AppendEvent(ctx context.Context, partition core.LogPartition, record core.BrokerEventRecord) (core.BrokerEventLogMessage, error) {
+func (l *EventLog) AppendEvent(ctx context.Context, partition core.LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
-		return core.BrokerEventLogMessage{}, err
+		return logmodel.BrokerEventLogMessage{}, err
 	}
-	return core.BrokerEventLogMessage{}, fmt.Errorf("kafka event log: append requires command/event transaction")
+	return logmodel.BrokerEventLogMessage{}, fmt.Errorf("kafka event log: append requires command/event transaction")
 }
 
-func (l *EventLog) FetchEvents(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]core.BrokerEventLogMessage, error) {
+func (l *EventLog) FetchEvents(ctx context.Context, partition core.LogPartition, afterOffset int64, limit int) ([]logmodel.BrokerEventLogMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -98,7 +99,7 @@ func (l *EventLog) FetchEvents(ctx context.Context, partition core.LogPartition,
 	if err != nil {
 		return nil, err
 	}
-	out := make([]core.BrokerEventLogMessage, 0, len(records))
+	out := make([]logmodel.BrokerEventLogMessage, 0, len(records))
 	for _, record := range records {
 		if record == nil {
 			continue

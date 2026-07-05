@@ -18,11 +18,11 @@ type jetStreamCommandCommitter interface {
 }
 
 type jetStreamEventAppender interface {
-	AppendEvent(ctx context.Context, partition core.LogPartition, record core.BrokerEventRecord) (core.BrokerEventLogMessage, error)
+	AppendEvent(ctx context.Context, partition core.LogPartition, record logmodel.BrokerEventRecord) (logmodel.BrokerEventLogMessage, error)
 }
 
 type jetStreamEventBatchAppender interface {
-	AppendEvents(ctx context.Context, records []core.BrokerEventRecord) ([]core.BrokerEventLogMessage, error)
+	AppendEvents(ctx context.Context, records []logmodel.BrokerEventRecord) ([]logmodel.BrokerEventLogMessage, error)
 }
 
 // JetStreamCommandEventTransactionClient implements Budgie's broker transaction
@@ -68,7 +68,7 @@ func newJetStreamCommandEventTransactionClient(commands jetStreamCommandCommitte
 	}
 }
 
-func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command core.CommandLogCommitPosition, records []core.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
+func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command core.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return core.BrokerCommandEventTransactionResult{}, err
 	}
@@ -86,7 +86,7 @@ func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommand(ct
 	}, nil
 }
 
-func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []core.CommandLogCommitPosition, records []core.BrokerEventRecord) (core.BrokerCommandEventTransactionBatchResult, error) {
+func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []core.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionBatchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return core.BrokerCommandEventTransactionBatchResult{}, err
 	}
@@ -106,14 +106,14 @@ func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(c
 		return core.BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("nats command/event transaction: %w", err)
 	}
 
-	var messages []core.BrokerEventLogMessage
+	var messages []logmodel.BrokerEventLogMessage
 	if appender, ok := c.events.(jetStreamEventBatchAppender); ok {
 		messages, err = appender.AppendEvents(ctx, records)
 		if err != nil {
 			return core.BrokerCommandEventTransactionBatchResult{}, err
 		}
 	} else {
-		messages = make([]core.BrokerEventLogMessage, 0, len(records))
+		messages = make([]logmodel.BrokerEventLogMessage, 0, len(records))
 		for _, record := range records {
 			partition := core.LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
 			msg, err := c.events.AppendEvent(ctx, partition, record)
