@@ -775,7 +775,7 @@ func newCommandLogDrainLoadAssigner(ctx context.Context, commandLog CommandLog, 
 	}
 	switch loadmodel.NormalizeCommandLogDrainAssignmentMode(config.AssignmentMode) {
 	case loadmodel.CommandLogDrainAssignmentHash:
-		return NewHashCommandPartitionAssigner(members, 1), nil
+		return logmodel.NewHashCommandPartitionAssigner(members, 1), nil
 	case loadmodel.CommandLogDrainAssignmentSnapshot:
 		lister, err := requireCommandPartitionOffsetLister(commandLog, "command log drain load: snapshot assignment requires command partition offsets")
 		if err != nil {
@@ -786,7 +786,7 @@ func newCommandLogDrainLoadAssigner(ctx context.Context, commandLog CommandLog, 
 			return nil, err
 		}
 		return commandLogDrainLoadSnapshotAssigner{
-			SnapshotCommandPartitionAssigner: NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshotForLaggingOffsets(snapshot, members, 1)),
+			SnapshotCommandPartitionAssigner: logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshotForLaggingOffsets(snapshot, members, 1)),
 			offsets:                          snapshot,
 			partitionLimit:                   partitionLimit,
 		}, nil
@@ -807,7 +807,7 @@ func snapshotCommandLogDrainLoadPartitionOffsets(ctx context.Context, lister Com
 }
 
 type commandLogDrainLoadSnapshotAssigner struct {
-	*SnapshotCommandPartitionAssigner
+	*logmodel.SnapshotCommandPartitionAssigner
 	offsets        CommandPartitionOffsetLister
 	partitionLimit int
 }

@@ -10,7 +10,7 @@ import (
 
 func TestHashCommandPartitionAssignerNormalizesMembersAndBumpsGeneration(t *testing.T) {
 	ctx := context.Background()
-	assigner := NewHashCommandPartitionAssigner([]string{"writer-b", " writer-a ", "writer-a", ""}, 4)
+	assigner := logmodel.NewHashCommandPartitionAssigner([]string{"writer-b", " writer-a ", "writer-a", ""}, 4)
 	if got := assigner.Members(); !reflect.DeepEqual(got, []string{"writer-a", "writer-b"}) {
 		t.Fatalf("members = %v, want sorted unique writer ids", got)
 	}
@@ -44,8 +44,8 @@ func TestHashCommandPartitionAssignerNormalizesMembersAndBumpsGeneration(t *test
 func TestHashCommandPartitionAssignerIsOrderIndependent(t *testing.T) {
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	a := NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b", "writer-c"}, 1)
-	b := NewHashCommandPartitionAssigner([]string{"writer-c", "writer-b", "writer-a"}, 1)
+	a := logmodel.NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b", "writer-c"}, 1)
+	b := logmodel.NewHashCommandPartitionAssigner([]string{"writer-c", "writer-b", "writer-a"}, 1)
 	first, _, err := a.AssignCommandPartition(ctx, "writer-a", partition)
 	if err != nil {
 		t.Fatalf("assign first: %v", err)
@@ -62,7 +62,7 @@ func TestHashCommandPartitionAssignerIsOrderIndependent(t *testing.T) {
 func TestHashCommandPartitionAssignerSupportsPartitionOverrides(t *testing.T) {
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionThread, Key: "thr_hot#reply-0"}
-	assigner := NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b"}, 3)
+	assigner := logmodel.NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b"}, 3)
 	if got := assigner.SetOverrides(map[LogPartition]string{partition: "writer-b"}); got != 4 {
 		t.Fatalf("generation after override = %d, want 4", got)
 	}
@@ -101,7 +101,7 @@ func TestSnapshotCommandPartitionAssignerListsOwnedPartitionsAndFailsClosed(t *t
 	general := LogPartition{Kind: partitionBoard, Key: "general"}
 	life := LogPartition{Kind: partitionBoard, Key: "life"}
 	hotReply := LogPartition{Kind: partitionThread, Key: "thr_hot#reply-0"}
-	assigner := NewSnapshotCommandPartitionAssigner(CommandPartitionAssignmentSnapshot{
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 11,
 		Owners: map[LogPartition]string{
 			general:  "writer-a",
@@ -152,7 +152,7 @@ func TestSnapshotCommandPartitionAssignerListsOwnedPartitionsAndFailsClosed(t *t
 		t.Fatalf("limited assignments = %+v, want %+v", limited, wantOwned[:1])
 	}
 
-	if got := assigner.ApplySnapshot(CommandPartitionAssignmentSnapshot{
+	if got := assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 12,
 		Owners: map[LogPartition]string{
 			general: "writer-b",
@@ -210,14 +210,14 @@ func TestCommandPartitionAssignmentsForOwnerNormalizesOwnerAndPartitions(t *test
 func TestSnapshotCommandPartitionAssignerIgnoresStaleGenerations(t *testing.T) {
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
-	assigner := NewSnapshotCommandPartitionAssigner(CommandPartitionAssignmentSnapshot{
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 10,
 		Owners: map[LogPartition]string{
 			partition: "writer-a",
 		},
 	})
 
-	if got := assigner.ApplySnapshot(CommandPartitionAssignmentSnapshot{
+	if got := assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 11,
 		Owners: map[LogPartition]string{
 			partition: "writer-b",
@@ -225,7 +225,7 @@ func TestSnapshotCommandPartitionAssignerIgnoresStaleGenerations(t *testing.T) {
 	}); got != 11 {
 		t.Fatalf("apply fresh generation = %d, want 11", got)
 	}
-	if got := assigner.ApplySnapshot(CommandPartitionAssignmentSnapshot{
+	if got := assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 11,
 		Owners: map[LogPartition]string{
 			partition: "writer-a",
@@ -233,7 +233,7 @@ func TestSnapshotCommandPartitionAssignerIgnoresStaleGenerations(t *testing.T) {
 	}); got != 11 {
 		t.Fatalf("apply repeated generation = %d, want current generation 11", got)
 	}
-	if got := assigner.ApplySnapshot(CommandPartitionAssignmentSnapshot{
+	if got := assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 9,
 		Owners: map[LogPartition]string{
 			partition: "writer-a",

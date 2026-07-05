@@ -320,7 +320,7 @@ func TestCommandPartitionOffsetMetricsNormalizeListedOffsets(t *testing.T) {
 func TestCommandPartitionAssignmentMetrics(t *testing.T) {
 	ctx := context.Background()
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	assigner := NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b"}, 4)
+	assigner := logmodel.NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b"}, 4)
 	owned := commandPartitionAssignedToForMetrics(t, ctx, assigner, "writer-a")
 	skipped := commandPartitionAssignedToForMetrics(t, ctx, assigner, "writer-b")
 	produceBrokerCommandLogTestRecord(t, ctx, log, CommandLogRecord{
@@ -360,7 +360,7 @@ func TestHotPartitionReassignmentLetsNewOwnerDrainLag(t *testing.T) {
 	ctx := context.Background()
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
 	hot := LogPartition{Kind: partitionThread, Key: "thr_hot#reply-0"}
-	assigner := NewSnapshotCommandPartitionAssigner(CommandPartitionAssignmentSnapshot{
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 17,
 		Owners: map[LogPartition]string{
 			hot: "writer-a",
@@ -393,7 +393,7 @@ func TestHotPartitionReassignmentLetsNewOwnerDrainLag(t *testing.T) {
 		t.Fatal("writer-b unexpectedly owned hot partition before reassignment")
 	}
 
-	assigner.ApplySnapshot(CommandPartitionAssignmentSnapshot{
+	assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 18,
 		Owners: map[LogPartition]string{
 			hot: "writer-b",

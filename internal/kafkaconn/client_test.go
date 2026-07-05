@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -170,7 +171,7 @@ func TestCommandWriterClientOptsRequiresPartitionCountForAssignmentCallbacks(t *
 		Runtime:         RuntimeConfigFromFlags("redpanda:9092", "", "", ""),
 		ClientID:        "writer-a",
 		TransactionalID: "budgie-writer-a",
-		Assignment:      core.NewSnapshotCommandPartitionAssigner(core.CommandPartitionAssignmentSnapshot{}),
+		Assignment:      logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{}),
 		Candidates:      staticCommandPartitionCandidates{},
 	})
 	requireErrorContains(t, err, "command topic partition count is required")
@@ -197,7 +198,7 @@ func TestCommandWriterRebalanceCallbacksApplyAssignmentAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("owned physical partition: %v", err)
 	}
-	assigner := core.NewSnapshotCommandPartitionAssigner(core.CommandPartitionAssignmentSnapshot{})
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{})
 	callbacks := newCommandWriterRebalanceCallbacks(
 		NewCommandPartitionRebalanceAdapter(assigner, CommandPartitionAssignmentOptions{
 			CommandTopic:   commandTopic,
@@ -234,7 +235,7 @@ func TestCommandWriterRebalanceCallbacksFailClosedWhenCandidatesFail(t *testing.
 	commandTopic := "budgie.commands"
 	partitionCount := int32(32)
 	ownedLogical := core.LogPartition{Kind: "board", Key: "general"}
-	assigner := core.NewSnapshotCommandPartitionAssigner(core.CommandPartitionAssignmentSnapshot{
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 1,
 		Owners: map[core.LogPartition]string{
 			ownedLogical: "writer-a",

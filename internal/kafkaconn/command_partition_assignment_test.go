@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 func TestKafkaPartitionForLogicalPartitionIsDeterministic(t *testing.T) {
-	partition := core.LogPartition{Kind: "board", Key: "general"}
+	partition := logmodel.Partition{Kind: "board", Key: "general"}
 	first, err := KafkaPartitionForLogicalPartition(partition, 32)
 	if err != nil {
 		t.Fatalf("KafkaPartitionForLogicalPartition: %v", err)
@@ -32,7 +32,7 @@ func TestCommandPartitionAssignmentSnapshotForOwnedKafkaPartitions(t *testing.T)
 	ctx := context.Background()
 	commandTopic := "budgie.commands"
 	partitionCount := int32(32)
-	ownedLogical := core.LogPartition{Kind: "board", Key: "general"}
+	ownedLogical := logmodel.Partition{Kind: "board", Key: "general"}
 	ownedPhysical, err := KafkaPartitionForLogicalPartition(ownedLogical, partitionCount)
 	if err != nil {
 		t.Fatalf("owned physical partition: %v", err)
@@ -47,11 +47,11 @@ func TestCommandPartitionAssignmentSnapshotForOwnedKafkaPartitions(t *testing.T)
 	}, []TopicPartitionAssignment{
 		{Topic: "other.commands", Partition: ownedPhysical},
 		{Topic: commandTopic, Partition: ownedPhysical},
-	}, []core.LogPartition{ownedLogical, unownedLogical})
+	}, []logmodel.Partition{ownedLogical, unownedLogical})
 	if err != nil {
 		t.Fatalf("CommandPartitionAssignmentSnapshotForOwnedKafkaPartitions: %v", err)
 	}
-	assigner := core.NewSnapshotCommandPartitionAssigner(snapshot)
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(snapshot)
 	assignment, assigned, err := assigner.AssignCommandPartition(ctx, "writer-a", ownedLogical)
 	if err != nil {
 		t.Fatalf("assign owned: %v", err)
@@ -79,12 +79,12 @@ func TestCommandPartitionRebalanceAdapterAppliesAssignmentAndRevoke(t *testing.T
 	ctx := context.Background()
 	commandTopic := "budgie.commands"
 	partitionCount := int32(32)
-	ownedLogical := core.LogPartition{Kind: "board", Key: "general"}
+	ownedLogical := logmodel.Partition{Kind: "board", Key: "general"}
 	ownedPhysical, err := KafkaPartitionForLogicalPartition(ownedLogical, partitionCount)
 	if err != nil {
 		t.Fatalf("owned physical partition: %v", err)
 	}
-	assigner := core.NewSnapshotCommandPartitionAssigner(core.CommandPartitionAssignmentSnapshot{})
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{})
 	adapter := NewCommandPartitionRebalanceAdapter(assigner, CommandPartitionAssignmentOptions{
 		CommandTopic:   commandTopic,
 		OwnerID:        "writer-a",
@@ -93,7 +93,7 @@ func TestCommandPartitionRebalanceAdapterAppliesAssignmentAndRevoke(t *testing.T
 
 	generation, err := adapter.ApplyConsumerGroupAssignment(ctx, 21, []TopicPartitionAssignment{
 		{Topic: commandTopic, Partition: ownedPhysical},
-	}, []core.LogPartition{ownedLogical})
+	}, []logmodel.Partition{ownedLogical})
 	if err != nil {
 		t.Fatalf("ApplyConsumerGroupAssignment: %v", err)
 	}
@@ -128,12 +128,12 @@ func TestCommandPartitionRebalanceAdapterIgnoresStaleAssignmentGeneration(t *tes
 	ctx := context.Background()
 	commandTopic := "budgie.commands"
 	partitionCount := int32(32)
-	logical := core.LogPartition{Kind: "board", Key: "general"}
+	logical := logmodel.Partition{Kind: "board", Key: "general"}
 	physical, err := KafkaPartitionForLogicalPartition(logical, partitionCount)
 	if err != nil {
 		t.Fatalf("physical partition: %v", err)
 	}
-	assigner := core.NewSnapshotCommandPartitionAssigner(core.CommandPartitionAssignmentSnapshot{})
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{})
 	adapter := NewCommandPartitionRebalanceAdapter(assigner, CommandPartitionAssignmentOptions{
 		CommandTopic:   commandTopic,
 		OwnerID:        "writer-a",
@@ -145,7 +145,7 @@ func TestCommandPartitionRebalanceAdapterIgnoresStaleAssignmentGeneration(t *tes
 	}
 	generation, err := adapter.ApplyConsumerGroupAssignment(ctx, 29, []TopicPartitionAssignment{
 		{Topic: commandTopic, Partition: physical},
-	}, []core.LogPartition{logical})
+	}, []logmodel.Partition{logical})
 	if err != nil {
 		t.Fatalf("stale apply: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestCommandPartitionAssignmentSnapshotRejectsInvalidPhysicalPartition(t *te
 		OwnerID:        "writer-a",
 		Generation:     1,
 		PartitionCount: 4,
-	}, []TopicPartitionAssignment{{Topic: "budgie.commands", Partition: 4}}, []core.LogPartition{{Kind: "board", Key: "general"}})
+	}, []TopicPartitionAssignment{{Topic: "budgie.commands", Partition: 4}}, []logmodel.Partition{{Kind: "board", Key: "general"}})
 	if err == nil {
 		t.Fatalf("CommandPartitionAssignmentSnapshotForOwnedKafkaPartitions succeeded, want invalid physical partition error")
 	}
@@ -175,7 +175,7 @@ func TestCommandPartitionAssignmentSnapshotRejectsInvalidPhysicalPartition(t *te
 
 func TestCommandPartitionRebalanceAdapterRejectsInvalidCallbacks(t *testing.T) {
 	ctx := context.Background()
-	assigner := core.NewSnapshotCommandPartitionAssigner(core.CommandPartitionAssignmentSnapshot{})
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{})
 	adapter := NewCommandPartitionRebalanceAdapter(assigner, CommandPartitionAssignmentOptions{
 		CommandTopic:   "budgie.commands",
 		OwnerID:        "writer-a",
@@ -211,10 +211,10 @@ func TestCommandPartitionAssignmentSnapshotRequiresOwner(t *testing.T) {
 	}
 }
 
-func firstDifferentPhysicalPartition(t *testing.T, first core.LogPartition, firstPhysical int32, partitionCount int32) core.LogPartition {
+func firstDifferentPhysicalPartition(t *testing.T, first logmodel.Partition, firstPhysical int32, partitionCount int32) logmodel.Partition {
 	t.Helper()
 	for i := 0; i < 256; i++ {
-		candidate := core.LogPartition{Kind: "board", Key: "candidate-" + string(rune('a'+i%26)) + "-" + string(rune('a'+(i/26)%26))}
+		candidate := logmodel.Partition{Kind: "board", Key: "candidate-" + string(rune('a'+i%26)) + "-" + string(rune('a'+(i/26)%26))}
 		if candidate.Normalize() == first.Normalize() {
 			continue
 		}
@@ -227,5 +227,5 @@ func firstDifferentPhysicalPartition(t *testing.T, first core.LogPartition, firs
 		}
 	}
 	t.Fatalf("could not find a candidate with a different physical partition from %d", firstPhysical)
-	return core.LogPartition{}
+	return logmodel.Partition{}
 }

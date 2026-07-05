@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 type TopicPartitionAssignment struct {
@@ -21,7 +21,7 @@ type CommandPartitionAssignmentOptions struct {
 }
 
 type CommandPartitionAssignmentSnapshotApplier interface {
-	ApplySnapshot(core.CommandPartitionAssignmentSnapshot) int64
+	ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot) int64
 }
 
 // CommandPartitionRebalanceAdapter applies Kafka/Redpanda consumer-group
@@ -40,7 +40,7 @@ func NewCommandPartitionRebalanceAdapter(target CommandPartitionAssignmentSnapsh
 	}
 }
 
-func (a *CommandPartitionRebalanceAdapter) ApplyConsumerGroupAssignment(ctx context.Context, generation int64, owned []TopicPartitionAssignment, candidates []core.LogPartition) (int64, error) {
+func (a *CommandPartitionRebalanceAdapter) ApplyConsumerGroupAssignment(ctx context.Context, generation int64, owned []TopicPartitionAssignment, candidates []logmodel.Partition) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -69,9 +69,9 @@ func (a *CommandPartitionRebalanceAdapter) RevokeConsumerGroupAssignment(ctx con
 	if generation <= 0 {
 		return 0, fmt.Errorf("kafka command partition assignment: rebalance generation is required")
 	}
-	return a.target.ApplySnapshot(core.CommandPartitionAssignmentSnapshot{
+	return a.target.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: generation,
-		Owners:     map[core.LogPartition]string{},
+		Owners:     map[logmodel.Partition]string{},
 	}), nil
 }
 
@@ -79,17 +79,17 @@ func (a *CommandPartitionRebalanceAdapter) RevokeConsumerGroupAssignment(ctx con
 // consumer-group assignment into the core snapshot assigner shape. Kafka owns
 // physical topic partitions; Budgie workers drain logical command partitions
 // whose deterministic key maps to one of those physical partitions.
-func CommandPartitionAssignmentSnapshotForOwnedKafkaPartitions(options CommandPartitionAssignmentOptions, owned []TopicPartitionAssignment, candidates []core.LogPartition) (core.CommandPartitionAssignmentSnapshot, error) {
+func CommandPartitionAssignmentSnapshotForOwnedKafkaPartitions(options CommandPartitionAssignmentOptions, owned []TopicPartitionAssignment, candidates []logmodel.Partition) (logmodel.CommandPartitionAssignmentSnapshot, error) {
 	options.CommandTopic = strings.TrimSpace(options.CommandTopic)
 	if options.CommandTopic == "" {
 		options.CommandTopic = DefaultCommandTopic
 	}
 	options.OwnerID = strings.TrimSpace(options.OwnerID)
 	if options.OwnerID == "" {
-		return core.CommandPartitionAssignmentSnapshot{}, fmt.Errorf("kafka command partition assignment: owner id is required")
+		return logmodel.CommandPartitionAssignmentSnapshot{}, fmt.Errorf("kafka command partition assignment: owner id is required")
 	}
 	if options.PartitionCount <= 0 {
-		return core.CommandPartitionAssignmentSnapshot{}, fmt.Errorf("kafka command partition assignment: partition count is required")
+		return logmodel.CommandPartitionAssignmentSnapshot{}, fmt.Errorf("kafka command partition assignment: partition count is required")
 	}
 	ownedPartitions := map[int32]bool{}
 	for _, assignment := range owned {
@@ -97,28 +97,28 @@ func CommandPartitionAssignmentSnapshotForOwnedKafkaPartitions(options CommandPa
 			continue
 		}
 		if assignment.Partition < 0 || assignment.Partition >= options.PartitionCount {
-			return core.CommandPartitionAssignmentSnapshot{}, fmt.Errorf("kafka command partition assignment: physical partition %d outside [0,%d)", assignment.Partition, options.PartitionCount)
+			return logmodel.CommandPartitionAssignmentSnapshot{}, fmt.Errorf("kafka command partition assignment: physical partition %d outside [0,%d)", assignment.Partition, options.PartitionCount)
 		}
 		ownedPartitions[assignment.Partition] = true
 	}
-	owners := map[core.LogPartition]string{}
+	owners := map[logmodel.Partition]string{}
 	for _, candidate := range candidates {
 		candidate = candidate.Normalize()
 		physical, err := KafkaPartitionForLogicalPartition(candidate, options.PartitionCount)
 		if err != nil {
-			return core.CommandPartitionAssignmentSnapshot{}, err
+			return logmodel.CommandPartitionAssignmentSnapshot{}, err
 		}
 		if ownedPartitions[physical] {
 			owners[candidate] = options.OwnerID
 		}
 	}
-	return core.CommandPartitionAssignmentSnapshot{
+	return logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: options.Generation,
 		Owners:     owners,
 	}, nil
 }
 
-func KafkaPartitionForLogicalPartition(partition core.LogPartition, partitionCount int32) (int32, error) {
+func KafkaPartitionForLogicalPartition(partition logmodel.Partition, partitionCount int32) (int32, error) {
 	return KafkaPartitionForKey(LogicalPartitionKey(partition), partitionCount)
 }
 

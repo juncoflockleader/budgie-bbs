@@ -1230,7 +1230,7 @@ func TestCommandLogWorkerDoesNotCommitIfHeartbeatLosesClaimDuringExecution(t *te
 func TestCommandLogWorkerDrainsOnlyAssignedPartitions(t *testing.T) {
 	ctx := context.Background()
 	log := NewBrokerCommandLog(NewMemoryBrokerCommandLogClient())
-	assigner := NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b"}, 7)
+	assigner := logmodel.NewHashCommandPartitionAssigner([]string{"writer-a", "writer-b"}, 7)
 	owned := commandPartitionAssignedTo(t, ctx, assigner, "writer-a")
 	skipped := commandPartitionAssignedTo(t, ctx, assigner, "writer-b")
 	if owned == skipped {
@@ -1279,7 +1279,7 @@ func TestCommandLogWorkerUsesAssignmentListerWithoutGlobalPartitionScan(t *testi
 	unassigned := LogPartition{Kind: partitionBoard, Key: "life"}
 	produceCommandLogWorkerRecord(t, ctx, base, owned, "cid-owned")
 	produceCommandLogWorkerRecord(t, ctx, base, unassigned, "cid-unassigned")
-	assigner := NewSnapshotCommandPartitionAssigner(CommandPartitionAssignmentSnapshot{
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 21,
 		Owners: map[LogPartition]string{
 			owned: "writer-a",
@@ -1318,7 +1318,7 @@ func TestCommandLogWorkerDoesNotCommitAfterSnapshotRebalanceBeforeCommit(t *test
 	log := NewMemoryCommandLog()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}
 	produceCommandLogWorkerRecord(t, ctx, log, partition, "cid-1")
-	assigner := NewSnapshotCommandPartitionAssigner(CommandPartitionAssignmentSnapshot{
+	assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{
 		Generation: 31,
 		Owners: map[LogPartition]string{
 			partition: "writer-a",
@@ -1333,7 +1333,7 @@ func TestCommandLogWorkerDoesNotCommitAfterSnapshotRebalanceBeforeCommit(t *test
 		BatchSize:   10,
 		Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
 			seen = append(seen, record.Offset)
-			assigner.ApplySnapshot(CommandPartitionAssignmentSnapshot{
+			assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 				Generation: 32,
 				Owners: map[LogPartition]string{
 					partition: "writer-b",
@@ -1381,7 +1381,7 @@ func TestCommandLogWorkerDoesNotFinalizeOutcomeAfterAssignmentLost(t *testing.T)
 		t.Run(tt.name, func(t *testing.T) {
 			log := NewMemoryCommandLog()
 			produceCommandLogWorkerRecord(t, ctx, log, partition, "cid-"+tt.name)
-			assigner := NewSnapshotCommandPartitionAssigner(CommandPartitionAssignmentSnapshot{
+			assigner := logmodel.NewSnapshotCommandPartitionAssigner(logmodel.CommandPartitionAssignmentSnapshot{
 				Generation: 41,
 				Owners: map[LogPartition]string{
 					partition: "writer-a",
@@ -1406,7 +1406,7 @@ func TestCommandLogWorkerDoesNotFinalizeOutcomeAfterAssignmentLost(t *testing.T)
 					return nil
 				}),
 				Executor: CommandLogExecutorFunc(func(ctx context.Context, record CommandLogRecord) Reply {
-					assigner.ApplySnapshot(CommandPartitionAssignmentSnapshot{
+					assigner.ApplySnapshot(logmodel.CommandPartitionAssignmentSnapshot{
 						Generation: 42,
 						Owners: map[LogPartition]string{
 							partition: "writer-b",
