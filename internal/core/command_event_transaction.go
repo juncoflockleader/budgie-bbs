@@ -323,20 +323,16 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Con
 		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: %w", err)
 	}
 	records := make([]BrokerEventRecord, 0, len(tx.Events))
-	seenIDs := map[string]BrokerEventRecord{}
 	for _, event := range tx.Events {
 		record, err := brokerEventTransactionRecord(event)
 		if err != nil {
 			return CommandEventTransactionResult{}, err
 		}
-		if existing, ok := seenIDs[record.ID]; ok {
-			if !logmodel.SameBrokerEventRecordIdentity(existing, record) {
-				return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: duplicate event id %q has different content", record.ID)
-			}
-			return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: duplicate event id %q in one transaction", record.ID)
-		}
-		seenIDs[record.ID] = record
 		records = append(records, record)
+	}
+	records, err := logmodel.NormalizeBrokerEventTransactionRecords(records, "one transaction")
+	if err != nil {
+		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: %w", err)
 	}
 	committed, err := s.client.AppendEventsAndCommitCommand(ctx, command, records)
 	if err != nil {
@@ -394,7 +390,6 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 	commands := make([]CommandLogCommitPosition, 0, len(txs))
 	eventRanges := make([]eventRange, len(txs))
 	records := []BrokerEventRecord{}
-	seenIDs := map[string]BrokerEventRecord{}
 	for i, tx := range txs {
 		command := CommandLogCommitPosition{
 			Partition:      tx.CommandPartition,
@@ -411,16 +406,13 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 			if err != nil {
 				return nil, err
 			}
-			if existing, ok := seenIDs[record.ID]; ok {
-				if !logmodel.SameBrokerEventRecordIdentity(existing, record) {
-					return nil, fmt.Errorf("broker command event transaction store: duplicate event id %q has different content", record.ID)
-				}
-				return nil, fmt.Errorf("broker command event transaction store: duplicate event id %q in one transaction batch", record.ID)
-			}
-			seenIDs[record.ID] = record
 			records = append(records, record)
 		}
 		eventRanges[i].end = len(records)
+	}
+	records, err := logmodel.NormalizeBrokerEventTransactionRecords(records, "one transaction batch")
+	if err != nil {
+		return nil, fmt.Errorf("broker command event transaction store: %w", err)
 	}
 
 	committed, err := batchClient.AppendEventsAndCommitCommands(ctx, commands, records)
