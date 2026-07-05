@@ -31,3 +31,26 @@ func TestPolicyPredicates(t *testing.T) {
 		})
 	}
 }
+
+func TestPostAuthorRecipient(t *testing.T) {
+	tests := []struct {
+		name       string
+		authorID   string
+		authorName string
+		want       string
+		wantOK     bool
+	}{
+		{name: "author id wins", authorID: " usr_alice ", authorName: "alice", want: "usr_alice", wantOK: true},
+		{name: "author name fallback", authorName: " alice ", want: "alice", wantOK: true},
+		{name: "blank author", wantOK: false},
+		{name: "anonymous author", authorID: "usr_anon", authorName: " Anonymous ", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := PostAuthorRecipient(tt.authorID, tt.authorName)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("PostAuthorRecipient(%q, %q) = %q, %v; want %q, %v", tt.authorID, tt.authorName, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}

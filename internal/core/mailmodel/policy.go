@@ -1,5 +1,7 @@
 package mailmodel
 
+import "strings"
+
 const MaxRecipientsPerSend = 50
 
 func AttachmentMutationAllowed(actorID, fromUserID string) bool {
@@ -24,4 +26,15 @@ func RecipientRefsTooMany(toAll bool, count int) bool {
 
 func MailGroupIncludesOwner(includesOwner bool) bool {
 	return includesOwner
+}
+
+func PostAuthorRecipient(authorID, authorName string) (string, bool) {
+	recipient := strings.TrimSpace(authorID)
+	if recipient == "" {
+		recipient = strings.TrimSpace(authorName)
+	}
+	if recipient == "" || strings.EqualFold(strings.TrimSpace(authorName), "anonymous") {
+		return "", false
+	}
+	return recipient, true
 }

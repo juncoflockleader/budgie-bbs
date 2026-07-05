@@ -1,8 +1,7 @@
 package commandrules
 
 import (
-	"strings"
-
+	"github.com/juncoflockleader/budgie-bbs/internal/core/mailmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -41,11 +40,8 @@ func DigestEntryMailSendPayload(p proto.SendDigestEntryMailPayload, export *proj
 }
 
 func MailPostAuthorSendPayload(actor *projections.User, p proto.MailPostAuthorPayload, thread *projections.Thread, post *projections.Post) (proto.SendMailPayload, *proto.ErrorDetail) {
-	recipient := strings.TrimSpace(post.AuthorID)
-	if recipient == "" {
-		recipient = strings.TrimSpace(post.Author)
-	}
-	if recipient == "" || strings.EqualFold(strings.TrimSpace(post.Author), "anonymous") {
+	recipient, ok := mailmodel.PostAuthorRecipient(post.AuthorID, post.Author)
+	if !ok {
 		return proto.SendMailPayload{}, newErrDetail(proto.ErrValidationFailed, "anonymous article author cannot receive mail", false)
 	}
 	return proto.SendMailPayload{
