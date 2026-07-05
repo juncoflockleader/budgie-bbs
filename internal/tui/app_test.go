@@ -305,7 +305,7 @@ func TestInitialTUIViewStartsAtMainMenu(t *testing.T) {
 	if !foundExit {
 		t.Fatalf("expected main menu items to include Exit, got %#v", m.list.Items())
 	}
-	if !strings.Contains(view, "1-7=jump") {
+	if !strings.Contains(view, "1-8=jump") {
 		t.Fatalf("expected main menu help to include the Exit shortcut range, got: %q", view)
 	}
 	if strings.Contains(view, "ready") {
