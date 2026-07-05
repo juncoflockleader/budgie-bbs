@@ -45,9 +45,7 @@ func qQuery(queryable sqlLike, query string, args ...any) (*sql.Rows, error) {
 	return sqlstore.Query(queryable, query, args...)
 }
 
-func qQueryRow(queryable interface {
-	QueryRow(query string, args ...any) *sql.Row
-}, query string, args ...any) *sql.Row {
+func qQueryRow(queryable sqlstore.RowQueryable, query string, args ...any) *sql.Row {
 	return sqlstore.QueryRow(queryable, query, args...)
 }
 

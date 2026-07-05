@@ -6,6 +6,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sqlstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -21,9 +22,7 @@ func checkProcessed(db *sql.DB, partitionKind, partitionKey, actorID, cid, comma
 	return currentRuntime().CheckProcessed(db, partitionKind, partitionKey, actorID, cid, commandHash)
 }
 
-func qQueryRow(queryable interface {
-	QueryRow(query string, args ...any) *sql.Row
-}, query string, args ...any) *sql.Row {
+func qQueryRow(queryable sqlstore.RowQueryable, query string, args ...any) *sql.Row {
 	return currentRuntime().QQueryRow(queryable, query, args...)
 }
 

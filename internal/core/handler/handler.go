@@ -11,15 +11,14 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/presencestore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sqlstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 type Runtime struct {
-	CheckProcessed func(db *sql.DB, partitionKind, partitionKey, actorID, cid, commandHash string) (string, bool, bool)
-	QQueryRow      func(queryable interface {
-		QueryRow(query string, args ...any) *sql.Row
-	}, query string, args ...any) *sql.Row
+	CheckProcessed               func(db *sql.DB, partitionKind, partitionKey, actorID, cid, commandHash string) (string, bool, bool)
+	QQueryRow                    func(queryable sqlstore.RowQueryable, query string, args ...any) *sql.Row
 	ActiveSanction               func(db *sql.DB, userID, scope string) (string, bool)
 	MatchContentFilter           func(db *sql.DB, boardID, text string) (*projections.ContentFilter, error)
 	NowMS                        func() int64
