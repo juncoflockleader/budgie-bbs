@@ -233,8 +233,8 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if rootReplyGuards.NoReply && !canModerateThread {
-		return Reply{Err: errDetail(proto.ErrForbidden, "thread starter is not accepting replies", false)}
+	if errDetail := commandrules.RequireThreadStarterAcceptsReplies(rootReplyGuards.NoReply, canModerateThread); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	attachments, ruleErr := commandrules.NormalizePostAttachments(p.Attachments, settings.AttachmentsAllowed, canModerateBoard, func(int) string {
 		return newID("att_")

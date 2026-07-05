@@ -251,6 +251,13 @@ func RequireThreadOpenForReply(locked, canModerateBoard bool) *proto.ErrorDetail
 	return nil
 }
 
+func RequireThreadStarterAcceptsReplies(noReply, canModerateThread bool) *proto.ErrorDetail {
+	if noReply && !canModerateThread {
+		return newErrDetail(proto.ErrForbidden, "thread starter is not accepting replies", false)
+	}
+	return nil
+}
+
 func RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow bool) *proto.ErrorDetail {
 	if canModerateThread {
 		return nil

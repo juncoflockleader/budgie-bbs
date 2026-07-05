@@ -534,8 +534,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if rootReplyGuards.NoReply && !canModerateThread {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread starter is not accepting replies", false)
+	if errDetail := commandrules.RequireThreadStarterAcceptsReplies(rootReplyGuards.NoReply, canModerateThread); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	effectiveReplyTo := ""
 	var quoteSource *Post
@@ -744,8 +744,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if rootReplyGuards.NoReply && !canModerateThread {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "thread starter is not accepting replies", false)
+	if errDetail := commandrules.RequireThreadStarterAcceptsReplies(rootReplyGuards.NoReply, canModerateThread); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	var mailBackTarget *Post
 	if rootReplyGuards.MailBack {
