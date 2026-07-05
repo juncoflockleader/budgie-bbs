@@ -1704,11 +1704,11 @@ func (c *Core) UserByName(name string) (*User, error) {
 
 // --- Projection readers (safe for concurrent access) ---
 
-func (c *Core) ListBoards() ([]Board, error) { return projections.ListBoards(c.DB) }
+func (c *Core) ListBoards() ([]projections.Board, error) { return projections.ListBoards(c.DB) }
 func (c *Core) ListCategories() ([]projections.Category, error) {
 	return projections.ListCategories(c.DB)
 }
-func (c *Core) GetBoard(id string) (*Board, error) { return projections.GetBoard(c.DB, id) }
+func (c *Core) GetBoard(id string) (*projections.Board, error) { return projections.GetBoard(c.DB, id) }
 
 func (c *Core) ListCategoriesForUser(viewer *User) ([]projections.Category, error) {
 	categories, err := c.ListCategories()
@@ -2135,7 +2135,7 @@ func (c *Core) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) (
 	}
 	return projections.ListChatOnlineUsers(c.DB, viewerID, roomID, limit, offset)
 }
-func (c *Core) ListFavoriteBoards(userID string) ([]Board, error) {
+func (c *Core) ListFavoriteBoards(userID string) ([]projections.Board, error) {
 	return projections.ListFavoriteBoards(c.DB, userID)
 }
 func (c *Core) ListFavoriteTree(userID string) (*projections.FavoriteTree, error) {

@@ -165,7 +165,7 @@ func TestRebuildPostViewShowsTitleAuthorTimeAndMetadata(t *testing.T) {
 	m.vp = viewport.New(120, 20)
 	m.width = 120
 	m.currentBoard = "tech"
-	m.boards = []core.Board{{ID: "tech", Name: "Tech Board"}}
+	m.boards = []projections.Board{{ID: "tech", Name: "Tech Board"}}
 	m.threads = []core.Thread{{ID: "thr_1", Title: "Welcome thread"}}
 	m.authorNames = map[string]string{"alice": "Alicia"}
 	m.posts = []core.Post{
@@ -569,7 +569,7 @@ func TestBoardHeaderShowsBoardTitleInBoardAndThreadViews(t *testing.T) {
 		page:         pageThreadList,
 		currentBoard: "tech",
 		list:         list.New(nil, list.NewDefaultDelegate(), 80, 20),
-		boards: []core.Board{{
+		boards: []projections.Board{{
 			ID:   "tech",
 			Name: "Tech Board",
 		}},
@@ -636,7 +636,7 @@ func TestViewHeightFitsTerminal(t *testing.T) {
 
 	m.page = pageThread
 	m.currentBoard = "tech"
-	m.boards = []core.Board{{ID: "tech", Name: "Tech Board"}}
+	m.boards = []projections.Board{{ID: "tech", Name: "Tech Board"}}
 	m.vp = viewport.New(48, 30)
 	m.vp.SetContent(strings.Repeat("post line\n", 40))
 	if got := lipgloss.Height(m.View()); got > m.height {
@@ -927,7 +927,7 @@ func TestRightArrowOpensBoardAndThreadListItems(t *testing.T) {
 		actor: &core.User{Name: "alice"},
 		page:  pageBoardList,
 		list:  list.New(nil, list.NewDefaultDelegate(), 80, 20),
-		boards: []core.Board{{
+		boards: []projections.Board{{
 			ID:   "general",
 			Name: "General",
 		}},

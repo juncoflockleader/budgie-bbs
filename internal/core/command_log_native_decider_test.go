@@ -7511,7 +7511,7 @@ func findBoardSummaryForTest(summaries []projections.BoardSummary, boardID strin
 	return nil
 }
 
-func hasBoardForTest(boards []Board, boardID string) bool {
+func hasBoardForTest(boards []projections.Board, boardID string) bool {
 	for _, board := range boards {
 		if board.ID == boardID {
 			return true

@@ -54,7 +54,7 @@ const sectionChromeLines = 4 // global header, panel borders, help line
 type (
 	eventMsg   struct{ evt *proto.Event }
 	errMsg     struct{ err error }
-	boardsMsg  struct{ boards []core.Board }
+	boardsMsg  struct{ boards []projections.Board }
 	threadsMsg struct {
 		board   string
 		offset  int
@@ -159,7 +159,7 @@ type model struct {
 	composingNewThread bool
 
 	// In-memory state.
-	boards        []core.Board
+	boards        []projections.Board
 	threads       []core.Thread
 	posts         []core.Post
 	postReactions map[string]bool
@@ -2154,7 +2154,7 @@ func (i mainMenuItem) Description() string { return i.desc }
 
 func (i mainMenuItem) FilterValue() string { return i.title }
 
-type boardItem struct{ b core.Board }
+type boardItem struct{ b projections.Board }
 
 func (i boardItem) Title() string       { return i.b.Name }
 func (i boardItem) Description() string { return i.b.Description }
@@ -2753,7 +2753,7 @@ func (m model) mudSectionContent() string {
 	return headStr + strings.Join(logLines, "\n") + "\n" + input
 }
 
-func (m *model) selectedBoard() *core.Board {
+func (m *model) selectedBoard() *projections.Board {
 	sel, ok := m.list.SelectedItem().(boardItem)
 	if !ok {
 		return nil

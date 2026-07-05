@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -137,8 +138,8 @@ type EventPartitionOffsetSeeder interface {
 // projection implementations can split this into smaller concrete stores while
 // keeping API and transport code on the interface boundary.
 type ProjectionStore interface {
-	ListBoards(ctx context.Context) ([]Board, error)
-	GetBoard(ctx context.Context, id string) (*Board, error)
+	ListBoards(ctx context.Context) ([]projections.Board, error)
+	GetBoard(ctx context.Context, id string) (*projections.Board, error)
 	ListThreads(ctx context.Context, boardID string, limit, offset int) ([]Thread, error)
 	GetThread(ctx context.Context, id string) (*Thread, error)
 	ListPosts(ctx context.Context, threadID string, limit, offset int) ([]Post, error)
