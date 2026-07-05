@@ -3698,12 +3698,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardFavorite(ctx context.Co
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	settings, err := projections.GetBoardSettings(e.core.DB, boardID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if settings == nil {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, boardID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if payload.Favorite {
 		if errDetail := commandrules.RequireFavoriteFolder(e.core.DB, actor.ID, payload.FolderID); errDetail != nil {
@@ -3826,12 +3822,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveBoardFavorite(ctx context.C
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	settings, err := projections.GetBoardSettings(e.core.DB, payload.Board)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if settings == nil {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, payload.Board); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if errDetail := commandrules.RequireFavoriteFolder(e.core.DB, actor.ID, payload.FolderID); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
