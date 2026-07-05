@@ -7,8 +7,7 @@ import (
 )
 
 func BrokerSubject(prefix string, partition Partition) string {
-	partition = partition.Normalize()
-	return prefix + "." + EncodeSubjectToken(partition.Kind) + "." + EncodeSubjectToken(partition.Key)
+	return prefix + "." + PartitionKey(partition)
 }
 
 func BrokerSubjectWildcard(prefix string) string {
@@ -20,7 +19,16 @@ func ParseBrokerSubject(prefix, subject string) (Partition, bool) {
 	if !ok {
 		return Partition{}, false
 	}
-	parts := strings.Split(rest, ".")
+	return ParsePartitionKey(rest)
+}
+
+func PartitionKey(partition Partition) string {
+	partition = partition.Normalize()
+	return EncodeSubjectToken(partition.Kind) + "." + EncodeSubjectToken(partition.Key)
+}
+
+func ParsePartitionKey(raw string) (Partition, bool) {
+	parts := strings.Split(raw, ".")
 	if len(parts) != 2 {
 		return Partition{}, false
 	}

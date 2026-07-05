@@ -2,7 +2,6 @@ package kafkaconn
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -305,34 +304,10 @@ func normalizeTransactionEvents(records []core.BrokerEventRecord) ([]core.Broker
 }
 
 func LogicalPartitionKey(partition core.LogPartition) string {
-	partition = partition.Normalize()
-	return encodePartitionToken(partition.Kind) + "." + encodePartitionToken(partition.Key)
+	return logmodel.PartitionKey(partition)
 }
 
 func ParseLogicalPartitionKey(key string) (core.LogPartition, bool) {
-	parts := strings.Split(key, ".")
-	if len(parts) != 2 {
-		return core.LogPartition{}, false
-	}
-	kind, ok := decodePartitionToken(parts[0])
-	if !ok {
-		return core.LogPartition{}, false
-	}
-	partitionKey, ok := decodePartitionToken(parts[1])
-	if !ok {
-		return core.LogPartition{}, false
-	}
-	return core.LogPartition{Kind: kind, Key: partitionKey}.Normalize(), true
-}
-
-func encodePartitionToken(token string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(token))
-}
-
-func decodePartitionToken(token string) (string, bool) {
-	data, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return "", false
-	}
-	return string(data), true
+	partition, ok := logmodel.ParsePartitionKey(key)
+	return core.LogPartition(partition), ok
 }
