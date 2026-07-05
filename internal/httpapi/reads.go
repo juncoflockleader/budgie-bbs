@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
-	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -322,7 +321,7 @@ func (s *Server) handleListBoardMemberApplications(w http.ResponseWriter, r *htt
 	status := r.URL.Query().Get("status")
 	limit, offset := paginate(r)
 	userID := actor.ID
-	if boardmodel.ActorCanManageBoardMembers(actor, info) {
+	if core.ActorCanManageBoardMembers(actor, info) {
 		userID = r.URL.Query().Get("userId")
 	}
 	apps, err := s.core.ListBoardMemberApplications(boardID, status, userID, limit, offset)
@@ -344,7 +343,7 @@ func (s *Server) handleListBoardDeletedPosts(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "not_found", "board not found", false)
 		return
 	}
-	if !boardmodel.ActorCanModerateBoardPosts(actor, info) {
+	if !core.ActorCanModerateBoardPosts(actor, info) {
 		writeError(w, http.StatusForbidden, proto.ErrForbidden, "board post moderation permission required", false)
 		return
 	}

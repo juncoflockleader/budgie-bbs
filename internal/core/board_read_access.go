@@ -25,6 +25,18 @@ func ActorModeratesBoard(actor *User, info *BoardInfo) bool {
 	return boardmodel.ActorModeratesBoard(boardAccessActor(actor), boardAccessInfo(info))
 }
 
+// ActorCanManageBoardMembers reports whether actor may review/manage board
+// membership using a loaded BoardInfo snapshot.
+func ActorCanManageBoardMembers(actor *User, info *BoardInfo) bool {
+	return boardmodel.ActorCanManageBoardMembers(boardAccessActor(actor), boardAccessInfo(info))
+}
+
+// ActorCanModerateBoardPosts reports whether actor may moderate posts using a
+// loaded BoardInfo snapshot.
+func ActorCanModerateBoardPosts(actor *User, info *BoardInfo) bool {
+	return boardmodel.ActorCanModerateBoardPosts(boardAccessActor(actor), boardAccessInfo(info))
+}
+
 // ActorCanSetBoardSettings reports whether actor may manage a board's settings:
 // a site moderator/admin, a board moderator, or a member granted the
 // can_set_board_settings permission. Mirrors the handler-side check for use by

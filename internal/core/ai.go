@@ -46,9 +46,6 @@ func (c *Core) BoardAIRuntime(boardID string) (*BoardAIRuntime, error) {
 	return projections.GetBoardAIRuntime(c.DB, boardID)
 }
 
-// BoardAIBotName returns the reserved username for a board's AI bot.
-func BoardAIBotName(boardID string) string { return accountmodel.BoardAIBotName(boardID) }
-
 // EnsureBoardAIBot creates (or finds) the board's AI bot account, forces it
 // approved, makes it a board member so it can post even in member-post boards,
 // and records its id in the board's AI config. Idempotent.
@@ -58,7 +55,7 @@ func (c *Core) EnsureBoardAIBot(boardID string) (*User, error) {
 			return u, c.activateBoardAIBot(boardID, u.ID)
 		}
 	}
-	botName := BoardAIBotName(boardID)
+	botName := accountmodel.BoardAIBotName(boardID)
 	if u, err := c.UserByName(botName); err == nil && u != nil {
 		return u, c.activateBoardAIBot(boardID, u.ID)
 	}

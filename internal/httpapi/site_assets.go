@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -70,7 +70,7 @@ func (s *Server) handleSetSiteAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	if !core.ValidSiteAsset(name) {
+	if !sitemodel.ValidAsset(name) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "unknown site asset", false)
 		return
 	}
@@ -106,7 +106,7 @@ func (s *Server) handleDeleteSiteAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	if !core.ValidSiteAsset(name) {
+	if !sitemodel.ValidAsset(name) {
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "unknown site asset", false)
 		return
 	}

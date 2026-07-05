@@ -9,9 +9,6 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 )
 
-// ValidSiteAsset reports whether name is an uploadable site asset slot.
-func ValidSiteAsset(name string) bool { return sitemodel.ValidAsset(name) }
-
 // SetAssetStore installs an external object store (e.g. S3/R2) for site-asset
 // bytes. Call once at startup before serving; nil keeps bytes in the DB.
 func (c *Core) SetAssetStore(s assetstore.Store) { c.assetStore = s }
