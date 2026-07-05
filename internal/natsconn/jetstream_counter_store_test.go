@@ -10,6 +10,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	nats "github.com/nats-io/nats.go"
 )
@@ -498,7 +499,7 @@ func assertCoreNATSReactionCount(t *testing.T, c *core.Core, postID string, want
 	}
 }
 
-func assertNATSCounterPollCounts(t *testing.T, c *core.Core, pollID, userID, wantVote string, wantOptionA, wantOptionB int) *core.Poll {
+func assertNATSCounterPollCounts(t *testing.T, c *core.Core, pollID, userID, wantVote string, wantOptionA, wantOptionB int) *projections.Poll {
 	t.Helper()
 	poll, err := c.GetPoll(pollID, userID)
 	if err != nil {

@@ -1181,7 +1181,7 @@ func (s *Server) handleListThreadPolls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pollsByPost == nil {
-		pollsByPost = map[string]*core.Poll{}
+		pollsByPost = map[string]*projections.Poll{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"polls": pollsByPost})
 }

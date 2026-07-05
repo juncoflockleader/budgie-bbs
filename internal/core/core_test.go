@@ -7318,7 +7318,7 @@ func TestPollVoteReplacesPriorVote(t *testing.T) {
 		t.Fatalf("expected poll row for thread post")
 	}
 
-	initialPoll := func() *core.Poll {
+	initialPoll := func() *projections.Poll {
 		pollState, err := c.GetPoll(poll.ID, bob.ID)
 		if err != nil {
 			t.Fatal(err)

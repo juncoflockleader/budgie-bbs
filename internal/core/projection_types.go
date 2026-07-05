@@ -26,5 +26,3 @@ type Post = projections.Post
 type PostDeletion = projections.PostDeletion
 type PostAttachment = projections.PostAttachment
 type User = projections.User
-type Poll = projections.Poll
-type PollOption = projections.PollOption

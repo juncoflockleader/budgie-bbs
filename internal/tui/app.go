@@ -63,7 +63,7 @@ type (
 	postsMsg     struct{ posts []core.Post }
 	postPollsMsg struct {
 		thread string
-		polls  map[string]*core.Poll
+		polls  map[string]*projections.Poll
 		err    error
 	}
 	chatLinesMsg struct {
@@ -72,7 +72,7 @@ type (
 	}
 	pollMsg struct {
 		postID string
-		poll   *core.Poll
+		poll   *projections.Poll
 		open   bool
 		err    error
 	}
@@ -164,7 +164,7 @@ type model struct {
 	posts         []core.Post
 	postReactions map[string]bool
 	selectedPost  int
-	postPolls     map[string]*core.Poll
+	postPolls     map[string]*projections.Poll
 	currentPoll   string // postID currently shown in pagePoll
 	chat          []chatLine
 	canCreatePoll bool
@@ -329,7 +329,7 @@ func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bo
 		profileInput:      pi,
 		selectedPost:      -1,
 		postReactions:     make(map[string]bool),
-		postPolls:         make(map[string]*core.Poll),
+		postPolls:         make(map[string]*projections.Poll),
 		authorNames:       make(map[string]string),
 		supportsANSI:      supportsANSI,
 		r:                 renderer,
@@ -485,7 +485,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = m.tr(msgStatusError, map[string]string{"message": err.Error()})
 			return m, nil
 		}
-		m.postPolls = make(map[string]*core.Poll)
+		m.postPolls = make(map[string]*projections.Poll)
 		if len(m.posts) == 0 {
 			m.selectedPost = -1
 		} else {
@@ -507,7 +507,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.postPolls = msg.polls
 		if m.postPolls == nil {
-			m.postPolls = make(map[string]*core.Poll)
+			m.postPolls = make(map[string]*projections.Poll)
 		}
 		m.rebuildPostView()
 
@@ -2792,7 +2792,7 @@ func (m *model) selectedPostID() string {
 	return m.posts[m.selectedPost].ID
 }
 
-func (m *model) currentPollData() *core.Poll {
+func (m *model) currentPollData() *projections.Poll {
 	if m.currentPoll == "" {
 		return nil
 	}
@@ -2862,7 +2862,7 @@ func (m *model) openThread(thread core.Thread) tea.Cmd {
 	}
 	m.currentThread = thread.ID
 	m.posts = nil
-	m.postPolls = make(map[string]*core.Poll)
+	m.postPolls = make(map[string]*projections.Poll)
 	m.currentPoll = ""
 	m.selectedPost = -1
 	m.vp.SetContent(m.styled(styleDim, m.tr(msgStatusLoadingThread)))
@@ -3308,7 +3308,7 @@ func (m model) fetchPollsForPosts(posts []core.Post) tea.Cmd {
 	}
 	return func() tea.Msg {
 		if len(postIDs) == 0 {
-			return postPollsMsg{thread: thread, polls: map[string]*core.Poll{}}
+			return postPollsMsg{thread: thread, polls: map[string]*projections.Poll{}}
 		}
 		polls, err := m.c.PollsForPosts(postIDs, m.actor.ID)
 		if err != nil {

@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -76,7 +77,7 @@ func TestRebuildPostViewMarksPollPosts(t *testing.T) {
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "Thread body"},
 		{ID: "pst_2", Author: "bob", CreatedSeq: 2, Body: "Reply body"},
 	}
-	m.postPolls = map[string]*core.Poll{
+	m.postPolls = map[string]*projections.Poll{
 		"pst_1": {ID: "pol_1"},
 	}
 
@@ -93,7 +94,7 @@ func TestRebuildPostViewNoPollMarkerForNoPollPost(t *testing.T) {
 	m.posts = []core.Post{
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "Plain body"},
 	}
-	m.postPolls = map[string]*core.Poll{}
+	m.postPolls = map[string]*projections.Poll{}
 
 	m.rebuildPostView()
 	rendered := m.vp.View()
@@ -109,7 +110,7 @@ func TestRebuildPostViewUsesOPAndReplyOrdinals(t *testing.T) {
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "First"},
 		{ID: "pst_2", Author: "bob", CreatedSeq: 2, Body: "Second"},
 	}
-	m.postPolls = map[string]*core.Poll{}
+	m.postPolls = map[string]*projections.Poll{}
 	m.selectedPost = 1
 
 	m.rebuildPostView()
@@ -128,7 +129,7 @@ func TestRebuildPostViewSeparatesMetadataBodyAndSignature(t *testing.T) {
 	m.posts = []core.Post{
 		{ID: "pst_1", Author: "alice", CreatedSeq: 1, Body: "Post body", Signature: "sig line"},
 	}
-	m.postPolls = map[string]*core.Poll{}
+	m.postPolls = map[string]*projections.Poll{}
 
 	m.rebuildPostView()
 	rendered := m.vp.View()
@@ -199,7 +200,7 @@ func TestRebuildPostViewShowsTitleAuthorTimeAndMetadata(t *testing.T) {
 			CreatedAt:   created,
 		},
 	}
-	m.postPolls = map[string]*core.Poll{"pst_1": {ID: "poll_1"}}
+	m.postPolls = map[string]*projections.Poll{"pst_1": {ID: "poll_1"}}
 	m.selectedPost = 1
 
 	m.rebuildPostView()
@@ -244,7 +245,7 @@ func TestHandlePostAppendedKeepsSignature(t *testing.T) {
 	m.vp = viewport.New(80, 20)
 	m.currentThread = "thr_1"
 	m.postReactions = map[string]bool{}
-	m.postPolls = map[string]*core.Poll{}
+	m.postPolls = map[string]*projections.Poll{}
 	m.handleEvent(&proto.Event{
 		Kind: proto.EvtPostAppended,
 		Seq:  7,
@@ -588,7 +589,7 @@ func TestBoardHeaderShowsBoardTitleInBoardAndThreadViews(t *testing.T) {
 	m.page = pageThread
 	m.vp = viewport.New(80, 10)
 	m.posts = []core.Post{{ID: "pst_1", Author: "alice", Body: "post content"}}
-	m.postPolls = map[string]*core.Poll{}
+	m.postPolls = map[string]*projections.Poll{}
 	m.rebuildPostView()
 	threadView := m.View()
 	threadLines := strings.Split(threadView, "\n")
@@ -761,7 +762,7 @@ func TestThreadReaderUpDownOpenAdjacentThreads(t *testing.T) {
 		currentThread: "thr_2",
 		list:          list.New(nil, list.NewDefaultDelegate(), 80, 20),
 		vp:            viewport.New(80, 20),
-		postPolls:     map[string]*core.Poll{"pst_1": {ID: "poll_1"}},
+		postPolls:     map[string]*projections.Poll{"pst_1": {ID: "poll_1"}},
 		selectedPost:  0,
 		threads: []core.Thread{
 			{ID: "thr_1", Title: "First"},

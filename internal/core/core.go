@@ -2397,7 +2397,7 @@ func (c *Core) UserReacted(postID, userID string) (bool, error) {
 
 // ── M11: Polls ──────────────────────────────────────────────────────────────
 
-func (c *Core) GetPoll(pollID, viewerUserID string) (*Poll, error) {
+func (c *Core) GetPoll(pollID, viewerUserID string) (*projections.Poll, error) {
 	poll, err := projections.GetPollWithVotes(c.DB, pollID, viewerUserID)
 	if err != nil || poll == nil {
 		return poll, err
@@ -2407,10 +2407,10 @@ func (c *Core) GetPoll(pollID, viewerUserID string) (*Poll, error) {
 	}
 	return poll, nil
 }
-func (c *Core) GetPollByPostID(postID string) (*Poll, error) {
+func (c *Core) GetPollByPostID(postID string) (*projections.Poll, error) {
 	return projections.GetPollByPostID(c.DB, postID)
 }
-func (c *Core) PollsForPosts(postIDs []string, viewerUserID string) (map[string]*Poll, error) {
+func (c *Core) PollsForPosts(postIDs []string, viewerUserID string) (map[string]*projections.Poll, error) {
 	polls, err := projections.PollsForPosts(c.DB, postIDs, viewerUserID)
 	if err != nil {
 		return nil, err
@@ -2451,7 +2451,7 @@ func (c *Core) applyCounterStorePostCount(post *Post) error {
 	return nil
 }
 
-func (c *Core) applyCounterStorePoll(poll *Poll, viewerUserID string) error {
+func (c *Core) applyCounterStorePoll(poll *projections.Poll, viewerUserID string) error {
 	if !c.useCounterStoreOverride() || poll == nil {
 		return nil
 	}
