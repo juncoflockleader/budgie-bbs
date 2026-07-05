@@ -1699,13 +1699,12 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardAutomodRule(ctx context
 		enabled = *payload.Enabled
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardAutomodRuleSet, []string{"board:" + board}, &proto.BoardAutomodRuleSetPayload{
-		ID: ruleID, Board: board, Enabled: enabled, Priority: payload.Priority,
-		MatchType: payload.MatchType, Pattern: payload.Pattern,
-		Threshold: payload.Threshold, WindowSec: payload.WindowSec, Action: action,
-		DurationSec: payload.DurationSec, Reason: payload.Reason,
-		Note: payload.Note, By: actor.ID, TS: ts,
-	}, ts)
+	scopes, eventPayload := commandevents.BoardAutomodRuleSet(
+		ruleID, board, enabled, payload.Priority,
+		payload.MatchType, payload.Pattern, payload.Threshold, payload.WindowSec,
+		action, payload.DurationSec, payload.Reason, payload.Note, actor.ID, ts,
+	)
+	event := nativeEvent(record, 0, proto.EvtBoardAutomodRuleSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(ruleID, event), nil
 }
 
@@ -1728,7 +1727,8 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteBoardAutomodRule(ctx cont
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtBoardAutomodRuleDeleted, []string{"board:" + board}, &proto.BoardAutomodRuleDeletedPayload{ID: id, Board: board, By: actor.ID, TS: ts}, ts)
+	scopes, eventPayload := commandevents.BoardAutomodRuleDeleted(id, board, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtBoardAutomodRuleDeleted, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(id, event), nil
 }
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -161,13 +162,11 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 		enabled = *p.Enabled
 	}
 	ts := nowMS()
-	scopes := []string{"board:" + board}
-	payload := &proto.BoardAutomodRuleSetPayload{
-		ID: ruleID, Board: board, Enabled: enabled, Priority: p.Priority,
-		MatchType: matchType, Pattern: pattern, Threshold: p.Threshold, WindowSec: p.WindowSec,
-		Action: action, DurationSec: p.DurationSec, Reason: p.Reason,
-		Note: p.Note, By: actor.ID, TS: ts,
-	}
+	scopes, payload := commandevents.BoardAutomodRuleSet(
+		ruleID, board, enabled, p.Priority,
+		matchType, pattern, p.Threshold, p.WindowSec,
+		action, p.DurationSec, p.Reason, p.Note, actor.ID, ts,
+	)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardAutomodRuleSet, scopes, payload)
 	if err != nil {
 		return internalErr(err)
@@ -202,8 +201,7 @@ func (h *Handler) deleteBoardAutomodRule(actor *User, p proto.DeleteBoardAutomod
 		return Reply{Err: errDetail}
 	}
 	ts := nowMS()
-	scopes := []string{"board:" + board}
-	payload := &proto.BoardAutomodRuleDeletedPayload{ID: id, Board: board, By: actor.ID, TS: ts}
+	scopes, payload := commandevents.BoardAutomodRuleDeleted(id, board, actor.ID, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardAutomodRuleDeleted, scopes, payload)
 	if err != nil {
 		return internalErr(err)

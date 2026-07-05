@@ -14,6 +14,39 @@ func BoardZapSet(userID, boardID string, zapped bool, ts int64) ([]string, *prot
 	return []string{"board:" + boardID, "user:" + userID}, payload
 }
 
+func BoardAutomodRuleSet(
+	ruleID, boardID string,
+	enabled bool,
+	priority int,
+	matchType, pattern string,
+	threshold, windowSec int,
+	action string,
+	durationSec int64,
+	reason, note, by string,
+	ts int64,
+) ([]string, *proto.BoardAutomodRuleSetPayload) {
+	return []string{"board:" + boardID}, &proto.BoardAutomodRuleSetPayload{
+		ID:          ruleID,
+		Board:       boardID,
+		Enabled:     enabled,
+		Priority:    priority,
+		MatchType:   matchType,
+		Pattern:     pattern,
+		Threshold:   threshold,
+		WindowSec:   windowSec,
+		Action:      action,
+		DurationSec: durationSec,
+		Reason:      reason,
+		Note:        note,
+		By:          by,
+		TS:          ts,
+	}
+}
+
+func BoardAutomodRuleDeleted(ruleID, boardID, by string, ts int64) ([]string, *proto.BoardAutomodRuleDeletedPayload) {
+	return []string{"board:" + boardID}, &proto.BoardAutomodRuleDeletedPayload{ID: ruleID, Board: boardID, By: by, TS: ts}
+}
+
 func FavoriteFolderCreated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderCreatedPayload) {
 	payload := &proto.FavoriteFolderCreatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
 	return []string{"user:" + userID}, payload
