@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/mailmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -87,17 +88,14 @@ func NormalizeMailAttachments(input []proto.AttachmentPayload, idFor func(int) s
 }
 
 func MailCopyCounts(recipients []*projections.User, senderID string, saveSent bool) map[string]int {
-	copyCounts := map[string]int{}
+	modelRecipients := make([]mailmodel.Recipient, 0, len(recipients))
 	for _, recipient := range recipients {
 		if recipient == nil {
 			continue
 		}
-		copyCounts[recipient.ID]++
+		modelRecipients = append(modelRecipients, mailmodel.Recipient{ID: recipient.ID})
 	}
-	if saveSent {
-		copyCounts[senderID]++
-	}
-	return copyCounts
+	return mailmodel.CopyCounts(modelRecipients, senderID, saveSent)
 }
 
 func ResolveMailRecipients(queryable Queryable, actor *projections.User, refs []string, mailAll bool) ([]*projections.User, *proto.ErrorDetail) {

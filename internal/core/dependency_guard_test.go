@@ -43,6 +43,7 @@ func TestCoreModelPackagesRemainLeafPackages(t *testing.T) {
 		"./internal/core/boardmodel",
 		"./internal/core/chatmodel",
 		"./internal/core/categorymodel",
+		"./internal/core/mailmodel",
 		"./internal/core/postmodel",
 		"./internal/core/pollmodel",
 		"./internal/core/threadmodel",
