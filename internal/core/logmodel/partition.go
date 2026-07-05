@@ -112,3 +112,49 @@ func SortCommandPartitionOffsetsByLag(offsets []CommandPartitionOffset) {
 		return la > lb
 	})
 }
+
+type EventPartitionOffset struct {
+	Partition  Partition
+	LastOffset int64
+}
+
+func (offset EventPartitionOffset) Normalize() EventPartitionOffset {
+	offset.Partition = offset.Partition.Normalize()
+	if offset.LastOffset < 0 {
+		offset.LastOffset = 0
+	}
+	return offset
+}
+
+func EventPartitionsByLastOffset(offsets []EventPartitionOffset, limit int) []Partition {
+	tails := map[Partition]int64{}
+	for _, offset := range offsets {
+		offset = offset.Normalize()
+		if _, ok := tails[offset.Partition]; !ok || offset.LastOffset > tails[offset.Partition] {
+			tails[offset.Partition] = offset.LastOffset
+		}
+	}
+	partitions := make([]Partition, 0, len(tails))
+	for partition := range tails {
+		partitions = append(partitions, partition)
+	}
+	sort.Slice(partitions, func(i, j int) bool {
+		if tails[partitions[i]] == tails[partitions[j]] {
+			return partitions[i].Less(partitions[j])
+		}
+		return tails[partitions[i]] > tails[partitions[j]]
+	})
+	if limit > 0 && len(partitions) > limit {
+		partitions = partitions[:limit]
+	}
+	return partitions
+}
+
+func SortEventPartitionOffsetsByLastOffset(offsets []EventPartitionOffset) {
+	sort.SliceStable(offsets, func(i, j int) bool {
+		if offsets[i].LastOffset == offsets[j].LastOffset {
+			return offsets[i].Partition.Less(offsets[j].Partition)
+		}
+		return offsets[i].LastOffset > offsets[j].LastOffset
+	})
+}
