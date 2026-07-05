@@ -5,71 +5,28 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 const (
-	DerivedViewCommunityStats       = "community_stats"
-	DerivedViewCommunityStatHistory = "community_stat_history"
-	DerivedViewLatestFeed           = "feeds.latest"
-	DerivedViewResidentFeed         = "feeds.resident"
-	DerivedViewBoardSummaries       = "summaries.boards"
-	DerivedViewUnreadThreads        = "summaries.unread_threads"
-	DerivedViewBoardRankings        = "rankings.boards"
-	DerivedViewThreadRankings       = "rankings.threads"
-	DerivedViewReplyRankings        = "rankings.replies"
-	DerivedViewUserRankings         = "rankings.users"
-	DerivedViewBlessingRankings     = "rankings.blessings"
-	DerivedViewArchiveRankings      = "rankings.archives"
-	DerivedViewPostSearch           = "search.posts"
-	DerivedViewDigestSearch         = "search.digest"
+	DerivedViewCommunityStats       = projections.DerivedViewCommunityStats
+	DerivedViewCommunityStatHistory = projections.DerivedViewCommunityStatHistory
+	DerivedViewLatestFeed           = projections.DerivedViewLatestFeed
+	DerivedViewResidentFeed         = projections.DerivedViewResidentFeed
+	DerivedViewBoardSummaries       = projections.DerivedViewBoardSummaries
+	DerivedViewUnreadThreads        = projections.DerivedViewUnreadThreads
+	DerivedViewBoardRankings        = projections.DerivedViewBoardRankings
+	DerivedViewThreadRankings       = projections.DerivedViewThreadRankings
+	DerivedViewReplyRankings        = projections.DerivedViewReplyRankings
+	DerivedViewUserRankings         = projections.DerivedViewUserRankings
+	DerivedViewBlessingRankings     = projections.DerivedViewBlessingRankings
+	DerivedViewArchiveRankings      = projections.DerivedViewArchiveRankings
+	DerivedViewPostSearch           = projections.DerivedViewPostSearch
+	DerivedViewDigestSearch         = projections.DerivedViewDigestSearch
 )
-
-var knownDerivedViews = []string{
-	DerivedViewCommunityStats,
-	DerivedViewCommunityStatHistory,
-	DerivedViewLatestFeed,
-	DerivedViewResidentFeed,
-	DerivedViewBoardSummaries,
-	DerivedViewUnreadThreads,
-	DerivedViewBoardRankings,
-	DerivedViewThreadRankings,
-	DerivedViewReplyRankings,
-	DerivedViewUserRankings,
-	DerivedViewBlessingRankings,
-	DerivedViewArchiveRankings,
-	DerivedViewPostSearch,
-	DerivedViewDigestSearch,
-}
-
-var derivedViewGroups = map[string][]string{
-	"community": {
-		DerivedViewCommunityStats,
-		DerivedViewCommunityStatHistory,
-	},
-	"feeds": {
-		DerivedViewLatestFeed,
-		DerivedViewResidentFeed,
-	},
-	"rankings": {
-		DerivedViewBoardRankings,
-		DerivedViewThreadRankings,
-		DerivedViewReplyRankings,
-		DerivedViewUserRankings,
-		DerivedViewBlessingRankings,
-		DerivedViewArchiveRankings,
-	},
-	"search": {
-		DerivedViewPostSearch,
-		DerivedViewDigestSearch,
-	},
-	"summaries": {
-		DerivedViewBoardSummaries,
-		DerivedViewUnreadThreads,
-	},
-}
 
 type DerivedViewWatermark struct {
 	View       string
@@ -94,59 +51,15 @@ type DerivedViewWatermarkWorker struct {
 }
 
 func KnownDerivedViews() []string {
-	return append([]string(nil), knownDerivedViews...)
+	return projections.KnownDerivedViews()
 }
 
 func DerivedViewGroups() map[string][]string {
-	out := make(map[string][]string, len(derivedViewGroups))
-	for group, views := range derivedViewGroups {
-		out[group] = append([]string(nil), views...)
-	}
-	return out
+	return projections.DerivedViewGroups()
 }
 
 func ResolveDerivedViews(views []string) ([]string, error) {
-	if len(views) == 0 {
-		return nil, fmt.Errorf("derived view name required")
-	}
-	known := map[string]bool{}
-	for _, view := range knownDerivedViews {
-		known[view] = true
-	}
-	seen := map[string]bool{}
-	out := []string{}
-	for _, raw := range views {
-		for _, part := range strings.Split(raw, ",") {
-			view := normalizeDerivedView(part)
-			if view == "" {
-				continue
-			}
-			if view == "all" || view == "*" {
-				return KnownDerivedViews(), nil
-			}
-			if group, ok := derivedViewGroups[view]; ok {
-				for _, groupedView := range group {
-					if !seen[groupedView] {
-						out = append(out, groupedView)
-						seen[groupedView] = true
-					}
-				}
-				continue
-			}
-			if !known[view] {
-				return nil, fmt.Errorf("unknown derived view %q", view)
-			}
-			if !seen[view] {
-				out = append(out, view)
-				seen[view] = true
-			}
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("derived view name required")
-	}
-	sort.Strings(out)
-	return out, nil
+	return projections.ResolveDerivedViews(views)
 }
 
 // DerivedViewAppliedSeq returns the applied durable position for a derived
@@ -344,13 +257,7 @@ func (c *Core) markDerivedViewsApplied(views []string, head int64) error {
 }
 
 func containsDerivedView(views []string, want string) bool {
-	want = normalizeDerivedView(want)
-	for _, view := range views {
-		if normalizeDerivedView(view) == want {
-			return true
-		}
-	}
-	return false
+	return projections.ContainsDerivedView(views, want)
 }
 
 func lookupDerivedViewAppliedSeq(db *sql.DB, view string) (int64, bool, error) {
@@ -366,5 +273,5 @@ func lookupDerivedViewAppliedSeq(db *sql.DB, view string) (int64, bool, error) {
 }
 
 func normalizeDerivedView(view string) string {
-	return strings.TrimSpace(strings.ToLower(view))
+	return projections.NormalizeDerivedView(view)
 }

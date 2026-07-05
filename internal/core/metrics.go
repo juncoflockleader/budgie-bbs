@@ -444,9 +444,10 @@ func derivedViewWatermarkSamples(db *sql.DB) ([]metrics.Sample, error) {
 		return nil, err
 	}
 
+	knownViews := projections.KnownDerivedViews()
 	seen := map[string]bool{}
-	samples := make([]metrics.Sample, 0, len(knownDerivedViews)*2+len(appliedByView)*2)
-	for _, view := range knownDerivedViews {
+	samples := make([]metrics.Sample, 0, len(knownViews)*2+len(appliedByView)*2)
+	for _, view := range knownViews {
 		applied, ok := appliedByView[view]
 		if !ok {
 			applied = head
