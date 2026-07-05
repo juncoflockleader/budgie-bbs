@@ -139,7 +139,7 @@ type CommandLogWorkerResult struct {
 	RetryableFailure     *proto.ErrorDetail
 }
 
-func commandLogWorkerAssignmentResult(partition LogPartition, assignment CommandPartitionAssignment, assigned bool) CommandLogWorkerResult {
+func commandLogWorkerAssignmentResult(partition LogPartition, assignment logmodel.CommandPartitionAssignment, assigned bool) CommandLogWorkerResult {
 	return CommandLogWorkerResult{
 		Partition:            partition.Normalize(),
 		Assigned:             assigned,
@@ -148,7 +148,7 @@ func commandLogWorkerAssignmentResult(partition LogPartition, assignment Command
 	}
 }
 
-func commandLogWorkerClaimedAssignmentResult(partition LogPartition, assignment CommandPartitionAssignment, ownerID string, committedOffset int64) CommandLogWorkerResult {
+func commandLogWorkerClaimedAssignmentResult(partition LogPartition, assignment logmodel.CommandPartitionAssignment, ownerID string, committedOffset int64) CommandLogWorkerResult {
 	result := commandLogWorkerAssignmentResult(partition, assignment, true)
 	result.Claimed = true
 	result.ClaimOwnerID = ownerID
@@ -432,7 +432,7 @@ func (w *CommandLogWorker) Run(ctx context.Context) {
 	}
 }
 
-func (w *CommandLogWorker) claimPartition(ctx context.Context, partition LogPartition) (CommandPartitionClaim, bool, error) {
+func (w *CommandLogWorker) claimPartition(ctx context.Context, partition LogPartition) (logmodel.CommandPartitionClaim, bool, error) {
 	claim := logmodel.NewCommandPartitionClaim(partition, w.ownerID, 0)
 	if w.claims == nil {
 		return claim, true, nil
@@ -440,7 +440,7 @@ func (w *CommandLogWorker) claimPartition(ctx context.Context, partition LogPart
 	return w.claims.ClaimCommandPartition(ctx, w.ownerID, partition, w.claimTTL)
 }
 
-func (w *CommandLogWorker) assignPartition(ctx context.Context, partition LogPartition) (CommandPartitionAssignment, bool, error) {
+func (w *CommandLogWorker) assignPartition(ctx context.Context, partition LogPartition) (logmodel.CommandPartitionAssignment, bool, error) {
 	assignment := logmodel.NewCommandPartitionAssignment(partition, w.ownerID, 1)
 	if w.assignments == nil {
 		return assignment, true, nil

@@ -27,16 +27,16 @@ func NewSQLCommandPartitionClaimer(db *sql.DB) *SQLCommandPartitionClaimer {
 	}
 }
 
-func (c *SQLCommandPartitionClaimer) ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (CommandPartitionClaim, bool, error) {
+func (c *SQLCommandPartitionClaimer) ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (logmodel.CommandPartitionClaim, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return CommandPartitionClaim{}, false, err
+		return logmodel.CommandPartitionClaim{}, false, err
 	}
 	if c == nil || c.db == nil {
-		return CommandPartitionClaim{}, false, fmt.Errorf("sql command partition claimer: nil db")
+		return logmodel.CommandPartitionClaim{}, false, fmt.Errorf("sql command partition claimer: nil db")
 	}
 	ownerID = strings.TrimSpace(ownerID)
 	if ownerID == "" {
-		return CommandPartitionClaim{}, false, fmt.Errorf("sql command partition claimer: missing owner id")
+		return logmodel.CommandPartitionClaim{}, false, fmt.Errorf("sql command partition claimer: missing owner id")
 	}
 	if ttl <= 0 {
 		ttl = defaultCommandPartitionClaimTTL
@@ -63,7 +63,7 @@ ON CONFLICT (partition_kind, partition_key) DO UPDATE
  WHERE command_partition_leases.owner_id=excluded.owner_id
     OR command_partition_leases.expires_at <= excluded.claimed_at`
 	if _, err := c.db.ExecContext(ctx, rebindPlaceholders(query), partition.Kind, partition.Key, ownerID, now, expiresAt); err != nil {
-		return CommandPartitionClaim{}, false, err
+		return logmodel.CommandPartitionClaim{}, false, err
 	}
 
 	var claimOwner string
@@ -72,7 +72,7 @@ ON CONFLICT (partition_kind, partition_key) DO UPDATE
 SELECT owner_id, expires_at
   FROM command_partition_leases
  WHERE partition_kind=? AND partition_key=?`), partition.Kind, partition.Key).Scan(&claimOwner, &claimExpiresAt); err != nil {
-		return CommandPartitionClaim{}, false, err
+		return logmodel.CommandPartitionClaim{}, false, err
 	}
 	claim := logmodel.NewCommandPartitionClaim(partition, claimOwner, claimExpiresAt)
 	return claim, claim.OwnerID == ownerID && claim.ExpiresAt >= expiresAt, nil

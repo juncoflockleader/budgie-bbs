@@ -120,16 +120,16 @@ func newJetStreamCommandPartitionAssignerWithKV(kv commandAssignmentKV, group st
 	}
 }
 
-func (a *JetStreamCommandPartitionAssigner) AssignCommandPartition(ctx context.Context, ownerID string, partition core.LogPartition) (core.CommandPartitionAssignment, bool, error) {
+func (a *JetStreamCommandPartitionAssigner) AssignCommandPartition(ctx context.Context, ownerID string, partition core.LogPartition) (logmodel.CommandPartitionAssignment, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return core.CommandPartitionAssignment{}, false, err
+		return logmodel.CommandPartitionAssignment{}, false, err
 	}
 	if a == nil || a.kv == nil {
-		return core.CommandPartitionAssignment{}, false, fmt.Errorf("nats command assignment: nil assigner")
+		return logmodel.CommandPartitionAssignment{}, false, fmt.Errorf("nats command assignment: nil assigner")
 	}
 	record, _, err := a.loadRecord(ctx)
 	if err != nil {
-		return core.CommandPartitionAssignment{}, false, err
+		return logmodel.CommandPartitionAssignment{}, false, err
 	}
 	assigner := logmodel.NewHashCommandPartitionAssignerWithOverrides(record.Members, decodeCommandAssignmentOverrides(record.Overrides), record.Generation)
 	return assigner.AssignCommandPartition(ctx, ownerID, partition)

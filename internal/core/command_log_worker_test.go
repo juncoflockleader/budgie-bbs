@@ -2529,9 +2529,9 @@ type scriptedCommandPartitionClaimer struct {
 	calls int
 }
 
-func (c *scriptedCommandPartitionClaimer) ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (CommandPartitionClaim, bool, error) {
+func (c *scriptedCommandPartitionClaimer) ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (logmodel.CommandPartitionClaim, bool, error) {
 	if c.calls >= len(c.steps) {
-		return CommandPartitionClaim{Partition: partition.Normalize(), OwnerID: ownerID}, false, nil
+		return logmodel.CommandPartitionClaim{Partition: partition.Normalize(), OwnerID: ownerID}, false, nil
 	}
 	step := c.steps[c.calls]
 	c.calls++
@@ -2539,7 +2539,7 @@ func (c *scriptedCommandPartitionClaimer) ClaimCommandPartition(ctx context.Cont
 	if claimOwner == "" {
 		claimOwner = ownerID
 	}
-	return CommandPartitionClaim{
+	return logmodel.CommandPartitionClaim{
 		Partition: partition.Normalize(),
 		OwnerID:   claimOwner,
 		ExpiresAt: step.expiresAt,
@@ -2614,7 +2614,7 @@ func newHeartbeatCommandPartitionClaimer(loseAt int) *heartbeatCommandPartitionC
 	}
 }
 
-func (c *heartbeatCommandPartitionClaimer) ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (CommandPartitionClaim, bool, error) {
+func (c *heartbeatCommandPartitionClaimer) ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (logmodel.CommandPartitionClaim, bool, error) {
 	c.mu.Lock()
 	c.calls++
 	call := c.calls
@@ -2626,13 +2626,13 @@ func (c *heartbeatCommandPartitionClaimer) ClaimCommandPartition(ctx context.Con
 	}
 	if loseAt > 0 && call >= loseAt {
 		c.lostOnce.Do(func() { close(c.lost) })
-		return CommandPartitionClaim{
+		return logmodel.CommandPartitionClaim{
 			Partition: partition.Normalize(),
 			OwnerID:   "writer-b",
 			ExpiresAt: int64(2000 + call),
 		}, false, nil
 	}
-	return CommandPartitionClaim{
+	return logmodel.CommandPartitionClaim{
 		Partition: partition.Normalize(),
 		OwnerID:   ownerID,
 		ExpiresAt: int64(1000 + call),
@@ -2678,7 +2678,7 @@ func newHeartbeatCommandPartitionAssigner(loseAt int) *heartbeatCommandPartition
 	}
 }
 
-func (a *heartbeatCommandPartitionAssigner) AssignCommandPartition(ctx context.Context, ownerID string, partition LogPartition) (CommandPartitionAssignment, bool, error) {
+func (a *heartbeatCommandPartitionAssigner) AssignCommandPartition(ctx context.Context, ownerID string, partition LogPartition) (logmodel.CommandPartitionAssignment, bool, error) {
 	a.mu.Lock()
 	a.calls++
 	call := a.calls
@@ -2690,13 +2690,13 @@ func (a *heartbeatCommandPartitionAssigner) AssignCommandPartition(ctx context.C
 	}
 	if loseAt > 0 && call >= loseAt {
 		a.lostOnce.Do(func() { close(a.lost) })
-		return CommandPartitionAssignment{
+		return logmodel.CommandPartitionAssignment{
 			Partition:  partition.Normalize(),
 			OwnerID:    "writer-b",
 			Generation: 2,
 		}, false, nil
 	}
-	return CommandPartitionAssignment{
+	return logmodel.CommandPartitionAssignment{
 		Partition:  partition.Normalize(),
 		OwnerID:    ownerID,
 		Generation: 1,

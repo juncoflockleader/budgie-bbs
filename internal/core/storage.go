@@ -58,15 +58,11 @@ type CommandPartitionOffsetLister interface {
 	ListCommandPartitionOffsets(ctx context.Context, limit int) ([]logmodel.CommandPartitionOffset, error)
 }
 
-type CommandPartitionClaim = logmodel.CommandPartitionClaim
-
-type CommandPartitionAssignment = logmodel.CommandPartitionAssignment
-
 // CommandPartitionAssigner models broker consumer-group ownership for command
 // partitions. A worker may drain a partition only while the assigner says that
 // worker owns the current assignment generation.
 type CommandPartitionAssigner interface {
-	AssignCommandPartition(ctx context.Context, ownerID string, partition LogPartition) (CommandPartitionAssignment, bool, error)
+	AssignCommandPartition(ctx context.Context, ownerID string, partition LogPartition) (logmodel.CommandPartitionAssignment, bool, error)
 }
 
 // StableCommandPartitionAssigner marks deterministic assignment snapshots that
@@ -82,14 +78,14 @@ type StableCommandPartitionAssigner interface {
 // use it to avoid scanning every known command partition when a consumer-group
 // rebalance has already produced an owned partition set.
 type CommandPartitionAssignmentLister interface {
-	ListAssignedCommandPartitions(ctx context.Context, ownerID string, limit int) ([]CommandPartitionAssignment, error)
+	ListAssignedCommandPartitions(ctx context.Context, ownerID string, limit int) ([]logmodel.CommandPartitionAssignment, error)
 }
 
 // CommandPartitionClaimer owns short-lived writer leases for command-log
 // partitions. It is the bridge between the current poll/drain worker and the
 // eventual broker consumer-group partition assignment model.
 type CommandPartitionClaimer interface {
-	ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (CommandPartitionClaim, bool, error)
+	ClaimCommandPartition(ctx context.Context, ownerID string, partition LogPartition, ttl time.Duration) (logmodel.CommandPartitionClaim, bool, error)
 }
 
 // EventAppend is the logical event the writer tier appends after deciding a

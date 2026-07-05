@@ -137,7 +137,7 @@ func TestSnapshotCommandPartitionAssignerListsOwnedPartitionsAndFailsClosed(t *t
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
 	}
-	wantOwned := []CommandPartitionAssignment{
+	wantOwned := []logmodel.CommandPartitionAssignment{
 		{Partition: general.Normalize(), OwnerID: "writer-a", Generation: 11},
 		{Partition: hotReply.Normalize(), OwnerID: "writer-a", Generation: 11},
 	}
@@ -179,7 +179,7 @@ func TestSnapshotCommandPartitionAssignerListsOwnedPartitionsAndFailsClosed(t *t
 func TestCommandPartitionAssignmentPartitionsNormalizesAndDedupes(t *testing.T) {
 	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
-	got := logmodel.CommandPartitionAssignmentPartitions([]CommandPartitionAssignment{
+	got := logmodel.CommandPartitionAssignmentPartitions([]logmodel.CommandPartitionAssignment{
 		{Partition: general, OwnerID: "writer-a"},
 		{Partition: general, OwnerID: "writer-a"},
 		{Partition: LogPartition{}, OwnerID: "writer-a"},
@@ -194,11 +194,11 @@ func TestCommandPartitionAssignmentsForOwnerNormalizesOwnerAndPartitions(t *test
 	general := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	global := LogPartition{Kind: partitionGlobal, Key: partitionGlobal}.Normalize()
 	single := logmodel.NewCommandPartitionAssignment(LogPartition{}, " writer-b ", 43)
-	if want := (CommandPartitionAssignment{Partition: global, OwnerID: "writer-b", Generation: 43}); single != want {
+	if want := (logmodel.CommandPartitionAssignment{Partition: global, OwnerID: "writer-b", Generation: 43}); single != want {
 		t.Fatalf("commandPartitionAssignmentForOwner = %+v, want %+v", single, want)
 	}
 	got := logmodel.CommandPartitionAssignmentsForOwner([]LogPartition{general, LogPartition{}}, " writer-a ", 42)
-	want := []CommandPartitionAssignment{
+	want := []logmodel.CommandPartitionAssignment{
 		{Partition: general, OwnerID: "writer-a", Generation: 42},
 		{Partition: global, OwnerID: "writer-a", Generation: 42},
 	}
