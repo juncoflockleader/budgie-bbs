@@ -888,7 +888,7 @@ func (l *MemoryCommandLog) Produce(ctx context.Context, record CommandLogRecord)
 	defer l.mu.Unlock()
 	if key, ok := newCommandReceiptKey(record.Partition, record.ActorID, record.CID); ok {
 		if existing, ok := l.byReceipt[key]; ok {
-			if !sameCommandLogRecordIdentity(existing, record) {
+			if !logmodel.SameCommandLogRecordIdentity(existing, record) {
 				return CommandLogRecord{}, fmt.Errorf("memory command log: duplicate command receipt %q has different content", record.CID)
 			}
 			return cloneCommandLogRecord(existing), nil

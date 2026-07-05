@@ -424,15 +424,6 @@ func cloneBrokerCommandLogMessage(msg BrokerCommandLogMessage) BrokerCommandLogM
 	return msg
 }
 
-func sameCommandLogRecordIdentity(existing, requested CommandLogRecord) bool {
-	return existing.Partition.Normalize() == requested.Partition.Normalize() &&
-		existing.ActorID == requested.ActorID &&
-		existing.CID == requested.CID &&
-		existing.Command == requested.Command &&
-		existing.EnqueuedAt == requested.EnqueuedAt &&
-		string(existing.Payload) == string(requested.Payload)
-}
-
 func sameBrokerCommandIdentity(existing, requested BrokerCommandRecord) bool {
 	return existing.ActorID == requested.ActorID &&
 		existing.CID == requested.CID &&

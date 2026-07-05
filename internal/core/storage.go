@@ -24,16 +24,7 @@ func logPartitionFromEventPartition(p eventPartition) LogPartition {
 
 // CommandLogRecord is the durable command-log entry produced by gateways and
 // consumed by the writer tier in the partitioned-log architecture.
-type CommandLogRecord struct {
-	Partition      LogPartition
-	Offset         int64
-	SourcePosition CommandLogSourcePosition
-	ActorID        string
-	CID            string
-	Command        proto.CommandName
-	Payload        json.RawMessage
-	EnqueuedAt     int64
-}
+type CommandLogRecord = logmodel.CommandLogRecord
 
 // CommandLogSourcePosition is the broker source offset for one command-log
 // record. Logical Partition/Offset remain the Budgie execution identity;
