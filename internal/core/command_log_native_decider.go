@@ -3706,12 +3706,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardFavorite(ctx context.Co
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
 	}
 	if payload.Favorite {
-		exists, err := projections.FavoriteFolderExists(e.core.DB, actor.ID, payload.FolderID)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !exists {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "favorite folder not found", false)
+		if errDetail := commandrules.RequireFavoriteFolder(e.core.DB, actor.ID, payload.FolderID); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 	}
 	ts := nativeCommandTimestamp(record)
@@ -3729,12 +3725,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateFavoriteFolder(ctx contex
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	exists, err := projections.FavoriteFolderExists(e.core.DB, actor.ID, payload.ParentID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "favorite folder not found", false)
+	if errDetail := commandrules.RequireFavoriteFolder(e.core.DB, actor.ID, payload.ParentID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	position, err := projections.FavoriteFolderTargetPosition(e.core.DB, actor.ID, payload.ParentID, payload.Position)
 	if err != nil {
@@ -3773,12 +3765,8 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateFavoriteFolder(ctx contex
 		if errDetail := commandrules.RequireFavoriteFolderNotSelfParent(payload.Folder, nextParent); errDetail != nil {
 			return nativeCommandDecision{}, errDetail
 		}
-		exists, err := projections.FavoriteFolderExists(e.core.DB, actor.ID, nextParent)
-		if err != nil {
-			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-		}
-		if !exists {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "favorite folder not found", false)
+		if errDetail := commandrules.RequireFavoriteFolder(e.core.DB, actor.ID, nextParent); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 		contains, err := projections.FavoriteFolderContains(e.core.DB, actor.ID, payload.Folder, nextParent)
 		if err != nil {
@@ -3845,12 +3833,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMoveBoardFavorite(ctx context.C
 	if settings == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
 	}
-	exists, err := projections.FavoriteFolderExists(e.core.DB, actor.ID, payload.FolderID)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "favorite folder not found", false)
+	if errDetail := commandrules.RequireFavoriteFolder(e.core.DB, actor.ID, payload.FolderID); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	scopes, eventPayload := commandevents.BoardFavoriteSet(actor.ID, payload.Board, payload.FolderID, true, payload.Position, ts)
