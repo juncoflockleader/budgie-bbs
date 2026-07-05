@@ -10,7 +10,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-func (h *Handler) votePoll(actor *User, p proto.VotePollPayload) Reply {
+func (h *Handler) votePoll(actor *projections.User, p proto.VotePollPayload) Reply {
 	if p.Poll == "" || p.Option == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "poll and option are required", false)}
 	}
@@ -69,7 +69,7 @@ func (h *Handler) votePoll(actor *User, p proto.VotePollPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: p.Poll}}
 }
 
-func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayload) Reply {
+func (h *Handler) publishPollResult(actor *projections.User, p proto.PublishPollResultPayload) Reply {
 	p, msg := proto.NormalizePublishPollResultPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -107,7 +107,7 @@ func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayloa
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
-func (h *Handler) ensurePollResultSystemPost(actor *User, sourceThread *projections.Thread, poll *Poll) (string, int64, error) {
+func (h *Handler) ensurePollResultSystemPost(actor *projections.User, sourceThread *projections.Thread, poll *Poll) (string, int64, error) {
 	threadID, postID := proto.PollResultPostIDs(poll.ID)
 	if existingSeq, found, err := projections.ThreadLastSeq(h.db, threadID); err != nil {
 		return "", 0, err

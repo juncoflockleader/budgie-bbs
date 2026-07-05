@@ -6,12 +6,13 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 // ── M10: Reactions ──────────────────────────────────────────────────────────
 
-func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
+func (h *Handler) reactPost(actor *projections.User, p proto.ReactPostPayload) Reply {
 	if p.Post == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
 	}
@@ -76,7 +77,7 @@ func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: post.ID}}
 }
 
-func (h *Handler) unreactPost(actor *User, p proto.ReactPostPayload) Reply {
+func (h *Handler) unreactPost(actor *projections.User, p proto.ReactPostPayload) Reply {
 	if p.Post == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "post is required", false)}
 	}

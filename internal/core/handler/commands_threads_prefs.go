@@ -1,10 +1,11 @@
 package handler
 
 import (
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-func (h *Handler) setThreadPref(actor *User, p proto.SetThreadPrefPayload) Reply {
+func (h *Handler) setThreadPref(actor *projections.User, p proto.SetThreadPrefPayload) Reply {
 	if p.Thread == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "thread is required", false)}
 	}

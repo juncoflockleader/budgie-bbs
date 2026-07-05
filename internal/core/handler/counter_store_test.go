@@ -18,7 +18,7 @@ func TestReactPostUsesCounterStore(t *testing.T) {
 	setCounterStoreRuntime(t, store)
 
 	h := New(db, bus)
-	reply := h.reactPost(&User{ID: "bob-id", Name: "bob"}, proto.ReactPostPayload{Post: "post-1", Emoji: "heart"})
+	reply := h.reactPost(&projections.User{ID: "bob-id", Name: "bob"}, proto.ReactPostPayload{Post: "post-1", Emoji: "heart"})
 	if reply.Err != nil {
 		t.Fatalf("reactPost error = %+v", reply.Err)
 	}
@@ -44,7 +44,7 @@ func TestUnreactPostUsesCounterStore(t *testing.T) {
 	setCounterStoreRuntime(t, store)
 
 	h := New(db, bus)
-	reply := h.unreactPost(&User{ID: "bob-id", Name: "bob"}, proto.ReactPostPayload{Post: "post-1"})
+	reply := h.unreactPost(&projections.User{ID: "bob-id", Name: "bob"}, proto.ReactPostPayload{Post: "post-1"})
 	if reply.Err != nil {
 		t.Fatalf("unreactPost error = %+v", reply.Err)
 	}
@@ -63,7 +63,7 @@ func TestVotePollUsesCounterStore(t *testing.T) {
 	setCounterStoreRuntime(t, store)
 
 	h := New(db, bus)
-	reply := h.votePoll(&User{ID: "bob-id", Name: "bob"}, proto.VotePollPayload{Poll: "poll-1", Option: "option-1"})
+	reply := h.votePoll(&projections.User{ID: "bob-id", Name: "bob"}, proto.VotePollPayload{Poll: "poll-1", Option: "option-1"})
 	if reply.Err != nil {
 		t.Fatalf("votePoll error = %+v", reply.Err)
 	}
@@ -82,7 +82,7 @@ func TestReactPostRollsBackCounterMutationOnFailure(t *testing.T) {
 	setCounterStoreRuntime(t, store)
 
 	h := New(db, bus)
-	reply := h.reactPost(&User{ID: "bob-id", Name: "bob"}, proto.ReactPostPayload{Post: "post-1", Emoji: "heart"})
+	reply := h.reactPost(&projections.User{ID: "bob-id", Name: "bob"}, proto.ReactPostPayload{Post: "post-1", Emoji: "heart"})
 	if reply.Err == nil {
 		t.Fatalf("reactPost error = nil, want counter failure")
 	}
