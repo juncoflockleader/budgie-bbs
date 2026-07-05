@@ -105,20 +105,18 @@ type EventStore interface {
 // boundary.
 type CommandEventTransaction = logmodel.CommandEventTransaction
 
-type CommandEventTransactionResult = logmodel.CommandEventTransactionResult
-
 // CommandEventTransactionStore is the final promotion boundary for broker-owned
 // writes. Redpanda/Kafka adapters must make CommitCommandEvents atomic or
 // provide equivalent idempotent replay semantics for the append/commit gap.
 type CommandEventTransactionStore interface {
-	CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error)
+	CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error)
 }
 
 // CommandEventTransactionBatchStore is an optional promotion boundary for
 // draining multiple logical command partitions through one broker transaction
 // where the backend can provide equivalent idempotent append/commit semantics.
 type CommandEventTransactionBatchStore interface {
-	CommitCommandEventBatch(ctx context.Context, txs []CommandEventTransaction) ([]CommandEventTransactionResult, error)
+	CommitCommandEventBatch(ctx context.Context, txs []CommandEventTransaction) ([]logmodel.CommandEventTransactionResult, error)
 }
 
 // EventPartitionLister exposes the partitions that currently have durable

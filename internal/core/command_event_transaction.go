@@ -228,7 +228,7 @@ func commandLogTransactionCommitFailureResult(err error) CommandLogFinalizationR
 	}
 }
 
-func validateCommandEventTransactionCommit(record CommandLogRecord, committed CommandEventTransactionResult) error {
+func validateCommandEventTransactionCommit(record CommandLogRecord, committed logmodel.CommandEventTransactionResult) error {
 	if committed.CommittedPartition == (LogPartition{}) {
 		return fmt.Errorf("command event transaction finalizer: missing committed partition")
 	}
@@ -308,12 +308,12 @@ func NewBrokerCommandEventTransactionStoreWithOptions(client BrokerCommandEventT
 	return &BrokerCommandEventTransactionStore{client: client, options: options}
 }
 
-func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
+func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
-		return CommandEventTransactionResult{}, err
+		return logmodel.CommandEventTransactionResult{}, err
 	}
 	if s == nil || s.client == nil {
-		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: nil client")
+		return logmodel.CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: nil client")
 	}
 	command := logmodel.CommandLogCommitPosition{
 		Partition:      tx.CommandPartition,
@@ -321,47 +321,47 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Con
 		SourcePosition: tx.CommandSourcePosition,
 	}.Normalize()
 	if err := command.Validate(); err != nil {
-		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: %w", err)
+		return logmodel.CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: %w", err)
 	}
 	records := make([]logmodel.BrokerEventRecord, 0, len(tx.Events))
 	for _, event := range tx.Events {
 		record, err := brokerEventTransactionRecord(event)
 		if err != nil {
-			return CommandEventTransactionResult{}, err
+			return logmodel.CommandEventTransactionResult{}, err
 		}
 		records = append(records, record)
 	}
 	records, err := logmodel.NormalizeBrokerEventTransactionRecords(records, "one transaction")
 	if err != nil {
-		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: %w", err)
+		return logmodel.CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: %w", err)
 	}
 	committed, err := s.client.AppendEventsAndCommitCommand(ctx, command, records)
 	if err != nil {
-		return CommandEventTransactionResult{}, err
+		return logmodel.CommandEventTransactionResult{}, err
 	}
 	if committed.CommittedPartition == (LogPartition{}) {
-		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: missing committed partition")
+		return logmodel.CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: missing committed partition")
 	}
 	if committed.CommittedPartition.Normalize() != command.Partition {
-		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: committed partition %s/%s for command partition %s/%s",
+		return logmodel.CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: committed partition %s/%s for command partition %s/%s",
 			committed.CommittedPartition.Normalize().Kind, committed.CommittedPartition.Normalize().Key,
 			command.Partition.Kind, command.Partition.Key)
 	}
 	if committed.CommittedOffset < command.Offset {
-		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: committed offset %d before command offset %d", committed.CommittedOffset, command.Offset)
+		return logmodel.CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: committed offset %d before command offset %d", committed.CommittedOffset, command.Offset)
 	}
 	events, err := validateBrokerCommandEventTransactionMessages(records, committed.Messages, s.options)
 	if err != nil {
-		return CommandEventTransactionResult{}, err
+		return logmodel.CommandEventTransactionResult{}, err
 	}
-	return CommandEventTransactionResult{
+	return logmodel.CommandEventTransactionResult{
 		Events:             events,
 		CommittedPartition: committed.CommittedPartition.Normalize(),
 		CommittedOffset:    committed.CommittedOffset,
 	}, nil
 }
 
-func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context.Context, txs []CommandEventTransaction) ([]CommandEventTransactionResult, error) {
+func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context.Context, txs []CommandEventTransaction) ([]logmodel.CommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -373,7 +373,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 	}
 	batchClient, ok := s.client.(BrokerCommandEventTransactionBatchClient)
 	if !ok {
-		results := make([]CommandEventTransactionResult, 0, len(txs))
+		results := make([]logmodel.CommandEventTransactionResult, 0, len(txs))
 		for _, tx := range txs {
 			result, err := s.CommitCommandEvents(ctx, tx)
 			results = append(results, result)
@@ -442,9 +442,9 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 	if err != nil {
 		return nil, err
 	}
-	results := make([]CommandEventTransactionResult, len(txs))
+	results := make([]logmodel.CommandEventTransactionResult, len(txs))
 	for i := range txs {
-		results[i] = CommandEventTransactionResult{
+		results[i] = logmodel.CommandEventTransactionResult{
 			Events:             append([]*proto.Event(nil), events[eventRanges[i].start:eventRanges[i].end]...),
 			CommittedPartition: committed.Commits[i].Partition,
 			CommittedOffset:    committed.Commits[i].Offset,

@@ -528,8 +528,8 @@ func TestCommandEventTransactionFinalizerRecordsTerminalFailureOnlyAfterCommit(t
 	}
 	var terminalRecords []CommandLogRecord
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
-			return CommandEventTransactionResult{}, errors.New("injected transaction commit failure")
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			return logmodel.CommandEventTransactionResult{}, errors.New("injected transaction commit failure")
 		}),
 		TerminalFailures: commandLogTerminalFailureRecorderFunc(func(ctx context.Context, record CommandLogRecord, errDetail *proto.ErrorDetail) error {
 			terminalRecords = append(terminalRecords, record)
@@ -568,9 +568,9 @@ func TestCommandEventTransactionFinalizerPassesCommandSourcePosition(t *testing.
 	}
 	var got logmodel.CommandLogSourcePosition
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			got = tx.CommandSourcePosition
-			return CommandEventTransactionResult{
+			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: tx.CommandPartition,
 				CommittedOffset:    tx.CommandOffset,
 			}, nil
@@ -598,9 +598,9 @@ func TestCommandEventTransactionFinalizerReturnsRetryableProgressWhenReceiptFail
 		CID:       "cid-retryable-recorder-fails",
 	}
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 			t.Fatalf("retryable command should not commit a command/event transaction")
-			return CommandEventTransactionResult{}, nil
+			return logmodel.CommandEventTransactionResult{}, nil
 		}),
 		RetryableFailures: commandLogRetryableFailureRecorderFunc(func(ctx context.Context, record CommandLogRecord, errDetail *proto.ErrorDetail) error {
 			return errors.New("retryable receipt write failed")
@@ -625,8 +625,8 @@ func TestCommandEventTransactionFinalizerReturnsCommittedTerminalProgressWhenRec
 		CID:       "cid-terminal-recorder-fails",
 	}
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
-			return CommandEventTransactionResult{
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: tx.CommandPartition,
 				CommittedOffset:    tx.CommandOffset,
 			}, nil
@@ -657,8 +657,8 @@ func TestCommandEventTransactionFinalizerReturnsCommittedAppliedProgressWhenRece
 		CID:       "cid-applied-recorder-fails",
 	}
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
-			return CommandEventTransactionResult{
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: tx.CommandPartition,
 				CommittedOffset:    tx.CommandOffset,
 			}, nil
@@ -688,8 +688,8 @@ func TestCommandEventTransactionFinalizerRejectsMissingCommittedPartition(t *tes
 	}
 	var appliedRecords []CommandLogRecord
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
-			return CommandEventTransactionResult{CommittedOffset: tx.CommandOffset}, nil
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			return logmodel.CommandEventTransactionResult{CommittedOffset: tx.CommandOffset}, nil
 		}),
 		Events: CommandLogEventDeciderFunc(func(ctx context.Context, record CommandLogRecord, reply commandexec.Reply) ([]EventAppend, error) {
 			return nil, nil
@@ -717,8 +717,8 @@ func TestCommandEventTransactionFinalizerRejectsWrongCommittedPartition(t *testi
 	}
 	var terminalRecords []CommandLogRecord
 	finalizer := CommandEventTransactionFinalizer{
-		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
-			return CommandEventTransactionResult{
+		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
+			return logmodel.CommandEventTransactionResult{
 				CommittedPartition: LogPartition{Kind: partitionBoard, Key: "other"},
 				CommittedOffset:    tx.CommandOffset,
 			}, nil
@@ -918,8 +918,8 @@ func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommi
 	}, nil
 }
 
-type commandEventTransactionStoreFunc func(context.Context, CommandEventTransaction) (CommandEventTransactionResult, error)
+type commandEventTransactionStoreFunc func(context.Context, CommandEventTransaction) (logmodel.CommandEventTransactionResult, error)
 
-func (f commandEventTransactionStoreFunc) CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
+func (f commandEventTransactionStoreFunc) CommitCommandEvents(ctx context.Context, tx CommandEventTransaction) (logmodel.CommandEventTransactionResult, error) {
 	return f(ctx, tx)
 }
