@@ -3521,13 +3521,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetLoginWatch(ctx context.Conte
 	ts := nativeCommandTimestamp(record)
 	events := make([]EventAppend, 0, 2)
 	if online {
-		events = append(events, nativeEvent(record, 0, proto.EvtNotificationCreated, []string{"user:" + actor.ID}, &proto.NotificationCreatedPayload{
-			ID:     stableCommandLogDecisionID("notif_", record, 0),
-			UserID: actor.ID,
-			Kind:   "login",
-			Actor:  target.Name,
-			TS:     ts,
-		}, ts))
+		scopes, notificationPayload := commandevents.NotificationCreated(stableCommandLogDecisionID("notif_", record, 0), actor.ID, "login", "", "", target.Name, ts)
+		events = append(events, nativeEvent(record, 0, proto.EvtNotificationCreated, scopes, notificationPayload, ts))
 	}
 	scopes, eventPayload := commandevents.UserRelationshipSet(actor.ID, target.ID, commandevents.LoginWatchRelationshipKind, "", relationshipActive, ts)
 	events = append(events, nativeEvent(record, len(events), proto.EvtUserRelationshipSet, scopes, eventPayload, ts))
@@ -3755,13 +3750,8 @@ func (e *CommandLogNativeDecisionExecutor) decideImportFavoriteTree(ctx context.
 		replace = *payload.Replace
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtFavoriteTreeImported, []string{"user:" + actor.ID}, &proto.FavoriteTreeImportedPayload{
-		UserID:  actor.ID,
-		Folders: eventFolders,
-		Boards:  eventBoards,
-		Replace: replace,
-		TS:      ts,
-	}, ts)
+	scopes, eventPayload := commandevents.FavoriteTreeImported(actor.ID, eventFolders, eventBoards, replace, ts)
+	event := nativeEvent(record, 0, proto.EvtFavoriteTreeImported, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent("", event), nil
 }
 

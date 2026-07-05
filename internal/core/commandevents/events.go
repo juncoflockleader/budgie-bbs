@@ -318,6 +318,11 @@ func FavoriteFolderDeleted(userID, folderID, parentID string, ts int64) ([]strin
 	return []string{"user:" + userID}, payload
 }
 
+func FavoriteTreeImported(userID string, folders []proto.FavoriteTreeImportedFolderPayload, boards []proto.FavoriteTreeImportedBoardPayload, replace bool, ts int64) ([]string, *proto.FavoriteTreeImportedPayload) {
+	payload := &proto.FavoriteTreeImportedPayload{UserID: userID, Folders: folders, Boards: boards, Replace: replace, TS: ts}
+	return []string{"user:" + userID}, payload
+}
+
 func DirectMessageSent(messageID, fromUserID, fromName, toUserID, toName, body string, ts int64) ([]string, *proto.DirectMessageSentPayload) {
 	return proto.DirectMessageEventScopes(fromUserID, toUserID),
 		proto.NewDirectMessageSentPayload(messageID, fromUserID, fromName, toUserID, toName, body, ts)
@@ -345,6 +350,18 @@ func DirectMessageSettingsSet(userID, policy string, ts int64) ([]string, *proto
 func UserRelationshipSet(userID, targetUserID, kind, note string, active bool, ts int64) ([]string, *proto.UserRelationshipSetPayload) {
 	payload := &proto.UserRelationshipSetPayload{UserID: userID, TargetUserID: targetUserID, Kind: kind, Active: active, Note: note, TS: ts}
 	return []string{"user:" + userID, "user:" + targetUserID}, payload
+}
+
+func NotificationCreated(notificationID, userID, kind, threadID, postID, actor string, ts int64) ([]string, *proto.NotificationCreatedPayload) {
+	return []string{"user:" + userID}, &proto.NotificationCreatedPayload{
+		ID:       notificationID,
+		UserID:   userID,
+		Kind:     kind,
+		ThreadID: threadID,
+		PostID:   postID,
+		Actor:    actor,
+		TS:       ts,
+	}
 }
 
 func UserBlessed(fromUserID, fromName, toUserID, toName, blessingID, message string, ts int64) ([]string, *proto.UserBlessedPayload) {

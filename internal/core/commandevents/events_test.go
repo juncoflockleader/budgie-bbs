@@ -293,3 +293,21 @@ func TestPostUpdateEvents(t *testing.T) {
 		t.Fatalf("PostFlagsSet payload = %+v", flags)
 	}
 }
+
+func TestUserScopedEvents(t *testing.T) {
+	folders := []proto.FavoriteTreeImportedFolderPayload{{ID: "folder_1", Name: "News", Position: 1}}
+	boards := []proto.FavoriteTreeImportedBoardPayload{{ID: "general", FolderID: "folder_1", Position: 2}}
+	scopes, favoriteTree := FavoriteTreeImported("usr_alice", folders, boards, true, 1234)
+	requireScopes(t, scopes, "user:usr_alice")
+	if favoriteTree.UserID != "usr_alice" || len(favoriteTree.Folders) != 1 || favoriteTree.Folders[0].ID != "folder_1" ||
+		len(favoriteTree.Boards) != 1 || favoriteTree.Boards[0].ID != "general" || !favoriteTree.Replace || favoriteTree.TS != 1234 {
+		t.Fatalf("FavoriteTreeImported payload = %+v", favoriteTree)
+	}
+
+	scopes, notification := NotificationCreated("notif_1", "usr_alice", "login", "thread_1", "post_1", "bob", 1235)
+	requireScopes(t, scopes, "user:usr_alice")
+	if notification.ID != "notif_1" || notification.UserID != "usr_alice" || notification.Kind != "login" ||
+		notification.ThreadID != "thread_1" || notification.PostID != "post_1" || notification.Actor != "bob" || notification.TS != 1235 {
+		t.Fatalf("NotificationCreated payload = %+v", notification)
+	}
+}
