@@ -128,21 +128,22 @@ func (c *Core) GenerateBackupCodes(userID string) ([]string, error) {
 		return nil, err
 	}
 	defer tx.Rollback() //nolint
-	if _, err := qExec(tx, `DELETE FROM two_factor_backup_codes WHERE user_id=?`, userID); err != nil {
-		return nil, err
-	}
 	codes := make([]string, 0, accountmodel.BackupCodeCount)
+	records := make([]twofactorstore.BackupCode, 0, accountmodel.BackupCodeCount)
 	for i := 0; i < accountmodel.BackupCodeCount; i++ {
 		code, err := accountmodel.RandomBackupCode()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := qExec(tx,
-			`INSERT INTO two_factor_backup_codes (id, user_id, code_hash, used, created_at) VALUES (?,?,?,0,?)`,
-			newID("bkp_"), userID, accountmodel.HashBackupCode(code), now); err != nil {
-			return nil, err
-		}
 		codes = append(codes, code)
+		records = append(records, twofactorstore.BackupCode{
+			ID:        newID("bkp_"),
+			CodeHash:  accountmodel.HashBackupCode(code),
+			CreatedAt: now,
+		})
+	}
+	if err := twofactorstore.ReplaceBackupCodes(tx, userID, records); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -155,17 +156,11 @@ func (c *Core) VerifyBackupCode(userID, code string) error {
 	if accountmodel.NormalizeBackupCode(code) == "" {
 		return ErrTwoFactorInvalidCode
 	}
-	res, err := qExec(c.DB,
-		`UPDATE two_factor_backup_codes SET used=1 WHERE user_id=? AND code_hash=? AND used=0`,
-		userID, accountmodel.HashBackupCode(code))
+	claimed, err := twofactorstore.ClaimBackupCode(c.DB, userID, accountmodel.HashBackupCode(code))
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
+	if !claimed {
 		return ErrTwoFactorInvalidCode
 	}
 	return nil

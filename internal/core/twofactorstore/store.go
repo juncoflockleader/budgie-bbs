@@ -7,6 +7,12 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sqlstore"
 )
 
+type BackupCode struct {
+	ID        string
+	CodeHash  string
+	CreatedAt int64
+}
+
 func SecuritySettings(db *sql.DB) (*accountmodel.SecuritySettings, error) {
 	out := &accountmodel.SecuritySettings{}
 	var req int
@@ -50,6 +56,36 @@ func BackupCodesRemaining(db *sql.DB, userID string) int {
 	var n int
 	_ = sqlstore.QueryRow(db, `SELECT COUNT(*) FROM two_factor_backup_codes WHERE user_id=? AND used=0`, userID).Scan(&n)
 	return n
+}
+
+func ReplaceBackupCodes(tx *sql.Tx, userID string, codes []BackupCode) error {
+	if _, err := sqlstore.Exec(tx, `DELETE FROM two_factor_backup_codes WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	for _, code := range codes {
+		if _, err := sqlstore.Exec(tx,
+			`INSERT INTO two_factor_backup_codes (id, user_id, code_hash, used, created_at) VALUES (?,?,?,0,?)`,
+			code.ID, userID, code.CodeHash, code.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ClaimBackupCode(db *sql.DB, userID, codeHash string) (bool, error) {
+	res, err := sqlstore.Exec(db,
+		`UPDATE two_factor_backup_codes SET used=1 WHERE user_id=? AND code_hash=? AND used=0`,
+		userID, codeHash,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func ClearBackupCodesIfUnenrolled(db *sql.DB, userID string) error {
