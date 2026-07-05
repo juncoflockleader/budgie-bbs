@@ -17,10 +17,7 @@ func EnsureRangeBoardAccess(queryable Queryable, actor *projections.User, boardI
 	if err != nil {
 		return internalErr(err)
 	}
-	if !canModeratePosts {
-		return newErrDetail(proto.ErrForbidden, "board post moderation permission required", false)
-	}
-	return nil
+	return RequireBoardPostModeration(canModeratePosts)
 }
 
 func LoadRangePost(postID, boardID string, getPost func(string) (*projections.Post, error), getThread func(string) (*projections.Thread, error)) (*projections.Post, *projections.Thread, *proto.ErrorDetail) {

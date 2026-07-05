@@ -285,6 +285,13 @@ func RequireThreadModeration(canModerateThread bool) *proto.ErrorDetail {
 	return nil
 }
 
+func RequireBoardPostModeration(canModeratePosts bool) *proto.ErrorDetail {
+	if !canModeratePosts {
+		return newErrDetail(proto.ErrForbidden, "board post moderation permission required", false)
+	}
+	return nil
+}
+
 func requireMemberBoardReadAccess(settings *projections.BoardSettings, message string, canUseMemberBoard func() (bool, *proto.ErrorDetail)) *proto.ErrorDetail {
 	if !boardRequiresReadMembership(settings) {
 		return nil

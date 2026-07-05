@@ -1074,8 +1074,8 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 	if err != nil || thread == nil {
 		return internalErr(err)
 	}
-	if !commandrules.ActorCanModerateBoardPosts(tx, actor, thread.Board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board post moderation permission required", false)}
+	if errDetail := commandrules.RequireBoardPostModeration(commandrules.ActorCanModerateBoardPosts(tx, actor, thread.Board)); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
