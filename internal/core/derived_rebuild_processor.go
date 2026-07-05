@@ -4,31 +4,23 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log/slog"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/processorloop"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 const defaultDerivedRebuildBatchSize = 500
 
-type processorRunProgress struct {
-	FromSeq    int64
-	AppliedSeq int64
-	HeadSeq    int64
-	Events     int
-	Log        bool
-	Extra      []any
-}
+type processorRunProgress = processorloop.Progress
 
 type periodicProcessor struct {
 	Core      *Core
 	BatchSize int
 	Interval  time.Duration
 
-	name    string
-	process func(context.Context, *Core, int) (processorRunProgress, error)
+	runner processorloop.Runner
 }
 
 type derivedRebuildProcessResult struct {
@@ -74,8 +66,14 @@ func newPeriodicProcessor(c *Core, name string, interval time.Duration, batchSiz
 		Core:      c,
 		BatchSize: batchSize,
 		Interval:  interval,
-		name:      name,
-		process:   process,
+		runner: processorloop.Runner{
+			Name:      name,
+			BatchSize: batchSize,
+			Interval:  interval,
+			Process: func(ctx context.Context, batchSize int) (processorRunProgress, error) {
+				return process(ctx, c, batchSize)
+			},
+		},
 	}, nil
 }
 
@@ -90,56 +88,11 @@ func nilProcessorError(name string) error {
 	return fmt.Errorf("%s processor: nil core", name)
 }
 
-func (p *periodicProcessor) processRunOnce(ctx context.Context) (processorRunProgress, error) {
-	if p == nil || p.Core == nil || p.process == nil {
-		name := "periodic"
-		if p != nil && p.name != "" {
-			name = p.name
-		}
-		return processorRunProgress{}, nilProcessorError(name)
-	}
-	return p.process(ctx, p.Core, p.BatchSize)
-}
-
 func (p *periodicProcessor) Run(ctx context.Context) {
-	if p == nil || p.Core == nil || p.process == nil {
+	if p == nil || p.Core == nil {
 		return
 	}
-	drain := func() {
-		for ctx.Err() == nil {
-			result, err := p.processRunOnce(ctx)
-			if err != nil {
-				if ctx.Err() == nil {
-					slog.Warn(p.name+" processor failed", "err", err)
-				}
-				return
-			}
-			if result.Log {
-				attrs := []any{
-					"fromSeq", result.FromSeq,
-					"appliedSeq", result.AppliedSeq,
-					"headSeq", result.HeadSeq,
-					"events", result.Events,
-				}
-				attrs = append(attrs, result.Extra...)
-				slog.Debug(p.name+" processor advanced", attrs...)
-			}
-			if result.Events < p.BatchSize || result.AppliedSeq >= result.HeadSeq {
-				return
-			}
-		}
-	}
-	drain()
-	ticker := time.NewTicker(p.Interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			drain()
-		}
-	}
+	p.runner.Run(ctx)
 }
 
 func newDerivedRebuildProcessor(c *Core, name string, interval time.Duration, batchSize int, process func(*Core, int) (derivedRebuildProcessResult, error)) (derivedRebuildProcessor, error) {
@@ -163,8 +116,8 @@ func nilDerivedRebuildProcessResult(name string) (derivedRebuildProcessResult, e
 func (p *derivedRebuildProcessor) ProcessOnce() (derivedRebuildProcessResult, error) {
 	if p == nil || p.Core == nil || p.process == nil {
 		name := "derived rebuild"
-		if p != nil && p.name != "" {
-			name = p.name
+		if p != nil && p.runner.Name != "" {
+			name = p.runner.Name
 		}
 		return nilDerivedRebuildProcessResult(name)
 	}
