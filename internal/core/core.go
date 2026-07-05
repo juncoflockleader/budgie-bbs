@@ -2017,24 +2017,24 @@ func (c *Core) GetBoardMemberApplication(applicationID string) (*BoardMemberAppl
 func (c *Core) ListBoardMemberApplications(boardID, status, userID string, limit, offset int) ([]BoardMemberApplication, error) {
 	return projections.ListBoardMemberApplications(c.DB, boardID, status, userID, limit, offset)
 }
-func (c *Core) ListDigestEntries(boardID, kind, path string, limit, offset int) ([]DigestEntry, error) {
+func (c *Core) ListDigestEntries(boardID, kind, path string, limit, offset int) ([]projections.DigestEntry, error) {
 	return projections.ListDigestEntries(c.DB, boardID, kind, path, limit, offset)
 }
-func (c *Core) ListDigestPathTree(boardID, kind string) ([]DigestPathNode, error) {
+func (c *Core) ListDigestPathTree(boardID, kind string) ([]projections.DigestPathNode, error) {
 	return projections.ListDigestPathTree(c.DB, boardID, kind)
 }
-func (c *Core) ListSiteDigestEntries(actor *User, kind, path string, limit, offset int) ([]DigestEntry, error) {
+func (c *Core) ListSiteDigestEntries(actor *User, kind, path string, limit, offset int) ([]projections.DigestEntry, error) {
 	viewer := readmodel.ViewerScopeForUser(actor)
 	return projections.ListSiteDigestEntries(c.DB, viewer.UserID, viewer.IncludePrivate, kind, path, limit, offset)
 }
-func (c *Core) SearchDigestEntries(actor *User, boardID, kind, path, query string, limit, offset int) ([]DigestEntry, error) {
+func (c *Core) SearchDigestEntries(actor *User, boardID, kind, path, query string, limit, offset int) ([]projections.DigestEntry, error) {
 	viewer := readmodel.ViewerScopeForUser(actor)
 	return projections.SearchDigestEntries(c.DB, viewer.UserID, viewer.IncludePrivate, boardID, kind, path, query, limit, offset)
 }
-func (c *Core) GetDigestExport(entryID string) (*DigestExport, error) {
+func (c *Core) GetDigestExport(entryID string) (*projections.DigestExport, error) {
 	return projections.GetDigestExport(c.DB, entryID)
 }
-func FormatDigestExportText(export *DigestExport) string {
+func FormatDigestExportText(export *projections.DigestExport) string {
 	return projections.FormatDigestExportText(export)
 }
 func (c *Core) ListMail(userID, mailbox string, limit, offset int, unreadOnly bool) ([]projections.MailItem, error) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -282,7 +283,7 @@ func (s *Server) handleDownloadDigestEntry(w http.ResponseWriter, r *http.Reques
 	http.ServeContent(w, r, filename, time.UnixMilli(export.Entry.UpdatedAt), bytes.NewReader(data))
 }
 
-func digestExportFilename(export *core.DigestExport) string {
+func digestExportFilename(export *projections.DigestExport) string {
 	name := strings.TrimSpace(export.Entry.Title)
 	if name == "" {
 		name = export.Entry.ID

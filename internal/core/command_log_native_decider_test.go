@@ -4840,7 +4840,7 @@ func TestNativeCommandLogDecisionExecutorProjectsCreateDigestDirectory(t *testin
 	if err != nil {
 		t.Fatalf("list digest path tree: %v", err)
 	}
-	nodes := map[string]DigestPathNode{}
+	nodes := map[string]projections.DigestPathNode{}
 	for _, node := range tree {
 		nodes[node.Path] = node
 	}
@@ -4968,7 +4968,7 @@ func TestNativeCommandLogDecisionExecutorProjectsCopyDigestPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list digest path tree after copy: %v", err)
 	}
-	nodes := map[string]DigestPathNode{}
+	nodes := map[string]projections.DigestPathNode{}
 	for _, node := range tree {
 		nodes[node.Path] = node
 	}

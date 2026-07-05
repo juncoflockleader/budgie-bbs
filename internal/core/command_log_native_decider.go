@@ -4320,7 +4320,7 @@ func nativeStableDecisionIDSet(prefix string, record CommandLogRecord, count int
 	return ids
 }
 
-func nativeDigestMirrorSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *User, entryID string, export *DigestExport, mirror projections.DigestMirrorSystemBoard, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
+func nativeDigestMirrorSystemLogEvents(db *sql.DB, record CommandLogRecord, actor *User, entryID string, export *projections.DigestExport, mirror projections.DigestMirrorSystemBoard, ts int64, startIndex int) ([]EventAppend, *proto.ErrorDetail) {
 	if actor == nil {
 		return nil, nativeDecisionErr(proto.ErrUnauthenticated, "login required", false)
 	}

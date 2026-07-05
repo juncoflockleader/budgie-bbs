@@ -4338,7 +4338,7 @@ func TestDigestCurationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodes := map[string]core.DigestPathNode{}
+	nodes := map[string]projections.DigestPathNode{}
 	for _, node := range tree {
 		nodes[node.Path] = node
 	}
@@ -4462,7 +4462,7 @@ func TestDigestCurationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	copiedNodes := map[string]core.DigestPathNode{}
+	copiedNodes := map[string]projections.DigestPathNode{}
 	for _, node := range copiedTree {
 		copiedNodes[node.Path] = node
 	}
@@ -4486,7 +4486,7 @@ func TestDigestCurationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	movedNodes := map[string]core.DigestPathNode{}
+	movedNodes := map[string]projections.DigestPathNode{}
 	for _, node := range movedTree {
 		movedNodes[node.Path] = node
 	}
