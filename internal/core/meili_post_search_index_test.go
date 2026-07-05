@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 func TestMeiliPostSearchIndexSendsDocumentsWaitsAndSearches(t *testing.T) {
@@ -21,7 +23,7 @@ func TestMeiliPostSearchIndexSendsDocumentsWaitsAndSearches(t *testing.T) {
 		}
 		switch {
 		case r.Method == http.MethodPut && r.URL.Path == "/indexes/posts/documents":
-			var docs []PostSearchDocument
+			var docs []projections.PostSearchDocument
 			if err := json.Unmarshal(data, &docs); err != nil {
 				t.Fatalf("decode upsert: %v", err)
 			}
@@ -62,7 +64,7 @@ func TestMeiliPostSearchIndexSendsDocumentsWaitsAndSearches(t *testing.T) {
 		t.Fatalf("NewMeiliPostSearchIndex: %v", err)
 	}
 	ctx := context.Background()
-	if err := index.UpsertPost(ctx, PostSearchDocument{ID: "post1", PostID: "post1", BoardID: "general", Body: "needle"}); err != nil {
+	if err := index.UpsertPost(ctx, projections.PostSearchDocument{ID: "post1", PostID: "post1", BoardID: "general", Body: "needle"}); err != nil {
 		t.Fatalf("UpsertPost: %v", err)
 	}
 	ids, err := index.Search(ctx, "needle", "general", 7)

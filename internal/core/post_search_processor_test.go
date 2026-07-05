@@ -225,14 +225,14 @@ func TestExternalPostSearchIndexProcessesEventsAndBackfills(t *testing.T) {
 
 type testPostSearchIndex struct {
 	mu   sync.Mutex
-	docs map[string]PostSearchDocument
+	docs map[string]projections.PostSearchDocument
 }
 
 func newTestPostSearchIndex() *testPostSearchIndex {
-	return &testPostSearchIndex{docs: map[string]PostSearchDocument{}}
+	return &testPostSearchIndex{docs: map[string]projections.PostSearchDocument{}}
 }
 
-func (i *testPostSearchIndex) UpsertPost(_ context.Context, doc PostSearchDocument) error {
+func (i *testPostSearchIndex) UpsertPost(_ context.Context, doc projections.PostSearchDocument) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if doc.ID == "" {
@@ -257,7 +257,7 @@ func (i *testPostSearchIndex) Clear(context.Context) error {
 func (i *testPostSearchIndex) clearOnly() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.docs = map[string]PostSearchDocument{}
+	i.docs = map[string]projections.PostSearchDocument{}
 }
 
 func (i *testPostSearchIndex) Search(_ context.Context, query, boardID string, limit int) ([]string, error) {
@@ -265,7 +265,7 @@ func (i *testPostSearchIndex) Search(_ context.Context, query, boardID string, l
 	defer i.mu.Unlock()
 	query = strings.ToLower(strings.TrimSpace(query))
 	boardID = strings.TrimSpace(boardID)
-	var docs []PostSearchDocument
+	var docs []projections.PostSearchDocument
 	for _, doc := range i.docs {
 		if boardID != "" && doc.BoardID != boardID {
 			continue

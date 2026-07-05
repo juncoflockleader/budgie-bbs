@@ -9,21 +9,8 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
-type PostSearchDocument struct {
-	ID         string `json:"id"`
-	PostID     string `json:"post_id"`
-	ThreadID   string `json:"thread_id"`
-	BoardID    string `json:"board_id"`
-	Author     string `json:"author"`
-	Body       string `json:"body"`
-	CreatedSeq int64  `json:"created_seq"`
-	UpdatedSeq int64  `json:"updated_seq"`
-	CreatedAt  int64  `json:"created_at"`
-	UpdatedAt  int64  `json:"updated_at"`
-}
-
 type PostSearchIndex interface {
-	UpsertPost(context.Context, PostSearchDocument) error
+	UpsertPost(context.Context, projections.PostSearchDocument) error
 	DeletePost(context.Context, string) error
 	Clear(context.Context) error
 	Search(context.Context, string, string, int) ([]string, error)
@@ -36,7 +23,7 @@ func (c *Core) rebuildExternalPostSearchIndex(ctx context.Context) (int, error) 
 	if err := c.postSearchIndex.Clear(ctx); err != nil {
 		return 0, fmt.Errorf("clear post search index: %w", err)
 	}
-	docs, err := listPostSearchDocuments(c.DB, "", 0)
+	docs, err := projections.ListPostSearchDocuments(c.DB, "", 0)
 	if err != nil {
 		return 0, err
 	}
@@ -46,91 +33,6 @@ func (c *Core) rebuildExternalPostSearchIndex(ctx context.Context) (int, error) 
 		}
 	}
 	return len(docs), nil
-}
-
-func listPostSearchDocuments(db *sql.DB, threadID string, limit int) ([]PostSearchDocument, error) {
-	args := []any{}
-	where := "p.redacted=0"
-	if strings.TrimSpace(threadID) != "" {
-		where += " AND p.thread=?"
-		args = append(args, strings.TrimSpace(threadID))
-	}
-	limitSQL := ""
-	if limit > 0 {
-		limitSQL = " LIMIT ?"
-		args = append(args, limit)
-	}
-	rows, err := qQuery(db,
-		fmt.Sprintf(
-			`SELECT p.id, p.thread, t.board, p.author, p.body,
-			        p.created_seq, p.updated_seq, p.created_at, p.updated_at
-			   FROM posts p
-			   JOIN threads t ON t.id=p.thread
-			  WHERE %s
-			  ORDER BY p.created_seq DESC%s`,
-			where, limitSQL,
-		),
-		args...,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var docs []PostSearchDocument
-	for rows.Next() {
-		var doc PostSearchDocument
-		if err := rows.Scan(&doc.PostID, &doc.ThreadID, &doc.BoardID, &doc.Author, &doc.Body, &doc.CreatedSeq, &doc.UpdatedSeq, &doc.CreatedAt, &doc.UpdatedAt); err != nil {
-			return nil, err
-		}
-		doc.ID = doc.PostID
-		if doc.CreatedAt == 0 {
-			doc.CreatedAt = doc.CreatedSeq
-		}
-		if doc.UpdatedAt == 0 {
-			doc.UpdatedAt = doc.CreatedAt
-		}
-		docs = append(docs, doc)
-	}
-	return docs, rows.Err()
-}
-
-func postSearchDocumentByID(db *sql.DB, postID string) (PostSearchDocument, bool, error) {
-	postID = strings.TrimSpace(postID)
-	if postID == "" {
-		return PostSearchDocument{}, false, nil
-	}
-	rows, err := qQuery(db,
-		`SELECT p.id, p.thread, t.board, p.author, p.body,
-		        p.created_seq, p.updated_seq, p.created_at, p.updated_at
-		   FROM posts p
-		   JOIN threads t ON t.id=p.thread
-		  WHERE p.id=? AND p.redacted=0
-		  LIMIT 1`,
-		postID,
-	)
-	if err != nil {
-		return PostSearchDocument{}, false, err
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		return PostSearchDocument{}, false, rows.Err()
-	}
-	var doc PostSearchDocument
-	if err := rows.Scan(&doc.PostID, &doc.ThreadID, &doc.BoardID, &doc.Author, &doc.Body, &doc.CreatedSeq, &doc.UpdatedSeq, &doc.CreatedAt, &doc.UpdatedAt); err != nil {
-		return PostSearchDocument{}, false, err
-	}
-	doc.ID = doc.PostID
-	if doc.CreatedAt == 0 {
-		doc.CreatedAt = doc.CreatedSeq
-	}
-	if doc.UpdatedAt == 0 {
-		doc.UpdatedAt = doc.CreatedAt
-	}
-	if rows.Next() {
-		return PostSearchDocument{}, false, fmt.Errorf("duplicate post search document %s", postID)
-	}
-	return doc, true, rows.Err()
 }
 
 func hydrateSearchPostIDs(db *sql.DB, actor *projections.User, ids []string, boardID string, limit int, enforceReadable bool) ([]projections.Post, error) {

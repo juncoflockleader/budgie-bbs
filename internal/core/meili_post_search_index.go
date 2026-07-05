@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 type MeiliPostSearchIndexOptions struct {
@@ -62,12 +64,12 @@ func NewMeiliPostSearchIndex(opts MeiliPostSearchIndexOptions) (*MeiliPostSearch
 	}, nil
 }
 
-func (m *MeiliPostSearchIndex) UpsertPost(ctx context.Context, doc PostSearchDocument) error {
+func (m *MeiliPostSearchIndex) UpsertPost(ctx context.Context, doc projections.PostSearchDocument) error {
 	if strings.TrimSpace(doc.ID) == "" {
 		doc.ID = doc.PostID
 	}
 	var task meiliTaskRef
-	if err := m.doJSON(ctx, http.MethodPut, "/indexes/"+url.PathEscape(m.index)+"/documents", []PostSearchDocument{doc}, &task); err != nil {
+	if err := m.doJSON(ctx, http.MethodPut, "/indexes/"+url.PathEscape(m.index)+"/documents", []projections.PostSearchDocument{doc}, &task); err != nil {
 		return err
 	}
 	return m.waitTask(ctx, task.TaskUID())

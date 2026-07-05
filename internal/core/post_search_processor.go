@@ -144,7 +144,7 @@ func (c *Core) applyExternalPostSearchEvent(ctx context.Context, evt *proto.Even
 		}
 		return true, nil
 	case *proto.ThreadMovedPayload:
-		docs, err := listPostSearchDocuments(c.DB, payload.Thread, 0)
+		docs, err := projections.ListPostSearchDocuments(c.DB, payload.Thread, 0)
 		if err != nil {
 			return false, err
 		}
@@ -160,7 +160,7 @@ func (c *Core) applyExternalPostSearchEvent(ctx context.Context, evt *proto.Even
 }
 
 func (c *Core) upsertExternalPostSearchDocument(ctx context.Context, postID string) (bool, error) {
-	doc, ok, err := postSearchDocumentByID(c.DB, postID)
+	doc, ok, err := projections.PostSearchDocumentByID(c.DB, postID)
 	if err != nil {
 		return false, err
 	}
