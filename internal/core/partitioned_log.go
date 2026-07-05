@@ -87,7 +87,7 @@ func (s *SQLEventStore) ListEventPartitions(ctx context.Context, limit int) ([]L
 	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
-func (s *SQLEventStore) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
+func (s *SQLEventStore) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -108,14 +108,14 @@ func (s *SQLEventStore) ListEventPartitionOffsets(ctx context.Context, limit int
 	}
 	defer rows.Close()
 
-	offsets := []EventPartitionOffset{}
+	offsets := []logmodel.EventPartitionOffset{}
 	for rows.Next() {
 		var kind, key string
 		var offset int64
 		if err := rows.Scan(&kind, &key, &offset); err != nil {
 			return nil, err
 		}
-		offsets = append(offsets, EventPartitionOffset{
+		offsets = append(offsets, logmodel.EventPartitionOffset{
 			Partition:  LogPartition{Kind: kind, Key: key}.Normalize(),
 			LastOffset: offset,
 		}.Normalize())
@@ -182,9 +182,7 @@ type EventLogPromotionReadinessReport struct {
 	Issues            []EventParityIssue
 }
 
-type EventPartitionOffset = logmodel.EventPartitionOffset
-
-func listEventPartitionOffsets(ctx context.Context, lister EventPartitionOffsetLister, limit int) ([]EventPartitionOffset, bool, error) {
+func listEventPartitionOffsets(ctx context.Context, lister EventPartitionOffsetLister, limit int) ([]logmodel.EventPartitionOffset, bool, error) {
 	if lister == nil {
 		return nil, false, fmt.Errorf("nil event partition offset lister")
 	}
@@ -835,9 +833,9 @@ func (s *MemoryEventStore) ListEventPartitions(ctx context.Context, limit int) (
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	offsets := make([]EventPartitionOffset, 0, len(s.partitionOffsets))
+	offsets := make([]logmodel.EventPartitionOffset, 0, len(s.partitionOffsets))
 	for partition, offset := range s.partitionOffsets {
-		offsets = append(offsets, EventPartitionOffset{
+		offsets = append(offsets, logmodel.EventPartitionOffset{
 			Partition:  partition,
 			LastOffset: offset,
 		}.Normalize())

@@ -455,7 +455,7 @@ func (c *shortBatchBrokerEventLogClient) ListEventPartitions(ctx context.Context
 	return c.inner.ListEventPartitions(ctx, limit)
 }
 
-func (c *shortBatchBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
+func (c *shortBatchBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	return c.inner.ListEventPartitionOffsets(ctx, limit)
 }
 
@@ -495,7 +495,7 @@ func (c *partitionOnlyBrokerEventLogClient) ListEventPartitions(ctx context.Cont
 	return c.inner.ListEventPartitions(ctx, limit)
 }
 
-func (c *partitionOnlyBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
+func (c *partitionOnlyBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	return c.inner.ListEventPartitionOffsets(ctx, limit)
 }
 

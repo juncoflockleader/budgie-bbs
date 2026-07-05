@@ -298,7 +298,7 @@ func (c *JetStreamEventLogClient) ListEventPartitions(ctx context.Context, limit
 	if err != nil {
 		return nil, err
 	}
-	offsets := make([]core.EventPartitionOffset, 0, len(info.State.Subjects))
+	offsets := make([]logmodel.EventPartitionOffset, 0, len(info.State.Subjects))
 	seen := map[core.LogPartition]bool{}
 	for subject, count := range info.State.Subjects {
 		partition, ok := core.ParseBrokerEventSubject(subject)
@@ -307,7 +307,7 @@ func (c *JetStreamEventLogClient) ListEventPartitions(ctx context.Context, limit
 		}
 		partition = partition.Normalize()
 		seen[partition] = true
-		offsets = append(offsets, core.EventPartitionOffset{
+		offsets = append(offsets, logmodel.EventPartitionOffset{
 			Partition:  partition,
 			LastOffset: int64(count),
 		}.Normalize())
@@ -318,7 +318,7 @@ func (c *JetStreamEventLogClient) ListEventPartitions(ctx context.Context, limit
 		}
 		partition = partition.Normalize()
 		if !seen[partition] {
-			offsets = append(offsets, core.EventPartitionOffset{
+			offsets = append(offsets, logmodel.EventPartitionOffset{
 				Partition:  partition,
 				LastOffset: offset,
 			}.Normalize())
@@ -327,7 +327,7 @@ func (c *JetStreamEventLogClient) ListEventPartitions(ctx context.Context, limit
 	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
-func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]core.EventPartitionOffset, error) {
+func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -338,14 +338,14 @@ func (c *JetStreamEventLogClient) ListEventPartitionOffsets(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	offsets := make([]core.EventPartitionOffset, 0, len(partitions))
+	offsets := make([]logmodel.EventPartitionOffset, 0, len(partitions))
 	for _, partition := range partitions {
 		partition = partition.Normalize()
 		tail, err := c.partitionTail(ctx, partition, core.BrokerEventSubject(partition))
 		if err != nil {
 			return nil, err
 		}
-		offsets = append(offsets, core.EventPartitionOffset{
+		offsets = append(offsets, logmodel.EventPartitionOffset{
 			Partition:  partition,
 			LastOffset: tail.logicalOffset,
 		}.Normalize())

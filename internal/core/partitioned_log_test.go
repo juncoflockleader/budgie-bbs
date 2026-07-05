@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -544,7 +545,7 @@ func TestListEventPartitionOffsetsReportsLimitAndNormalizes(t *testing.T) {
 	if !limited {
 		t.Fatal("limited = false, want true")
 	}
-	want := []EventPartitionOffset{
+	want := []logmodel.EventPartitionOffset{
 		{Partition: user, LastOffset: 7},
 		{Partition: general, LastOffset: 5},
 	}
@@ -553,7 +554,7 @@ func TestListEventPartitionOffsetsReportsLimitAndNormalizes(t *testing.T) {
 	}
 
 	offsets, limited, err = listEventPartitionOffsets(ctx, eventPartitionOffsetSliceLister{
-		offsets: []EventPartitionOffset{{Partition: LogPartition{}, LastOffset: -4}},
+		offsets: []logmodel.EventPartitionOffset{{Partition: LogPartition{}, LastOffset: -4}},
 	}, 0)
 	if err != nil {
 		t.Fatalf("listEventPartitionOffsets custom lister: %v", err)
@@ -561,7 +562,7 @@ func TestListEventPartitionOffsetsReportsLimitAndNormalizes(t *testing.T) {
 	if limited {
 		t.Fatal("limited = true, want false")
 	}
-	want = []EventPartitionOffset{{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}}}
+	want = []logmodel.EventPartitionOffset{{Partition: LogPartition{Kind: partitionGlobal, Key: partitionGlobal}}}
 	if !reflect.DeepEqual(offsets, want) {
 		t.Fatalf("normalized offsets = %+v, want %+v", offsets, want)
 	}
@@ -618,14 +619,14 @@ func (l eventPartitionSliceLister) ListEventPartitions(ctx context.Context, limi
 }
 
 type eventPartitionOffsetSliceLister struct {
-	offsets []EventPartitionOffset
+	offsets []logmodel.EventPartitionOffset
 }
 
-func (l eventPartitionOffsetSliceLister) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
+func (l eventPartitionOffsetSliceLister) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := append([]EventPartitionOffset(nil), l.offsets...)
+	out := append([]logmodel.EventPartitionOffset(nil), l.offsets...)
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}

@@ -182,7 +182,7 @@ func (s *BrokerEventStore) ListEventPartitions(ctx context.Context, limit int) (
 	return lister.ListEventPartitions(ctx, limit)
 }
 
-func (s *BrokerEventStore) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
+func (s *BrokerEventStore) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	lister, ok := s.client.(EventPartitionOffsetLister)
 	if !ok {
 		return nil, fmt.Errorf("broker event store: partition offset listing is not supported")
@@ -382,7 +382,7 @@ func (c *MemoryBrokerEventLogClient) ListEventPartitions(ctx context.Context, li
 	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
-func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error) {
+func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -391,9 +391,9 @@ func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Conte
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	offsets := make([]EventPartitionOffset, 0, len(c.tails))
+	offsets := make([]logmodel.EventPartitionOffset, 0, len(c.tails))
 	for partition, tail := range c.tails {
-		offsets = append(offsets, EventPartitionOffset{
+		offsets = append(offsets, logmodel.EventPartitionOffset{
 			Partition:  partition.Normalize(),
 			LastOffset: tail,
 		}.Normalize())

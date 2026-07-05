@@ -174,7 +174,7 @@ func (l *EventLog) ListEventPartitions(ctx context.Context, limit int) ([]core.L
 	return lister.ListEventPartitions(ctx, limit)
 }
 
-func (l *EventLog) ListEventPartitionOffsets(ctx context.Context, limit int) ([]core.EventPartitionOffset, error) {
+func (l *EventLog) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

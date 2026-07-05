@@ -149,7 +149,7 @@ func (a *SQLEventPositionAllocator) ListEventPartitions(ctx context.Context, lim
 	return logmodel.EventPartitionsByLastOffset(offsets, limit), nil
 }
 
-func (a *SQLEventPositionAllocator) ListEventPartitionOffsets(ctx context.Context, limit int) ([]core.EventPartitionOffset, error) {
+func (a *SQLEventPositionAllocator) ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -171,14 +171,14 @@ func (a *SQLEventPositionAllocator) ListEventPartitionOffsets(ctx context.Contex
 	}
 	defer rows.Close()
 
-	offsets := []core.EventPartitionOffset{}
+	offsets := []logmodel.EventPartitionOffset{}
 	for rows.Next() {
 		var kind, key string
 		var offset int64
 		if err := rows.Scan(&kind, &key, &offset); err != nil {
 			return nil, err
 		}
-		offsets = append(offsets, core.EventPartitionOffset{
+		offsets = append(offsets, logmodel.EventPartitionOffset{
 			Partition:  core.LogPartition{Kind: kind, Key: key}.Normalize(),
 			LastOffset: offset,
 		}.Normalize())

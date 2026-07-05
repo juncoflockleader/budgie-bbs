@@ -149,7 +149,7 @@ type EventPartitionLister interface {
 // partitions. Projection catch-up gates use it to distinguish a short broker
 // read from a fully drained logical partition.
 type EventPartitionOffsetLister interface {
-	ListEventPartitionOffsets(ctx context.Context, limit int) ([]EventPartitionOffset, error)
+	ListEventPartitionOffsets(ctx context.Context, limit int) ([]logmodel.EventPartitionOffset, error)
 }
 
 // EventPartitionOffsetSeeder is implemented by shadow stores that can start in
