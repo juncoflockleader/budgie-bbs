@@ -3770,8 +3770,8 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateFavoriteFolder(ctx contex
 	nextParent := current.ParentID
 	if payload.ParentID != nil {
 		nextParent = *payload.ParentID
-		if nextParent == payload.Folder {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "folder cannot be its own parent", false)
+		if errDetail := commandrules.RequireFavoriteFolderNotSelfParent(payload.Folder, nextParent); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 		exists, err := projections.FavoriteFolderExists(e.core.DB, actor.ID, nextParent)
 		if err != nil {
@@ -3784,8 +3784,8 @@ func (e *CommandLogNativeDecisionExecutor) decideUpdateFavoriteFolder(ctx contex
 		if err != nil {
 			return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 		}
-		if contains {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "folder cannot move under its descendant", false)
+		if errDetail := commandrules.RequireFavoriteFolderNotDescendantParent(contains); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 	}
 	targetPosition := current.Position

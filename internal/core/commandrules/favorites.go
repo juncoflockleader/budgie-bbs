@@ -34,3 +34,17 @@ func RequireBoardZapAllowed(zapped bool, settings *projections.BoardSettings) *p
 	}
 	return nil
 }
+
+func RequireFavoriteFolderNotSelfParent(folderID, parentID string) *proto.ErrorDetail {
+	if parentID == folderID {
+		return newErrDetail(proto.ErrValidationFailed, "folder cannot be its own parent", false)
+	}
+	return nil
+}
+
+func RequireFavoriteFolderNotDescendantParent(containsParent bool) *proto.ErrorDetail {
+	if containsParent {
+		return newErrDetail(proto.ErrValidationFailed, "folder cannot move under its descendant", false)
+	}
+	return nil
+}

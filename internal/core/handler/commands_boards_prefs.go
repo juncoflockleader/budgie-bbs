@@ -78,14 +78,16 @@ func (h *Handler) updateFavoriteFolder(actor *User, p proto.UpdateFavoriteFolder
 		return errReply
 	}
 	if p.ParentID != nil {
-		if *p.ParentID == p.Folder {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, "folder cannot be its own parent", false)}
+		if errDetail := commandrules.RequireFavoriteFolderNotSelfParent(p.Folder, *p.ParentID); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 		if errReply := h.requireFavoriteFolder(actor.ID, *p.ParentID); errReply.Err != nil {
 			return errReply
 		}
-		if contains, err := projections.FavoriteFolderContains(h.db, actor.ID, p.Folder, *p.ParentID); err == nil && contains {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, "folder cannot move under its descendant", false)}
+		if contains, err := projections.FavoriteFolderContains(h.db, actor.ID, p.Folder, *p.ParentID); err == nil {
+			if errDetail := commandrules.RequireFavoriteFolderNotDescendantParent(contains); errDetail != nil {
+				return Reply{Err: errDetail}
+			}
 		}
 	}
 	if err := currentRuntime().UpdateFavoriteFolder(h.db, actor.ID, p.Folder, p.Name, p.ParentID, p.Position); err != nil {
