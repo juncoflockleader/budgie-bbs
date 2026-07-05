@@ -162,8 +162,6 @@ type PresenceStats = presencestore.Stats
 type ChatStore = chatstore.Store
 
 type User = projections.User
-type Thread = projections.Thread
-type Post = projections.Post
 type Poll = projections.Poll
 type SocialUser = projections.SocialUser
 type ChatRoom = projections.ChatRoom

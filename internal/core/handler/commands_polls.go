@@ -107,7 +107,7 @@ func (h *Handler) publishPollResult(actor *User, p proto.PublishPollResultPayloa
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: seq}}
 }
 
-func (h *Handler) ensurePollResultSystemPost(actor *User, sourceThread *Thread, poll *Poll) (string, int64, error) {
+func (h *Handler) ensurePollResultSystemPost(actor *User, sourceThread *projections.Thread, poll *Poll) (string, int64, error) {
 	threadID, postID := proto.PollResultPostIDs(poll.ID)
 	if existingSeq, found, err := projections.ThreadLastSeq(h.db, threadID); err != nil {
 		return "", 0, err

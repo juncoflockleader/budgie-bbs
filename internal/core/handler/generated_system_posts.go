@@ -66,13 +66,13 @@ func (h *Handler) appendGeneratedSystemPostTx(tx *sql.Tx, actor *User, spec gene
 	if err != nil {
 		return nil, err
 	}
-	if err := currentRuntime().InsertThread(tx, &Thread{
+	if err := currentRuntime().InsertThread(tx, &projections.Thread{
 		ID: spec.ThreadID, Board: spec.BoardID, Author: actor.Name, AuthorID: actor.ID, Title: spec.Title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return nil, err
 	}
-	if err := currentRuntime().InsertPost(tx, &Post{
+	if err := currentRuntime().InsertPost(tx, &projections.Post{
 		ID: spec.PostID, Thread: spec.ThreadID, Author: actor.Name, AuthorID: actor.ID,
 		Body: spec.Body, ContentType: "markup", CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {

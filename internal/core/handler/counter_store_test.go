@@ -117,17 +117,17 @@ func setCounterStoreRuntime(t *testing.T, store CounterStore) {
 		NowMS: func() int64 {
 			return 1234
 		},
-		GetPost: func(_ *sql.DB, id string) (*Post, error) {
+		GetPost: func(_ *sql.DB, id string) (*projections.Post, error) {
 			if id != "post-1" {
 				t.Fatalf("GetPost id = %s, want post-1", id)
 			}
-			return &Post{ID: "post-1", Thread: "thread-1", Author: "alice", AuthorID: "alice-id"}, nil
+			return &projections.Post{ID: "post-1", Thread: "thread-1", Author: "alice", AuthorID: "alice-id"}, nil
 		},
-		GetThread: func(_ *sql.DB, id string) (*Thread, error) {
+		GetThread: func(_ *sql.DB, id string) (*projections.Thread, error) {
 			if id != "thread-1" {
 				t.Fatalf("GetThread id = %s, want thread-1", id)
 			}
-			return &Thread{ID: "thread-1", Board: "general"}, nil
+			return &projections.Thread{ID: "thread-1", Board: "general"}, nil
 		},
 		GetPollWithVotes: func(_ *sql.DB, pollID, viewerUserID string) (*Poll, error) {
 			if pollID != "poll-1" {
