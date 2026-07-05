@@ -19,6 +19,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/ratelimit"
 )
 
@@ -159,7 +160,7 @@ func (s *Server) authPassword(ctx ssh.Context, password string) bool {
 
 // tuiHandler is the bubbletea program factory called once per SSH session.
 func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
-	user, _ := sess.Context().Value(userKey{}).(*core.User)
+	user, _ := sess.Context().Value(userKey{}).(*projections.User)
 	if user == nil {
 		user = guestUser()
 	}
@@ -217,8 +218,8 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 
 type userKey struct{}
 
-func guestUser() *core.User {
-	return &core.User{ID: "guest", Name: "guest", Role: "user"}
+func guestUser() *projections.User {
+	return &projections.User{ID: "guest", Name: "guest", Role: "user"}
 }
 
 func isGuestSSHUser(username string) bool {

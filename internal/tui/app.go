@@ -58,9 +58,9 @@ type (
 	threadsMsg struct {
 		board   string
 		offset  int
-		threads []core.Thread
+		threads []projections.Thread
 	}
-	postsMsg     struct{ posts []core.Post }
+	postsMsg     struct{ posts []projections.Post }
 	postPollsMsg struct {
 		thread string
 		polls  map[string]*projections.Poll
@@ -76,7 +76,7 @@ type (
 		open   bool
 		err    error
 	}
-	searchMsg        struct{ posts []core.Post }
+	searchMsg        struct{ posts []projections.Post }
 	notificationsMsg struct {
 		notifications []projections.Notification
 		unread        int
@@ -119,7 +119,7 @@ type (
 // model is the root bubbletea model.
 type model struct {
 	c      *core.Core
-	actor  *core.User
+	actor  *projections.User
 	sub    *core.Subscription
 	locale localeCode
 
@@ -160,8 +160,8 @@ type model struct {
 
 	// In-memory state.
 	boards        []projections.Board
-	threads       []core.Thread
-	posts         []core.Post
+	threads       []projections.Thread
+	posts         []projections.Post
 	postReactions map[string]bool
 	selectedPost  int
 	postPolls     map[string]*projections.Poll
@@ -279,7 +279,7 @@ func (m *model) postSignatureSepLine() string {
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []doormodel.DoorConfig, termName string, allowRegistration bool, requires2FA bool, renderer *lipgloss.Renderer) model {
+func newModel(c *core.Core, actor *projections.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []doormodel.DoorConfig, termName string, allowRegistration bool, requires2FA bool, renderer *lipgloss.Renderer) model {
 	if renderer == nil {
 		// Unit tests and any non-SSH caller fall back to the global renderer.
 		renderer = lipgloss.DefaultRenderer()
@@ -1424,7 +1424,7 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 			return []tea.Cmd{m.fetchNotificationStatus()}
 		}
 		if p.Thread == m.currentThread {
-			post := core.Post{
+			post := projections.Post{
 				ID:            p.ID,
 				Thread:        p.Thread,
 				Author:        p.Author,
@@ -1440,12 +1440,12 @@ func (m *model) handleEvent(evt *proto.Event) []tea.Cmd {
 				UpdatedAt:     p.TS,
 			}
 			m.posts = append(m.posts, post)
-			m.hydratePostAuthorNames([]core.Post{post})
+			m.hydratePostAuthorNames([]projections.Post{post})
 			m.postReactions[p.ID] = false
 			m.selectedPost = len(m.posts) - 1
 			m.rebuildPostView()
 			m.vp.GotoBottom()
-			cmds = append(cmds, m.fetchPollsForPosts([]core.Post{{ID: p.ID}}))
+			cmds = append(cmds, m.fetchPollsForPosts([]projections.Post{{ID: p.ID}}))
 		}
 		for i, t := range m.threads {
 			if t.ID == p.Thread {
@@ -2162,7 +2162,7 @@ func (i boardItem) FilterValue() string { return i.b.Name }
 
 type threadItem struct {
 	index int
-	t     core.Thread
+	t     projections.Thread
 	desc  string
 }
 
@@ -2761,7 +2761,7 @@ func (m *model) selectedBoard() *projections.Board {
 	return &sel.b
 }
 
-func (m *model) selectedThread() *core.Thread {
+func (m *model) selectedThread() *projections.Thread {
 	sel, ok := m.list.SelectedItem().(threadItem)
 	if !ok {
 		return nil
@@ -2855,7 +2855,7 @@ func (m *model) navigateAdjacentThread(delta int) tea.Cmd {
 	return m.openThread(m.threads[nextIndex])
 }
 
-func (m *model) openThread(thread core.Thread) tea.Cmd {
+func (m *model) openThread(thread projections.Thread) tea.Cmd {
 	if strings.TrimSpace(thread.ID) == "" {
 		m.statusMsg = m.tr(msgStatusChatNotFound)
 		return nil
@@ -2884,7 +2884,7 @@ func (m *model) hydrateReactionState() error {
 	return nil
 }
 
-func (m *model) hydratePostAuthorNames(posts []core.Post) {
+func (m *model) hydratePostAuthorNames(posts []projections.Post) {
 	if m.authorNames == nil {
 		m.authorNames = make(map[string]string)
 	}
@@ -2958,7 +2958,7 @@ func (m *model) rebuildPostView() {
 	m.vp.SetContent(b.String())
 }
 
-func (m model) postHeaderLines(index int, p core.Post, ordinals map[string]string) []string {
+func (m model) postHeaderLines(index int, p projections.Post, ordinals map[string]string) []string {
 	ordinal := m.postOrdinal(index)
 	authorLine := fmt.Sprintf(
 		"%-4s  %s %s  %s %s",
@@ -2987,7 +2987,7 @@ func (m model) postHeaderLines(index int, p core.Post, ordinals map[string]strin
 	return headerLines
 }
 
-func (m model) postTitle(p core.Post) string {
+func (m model) postTitle(p projections.Post) string {
 	if title := strings.TrimSpace(p.ThreadTitle); title != "" {
 		return title
 	}
@@ -3009,7 +3009,7 @@ func (m model) postTitle(p core.Post) string {
 	return m.tr(msgCommonUntitled)
 }
 
-func (m model) postAuthorLabel(p core.Post) string {
+func (m model) postAuthorLabel(p projections.Post) string {
 	name := strings.TrimSpace(p.Author)
 	if name == "" {
 		name = m.tr(msgCommonUnknown)
@@ -3028,7 +3028,7 @@ func (m model) postAuthorLabel(p core.Post) string {
 	return styledName
 }
 
-func (m model) postTimeLabel(p core.Post) string {
+func (m model) postTimeLabel(p projections.Post) string {
 	if p.CreatedAt > 1_000_000_000_000 {
 		return time.UnixMilli(p.CreatedAt).Format("2006-01-02 15:04")
 	}
@@ -3038,7 +3038,7 @@ func (m model) postTimeLabel(p core.Post) string {
 	return m.tr(msgCommonUnknown)
 }
 
-func (m model) postMetadata(p core.Post, ordinals map[string]string) []string {
+func (m model) postMetadata(p projections.Post, ordinals map[string]string) []string {
 	var meta []string
 	if p.CreatedSeq > 0 {
 		meta = append(meta, m.tr(msgPostPrefixSeq, map[string]string{"seq": fmt.Sprintf("%d", p.CreatedSeq)}))
@@ -3300,7 +3300,7 @@ func (m model) fetchChatLines(room string) tea.Cmd {
 	}
 }
 
-func (m model) fetchPollsForPosts(posts []core.Post) tea.Cmd {
+func (m model) fetchPollsForPosts(posts []projections.Post) tea.Cmd {
 	thread := m.currentThread
 	postIDs := make([]string, 0, len(posts))
 	for _, p := range posts {
@@ -3696,7 +3696,7 @@ func (m *model) submitProfileField() tea.Cmd {
 	}
 }
 
-func (m *model) rebuildSearchView(posts []core.Post) {
+func (m *model) rebuildSearchView(posts []projections.Post) {
 	var b strings.Builder
 	plural := ""
 	if len(posts) != 1 {
