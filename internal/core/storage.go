@@ -3,48 +3,19 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"sort"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 // LogPartition is the write-ordering key for command and event logs. IS4 moves
 // ownership of these partitions to a broker consumer group; the Postgres path
 // still derives the same key before taking a partition advisory lock.
-type LogPartition struct {
-	Kind string
-	Key  string
-}
-
-func (p LogPartition) Normalize() LogPartition {
-	if p.Kind == "" {
-		p.Kind = partitionGlobal
-	}
-	if p.Key == "" {
-		p.Key = partitionGlobal
-	}
-	return p
-}
-
-func (p LogPartition) Less(other LogPartition) bool {
-	p = p.Normalize()
-	other = other.Normalize()
-	if p.Kind == other.Kind {
-		return p.Key < other.Key
-	}
-	return p.Kind < other.Kind
-}
+type LogPartition = logmodel.Partition
 
 func SortLogPartitions(partitions []LogPartition) {
-	sort.Slice(partitions, func(i, j int) bool {
-		return partitions[i].Less(partitions[j])
-	})
-}
-
-func (p LogPartition) eventPartition() eventPartition {
-	p = p.Normalize()
-	return eventPartition{Kind: p.Kind, Key: p.Key}
+	logmodel.SortPartitions(partitions)
 }
 
 func logPartitionFromEventPartition(p eventPartition) LogPartition {

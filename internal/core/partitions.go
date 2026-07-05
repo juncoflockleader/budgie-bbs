@@ -4,19 +4,20 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 const (
-	partitionGlobal = "global"
-	partitionBoard  = "board"
-	partitionThread = "thread"
-	partitionPost   = "post"
-	partitionPoll   = "poll"
-	partitionUser   = "user"
-	partitionMail   = "mail"
-	partitionChat   = "chat"
-	partitionReview = "review"
+	partitionGlobal = logmodel.PartitionGlobal
+	partitionBoard  = logmodel.PartitionBoard
+	partitionThread = logmodel.PartitionThread
+	partitionPost   = logmodel.PartitionPost
+	partitionPoll   = logmodel.PartitionPoll
+	partitionUser   = logmodel.PartitionUser
+	partitionMail   = logmodel.PartitionMail
+	partitionChat   = logmodel.PartitionChat
+	partitionReview = logmodel.PartitionReview
 )
 
 type eventPartition struct {
