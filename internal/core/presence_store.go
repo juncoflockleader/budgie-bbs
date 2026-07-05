@@ -38,44 +38,9 @@ func (s sqlPresenceStore) ListChatOnlineUsers(viewerID, roomID string, limit, of
 }
 
 func (s sqlPresenceStore) ChatOnlineCounts() (map[string]int, error) {
-	cutoff := nowMS() - 5*60*1000
-	rows, err := qQuery(s.db,
-		`SELECT location_label, COUNT(DISTINCT user_id)
-		   FROM user_presence_sessions
-		  WHERE last_seen >= ?
-		    AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')
-		    AND LOWER(mode)='chat'
-		    AND location_label<>''
-		  GROUP BY location_label`,
-		cutoff,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	counts := map[string]int{}
-	for rows.Next() {
-		var roomID string
-		var count int
-		if err := rows.Scan(&roomID, &count); err != nil {
-			return nil, err
-		}
-		counts[roomID] = count
-	}
-	return counts, rows.Err()
+	return presencestore.ChatOnlineCounts(s.db, nowMS()-5*60*1000)
 }
 
 func (s sqlPresenceStore) Stats() (presencestore.Stats, error) {
-	cutoff := nowMS() - 5*60*1000
-	stats := presencestore.Stats{}
-	err := qQueryRow(s.db,
-		`SELECT
-		    (SELECT COUNT(DISTINCT user_id) FROM user_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'invisible', 'cloak', 'cloaked')),
-		    (SELECT COUNT(*) FROM guest_presence_sessions WHERE last_seen >= ? AND LOWER(status) NOT IN ('offline', 'inactive')),
-		    COALESCE((SELECT total_guest_logins FROM community_counter_totals WHERE id='default'), 0),
-		    COALESCE((SELECT total_guest_logouts FROM community_counter_totals WHERE id='default'), 0)`,
-		cutoff,
-		cutoff,
-	).Scan(&stats.OnlineUsers, &stats.OnlineGuests, &stats.TotalGuestLogins, &stats.TotalGuestLogouts)
-	return stats, err
+	return presencestore.OnlineStats(s.db, nowMS()-5*60*1000)
 }
