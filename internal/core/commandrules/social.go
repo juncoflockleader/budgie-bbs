@@ -1,25 +1,9 @@
 package commandrules
 
 import (
-	"database/sql"
-
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
-
-type Queryable interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-}
-
-func newErrDetail(code, message string, retryable bool) *proto.ErrorDetail {
-	return &proto.ErrorDetail{Code: code, Message: message, Retryable: retryable}
-}
-
-func internalErr(err error) *proto.ErrorDetail {
-	return newErrDetail("internal_error", err.Error(), true)
-}
 
 func ResolveOtherUser(queryable Queryable, actor *projections.User, ref, missingMessage, selfMessage string) (*projections.User, *proto.ErrorDetail) {
 	if actor == nil {
