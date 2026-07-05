@@ -20,13 +20,7 @@ type HashCommandPartitionAssigner struct {
 	generation int64
 }
 
-// CommandPartitionAssignmentSnapshot is the in-memory shape a native broker
-// consumer-group adapter can publish after a rebalance. Owners maps logical
-// command partitions to the writer that owns them for Generation.
-type CommandPartitionAssignmentSnapshot struct {
-	Generation int64
-	Owners     map[LogPartition]string
-}
+type CommandPartitionAssignmentSnapshot = logmodel.CommandPartitionAssignmentSnapshot
 
 // SnapshotCommandPartitionAssigner applies broker-style assignment snapshots.
 // Unlike the hash assigner, missing partitions are unassigned. This mirrors
@@ -65,7 +59,7 @@ func (a *SnapshotCommandPartitionAssigner) ApplySnapshot(snapshot CommandPartiti
 	if a.generation <= 0 {
 		a.generation = 1
 	}
-	a.assignments = normalizeSnapshotCommandPartitionAssignments(snapshot.Owners)
+	a.assignments = logmodel.NormalizeCommandPartitionAssignmentOwners(snapshot.Owners)
 	return a.generation
 }
 
@@ -296,22 +290,6 @@ func cloneCommandPartitionAssignmentOverrides(overrides map[LogPartition]string)
 	out := make(map[LogPartition]string, len(overrides))
 	for partition, ownerID := range overrides {
 		out[partition.Normalize()] = ownerID
-	}
-	return out
-}
-
-func normalizeSnapshotCommandPartitionAssignments(assignments map[LogPartition]string) map[LogPartition]string {
-	out := map[LogPartition]string{}
-	for partition, ownerID := range assignments {
-		partition = partition.Normalize()
-		ownerID = strings.TrimSpace(ownerID)
-		if partition.Kind == "" || partition.Key == "" || ownerID == "" {
-			continue
-		}
-		out[partition] = ownerID
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }
