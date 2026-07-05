@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -146,10 +145,8 @@ func (h *Handler) setBoardAutomodRule(actor *User, p proto.SetBoardAutomodRulePa
 	}
 	defer tx.Rollback() //nolint
 
-	if _, found, err := projections.BoardName(tx, board); err != nil {
-		return internalErr(err)
-	} else if !found {
-		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
+	if errDetail := commandrules.RequireBoard(tx, board); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	req := proto.AutomodActionPermissionRequirements(actions)

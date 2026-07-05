@@ -1674,14 +1674,11 @@ func (e *CommandLogNativeDecisionExecutor) decideSetBoardAutomodRule(ctx context
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	exists, err := projections.BoardExists(e.core.DB, board)
-	if err != nil {
-		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	}
-	if !exists {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
+	if errDetail := commandrules.RequireBoard(e.core.DB, board); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	req := proto.AutomodActionPermissionRequirements(actions)
+	var err error
 	canModerateThreads := false
 	if req.ThreadModeration {
 		canModerateThreads, err = projections.ActorCanModerateBoardThreads(e.core.DB, actor, board)
