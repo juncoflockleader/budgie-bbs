@@ -3,12 +3,10 @@ package accountmodel
 import (
 	"strings"
 	"testing"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 func TestNewcomerLifecycleRecord(t *testing.T) {
-	user := &projections.User{ID: "usr_alice", Name: "alice", Role: "user"}
+	user := LifecycleUser{ID: "usr_alice", Name: "alice", Role: "user"}
 	record := NewcomerLifecycleRecord(user)
 	if record.BoardID != "newcomers" || record.ThreadID != "newcomer_thr_usr_alice" || record.PostID != "newcomer_pst_usr_alice" {
 		t.Fatalf("newcomer record ids = %+v", record)
@@ -25,7 +23,7 @@ func TestNewcomerLifecycleRecord(t *testing.T) {
 }
 
 func TestGoodbyeLifecycleRecord(t *testing.T) {
-	user := &projections.User{ID: "usr_alice", Name: "alice", Role: "user"}
+	user := LifecycleUser{ID: "usr_alice", Name: "alice", Role: "user"}
 	record := GoodbyeLifecycleRecord(user)
 	if record.BoardID != "Goodbye" || record.ThreadID != "goodbye_thr_usr_alice" || record.PostID != "goodbye_pst_usr_alice" {
 		t.Fatalf("goodbye record ids = %+v", record)

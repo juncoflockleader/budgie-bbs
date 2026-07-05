@@ -2,8 +2,6 @@ package accountmodel
 
 import (
 	"fmt"
-
-	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
 type LifecycleRecord struct {
@@ -19,7 +17,13 @@ type LifecycleRecord struct {
 	MarkBoardReadForAllUsers bool
 }
 
-func NewcomerLifecycleRecord(user *projections.User) LifecycleRecord {
+type LifecycleUser struct {
+	ID   string
+	Name string
+	Role string
+}
+
+func NewcomerLifecycleRecord(user LifecycleUser) LifecycleRecord {
 	title := "New user: " + user.Name
 	body := fmt.Sprintf("# %s\n\n- User: %s\n- Role: %s\n- Status: registered\n\nThis generated newcomer record contains public account information only.\n",
 		title, user.Name, user.Role)
@@ -37,7 +41,7 @@ func NewcomerLifecycleRecord(user *projections.User) LifecycleRecord {
 	}
 }
 
-func GoodbyeLifecycleRecord(user *projections.User) LifecycleRecord {
+func GoodbyeLifecycleRecord(user LifecycleUser) LifecycleRecord {
 	title := "Goodbye: " + user.Name
 	body := fmt.Sprintf("# %s\n\n- User: %s\n- Status: deactivated\n\nThe account holder closed this account. Private deactivation notes are not published.\n",
 		title, user.Name)

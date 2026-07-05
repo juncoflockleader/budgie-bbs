@@ -1008,7 +1008,7 @@ func (c *Core) registerUserInternal(name, password string) (*User, error) {
 	user := &User{ID: id, Name: name, Role: role, Created: ts, RegistrationStatus: status}
 	events := []*proto.Event{}
 	if status == "approved" {
-		events, err = c.appendAccountLifecycleRecordTx(tx, accountmodel.NewcomerLifecycleRecord(user), ts)
+		events, err = c.appendAccountLifecycleRecordTx(tx, accountmodel.NewcomerLifecycleRecord(accountLifecycleUser(user)), ts)
 		if err != nil {
 			return nil, fmt.Errorf("create newcomer record: %w", err)
 		}
@@ -1031,6 +1031,17 @@ func seedDefaultFavorites(db sqlLike, userID string, ts int64) error {
 		userID, ts, ts,
 	)
 	return err
+}
+
+func accountLifecycleUser(user *User) accountmodel.LifecycleUser {
+	if user == nil {
+		return accountmodel.LifecycleUser{}
+	}
+	return accountmodel.LifecycleUser{
+		ID:   user.ID,
+		Name: user.Name,
+		Role: user.Role,
+	}
 }
 
 func (c *Core) appendAccountLifecycleRecordTx(tx *sql.Tx, record accountmodel.LifecycleRecord, ts int64) ([]*proto.Event, error) {
@@ -1297,7 +1308,7 @@ func (c *Core) DeactivateAccount(userID, password, reason string) error {
 	); err != nil {
 		return err
 	}
-	events, err := c.appendAccountLifecycleRecordTx(tx, accountmodel.GoodbyeLifecycleRecord(u), ts)
+	events, err := c.appendAccountLifecycleRecordTx(tx, accountmodel.GoodbyeLifecycleRecord(accountLifecycleUser(u)), ts)
 	if err != nil {
 		return err
 	}
@@ -2516,7 +2527,7 @@ func (c *Core) ReviewAccountRegistration(userID, reviewerID, decision, reason st
 			if err != nil {
 				return nil, err
 			}
-			events, err := c.appendAccountLifecycleRecordTx(tx, accountmodel.NewcomerLifecycleRecord(user), nowMS())
+			events, err := c.appendAccountLifecycleRecordTx(tx, accountmodel.NewcomerLifecycleRecord(accountLifecycleUser(user)), nowMS())
 			if err != nil {
 				_ = tx.Rollback()
 				return nil, err
