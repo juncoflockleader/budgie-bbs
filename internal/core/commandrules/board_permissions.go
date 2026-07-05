@@ -13,6 +13,13 @@ func ActorCanModerateBoard(queryable Queryable, actor *projections.User, boardID
 	return BoardPermissionAllowed(projections.ActorCanModerateBoard(queryable, actor, boardID))
 }
 
+func RequireBoardModerationPermission(canModerateBoard bool) *proto.ErrorDetail {
+	if !canModerateBoard {
+		return newErrDetail(proto.ErrForbidden, "board moderation permission required", false)
+	}
+	return nil
+}
+
 func ActorCanUseMemberBoard(queryable Queryable, actor *projections.User, boardID string) bool {
 	return BoardPermissionAllowed(projections.ActorCanUseMemberBoard(queryable, actor, boardID))
 }

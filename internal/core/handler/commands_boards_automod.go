@@ -210,8 +210,9 @@ func (h *Handler) deleteBoardAutomodRule(actor *User, p proto.DeleteBoardAutomod
 		return internalErr(err)
 	}
 	defer tx.Rollback() //nolint
-	if !commandrules.ActorCanModerateBoardPosts(tx, actor, board) && !commandrules.ActorCanModerateBoardThreads(tx, actor, board) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board moderation permission required", false)}
+	canModerateBoard := commandrules.ActorCanModerateBoardPosts(tx, actor, board) || commandrules.ActorCanModerateBoardThreads(tx, actor, board)
+	if errDetail := commandrules.RequireBoardModerationPermission(canModerateBoard); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	ts := nowMS()
 	scopes := []string{"board:" + board}

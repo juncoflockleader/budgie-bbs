@@ -1729,10 +1729,12 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteBoardAutomodRule(ctx cont
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if ok, err := projections.ActorCanModerateBoardContent(e.core.DB, actor, board); err != nil {
+	canModerateBoard, err := projections.ActorCanModerateBoardContent(e.core.DB, actor, board)
+	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
-	} else if !ok {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board moderation permission required", false)
+	}
+	if errDetail := commandrules.RequireBoardModerationPermission(canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	event := nativeEvent(record, 0, proto.EvtBoardAutomodRuleDeleted, []string{"board:" + board}, &proto.BoardAutomodRuleDeletedPayload{ID: id, Board: board, By: actor.ID, TS: ts}, ts)
