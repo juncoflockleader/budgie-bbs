@@ -7,6 +7,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitestore"
 )
 
 // SetAssetStore installs an external object store (e.g. S3/R2) for site-asset
@@ -35,18 +36,11 @@ func (c *Core) SetSiteAsset(name, contentType string, data []byte) error {
 	version := nowMS()
 
 	if c.assetStore != nil {
-		var oldVersion int64
-		_ = qQueryRow(c.DB, `SELECT updated_at FROM site_assets WHERE name=?`, name).Scan(&oldVersion)
+		oldVersion := sitestore.AssetVersion(c.DB, name)
 		if err := c.assetStore.Put(context.Background(), sitemodel.AssetObjectKey(name, version), contentType, data); err != nil {
 			return err
 		}
-		if _, err := qExec(c.DB,
-			`INSERT INTO site_assets (name, content_type, data, byte_size, updated_at)
-			 VALUES (?, ?, NULL, ?, ?)
-			 ON CONFLICT(name) DO UPDATE SET
-			   content_type=excluded.content_type, data=NULL,
-			   byte_size=excluded.byte_size, updated_at=excluded.updated_at`,
-			name, contentType, len(data), version); err != nil {
+		if err := sitestore.StoreExternalAsset(c.DB, name, contentType, len(data), version); err != nil {
 			return err
 		}
 		if oldVersion > 0 && oldVersion != version {
@@ -55,14 +49,7 @@ func (c *Core) SetSiteAsset(name, contentType string, data []byte) error {
 		return nil
 	}
 
-	_, err := qExec(c.DB,
-		`INSERT INTO site_assets (name, content_type, data, byte_size, updated_at)
-		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(name) DO UPDATE SET
-		   content_type=excluded.content_type, data=excluded.data,
-		   byte_size=excluded.byte_size, updated_at=excluded.updated_at`,
-		name, contentType, data, len(data), version)
-	return err
+	return sitestore.StoreInlineAsset(c.DB, name, contentType, data, version)
 }
 
 // SiteAsset returns an asset's bytes for the app-served path, or sql.ErrNoRows
@@ -72,17 +59,15 @@ func (c *Core) SiteAsset(name string) (data []byte, contentType string, updatedA
 	if !sitemodel.ValidAsset(name) {
 		return nil, "", 0, sql.ErrNoRows
 	}
-	var raw []byte
-	err = qQueryRow(c.DB, `SELECT data, content_type, updated_at FROM site_assets WHERE name=?`, name).
-		Scan(&raw, &contentType, &updatedAt)
+	stored, err := sitestore.LoadAsset(c.DB, name)
 	if err != nil {
 		return nil, "", 0, err
 	}
-	if len(raw) > 0 {
-		return raw, contentType, updatedAt, nil
+	if len(stored.Data) > 0 {
+		return stored.Data, stored.ContentType, stored.UpdatedAt, nil
 	}
 	if c.assetStore != nil {
-		b, ct, gerr := c.assetStore.Get(context.Background(), sitemodel.AssetObjectKey(name, updatedAt))
+		b, ct, gerr := c.assetStore.Get(context.Background(), sitemodel.AssetObjectKey(name, stored.UpdatedAt))
 		if errors.Is(gerr, assetstore.ErrNotFound) {
 			return nil, "", 0, sql.ErrNoRows
 		}
@@ -90,9 +75,9 @@ func (c *Core) SiteAsset(name string) (data []byte, contentType string, updatedA
 			return nil, "", 0, gerr
 		}
 		if ct == "" {
-			ct = contentType
+			ct = stored.ContentType
 		}
-		return b, ct, updatedAt, nil
+		return b, ct, stored.UpdatedAt, nil
 	}
 	return nil, "", 0, sql.ErrNoRows
 }
@@ -100,33 +85,15 @@ func (c *Core) SiteAsset(name string) (data []byte, contentType string, updatedA
 // DeleteSiteAsset clears an uploaded asset (reverting to the glyph/no-banner).
 func (c *Core) DeleteSiteAsset(name string) error {
 	name = sitemodel.NormalizeAssetName(name)
-	var version int64
-	_ = qQueryRow(c.DB, `SELECT updated_at FROM site_assets WHERE name=?`, name).Scan(&version)
+	version := sitestore.AssetVersion(c.DB, name)
 	if c.assetStore != nil && version > 0 {
 		_ = c.assetStore.Delete(context.Background(), sitemodel.AssetObjectKey(name, version)) // best effort
 	}
-	_, err := qExec(c.DB, `DELETE FROM site_assets WHERE name=?`, name)
-	return err
+	return sitestore.DeleteAsset(c.DB, name)
 }
 
 // SiteAssetVersions returns each asset slot's version (updated_at ms), 0 when
 // unset. Surfaced to the web so it can build cache-busting / CDN URLs.
 func (c *Core) SiteAssetVersions() map[string]int64 {
-	out := sitemodel.EmptyAssetVersions()
-	rows, err := c.DB.Query(`SELECT name, updated_at FROM site_assets`)
-	if err != nil {
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var n string
-		var v int64
-		if rows.Scan(&n, &v) == nil {
-			name := sitemodel.NormalizeAssetName(n)
-			if sitemodel.ValidAsset(name) {
-				out[name] = v
-			}
-		}
-	}
-	return out
+	return sitestore.AssetVersions(c.DB)
 }
