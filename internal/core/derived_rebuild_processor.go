@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -185,7 +186,7 @@ func (c *Core) replayDerivedViewEventBatch(view string, batchSize int) (derivedV
 	if batchSize <= 0 {
 		batchSize = defaultDerivedRebuildBatchSize
 	}
-	fromSeq, found, err := lookupDerivedViewAppliedSeq(c.DB, view)
+	fromSeq, found, err := projections.LookupProjectionWatermarkAppliedSeq(c.DB, view)
 	if err != nil {
 		return derivedViewEventBatch{}, err
 	}

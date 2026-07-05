@@ -109,7 +109,7 @@ func (p *AIProcessor) ProcessOnce(ctx context.Context) (AIProcessResult, error) 
 		return AIProcessResult{}, nilProcessorError("ai responder")
 	}
 	c := p.Core
-	fromSeq, _, err := lookupDerivedViewAppliedSeq(c.DB, aiResponderView)
+	fromSeq, _, err := projections.LookupProjectionWatermarkAppliedSeq(c.DB, aiResponderView)
 	if err != nil {
 		return AIProcessResult{}, err
 	}

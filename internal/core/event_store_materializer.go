@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -203,7 +204,7 @@ func (c *Core) MaterializeEventStorePartition(ctx context.Context, store EventSt
 	if limit <= 0 {
 		limit = 100
 	}
-	applied, found, err := lookupDerivedViewAppliedSeq(c.DB, result.Watermark)
+	applied, found, err := projections.LookupProjectionWatermarkAppliedSeq(c.DB, result.Watermark)
 	if err != nil {
 		return result, err
 	}
@@ -377,18 +378,7 @@ func (c *Core) seedEventStoreProjectionWatermarksFromEventPartitionOffsets(ctx c
 	defer tx.Rollback() //nolint:errcheck
 	for _, seed := range seeds {
 		watermark := logmodel.EventStoreProjectionWatermarkName(source, seed.partition)
-		if _, err := qExec(tx,
-			`INSERT INTO derived_view_watermarks (view_name, applied_seq, updated_at)
-			 VALUES (?, ?, ?)
-			 ON CONFLICT(view_name) DO UPDATE
-			       SET applied_seq=CASE
-			             WHEN derived_view_watermarks.applied_seq > excluded.applied_seq
-			             THEN derived_view_watermarks.applied_seq
-			             ELSE excluded.applied_seq
-			           END,
-			           updated_at=excluded.updated_at`,
-			watermark, seed.offset, nowMS(),
-		); err != nil {
+		if err := projections.RecordProjectionWatermarkAppliedMax(tx, watermark, seed.offset, nowMS()); err != nil {
 			return 0, err
 		}
 	}
@@ -1232,16 +1222,5 @@ func eventStoreProjectionPostCommittedBody(post *proto.PostAppendedPayload) stri
 }
 
 func recordEventStoreProjectionWatermarkTx(tx *sql.Tx, watermark string, offset int64) error {
-	if offset < 0 {
-		offset = 0
-	}
-	_, err := qExec(tx,
-		`INSERT INTO derived_view_watermarks (view_name, applied_seq, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(view_name) DO UPDATE
-		       SET applied_seq=excluded.applied_seq,
-		           updated_at=excluded.updated_at`,
-		watermark, offset, nowMS(),
-	)
-	return err
+	return projections.RecordProjectionWatermarkApplied(tx, watermark, offset, nowMS())
 }

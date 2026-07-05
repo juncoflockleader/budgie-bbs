@@ -247,15 +247,7 @@ func processCommunityStatSnapshotJob(db *sql.DB, p communityStatSnapshotJob) err
 	if err != nil {
 		return err
 	}
-	_, err = qExec(db,
-		`INSERT INTO derived_view_watermarks (view_name, applied_seq, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(view_name) DO UPDATE
-		       SET applied_seq=excluded.applied_seq,
-		           updated_at=excluded.updated_at`,
-		DerivedViewCommunityStatHistory, head, nowMS(),
-	)
-	return err
+	return projections.RecordDerivedViewApplied(db, DerivedViewCommunityStatHistory, head, nowMS())
 }
 
 func processPostCommittedJob(db *sql.DB, bus Bus, p postCommittedJob) error {

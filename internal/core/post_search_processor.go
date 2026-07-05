@@ -255,20 +255,5 @@ func reindexPostSearchFromProjection(tx *sql.Tx, postID string) error {
 }
 
 func recordDerivedViewAppliedTx(tx *sql.Tx, view string, appliedSeq int64) error {
-	view = normalizeDerivedView(view)
-	if view == "" {
-		return fmt.Errorf("derived view name required")
-	}
-	if appliedSeq < 0 {
-		appliedSeq = 0
-	}
-	_, err := qExec(tx,
-		`INSERT INTO derived_view_watermarks (view_name, applied_seq, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(view_name) DO UPDATE
-		       SET applied_seq=excluded.applied_seq,
-		           updated_at=excluded.updated_at`,
-		view, appliedSeq, nowMS(),
-	)
-	return err
+	return projections.RecordDerivedViewApplied(tx, view, appliedSeq, nowMS())
 }

@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -71,7 +70,7 @@ func (c *Core) DerivedViewAppliedSeq(view string) (int64, error) {
 	if view == "" {
 		return c.Head()
 	}
-	applied, found, err := lookupDerivedViewAppliedSeq(c.DB, view)
+	applied, found, err := projections.LookupProjectionWatermarkAppliedSeq(c.DB, view)
 	if err != nil {
 		return 0, err
 	}
@@ -82,22 +81,7 @@ func (c *Core) DerivedViewAppliedSeq(view string) (int64, error) {
 }
 
 func (c *Core) RecordDerivedViewApplied(view string, appliedSeq int64) error {
-	view = normalizeDerivedView(view)
-	if view == "" {
-		return fmt.Errorf("derived view name required")
-	}
-	if appliedSeq < 0 {
-		appliedSeq = 0
-	}
-	_, err := qExec(c.DB,
-		`INSERT INTO derived_view_watermarks (view_name, applied_seq, updated_at)
-		 VALUES (?, ?, ?)
-		 ON CONFLICT(view_name) DO UPDATE
-		       SET applied_seq=excluded.applied_seq,
-		           updated_at=excluded.updated_at`,
-		view, appliedSeq, nowMS(),
-	)
-	return err
+	return projections.RecordDerivedViewApplied(c.DB, view, appliedSeq, nowMS())
 }
 
 func (c *Core) ListDerivedViewWatermarks() ([]DerivedViewWatermark, error) {
@@ -258,18 +242,6 @@ func (c *Core) markDerivedViewsApplied(views []string, head int64) error {
 
 func containsDerivedView(views []string, want string) bool {
 	return projections.ContainsDerivedView(views, want)
-}
-
-func lookupDerivedViewAppliedSeq(db *sql.DB, view string) (int64, bool, error) {
-	var applied int64
-	err := qQueryRow(db, `SELECT applied_seq FROM derived_view_watermarks WHERE view_name=?`, view).Scan(&applied)
-	if err == sql.ErrNoRows {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	return applied, true, nil
 }
 
 func normalizeDerivedView(view string) string {
