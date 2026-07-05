@@ -2,9 +2,8 @@ package core
 
 import (
 	"database/sql"
-	"errors"
-	"regexp"
-	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 )
 
 // SiteAppearance holds admin-configurable site-wide branding/appearance. All
@@ -22,17 +21,11 @@ type SiteAppearance struct {
 	UpdatedAt      int64              `json:"updatedAt"`
 }
 
-const defaultSiteTitle = "Budgie BBS"
-const defaultSiteTheme = "light"
-
-var siteThemes = map[string]bool{"dark": true, "dim": true, "light": true, "warm": true}
-
-var hexColorRe = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
-
 // SiteAppearance returns the current site appearance settings (sensible defaults
 // if unset).
 func (c *Core) SiteAppearance() (*SiteAppearance, error) {
-	out := &SiteAppearance{SiteTitle: defaultSiteTitle, DefaultTheme: defaultSiteTheme}
+	defaults := sitemodel.DefaultAppearanceFields()
+	out := &SiteAppearance{SiteTitle: defaults.SiteTitle, DefaultTheme: defaults.DefaultTheme}
 	var layoutRaw string
 	err := qQueryRow(c.DB,
 		`SELECT site_title, COALESCE(logo,''), tagline, banner_message, accent_color, default_theme,
@@ -49,46 +42,16 @@ func (c *Core) SiteAppearance() (*SiteAppearance, error) {
 	}
 	layout := decodeTUIMainMenuLayout(layoutRaw)
 	out.MainMenuLayout = &layout
-	if strings.TrimSpace(out.SiteTitle) == "" {
-		out.SiteTitle = defaultSiteTitle
-	}
-	if !siteThemes[out.DefaultTheme] {
-		out.DefaultTheme = defaultSiteTheme
-	}
+	fields := sitemodel.ApplyAppearanceDefaults(siteAppearanceFields(*out))
+	applySiteAppearanceFields(out, fields)
 	return out, nil
 }
 
 // SetSiteAppearance validates and persists the site appearance settings.
 func (c *Core) SetSiteAppearance(a SiteAppearance) (*SiteAppearance, error) {
-	title := strings.TrimSpace(a.SiteTitle)
-	if title == "" {
-		title = defaultSiteTitle
-	}
-	if len(title) > 80 {
-		return nil, errors.New("site title must be 80 characters or less")
-	}
-	logo := strings.TrimSpace(a.Logo)
-	if len(logo) > 32 {
-		return nil, errors.New("logo must be 32 bytes or less (a short glyph or emoji)")
-	}
-	tagline := strings.TrimSpace(a.Tagline)
-	if len(tagline) > 200 {
-		return nil, errors.New("tagline must be 200 characters or less")
-	}
-	banner := strings.TrimSpace(a.BannerMessage)
-	if len(banner) > 500 {
-		return nil, errors.New("banner must be 500 characters or less")
-	}
-	accent := strings.ToLower(strings.TrimSpace(a.AccentColor))
-	if accent != "" && !hexColorRe.MatchString(accent) {
-		return nil, errors.New("accent color must be a hex value like #58a6ff")
-	}
-	theme := strings.TrimSpace(a.DefaultTheme)
-	if theme == "" {
-		theme = defaultSiteTheme
-	}
-	if !siteThemes[theme] {
-		return nil, errors.New("default theme must be one of dark, dim, light, warm")
+	fields, err := sitemodel.NormalizeAppearanceFields(siteAppearanceFields(a))
+	if err != nil {
+		return nil, err
 	}
 	normLayout, err := normalizeTUIMainMenuLayout(a.MainMenuLayout)
 	if err != nil {
@@ -105,9 +68,29 @@ func (c *Core) SetSiteAppearance(a SiteAppearance) (*SiteAppearance, error) {
 		   site_title=excluded.site_title, logo=excluded.logo, tagline=excluded.tagline, banner_message=excluded.banner_message,
 		   accent_color=excluded.accent_color, default_theme=excluded.default_theme,
 		   tui_main_menu_layout=excluded.tui_main_menu_layout, updated_at=excluded.updated_at`,
-		title, logo, tagline, banner, accent, theme, layoutRaw, nowMS(),
+		fields.SiteTitle, fields.Logo, fields.Tagline, fields.BannerMessage, fields.AccentColor, fields.DefaultTheme, layoutRaw, nowMS(),
 	); err != nil {
 		return nil, err
 	}
 	return c.SiteAppearance()
+}
+
+func siteAppearanceFields(a SiteAppearance) sitemodel.AppearanceFields {
+	return sitemodel.AppearanceFields{
+		SiteTitle:     a.SiteTitle,
+		Logo:          a.Logo,
+		Tagline:       a.Tagline,
+		BannerMessage: a.BannerMessage,
+		AccentColor:   a.AccentColor,
+		DefaultTheme:  a.DefaultTheme,
+	}
+}
+
+func applySiteAppearanceFields(a *SiteAppearance, fields sitemodel.AppearanceFields) {
+	a.SiteTitle = fields.SiteTitle
+	a.Logo = fields.Logo
+	a.Tagline = fields.Tagline
+	a.BannerMessage = fields.BannerMessage
+	a.AccentColor = fields.AccentColor
+	a.DefaultTheme = fields.DefaultTheme
 }

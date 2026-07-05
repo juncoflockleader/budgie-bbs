@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -52,6 +53,8 @@ var tuiBlockTypes = map[string]bool{
 var tuiAligns = map[string]bool{
 	tuiAlignLeft: true, tuiAlignCenter: true, tuiAlignRight: true,
 }
+
+var hexColorRe = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
 
 // defaultTUIMainMenuLayout is used when an admin has not configured one. It
 // centers the wordmark banner over a tagline and the menu, so a fresh install
