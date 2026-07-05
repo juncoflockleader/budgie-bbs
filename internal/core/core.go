@@ -25,6 +25,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/categorymodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
@@ -93,7 +94,7 @@ type Core struct {
 	eventLogShadowStartHead bool
 	commandLogShadow        CommandLog
 	commandLogAuthoritative CommandLog
-	counterStore            CounterStore
+	counterStore            counterstore.Store
 	counterStoreOverride    bool
 	presenceStore           PresenceStore
 	presenceStoreOverride   bool
@@ -117,7 +118,7 @@ type coreOptions struct {
 	eventLogShadowStartHead   bool
 	commandLogShadow          CommandLog
 	commandLogAuthoritative   CommandLog
-	counterStore              CounterStore
+	counterStore              counterstore.Store
 	presenceStore             PresenceStore
 	chatStore                 ChatStore
 	postSearchIndex           PostSearchIndex
@@ -181,7 +182,7 @@ func WithAuthoritativeCommandLog(log CommandLog) Option {
 	}
 }
 
-func WithCounterStore(store CounterStore) Option {
+func WithCounterStore(store counterstore.Store) Option {
 	return func(opts *coreOptions) {
 		opts.counterStore = store
 	}
@@ -1397,11 +1398,11 @@ func (c *Core) DeleteUser(actorID, targetUserID, reason string) error {
 	return nil
 }
 
-func (c *Core) snapshotUserCounterIdentityTx(tx *sql.Tx, userID string) (CounterUserIdentity, map[string]string, error) {
+func (c *Core) snapshotUserCounterIdentityTx(tx *sql.Tx, userID string) (counterstore.UserIdentity, map[string]string, error) {
 	if c == nil || c.counterStore == nil {
-		return CounterUserIdentity{}, nil, nil
+		return counterstore.UserIdentity{}, nil, nil
 	}
-	identity := CounterUserIdentity{}
+	identity := counterstore.UserIdentity{}
 	var err error
 	if isSQLCounterStore(c.counterStore) {
 		identity, err = snapshotSQLUserCounterIdentityTx(tx, userID)
@@ -1409,7 +1410,7 @@ func (c *Core) snapshotUserCounterIdentityTx(tx *sql.Tx, userID string) (Counter
 		identity, err = c.counterStore.UserCounterIdentity(userID)
 	}
 	if err != nil {
-		return CounterUserIdentity{}, nil, err
+		return counterstore.UserIdentity{}, nil, err
 	}
 	authors := map[string]string{}
 	for _, reaction := range identity.Reactions {
@@ -1425,21 +1426,21 @@ func (c *Core) snapshotUserCounterIdentityTx(tx *sql.Tx, userID string) (Counter
 			continue
 		}
 		if err != nil {
-			return CounterUserIdentity{}, nil, err
+			return counterstore.UserIdentity{}, nil, err
 		}
 		authors[reaction.PostID] = authorID
 	}
 	return identity, authors, nil
 }
 
-func snapshotSQLUserCounterIdentityTx(tx *sql.Tx, userID string) (CounterUserIdentity, error) {
-	identity := CounterUserIdentity{}
+func snapshotSQLUserCounterIdentityTx(tx *sql.Tx, userID string) (counterstore.UserIdentity, error) {
+	identity := counterstore.UserIdentity{}
 	reactionRows, err := qQuery(tx, `SELECT post_id, user_id, emoji, ts FROM post_reactions WHERE user_id=? ORDER BY post_id`, userID)
 	if err != nil {
 		return identity, err
 	}
 	for reactionRows.Next() {
-		var row CounterReactionIdentity
+		var row counterstore.ReactionIdentity
 		if err := reactionRows.Scan(&row.PostID, &row.UserID, &row.Emoji, &row.TS); err != nil {
 			_ = reactionRows.Close()
 			return identity, err
@@ -1459,7 +1460,7 @@ func snapshotSQLUserCounterIdentityTx(tx *sql.Tx, userID string) (CounterUserIde
 		return identity, err
 	}
 	for voteRows.Next() {
-		var row CounterPollVoteIdentity
+		var row counterstore.PollVoteIdentity
 		if err := voteRows.Scan(&row.PollID, &row.OptionID, &row.UserID, &row.TS); err != nil {
 			_ = voteRows.Close()
 			return identity, err
@@ -1476,12 +1477,12 @@ func snapshotSQLUserCounterIdentityTx(tx *sql.Tx, userID string) (CounterUserIde
 	return identity, nil
 }
 
-func isSQLCounterStore(store CounterStore) bool {
+func isSQLCounterStore(store counterstore.Store) bool {
 	_, ok := store.(sqlCounterStore)
 	return ok
 }
 
-func cleanupUserCounterIdentityTx(tx *sql.Tx, userID string, identity CounterUserIdentity, reactionAuthors map[string]string) error {
+func cleanupUserCounterIdentityTx(tx *sql.Tx, userID string, identity counterstore.UserIdentity, reactionAuthors map[string]string) error {
 	for _, reaction := range identity.Reactions {
 		if err := projections.DeleteReaction(tx, reaction.PostID, userID); err != nil {
 			return err
@@ -1501,7 +1502,7 @@ func cleanupUserCounterIdentityTx(tx *sql.Tx, userID string, identity CounterUse
 	return err
 }
 
-func (c *Core) cleanupDeletedUserCounterIdentity(userID string, identity CounterUserIdentity, reactionAuthors map[string]string) error {
+func (c *Core) cleanupDeletedUserCounterIdentity(userID string, identity counterstore.UserIdentity, reactionAuthors map[string]string) error {
 	if c == nil || c.counterStore == nil {
 		return nil
 	}

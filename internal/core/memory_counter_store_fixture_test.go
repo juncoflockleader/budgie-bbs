@@ -105,19 +105,19 @@ func (s *MemoryCounterStore) PollVote(pollID, userID string) (string, bool, erro
 	return optionID, ok, nil
 }
 
-func (s *MemoryCounterStore) UserCounterIdentity(userID string) (CounterUserIdentity, error) {
+func (s *MemoryCounterStore) UserCounterIdentity(userID string) (counterstore.UserIdentity, error) {
 	if s == nil {
-		return CounterUserIdentity{}, sql.ErrConnDone
+		return counterstore.UserIdentity{}, sql.ErrConnDone
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	identity := CounterUserIdentity{}
+	identity := counterstore.UserIdentity{}
 	shard := s.shardForIdentity(userID)
 	for key, reaction := range shard.reactions {
 		if key.userID != userID {
 			continue
 		}
-		identity.Reactions = append(identity.Reactions, CounterReactionIdentity{
+		identity.Reactions = append(identity.Reactions, counterstore.ReactionIdentity{
 			PostID: key.postID,
 			UserID: key.userID,
 			Emoji:  reaction.emoji,
@@ -128,7 +128,7 @@ func (s *MemoryCounterStore) UserCounterIdentity(userID string) (CounterUserIden
 		if key.userID != userID {
 			continue
 		}
-		identity.PollVotes = append(identity.PollVotes, CounterPollVoteIdentity{
+		identity.PollVotes = append(identity.PollVotes, counterstore.PollVoteIdentity{
 			PollID:   key.pollID,
 			OptionID: optionID,
 			UserID:   key.userID,
@@ -146,7 +146,7 @@ func (s *MemoryCounterStore) ReactionReceivedCount(userID string) int {
 	return s.shardForIdentity(userID).reactionsReceived[userID]
 }
 
-func (s *MemoryCounterStore) BeginMutation() (CounterMutation, error) {
+func (s *MemoryCounterStore) BeginMutation() (counterstore.Mutation, error) {
 	if s == nil {
 		return nil, sql.ErrConnDone
 	}

@@ -15,11 +15,6 @@ import (
 type Handler = handler.Handler
 type Reply = commandexec.Reply
 type CommandPartition = commandexec.Partition
-type CounterStore = counterstore.Store
-type CounterMutation = counterstore.Mutation
-type CounterUserIdentity = counterstore.UserIdentity
-type CounterReactionIdentity = counterstore.ReactionIdentity
-type CounterPollVoteIdentity = counterstore.PollVoteIdentity
 type PresenceStore = presencestore.Store
 type PresenceStats = presencestore.Stats
 type ChatStore = chatstore.Store
@@ -30,7 +25,7 @@ type pollBlock struct {
 	expiresAt int64
 }
 
-func newHandler(db *sql.DB, bus Bus, counterStore CounterStore, presenceStore PresenceStore, chatStore ChatStore) *Handler {
+func newHandler(db *sql.DB, bus Bus, counterStore counterstore.Store, presenceStore PresenceStore, chatStore ChatStore) *Handler {
 	if counterStore == nil {
 		counterStore = sqlCounterStore{db: db}
 	}

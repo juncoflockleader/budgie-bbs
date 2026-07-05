@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	nats "github.com/nats-io/nats.go"
 )
 
@@ -108,7 +108,7 @@ type JetStreamCounterStoreRepairResult struct {
 	DeletedShardRecords     int
 }
 
-var _ core.CounterStore = (*JetStreamCounterStore)(nil)
+var _ counterstore.Store = (*JetStreamCounterStore)(nil)
 
 func NewJetStreamCounterStore(ctx context.Context, conn *Conn, options JetStreamCounterStoreOptions) (*JetStreamCounterStore, error) {
 	if ctx == nil {
@@ -205,15 +205,15 @@ func (s *JetStreamCounterStore) PollVote(pollID, userID string) (string, bool, e
 	return record.OptionID, true, nil
 }
 
-func (s *JetStreamCounterStore) UserCounterIdentity(userID string) (core.CounterUserIdentity, error) {
+func (s *JetStreamCounterStore) UserCounterIdentity(userID string) (counterstore.UserIdentity, error) {
 	if err := s.requireStore(); err != nil {
-		return core.CounterUserIdentity{}, err
+		return counterstore.UserIdentity{}, err
 	}
 	keys, err := s.keys()
 	if err != nil {
-		return core.CounterUserIdentity{}, err
+		return counterstore.UserIdentity{}, err
 	}
-	identity := core.CounterUserIdentity{}
+	identity := counterstore.UserIdentity{}
 	encodedUserSuffix := "/" + jetStreamCounterKeyPart(userID)
 	for _, key := range keys {
 		switch {
@@ -223,7 +223,7 @@ func (s *JetStreamCounterStore) UserCounterIdentity(userID string) (core.Counter
 				return identity, fmt.Errorf("nats counter store: read user reaction identity %s: %w", key, err)
 			}
 			if found && record.UserID == userID {
-				identity.Reactions = append(identity.Reactions, core.CounterReactionIdentity{
+				identity.Reactions = append(identity.Reactions, counterstore.ReactionIdentity{
 					PostID: record.PostID,
 					UserID: record.UserID,
 					Emoji:  record.Emoji,
@@ -236,7 +236,7 @@ func (s *JetStreamCounterStore) UserCounterIdentity(userID string) (core.Counter
 				return identity, fmt.Errorf("nats counter store: read user poll vote identity %s: %w", key, err)
 			}
 			if found && record.UserID == userID {
-				identity.PollVotes = append(identity.PollVotes, core.CounterPollVoteIdentity{
+				identity.PollVotes = append(identity.PollVotes, counterstore.PollVoteIdentity{
 					PollID:   record.PollID,
 					OptionID: record.OptionID,
 					UserID:   record.UserID,
@@ -259,7 +259,7 @@ func (s *JetStreamCounterStore) ReactionReceivedCount(userID string) (int, error
 	return record.Count, nil
 }
 
-func (s *JetStreamCounterStore) BeginMutation() (core.CounterMutation, error) {
+func (s *JetStreamCounterStore) BeginMutation() (counterstore.Mutation, error) {
 	if err := s.requireStore(); err != nil {
 		return nil, err
 	}

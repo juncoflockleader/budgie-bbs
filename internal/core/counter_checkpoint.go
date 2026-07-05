@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -128,7 +129,7 @@ func buildCounterCheckpointPayload(tx *sql.Tx, sourceHeadSeq, ts int64) (*proto.
 	return payload, nil
 }
 
-func buildCounterCheckpointPayloadFromCounterStore(tx *sql.Tx, sourceHeadSeq, ts int64, store CounterStore) (*proto.CounterCheckpointPayload, error) {
+func buildCounterCheckpointPayloadFromCounterStore(tx *sql.Tx, sourceHeadSeq, ts int64, store counterstore.Store) (*proto.CounterCheckpointPayload, error) {
 	if store == nil {
 		return nil, fmt.Errorf("counter store checkpoint: nil store")
 	}

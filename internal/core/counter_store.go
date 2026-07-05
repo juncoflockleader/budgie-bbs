@@ -45,14 +45,14 @@ func (s sqlCounterStore) PollVote(pollID, userID string) (string, bool, error) {
 	return optionID, true, nil
 }
 
-func (s sqlCounterStore) UserCounterIdentity(userID string) (CounterUserIdentity, error) {
-	identity := CounterUserIdentity{}
+func (s sqlCounterStore) UserCounterIdentity(userID string) (counterstore.UserIdentity, error) {
+	identity := counterstore.UserIdentity{}
 	reactionRows, err := qQuery(s.db, `SELECT post_id, user_id, emoji, ts FROM post_reactions WHERE user_id=? ORDER BY post_id`, userID)
 	if err != nil {
 		return identity, err
 	}
 	for reactionRows.Next() {
-		var row CounterReactionIdentity
+		var row counterstore.ReactionIdentity
 		if err := reactionRows.Scan(&row.PostID, &row.UserID, &row.Emoji, &row.TS); err != nil {
 			_ = reactionRows.Close()
 			return identity, err
@@ -72,7 +72,7 @@ func (s sqlCounterStore) UserCounterIdentity(userID string) (CounterUserIdentity
 		return identity, err
 	}
 	for voteRows.Next() {
-		var row CounterPollVoteIdentity
+		var row counterstore.PollVoteIdentity
 		if err := voteRows.Scan(&row.PollID, &row.OptionID, &row.UserID, &row.TS); err != nil {
 			_ = voteRows.Close()
 			return identity, err

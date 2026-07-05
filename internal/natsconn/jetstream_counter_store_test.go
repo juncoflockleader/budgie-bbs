@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	nats "github.com/nats-io/nats.go"
 )
@@ -389,7 +390,7 @@ func TestCounterShardFailureChaosRepairRecoversCoreReadsAndCheckpoints(t *testin
 	assertNATSCounterCheckpoint(t, c, "poll.option_votes", optionA, 1)
 }
 
-func beginJetStreamCounterMutation(t *testing.T, store *JetStreamCounterStore) core.CounterMutation {
+func beginJetStreamCounterMutation(t *testing.T, store *JetStreamCounterStore) counterstore.Mutation {
 	t.Helper()
 	mutation, err := store.BeginMutation()
 	if err != nil {
