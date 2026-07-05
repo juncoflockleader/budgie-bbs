@@ -25,6 +25,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 	_ "modernc.org/sqlite"
 )
@@ -2457,7 +2458,7 @@ func (c *Core) ListLatestFeedPosts(actor *User, limit, offset int) ([]Post, erro
 		viewerID = actor.ID
 		includePrivate = actor.IsMod()
 	}
-	limit, offset = normalizeReadCachePagination(limit, offset, 30, 100)
+	limit, offset = readmodel.NormalizePagination(limit, offset, 30, 100)
 	cacheKey, cacheOK := c.latestFeedCacheKey(viewerID, includePrivate, limit, offset)
 	if cacheOK {
 		if posts, ok, err := c.readCache.GetLatestFeedPosts(context.Background(), cacheKey); err == nil && ok {
@@ -2500,7 +2501,7 @@ func (c *Core) latestFeedCacheKey(viewerID string, includePrivate bool, limit, o
 	if err != nil {
 		return LatestFeedReadCacheKey{}, false
 	}
-	return latestFeedReadCacheKey(viewerID, includePrivate, limit, offset, appliedSeq, headSeq), true
+	return readmodel.NewLatestFeedKey(viewerID, includePrivate, limit, offset, appliedSeq, headSeq), true
 }
 
 func (c *Core) ListBoardDeletedPosts(boardID, kind string, limit, offset int) ([]PostDeletion, error) {

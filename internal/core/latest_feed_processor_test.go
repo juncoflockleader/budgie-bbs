@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/readmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -247,7 +248,7 @@ func (c *scriptedLatestFeedReadCache) GetLatestFeedPosts(ctx context.Context, ke
 	if !c.hit {
 		return nil, false, nil
 	}
-	return cloneReadCachePosts(c.posts), true, nil
+	return readmodel.ClonePosts(c.posts), true, nil
 }
 
 func (c *scriptedLatestFeedReadCache) PutLatestFeedPosts(ctx context.Context, key LatestFeedReadCacheKey, posts []Post) error {
@@ -256,6 +257,6 @@ func (c *scriptedLatestFeedReadCache) PutLatestFeedPosts(ctx context.Context, ke
 	}
 	c.puts++
 	c.lastKey = key
-	c.posts = cloneReadCachePosts(posts)
+	c.posts = readmodel.ClonePosts(posts)
 	return nil
 }
