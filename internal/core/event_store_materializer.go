@@ -3,17 +3,15 @@ package core
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
-
-const defaultEventStoreProjectionSource = "event-store"
 
 type EventStoreProjectionWorkerConfig struct {
 	Core           *Core
@@ -81,7 +79,7 @@ func NewEventStoreProjectionWorker(config EventStoreProjectionWorkerConfig) (*Ev
 		core:           config.Core,
 		store:          config.Store,
 		partitions:     partitions,
-		source:         normalizeEventStoreProjectionSource(config.Source),
+		source:         logmodel.NormalizeEventStoreProjectionSource(config.Source),
 		batchSize:      batchSize,
 		partitionLimit: partitionLimit,
 		interval:       interval,
@@ -188,10 +186,10 @@ func eventStoreProjectionWorkerShouldContinue(results []EventStorePartitionMater
 // watermark in the same transaction.
 func (c *Core) MaterializeEventStorePartition(ctx context.Context, store EventStore, config EventStorePartitionMaterializationConfig) (EventStorePartitionMaterializationResult, error) {
 	result := EventStorePartitionMaterializationResult{
-		Source:    normalizeEventStoreProjectionSource(config.Source),
+		Source:    logmodel.NormalizeEventStoreProjectionSource(config.Source),
 		Partition: config.Partition.Normalize(),
 	}
-	result.Watermark = eventStoreProjectionWatermarkName(result.Source, result.Partition)
+	result.Watermark = logmodel.EventStoreProjectionWatermarkName(result.Source, result.Partition)
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -378,7 +376,7 @@ func (c *Core) seedEventStoreProjectionWatermarksFromEventPartitionOffsets(ctx c
 	}
 	defer tx.Rollback() //nolint:errcheck
 	for _, seed := range seeds {
-		watermark := eventStoreProjectionWatermarkName(source, seed.partition)
+		watermark := logmodel.EventStoreProjectionWatermarkName(source, seed.partition)
 		if _, err := qExec(tx,
 			`INSERT INTO derived_view_watermarks (view_name, applied_seq, updated_at)
 			 VALUES (?, ?, ?)
@@ -1246,24 +1244,4 @@ func recordEventStoreProjectionWatermarkTx(tx *sql.Tx, watermark string, offset 
 		watermark, offset, nowMS(),
 	)
 	return err
-}
-
-func normalizeEventStoreProjectionSource(source string) string {
-	source = strings.TrimSpace(strings.ToLower(source))
-	if source == "" {
-		return defaultEventStoreProjectionSource
-	}
-	return source
-}
-
-func eventStoreProjectionWatermarkName(source string, partition LogPartition) string {
-	partition = partition.Normalize()
-	return "event-store-projection:" +
-		encodeEventStoreProjectionWatermarkToken(normalizeEventStoreProjectionSource(source)) + ":" +
-		encodeEventStoreProjectionWatermarkToken(partition.Kind) + ":" +
-		encodeEventStoreProjectionWatermarkToken(partition.Key)
-}
-
-func encodeEventStoreProjectionWatermarkToken(value string) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(value))
 }
