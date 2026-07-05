@@ -1,36 +1,18 @@
 package core
 
 import (
-	"strings"
-
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/policy"
 )
 
-// RegistrationIntake holds the optional private signup fields plus the
-// privacy-policy acceptance recorded at account creation. All free-text fields
-// are optional; they are stored in user_private_profiles, never in public state.
-type RegistrationIntake struct {
-	RealName       string
-	Affiliation    string // stored in the `school` column
-	Note           string // reason for joining / contact note
-	PolicyAccepted bool
-	PolicyVersion  string
-}
+type RegistrationIntake = accountmodel.RegistrationIntake
 
 // SaveRegistrationIntake persists the private signup fields and, when accepted,
 // stamps the privacy-policy acceptance time and version. It upserts only the
 // intake-owned columns, leaving registration_email to the verification flow.
 func (c *Core) SaveRegistrationIntake(userID string, in RegistrationIntake) error {
-	realName := strings.TrimSpace(in.RealName)
-	affiliation := strings.TrimSpace(in.Affiliation)
-	note := strings.TrimSpace(in.Note)
 	now := nowMS()
-	var acceptedAt int64
-	version := ""
-	if in.PolicyAccepted {
-		acceptedAt = now
-		version = strings.TrimSpace(in.PolicyVersion)
-	}
+	intake := accountmodel.NormalizeRegistrationIntake(in, now)
 	_, err := qExec(c.DB,
 		`INSERT INTO user_private_profiles (user_id, real_name, school, contact_note, policy_accepted_at, policy_version, updated_at)
 		 VALUES (?,?,?,?,?,?,?)
@@ -41,7 +23,7 @@ func (c *Core) SaveRegistrationIntake(userID string, in RegistrationIntake) erro
 		   policy_accepted_at=excluded.policy_accepted_at,
 		   policy_version=excluded.policy_version,
 		   updated_at=excluded.updated_at`,
-		userID, realName, affiliation, note, acceptedAt, version, now,
+		userID, intake.RealName, intake.Affiliation, intake.Note, intake.PolicyAcceptedAt, intake.PolicyVersion, now,
 	)
 	return err
 }
