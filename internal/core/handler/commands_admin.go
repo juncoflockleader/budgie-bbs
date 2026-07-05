@@ -245,8 +245,8 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 	// Authorize by scope: a global sanction requires the site moderator role;
 	// a board sanction is also available to that board's moderators.
 	if scope == "global" {
-		if !actor.IsMod() {
-			return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
+		if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 	} else {
 		if _, found, err := projections.BoardName(tx, scope); err != nil {
@@ -316,8 +316,8 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 	// Authorize by scope: a global sanction requires the site moderator role;
 	// a board sanction is also clearable by that board's moderators.
 	if scope == "global" {
-		if !actor.IsMod() {
-			return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
+		if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 	} else {
 		if _, found, err := projections.BoardName(tx, scope); err != nil {

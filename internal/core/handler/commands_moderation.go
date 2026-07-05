@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -70,8 +71,8 @@ func (h *Handler) flagPost(actor *User, p proto.FlagPostPayload) Reply {
 }
 
 func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply {
-	if !actor.IsMod() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "moderator role required", false)}
+	if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	p, msg := proto.NormalizeResolveReviewPayload(p)
 	if msg != "" {

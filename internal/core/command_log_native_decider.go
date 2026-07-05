@@ -1503,8 +1503,8 @@ func (e *CommandLogNativeDecisionExecutor) decideResolveReview(ctx context.Conte
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if !actor.IsMod() {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "moderator role required", false)
+	if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	target, found, err := projections.GetModerationReviewLogTarget(e.core.DB, payload.Review)
 	if err != nil {
@@ -1752,8 +1752,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSanctionUser(ctx context.Contex
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if !actor.IsMod() {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "moderator role required", false)
+	if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
@@ -1816,8 +1816,8 @@ func (e *CommandLogNativeDecisionExecutor) decideClearUserSanction(ctx context.C
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if !actor.IsMod() {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "moderator role required", false)
+	if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if msg != "" {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
