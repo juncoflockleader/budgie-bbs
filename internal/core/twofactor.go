@@ -1,7 +1,6 @@
 package core
 
 import (
-	"database/sql"
 	"errors"
 	"strings"
 	"time"
@@ -9,6 +8,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/emailverificationstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/twofactorstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/totp"
 )
@@ -54,10 +54,7 @@ func (c *Core) BeginTOTPEnrollment(userID, accountName string) (secret, uri stri
 	if err != nil {
 		return "", "", err
 	}
-	if _, err = qExec(c.DB,
-		`INSERT INTO user_2fa_settings (user_id, totp_pending, updated_at) VALUES (?,?,?)
-		 ON CONFLICT(user_id) DO UPDATE SET totp_pending=excluded.totp_pending, updated_at=excluded.updated_at`,
-		userID, secret, nowMS()); err != nil {
+	if err = twofactorstore.StorePendingTOTPSecret(c.DB, userID, secret, nowMS()); err != nil {
 		return "", "", err
 	}
 	return secret, totp.OTPAuthURI(accountmodel.TOTPIssuer, accountName, secret), nil
@@ -66,26 +63,22 @@ func (c *Core) BeginTOTPEnrollment(userID, accountName string) (secret, uri stri
 // ConfirmTOTPEnrollment activates a pending TOTP secret once the user proves
 // possession with a valid code.
 func (c *Core) ConfirmTOTPEnrollment(userID, code string) error {
-	var pending string
-	err := qQueryRow(c.DB, `SELECT totp_pending FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&pending)
-	if err == sql.ErrNoRows || strings.TrimSpace(pending) == "" {
-		return ErrTwoFactorNotEnrolled
-	}
+	pending, found, err := twofactorstore.PendingTOTPSecret(c.DB, userID)
 	if err != nil {
 		return err
+	}
+	if !found {
+		return ErrTwoFactorNotEnrolled
 	}
 	if !totp.Validate(pending, code, time.Now().Unix(), 1) {
 		return ErrTwoFactorInvalidCode
 	}
-	_, err = qExec(c.DB,
-		`UPDATE user_2fa_settings SET totp_secret=?, totp_pending='', totp_enrolled=1, updated_at=? WHERE user_id=?`,
-		pending, nowMS(), userID)
-	return err
+	return twofactorstore.ActivatePendingTOTP(c.DB, userID, pending, nowMS())
 }
 
 // DisableTOTP removes a user's authenticator enrollment.
 func (c *Core) DisableTOTP(userID string) error {
-	if _, err := qExec(c.DB, `UPDATE user_2fa_settings SET totp_secret='', totp_pending='', totp_enrolled=0, updated_at=? WHERE user_id=?`, nowMS(), userID); err != nil {
+	if err := twofactorstore.DisableTOTP(c.DB, userID, nowMS()); err != nil {
 		return err
 	}
 	return c.clearBackupCodesIfUnenrolled(userID)
@@ -96,16 +89,12 @@ func (c *Core) EnableEmail2FA(userID string) error {
 	if c.userRegistrationEmail(userID) == "" {
 		return ErrTwoFactorNoEmail
 	}
-	_, err := qExec(c.DB,
-		`INSERT INTO user_2fa_settings (user_id, email_enrolled, updated_at) VALUES (?,1,?)
-		 ON CONFLICT(user_id) DO UPDATE SET email_enrolled=1, updated_at=excluded.updated_at`,
-		userID, nowMS())
-	return err
+	return twofactorstore.EnableEmail2FA(c.DB, userID, nowMS())
 }
 
 // DisableEmail2FA turns off email-code 2FA.
 func (c *Core) DisableEmail2FA(userID string) error {
-	if _, err := qExec(c.DB, `UPDATE user_2fa_settings SET email_enrolled=0, updated_at=? WHERE user_id=?`, nowMS(), userID); err != nil {
+	if err := twofactorstore.DisableEmail2FA(c.DB, userID, nowMS()); err != nil {
 		return err
 	}
 	return c.clearBackupCodesIfUnenrolled(userID)
@@ -215,31 +204,28 @@ func (c *Core) StaffShouldEnroll2FA(userID, role string) (bool, error) {
 
 // VerifyTOTP checks an authenticator code against the user's active secret.
 func (c *Core) VerifyTOTP(userID, code string) error {
-	var secret string
-	var enrolled int
-	var lastStep int64
-	err := qQueryRow(c.DB, `SELECT totp_secret, totp_enrolled, totp_last_step FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&secret, &enrolled, &lastStep)
-	if err == sql.ErrNoRows || enrolled == 0 || strings.TrimSpace(secret) == "" {
-		return ErrTwoFactorNotEnrolled
-	}
+	stored, found, err := twofactorstore.LoadTOTPSecret(c.DB, userID)
 	if err != nil {
 		return err
 	}
-	step, ok := totp.ValidateAt(secret, code, time.Now().Unix(), 1)
+	if !found {
+		return ErrTwoFactorNotEnrolled
+	}
+	step, ok := totp.ValidateAt(stored.Secret, code, time.Now().Unix(), 1)
 	if !ok {
 		return ErrTwoFactorInvalidCode
 	}
 	// Reject replay: a code is single-use per time-step. Atomically claim the
 	// step only if it is newer than the last one accepted (guards concurrent
 	// replays too — exactly one updater wins).
-	if step <= lastStep {
+	if step <= stored.LastStep {
 		return ErrTwoFactorInvalidCode
 	}
-	res, err := qExec(c.DB, `UPDATE user_2fa_settings SET totp_last_step=? WHERE user_id=? AND totp_last_step < ?`, step, userID, step)
+	claimed, err := twofactorstore.ClaimTOTPStep(c.DB, userID, step)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if !claimed {
 		return ErrTwoFactorInvalidCode
 	}
 	return nil
@@ -315,7 +301,9 @@ func (c *Core) VerifyEmail2FACode(userID, code string) error {
 }
 
 func (c *Core) userRegistrationEmail(userID string) string {
-	var email string
-	_ = qQueryRow(c.DB, `SELECT COALESCE(registration_email,'') FROM user_private_profiles WHERE user_id=?`, userID).Scan(&email)
-	return strings.TrimSpace(email)
+	status, err := emailverificationstore.UserStatus(c.DB, userID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(status.Email)
 }

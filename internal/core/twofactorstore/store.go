@@ -2,6 +2,7 @@ package twofactorstore
 
 import (
 	"database/sql"
+	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sqlstore"
@@ -16,6 +17,11 @@ type BackupCode struct {
 type EmailCode struct {
 	CodeHash  string
 	ExpiresAt int64
+}
+
+type TOTPSecret struct {
+	Secret   string
+	LastStep int64
 }
 
 func SecuritySettings(db *sql.DB) (*accountmodel.SecuritySettings, error) {
@@ -57,6 +63,77 @@ func TwoFactorStatus(db *sql.DB, userID string) (accountmodel.TwoFactorStatus, e
 	return st, nil
 }
 
+func StorePendingTOTPSecret(db *sql.DB, userID, secret string, updatedAt int64) error {
+	_, err := sqlstore.Exec(db,
+		`INSERT INTO user_2fa_settings (user_id, totp_pending, updated_at) VALUES (?,?,?)
+		 ON CONFLICT(user_id) DO UPDATE SET totp_pending=excluded.totp_pending, updated_at=excluded.updated_at`,
+		userID, secret, updatedAt,
+	)
+	return err
+}
+
+func PendingTOTPSecret(db *sql.DB, userID string) (string, bool, error) {
+	var secret string
+	err := sqlstore.QueryRow(db, `SELECT totp_pending FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&secret)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if strings.TrimSpace(secret) == "" {
+		return "", false, nil
+	}
+	return secret, true, nil
+}
+
+func ActivatePendingTOTP(db *sql.DB, userID, secret string, updatedAt int64) error {
+	_, err := sqlstore.Exec(db,
+		`UPDATE user_2fa_settings SET totp_secret=?, totp_pending='', totp_enrolled=1, updated_at=? WHERE user_id=?`,
+		secret, updatedAt, userID,
+	)
+	return err
+}
+
+func DisableTOTP(db *sql.DB, userID string, updatedAt int64) error {
+	_, err := sqlstore.Exec(db, `UPDATE user_2fa_settings SET totp_secret='', totp_pending='', totp_enrolled=0, updated_at=? WHERE user_id=?`, updatedAt, userID)
+	return err
+}
+
+func EnableEmail2FA(db *sql.DB, userID string, updatedAt int64) error {
+	_, err := sqlstore.Exec(db,
+		`INSERT INTO user_2fa_settings (user_id, email_enrolled, updated_at) VALUES (?,1,?)
+		 ON CONFLICT(user_id) DO UPDATE SET email_enrolled=1, updated_at=excluded.updated_at`,
+		userID, updatedAt,
+	)
+	return err
+}
+
+func DisableEmail2FA(db *sql.DB, userID string, updatedAt int64) error {
+	_, err := sqlstore.Exec(db, `UPDATE user_2fa_settings SET email_enrolled=0, updated_at=? WHERE user_id=?`, updatedAt, userID)
+	return err
+}
+
+func LoadTOTPSecret(db *sql.DB, userID string) (TOTPSecret, bool, error) {
+	var secret TOTPSecret
+	var enrolled int
+	err := sqlstore.QueryRow(db, `SELECT totp_secret, totp_enrolled, totp_last_step FROM user_2fa_settings WHERE user_id=?`, userID).Scan(&secret.Secret, &enrolled, &secret.LastStep)
+	if err == sql.ErrNoRows {
+		return TOTPSecret{}, false, nil
+	}
+	if err != nil {
+		return TOTPSecret{}, false, err
+	}
+	if enrolled == 0 || strings.TrimSpace(secret.Secret) == "" {
+		return TOTPSecret{}, false, nil
+	}
+	return secret, true, nil
+}
+
+func ClaimTOTPStep(db *sql.DB, userID string, step int64) (bool, error) {
+	return execChanged(db, `UPDATE user_2fa_settings SET totp_last_step=? WHERE user_id=? AND totp_last_step < ?`, step, userID, step)
+}
+
 func BackupCodesRemaining(db *sql.DB, userID string) int {
 	var n int
 	_ = sqlstore.QueryRow(db, `SELECT COUNT(*) FROM two_factor_backup_codes WHERE user_id=? AND used=0`, userID).Scan(&n)
@@ -79,18 +156,10 @@ func ReplaceBackupCodes(tx *sql.Tx, userID string, codes []BackupCode) error {
 }
 
 func ClaimBackupCode(db *sql.DB, userID, codeHash string) (bool, error) {
-	res, err := sqlstore.Exec(db,
+	return execChanged(db,
 		`UPDATE two_factor_backup_codes SET used=1 WHERE user_id=? AND code_hash=? AND used=0`,
 		userID, codeHash,
 	)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
 }
 
 func StoreEmailCode(tx *sql.Tx, userID, codeHash string, createdAt, expiresAt int64) error {
@@ -120,7 +189,11 @@ func DeleteEmailCode(db *sql.DB, userID string) error {
 }
 
 func ClaimEmailCode(db *sql.DB, userID, codeHash string) (bool, error) {
-	res, err := sqlstore.Exec(db, `DELETE FROM two_factor_email_codes WHERE user_id=? AND code_hash=?`, userID, codeHash)
+	return execChanged(db, `DELETE FROM two_factor_email_codes WHERE user_id=? AND code_hash=?`, userID, codeHash)
+}
+
+func execChanged(execable sqlstore.SQLLike, query string, args ...any) (bool, error) {
+	res, err := sqlstore.Exec(execable, query, args...)
 	if err != nil {
 		return false, err
 	}
