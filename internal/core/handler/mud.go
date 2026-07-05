@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -74,9 +75,6 @@ var mudDirAliases = map[string]string{
 
 var mudDirNames = map[string]string{"n": "north", "s": "south", "e": "east", "w": "west", "u": "up", "d": "down"}
 var mudDirOpposite = map[string]string{"n": "the south", "s": "the north", "e": "the west", "w": "the east", "u": "below", "d": "above"}
-
-func mudRoomScope(roomID string) string { return "mud:room:" + roomID }
-func mudUserScope(userID string) string { return "mud:user:" + userID }
 
 // --- Occupancy (in-memory, per-node) ---------------------------------------
 
@@ -180,9 +178,8 @@ func mudAck() Reply { return Reply{Result: &proto.AckResult{}} }
 // mudPublishView delivers a private view/feedback event to the acting player.
 // The command always runs on the player's own node, so local delivery suffices.
 func (h *Handler) mudPublishView(userID string, v *proto.MUDViewPayload, now time.Time) {
-	v.TS = now.UnixMilli()
-	scope := mudUserScope(userID)
-	h.bus.Publish(&proto.Event{Kind: proto.EvtMUDView, Scopes: []string{scope}, Payload: v, TS: v.TS})
+	scopes, payload := commandevents.MUDView(userID, v, now.UnixMilli())
+	h.bus.Publish(&proto.Event{Kind: proto.EvtMUDView, Scopes: scopes, Payload: payload, TS: payload.TS})
 }
 
 // executeMUDCommand parses and runs a single MUD command line for the actor.
@@ -201,13 +198,13 @@ func (h *Handler) executeMUDCommand(actor *User, p proto.MUDCommandPayload) Repl
 	case "quit", "leave", "exit":
 		mudOccupancy().leave(actor.ID)
 		h.mudBroadcast(roomID, "leave", actor.Name, actor.Name+" fades away.", now)
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Left: true}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLeft(), now)
 
 	case "help", "?", "commands":
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: mudHelpLines()}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLines(mudHelpLines()...), now)
 
 	case "exits":
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{mudExitsLine(roomID)}}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLines(mudExitsLine(roomID)), now)
 
 	case "who", "here":
 		others := mudOccupancy().occupants(roomID, actor.ID, now)
@@ -215,12 +212,12 @@ func (h *Handler) executeMUDCommand(actor *User, p proto.MUDCommandPayload) Repl
 		if len(others) > 0 {
 			line = "Here with you: " + strings.Join(others, ", ")
 		}
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{line}}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLines(line), now)
 
 	case "say", "'":
 		text := strings.TrimSpace(arg)
 		if text == "" {
-			h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{"Say what?"}}, now)
+			h.mudPublishView(actor.ID, commandevents.MUDViewLines("Say what?"), now)
 			break
 		}
 		h.mudEnsurePresence(actor, roomID, now)
@@ -229,7 +226,7 @@ func (h *Handler) executeMUDCommand(actor *User, p proto.MUDCommandPayload) Repl
 	case "emote", "pose", ":", "me":
 		text := strings.TrimSpace(arg)
 		if text == "" {
-			h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{"Emote what?"}}, now)
+			h.mudPublishView(actor.ID, commandevents.MUDViewLines("Emote what?"), now)
 			break
 		}
 		h.mudEnsurePresence(actor, roomID, now)
@@ -240,14 +237,14 @@ func (h *Handler) executeMUDCommand(actor *User, p proto.MUDCommandPayload) Repl
 
 	case "", "look", "l":
 		h.mudEnsurePresence(actor, roomID, now)
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Room: h.mudRoomView(roomID, actor.ID, now)}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewRoom(h.mudRoomView(roomID, actor.ID, now)), now)
 
 	default:
 		if _, ok := mudDirAliases[verb]; ok {
 			h.mudMove(actor, roomID, verb, now)
 			break
 		}
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{`Hm? Try "help" for a list of commands.`}}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLines(`Hm? Try "help" for a list of commands.`), now)
 	}
 	return mudAck()
 }
@@ -263,22 +260,22 @@ func (h *Handler) mudEnsurePresence(actor *User, roomID string, now time.Time) {
 func (h *Handler) mudMove(actor *User, fromRoom, rawDir string, now time.Time) {
 	dir, ok := mudDirAliases[strings.ToLower(strings.TrimSpace(rawDir))]
 	if !ok {
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{"Go where? Try a direction like north, south, east, west."}}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLines("Go where? Try a direction like north, south, east, west."), now)
 		return
 	}
 	dest, ok := mudWorld[fromRoom].Exits[dir]
 	if !ok {
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{"You can't go that way."}}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLines("You can't go that way."), now)
 		return
 	}
 	if err := h.mudSetPlayerRoom(actor.ID, dest); err != nil {
-		h.mudPublishView(actor.ID, &proto.MUDViewPayload{Lines: []string{"You stumble and can't move right now."}}, now)
+		h.mudPublishView(actor.ID, commandevents.MUDViewLines("You stumble and can't move right now."), now)
 		return
 	}
 	mudOccupancy().touch(actor.ID, actor.Name, dest, now)
 	h.mudBroadcast(fromRoom, "leave", actor.Name, actor.Name+" heads "+mudDirNames[dir]+".", now)
 	h.mudBroadcast(dest, "enter", actor.Name, actor.Name+" arrives from "+mudDirOpposite[dir]+".", now)
-	h.mudPublishView(actor.ID, &proto.MUDViewPayload{Room: h.mudRoomView(dest, actor.ID, now)}, now)
+	h.mudPublishView(actor.ID, commandevents.MUDViewRoom(h.mudRoomView(dest, actor.ID, now)), now)
 }
 
 func (h *Handler) mudRoomView(roomID, actorID string, now time.Time) *proto.MUDRoomView {
@@ -301,14 +298,14 @@ func (h *Handler) mudRoomView(roomID, actorID string, now time.Time) *proto.MUDR
 // (and sibling nodes), mirroring the ephemeral chat path.
 func (h *Handler) mudBroadcast(roomID, kind, actor, text string, now time.Time) {
 	ts := now.UnixMilli()
-	scope := mudRoomScope(roomID)
+	scopes, payload := commandevents.MUDRoom(roomID, kind, actor, text, ts)
 	h.bus.Publish(&proto.Event{
 		Kind:    proto.EvtMUDRoom,
-		Scopes:  []string{scope},
-		Payload: &proto.MUDRoomEventPayload{Room: roomID, Kind: kind, Actor: actor, Text: text, TS: ts},
+		Scopes:  scopes,
+		Payload: payload,
 		TS:      ts,
 	})
-	pgNotifyEphemeral(h.db, string(proto.EvtMUDRoom), newID("mud_"), scope)
+	pgNotifyEphemeral(h.db, string(proto.EvtMUDRoom), newID("mud_"), strings.Join(scopes, ","))
 }
 
 func mudExitsLine(roomID string) string {

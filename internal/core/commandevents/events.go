@@ -23,6 +23,27 @@ func PresenceUpdate(spec PresenceUpdateSpec) ([]string, *proto.PresenceUpdatePay
 	return scopes, &payload
 }
 
+func MUDView(userID string, payload *proto.MUDViewPayload, ts int64) ([]string, *proto.MUDViewPayload) {
+	payload.TS = ts
+	return []string{"mud:user:" + userID}, payload
+}
+
+func MUDViewLeft() *proto.MUDViewPayload {
+	return &proto.MUDViewPayload{Left: true}
+}
+
+func MUDViewLines(lines ...string) *proto.MUDViewPayload {
+	return &proto.MUDViewPayload{Lines: lines}
+}
+
+func MUDViewRoom(room *proto.MUDRoomView) *proto.MUDViewPayload {
+	return &proto.MUDViewPayload{Room: room}
+}
+
+func MUDRoom(roomID, kind, actor, text string, ts int64) ([]string, *proto.MUDRoomEventPayload) {
+	return []string{"mud:room:" + roomID}, &proto.MUDRoomEventPayload{Room: roomID, Kind: kind, Actor: actor, Text: text, TS: ts}
+}
+
 func BoardFavoriteSet(userID, boardID, folderID string, favorite bool, position *int, ts int64) ([]string, *proto.BoardFavoriteSetPayload) {
 	payload := &proto.BoardFavoriteSetPayload{UserID: userID, Board: boardID, Favorite: favorite, FolderID: folderID, Position: position, TS: ts}
 	return []string{"board:" + boardID, "user:" + userID}, payload

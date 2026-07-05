@@ -50,6 +50,34 @@ func TestRealtimeEvents(t *testing.T) {
 	}
 }
 
+func TestMUDEvents(t *testing.T) {
+	scopes, view := MUDView("usr_alice", MUDViewLines("hello", "there"), 1234)
+	requireScopes(t, scopes, "mud:user:usr_alice")
+	if len(view.Lines) != 2 || view.Lines[0] != "hello" || view.Lines[1] != "there" || view.TS != 1234 {
+		t.Fatalf("MUDView lines payload = %+v", view)
+	}
+
+	roomView := &proto.MUDRoomView{ID: "square", Name: "Square"}
+	scopes, roomPayload := MUDView("usr_alice", MUDViewRoom(roomView), 1235)
+	requireScopes(t, scopes, "mud:user:usr_alice")
+	if roomPayload.Room == nil || roomPayload.Room.ID != "square" || roomPayload.TS != 1235 {
+		t.Fatalf("MUDView room payload = %+v", roomPayload)
+	}
+
+	scopes, left := MUDView("usr_alice", MUDViewLeft(), 1236)
+	requireScopes(t, scopes, "mud:user:usr_alice")
+	if !left.Left || left.TS != 1236 {
+		t.Fatalf("MUDView left payload = %+v", left)
+	}
+
+	scopes, roomEvent := MUDRoom("square", "say", "alice", `alice says, "hi"`, 1237)
+	requireScopes(t, scopes, "mud:room:square")
+	if roomEvent.Room != "square" || roomEvent.Kind != "say" || roomEvent.Actor != "alice" ||
+		roomEvent.Text != `alice says, "hi"` || roomEvent.TS != 1237 {
+		t.Fatalf("MUDRoom payload = %+v", roomEvent)
+	}
+}
+
 func TestBoardAutomodRuleEvents(t *testing.T) {
 	scopes, payload := BoardAutomodRuleSet(
 		"rule_1", "general", true, 7,
