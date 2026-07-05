@@ -2545,16 +2545,12 @@ func (c *Core) ListPasswordRecoveryRequests(status string, limit, offset int) ([
 }
 
 func (c *Core) ReviewPasswordRecoveryRequest(requestID, reviewerID, decision, newPassword, note string) (*PasswordRecoveryRequest, error) {
-	var passwordHash string
-	if strings.ToLower(strings.TrimSpace(decision)) == "reset" {
-		if strings.TrimSpace(newPassword) == "" {
-			return nil, fmt.Errorf("new password required")
-		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
-		if err != nil {
-			return nil, err
-		}
-		passwordHash = string(hash)
+	passwordHash, err := accountmodel.PasswordRecoveryReviewHash(decision, newPassword, func(password string) (string, error) {
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		return string(hash), err
+	})
+	if err != nil {
+		return nil, err
 	}
 	return projections.ReviewPasswordRecoveryRequest(c.DB, requestID, reviewerID, decision, passwordHash, note)
 }
