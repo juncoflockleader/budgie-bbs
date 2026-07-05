@@ -223,8 +223,8 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, thread.Board)
 	canModerateThread := commandrules.ActorCanModerateBoardThreads(h.db, actor, thread.Board)
-	if thread.Locked && !canModerateBoard {
-		return Reply{Err: errDetail(proto.ErrThreadLocked, "thread is locked", false)}
+	if errDetail := commandrules.RequireThreadOpenForReply(thread.Locked, canModerateBoard); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	if errDetail := commandrules.RequireReplyBoardAccess(h.db, actor, thread.Board, settings, canModerateBoard); errDetail != nil {
 		return Reply{Err: errDetail}

@@ -518,8 +518,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 	}
 	canModerateBoard := decisionCtx.CanModerateBoard
 	canModerateThread := decisionCtx.CanModerateThread
-	if thread.Locked && !canModerateBoard {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrThreadLocked, "thread is locked", false)
+	if errDetail := commandrules.RequireThreadOpenForReply(thread.Locked, canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if errDetail := commandrules.RequireReplyBoardAccessStrict(e.core.DB, actor, thread.Board, settings, canModerateBoard); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
@@ -724,8 +724,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if thread.Locked && !canModerateBoard {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrThreadLocked, "thread is locked", false)
+	if errDetail := commandrules.RequireThreadOpenForReply(thread.Locked, canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if errDetail := commandrules.RequireReplyBoardAccessStrict(e.core.DB, actor, thread.Board, settings, canModerateBoard); errDetail != nil {
 		return nativeCommandDecision{}, errDetail

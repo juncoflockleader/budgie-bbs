@@ -410,8 +410,8 @@ func (h *Handler) curatePost(actor *User, p proto.CuratePostPayload) Reply {
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "cannot curate a redacted post", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot curate a redacted post"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil {

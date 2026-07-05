@@ -3,6 +3,7 @@ package handler
 import (
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -27,8 +28,8 @@ func (h *Handler) reactPost(actor *User, p proto.ReactPostPayload) Reply {
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "cannot react to a redacted post", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot react to a redacted post"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil || thread == nil {

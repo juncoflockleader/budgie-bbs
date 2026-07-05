@@ -244,6 +244,13 @@ func RequirePostRedacted(redacted bool, message string) *proto.ErrorDetail {
 	return nil
 }
 
+func RequireThreadOpenForReply(locked, canModerateBoard bool) *proto.ErrorDetail {
+	if locked && !canModerateBoard {
+		return newErrDetail(proto.ErrThreadLocked, "thread is locked", false)
+	}
+	return nil
+}
+
 func RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow bool) *proto.ErrorDetail {
 	if canModerateThread {
 		return nil
