@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/counterstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -3534,7 +3535,7 @@ func ClearUserSanctions(tx *sql.Tx, userID, kind, scope string) (int64, error) {
 }
 
 func CheckProcessed(db *sql.DB, partitionKind, partitionKey, actorID, cid, commandHash string) (string, bool, bool) {
-	partitionKind, partitionKey = normalizeCommandPartition(partitionKind, partitionKey)
+	partitionKind, partitionKey = commandexec.NormalizePartitionFields(partitionKind, partitionKey)
 	var result, storedHash string
 	err := QQueryRow(db,
 		`SELECT result_json, command_hash
@@ -3555,7 +3556,7 @@ func CheckProcessed(db *sql.DB, partitionKind, partitionKey, actorID, cid, comma
 }
 
 func RecordProcessed(tx *sql.Tx, partitionKind, partitionKey, actorID, cid, commandHash, resultJSON string) error {
-	partitionKind, partitionKey = normalizeCommandPartition(partitionKind, partitionKey)
+	partitionKind, partitionKey = commandexec.NormalizePartitionFields(partitionKind, partitionKey)
 	// Prune entries older than 10 minutes while we're here.
 	cutoff := time.Now().Add(-10 * time.Minute).UnixMilli()
 	if _, err := QExec(tx, `DELETE FROM processed_commands_v2 WHERE processed_at<?`, cutoff); err != nil {
@@ -3577,18 +3578,6 @@ func RecordProcessed(tx *sql.Tx, partitionKind, partitionKey, actorID, cid, comm
 		partitionKind, partitionKey, actorID, cid, commandHash, resultJSON, NowMS(),
 	)
 	return err
-}
-
-func normalizeCommandPartition(kind, key string) (string, string) {
-	kind = strings.TrimSpace(kind)
-	key = strings.TrimSpace(key)
-	if kind == "" {
-		kind = "global"
-	}
-	if key == "" {
-		key = "global"
-	}
-	return kind, key
 }
 
 func UpsertReaction(tx *sql.Tx, postID, userID, emoji string, ts int64) error {

@@ -9,15 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 func TestPartitionLaneIndexIsDeterministic(t *testing.T) {
 	partition := CommandPartition{Kind: "board", Key: "general"}
-	first := partitionLaneIndex(partition, 16)
+	first := commandexec.PartitionLaneIndex(partition, 16)
 	for i := 0; i < 20; i++ {
-		if got := partitionLaneIndex(partition, 16); got != first {
+		if got := commandexec.PartitionLaneIndex(partition, 16); got != first {
 			t.Fatalf("lane changed from %d to %d", first, got)
 		}
 	}
@@ -25,10 +26,10 @@ func TestPartitionLaneIndexIsDeterministic(t *testing.T) {
 
 func TestPartitionLaneIndexFallsBackToLaneZero(t *testing.T) {
 	partition := CommandPartition{Kind: "board", Key: "general"}
-	if got := partitionLaneIndex(partition, 0); got != 0 {
+	if got := commandexec.PartitionLaneIndex(partition, 0); got != 0 {
 		t.Fatalf("lane for zero lanes = %d, want 0", got)
 	}
-	if got := partitionLaneIndex(partition, 1); got != 0 {
+	if got := commandexec.PartitionLaneIndex(partition, 1); got != 0 {
 		t.Fatalf("lane for one lane = %d, want 0", got)
 	}
 }
@@ -202,7 +203,7 @@ func partitionsOnDifferentLanes(t *testing.T, lanes int) (CommandPartition, Comm
 	a := CommandPartition{Kind: "board", Key: "general"}
 	for _, key := range []string{"life", "tech", "music", "sports", "arts"} {
 		b := CommandPartition{Kind: "board", Key: key}
-		if partitionLaneIndex(a, lanes) != partitionLaneIndex(b, lanes) {
+		if commandexec.PartitionLaneIndex(a, lanes) != commandexec.PartitionLaneIndex(b, lanes) {
 			return a, b
 		}
 	}

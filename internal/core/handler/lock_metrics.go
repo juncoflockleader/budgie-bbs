@@ -4,6 +4,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 )
 
@@ -28,7 +29,7 @@ func init() {
 }
 
 func observePartitionLockWait(partition CommandPartition, waitMS float64) {
-	partition = normalizeCommandPartition(partition)
+	partition = commandexec.NormalizePartition(partition)
 	key := partition.Kind + "\x00" + partition.Key
 
 	partitionLockWaitMu.Lock()

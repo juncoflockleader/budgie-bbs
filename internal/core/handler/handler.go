@@ -2,11 +2,8 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
-	"hash/fnv"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/chatstore"
@@ -298,7 +295,7 @@ func (h *Handler) runPartitioned(ctx context.Context) {
 	for {
 		select {
 		case env := <-h.queue:
-			idx := partitionLaneIndex(env.partition, len(lanes))
+			idx := commandexec.PartitionLaneIndex(env.partition, len(lanes))
 			select {
 			case lanes[idx] <- env:
 			case <-ctx.Done():
@@ -365,20 +362,4 @@ func (h *Handler) ExecutePartition(ctx context.Context, actor *User, name proto.
 	case <-ctx.Done():
 		return Reply{Err: errDetail(proto.ErrForbidden, "request cancelled", false)}
 	}
-}
-
-func partitionLaneIndex(partition CommandPartition, lanes int) int {
-	if lanes <= 1 {
-		return 0
-	}
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(partition.Kind))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(partition.Key))
-	return int(h.Sum64() % uint64(lanes))
-}
-
-func hashCommand(name proto.CommandName, payload json.RawMessage) string {
-	sum := sha256.Sum256(append([]byte(name+"\x00"), payload...))
-	return hex.EncodeToString(sum[:])
 }

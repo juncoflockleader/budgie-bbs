@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -14,8 +15,8 @@ func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.Raw
 	if actor != nil {
 		actorID = actor.ID
 	}
-	partition = normalizeCommandPartition(partition)
-	commandHash := hashCommand(name, payload)
+	partition = commandexec.NormalizePartition(partition)
+	commandHash := commandexec.HashCommand(name, payload)
 	if cid != "" {
 		if cached, ok, conflict := checkProcessed(h.db, partition.Kind, partition.Key, actorID, cid, commandHash); conflict {
 			return Reply{Err: errDetail(proto.ErrConflict, "command id was already used with a different payload", false)}
@@ -38,16 +39,6 @@ func (h *Handler) dispatch(actor *User, name proto.CommandName, payload json.Raw
 		}
 	}
 	return reply
-}
-
-func normalizeCommandPartition(partition CommandPartition) CommandPartition {
-	if partition.Kind == "" {
-		partition.Kind = "global"
-	}
-	if partition.Key == "" {
-		partition.Key = "global"
-	}
-	return partition
 }
 
 func (h *Handler) route(actor *User, name proto.CommandName, payload json.RawMessage) Reply {
