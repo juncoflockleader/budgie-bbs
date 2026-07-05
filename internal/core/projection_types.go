@@ -59,4 +59,3 @@ type ModerationReview = projections.ModerationReview
 type UserSanction = projections.UserSanction
 type Poll = projections.Poll
 type PollOption = projections.PollOption
-type Notification = projections.Notification

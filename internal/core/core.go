@@ -2479,7 +2479,7 @@ func (c *Core) applyCounterStorePoll(poll *Poll, viewerUserID string) error {
 
 // ── M8: Notifications ───────────────────────────────────────────────────────
 
-func (c *Core) ListNotifications(userID string, limit, offset int, unreadOnly bool) ([]Notification, error) {
+func (c *Core) ListNotifications(userID string, limit, offset int, unreadOnly bool) ([]projections.Notification, error) {
 	return projections.ListNotifications(c.DB, userID, limit, offset, unreadOnly)
 }
 func (c *Core) CountUnreadNotifications(userID string) (int, error) {

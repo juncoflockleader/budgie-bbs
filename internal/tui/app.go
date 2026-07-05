@@ -18,6 +18,7 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandexec"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -77,7 +78,7 @@ type (
 	}
 	searchMsg        struct{ posts []core.Post }
 	notificationsMsg struct {
-		notifications []core.Notification
+		notifications []projections.Notification
 		unread        int
 	}
 	notificationStatusMsg struct{ unread int }
@@ -169,7 +170,7 @@ type model struct {
 	canCreatePoll bool
 	trustLoaded   bool
 	// Notifications tracked in the current actor session.
-	notifications []core.Notification
+	notifications []projections.Notification
 	unreadNotifs  int
 	profile       *core.UserProfile
 	profileField  profileField
@@ -2177,7 +2178,7 @@ func (i threadItem) Description() string {
 func (i threadItem) FilterValue() string { return i.t.Title }
 
 type notificationItem struct {
-	n     core.Notification
+	n     projections.Notification
 	title string
 }
 
@@ -2194,7 +2195,7 @@ func (m *model) notificationKindLabel(kind string) string {
 	}
 }
 
-func (m *model) notificationItemTitle(n core.Notification) string {
+func (m *model) notificationItemTitle(n projections.Notification) string {
 	label := m.notificationKindLabel(n.Kind)
 	line := m.tr(msgCommonPostFormat, map[string]string{"label": label, "thread": n.ThreadID})
 	if n.Read {
@@ -2768,7 +2769,7 @@ func (m *model) selectedThread() *core.Thread {
 	return &sel.t
 }
 
-func (m *model) selectedNotification() *core.Notification {
+func (m *model) selectedNotification() *projections.Notification {
 	sel, ok := m.list.SelectedItem().(notificationItem)
 	if !ok {
 		return nil

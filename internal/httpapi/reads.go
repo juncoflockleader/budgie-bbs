@@ -1090,7 +1090,7 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 	if notifs == nil {
 		// A nil slice marshals to JSON null; return [] so clients can safely
 		// iterate (an empty list must not crash the notifications page).
-		notifs = []core.Notification{}
+		notifs = []projections.Notification{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": notifs, "unreadCount": unread})
 }
