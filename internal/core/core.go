@@ -1693,13 +1693,7 @@ func (c *Core) ListBoards() ([]Board, error)        { return projections.ListBoa
 func (c *Core) ListCategories() ([]Category, error) { return projections.ListCategories(c.DB) }
 func (c *Core) GetBoard(id string) (*Board, error)  { return projections.GetBoard(c.DB, id) }
 
-type CategoryUpdate struct {
-	Name        *string
-	Description *string
-	ParentID    *string
-	Position    *int
-	Visibility  *string
-}
+type CategoryUpdate = categorymodel.UpdatePatch
 
 func (c *Core) ListCategoriesForUser(viewer *User) ([]Category, error) {
 	categories, err := c.ListCategories()
@@ -1736,48 +1730,20 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) 
 		return nil, sql.ErrNoRows
 	}
 
-	name := category.Name
-	description := category.Description
-	parentID := category.ParentID
-	position := category.Position
-	visibility := category.Visibility
-	if patch.Name != nil {
-		name = strings.TrimSpace(*patch.Name)
-		if name == "" {
-			return nil, fmt.Errorf("category name required")
-		}
+	plan, err := categorymodel.PlanUpdate(*category, patch)
+	if err != nil {
+		return nil, err
 	}
-	if patch.Description != nil {
-		description = strings.TrimSpace(*patch.Description)
-	}
-	parentChanged := false
-	if patch.ParentID != nil {
-		parentID = strings.TrimSpace(*patch.ParentID)
-		parentChanged = parentID != category.ParentID
-		if parentID == categoryID {
-			return nil, fmt.Errorf("category cannot be its own parent")
-		}
-		if err := validateCategoryParentTx(tx, categoryID, parentID); err != nil {
+	if plan.ParentChanged {
+		if err := validateCategoryParentTx(tx, categoryID, plan.ParentID); err != nil {
 			return nil, err
 		}
 	}
-	if patch.Position != nil {
-		if *patch.Position < 0 {
-			return nil, fmt.Errorf("position cannot be negative")
-		}
-		position = *patch.Position
-	} else if parentChanged {
-		position, err = projections.NextCategoryPosition(tx, parentID)
+	if patch.Position == nil && plan.ParentChanged {
+		plan.Position, err = projections.NextCategoryPosition(tx, plan.ParentID)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if patch.Visibility != nil {
-		normalized, err := categorymodel.NormalizeVisibility(*patch.Visibility)
-		if err != nil {
-			return nil, err
-		}
-		visibility = normalized
 	}
 
 	ts := nowMS()
@@ -1785,11 +1751,11 @@ func (c *Core) UpdateCategory(actorID, categoryID string, patch CategoryUpdate) 
 		`UPDATE categories
 		    SET name=?, description=?, parent_id=?, position=?, visibility=?, updated_at=?
 		  WHERE id=?`,
-		name, description, parentID, position, visibility, ts, categoryID,
+		plan.Name, plan.Description, plan.ParentID, plan.Position, plan.Visibility, ts, categoryID,
 	); err != nil {
 		return nil, err
 	}
-	if _, err := qExec(tx, `UPDATE boards SET name=?, description=? WHERE id=?`, name, description, categoryID); err != nil {
+	if _, err := qExec(tx, `UPDATE boards SET name=?, description=? WHERE id=?`, plan.Name, plan.Description, categoryID); err != nil {
 		return nil, err
 	}
 	updated, err := getCategoryTx(tx, categoryID)
