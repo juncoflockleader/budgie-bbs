@@ -60,7 +60,7 @@ func (c *Core) ProcessLatestFeedOnce(batchSize int) (LatestFeedProcessResult, er
 	return c.processFeedMaterializationOnce(batchSize, feedMaterializationSpec{
 		view:      projections.DerivedViewLatestFeed,
 		errPrefix: "latest feed",
-		apply:     applyLatestFeedEvent,
+		apply:     projections.ApplyLatestFeedEvent,
 	})
 }
 
@@ -96,22 +96,5 @@ func latestFeedRunProgress(result LatestFeedProcessResult) processorRunProgress 
 		Events:     result.Events,
 		Log:        result.Events > 0 || result.AppliedSeq < result.HeadSeq,
 		Extra:      []any{"feedChanges", result.FeedChanges},
-	}
-}
-
-func applyLatestFeedEvent(tx *sql.Tx, evt *proto.Event) (bool, error) {
-	switch payload := evt.Payload.(type) {
-	case *proto.PostAppendedPayload:
-		return projections.UpsertLatestFeedPost(tx, payload.ID)
-	case *proto.PostRedactedPayload:
-		return projections.DeleteLatestFeedPost(tx, payload.ID)
-	case *proto.PostRestoredPayload:
-		return projections.UpsertLatestFeedPost(tx, payload.ID)
-	case *proto.PostPurgedPayload:
-		return projections.DeleteLatestFeedPost(tx, payload.ID)
-	case *proto.ThreadMovedPayload:
-		return projections.MoveLatestFeedThread(tx, payload.Thread, payload.ToBoard)
-	default:
-		return false, nil
 	}
 }

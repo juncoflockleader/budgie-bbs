@@ -620,6 +620,14 @@ func MoveResidentFeedThread(tx *sql.Tx, threadID, toBoard string) (bool, error) 
 	return affected > 0, err
 }
 
+func ApplyResidentFeedEvent(tx *sql.Tx, evt *proto.Event) (bool, error) {
+	return applyFeedEvent(tx, evt, feedProjectionOps{
+		upsertPost: UpsertResidentFeedPost,
+		deletePost: DeleteResidentFeedPost,
+		moveThread: MoveResidentFeedThread,
+	})
+}
+
 func UpsertLatestFeedPost(tx *sql.Tx, postID string) (bool, error) {
 	res, err := QExec(tx,
 		`INSERT INTO latest_feed_posts (post_id, thread_id, board_id, created_seq, updated_seq)
@@ -657,6 +665,37 @@ func MoveLatestFeedThread(tx *sql.Tx, threadID, toBoard string) (bool, error) {
 	}
 	affected, err := res.RowsAffected()
 	return affected > 0, err
+}
+
+func ApplyLatestFeedEvent(tx *sql.Tx, evt *proto.Event) (bool, error) {
+	return applyFeedEvent(tx, evt, feedProjectionOps{
+		upsertPost: UpsertLatestFeedPost,
+		deletePost: DeleteLatestFeedPost,
+		moveThread: MoveLatestFeedThread,
+	})
+}
+
+type feedProjectionOps struct {
+	upsertPost func(*sql.Tx, string) (bool, error)
+	deletePost func(*sql.Tx, string) (bool, error)
+	moveThread func(*sql.Tx, string, string) (bool, error)
+}
+
+func applyFeedEvent(tx *sql.Tx, evt *proto.Event, ops feedProjectionOps) (bool, error) {
+	switch payload := evt.Payload.(type) {
+	case *proto.PostAppendedPayload:
+		return ops.upsertPost(tx, payload.ID)
+	case *proto.PostRedactedPayload:
+		return ops.deletePost(tx, payload.ID)
+	case *proto.PostRestoredPayload:
+		return ops.upsertPost(tx, payload.ID)
+	case *proto.PostPurgedPayload:
+		return ops.deletePost(tx, payload.ID)
+	case *proto.ThreadMovedPayload:
+		return ops.moveThread(tx, payload.Thread, payload.ToBoard)
+	default:
+		return false, nil
+	}
 }
 
 func SetPostFlags(tx *sql.Tx, postID string, marked, recommended, noReply, tex, mailBack bool, seq int64) error {

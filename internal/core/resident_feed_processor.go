@@ -2,11 +2,9 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
-	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
 type ResidentFeedProcessResult = feedMaterializationProcessResult
@@ -46,7 +44,7 @@ func (c *Core) ProcessResidentFeedOnce(batchSize int) (ResidentFeedProcessResult
 	return c.processFeedMaterializationOnce(batchSize, feedMaterializationSpec{
 		view:      projections.DerivedViewResidentFeed,
 		errPrefix: "resident feed",
-		apply:     applyResidentFeedEvent,
+		apply:     projections.ApplyResidentFeedEvent,
 	})
 }
 
@@ -58,22 +56,5 @@ func residentFeedRunProgress(result ResidentFeedProcessResult) processorRunProgr
 		Events:     result.Events,
 		Log:        result.Events > 0 || result.AppliedSeq < result.HeadSeq,
 		Extra:      []any{"feedChanges", result.FeedChanges},
-	}
-}
-
-func applyResidentFeedEvent(tx *sql.Tx, evt *proto.Event) (bool, error) {
-	switch payload := evt.Payload.(type) {
-	case *proto.PostAppendedPayload:
-		return projections.UpsertResidentFeedPost(tx, payload.ID)
-	case *proto.PostRedactedPayload:
-		return projections.DeleteResidentFeedPost(tx, payload.ID)
-	case *proto.PostRestoredPayload:
-		return projections.UpsertResidentFeedPost(tx, payload.ID)
-	case *proto.PostPurgedPayload:
-		return projections.DeleteResidentFeedPost(tx, payload.ID)
-	case *proto.ThreadMovedPayload:
-		return projections.MoveResidentFeedThread(tx, payload.Thread, payload.ToBoard)
-	default:
-		return false, nil
 	}
 }
