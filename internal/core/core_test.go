@@ -6604,7 +6604,7 @@ func postReplyDepth(posts []core.Post, postID string) int {
 	return -1
 }
 
-func favoriteFolderByName(tree *core.FavoriteTree, name string) *core.FavoriteFolder {
+func favoriteFolderByName(tree *projections.FavoriteTree, name string) *projections.FavoriteFolder {
 	for i := range tree.Folders {
 		if tree.Folders[i].Name == name {
 			return &tree.Folders[i]
@@ -6613,7 +6613,7 @@ func favoriteFolderByName(tree *core.FavoriteTree, name string) *core.FavoriteFo
 	return nil
 }
 
-func favoriteFolderForBoard(tree *core.FavoriteTree, boardID string) string {
+func favoriteFolderForBoard(tree *projections.FavoriteTree, boardID string) string {
 	for _, board := range tree.Boards {
 		if board.ID == boardID {
 			return board.FolderID

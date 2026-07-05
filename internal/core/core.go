@@ -2136,10 +2136,10 @@ func (c *Core) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) (
 func (c *Core) ListFavoriteBoards(userID string) ([]Board, error) {
 	return projections.ListFavoriteBoards(c.DB, userID)
 }
-func (c *Core) ListFavoriteTree(userID string) (*FavoriteTree, error) {
+func (c *Core) ListFavoriteTree(userID string) (*projections.FavoriteTree, error) {
 	return projections.ListFavoriteTree(c.DB, userID)
 }
-func (c *Core) ImportFavoriteTree(userID string, tree *FavoriteTree, replace bool) (*FavoriteTree, error) {
+func (c *Core) ImportFavoriteTree(userID string, tree *projections.FavoriteTree, replace bool) (*projections.FavoriteTree, error) {
 	if err := importFavoriteTree(c.DB, userID, tree, replace); err != nil {
 		return nil, err
 	}

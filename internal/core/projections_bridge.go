@@ -138,7 +138,7 @@ func recordLogout(db *sql.DB) error {
 	return projections.RecordLogout(db)
 }
 
-func importFavoriteTree(db *sql.DB, userID string, tree *FavoriteTree, replace bool) error {
+func importFavoriteTree(db *sql.DB, userID string, tree *projections.FavoriteTree, replace bool) error {
 	return projections.ImportFavoriteTree(db, userID, tree, replace, newID)
 }
 

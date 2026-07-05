@@ -7520,7 +7520,7 @@ func hasBoardForTest(boards []Board, boardID string) bool {
 	return false
 }
 
-func findFavoriteFolderForTest(tree *FavoriteTree, folderID string) *FavoriteFolder {
+func findFavoriteFolderForTest(tree *projections.FavoriteTree, folderID string) *projections.FavoriteFolder {
 	if tree == nil {
 		return nil
 	}
@@ -7532,7 +7532,7 @@ func findFavoriteFolderForTest(tree *FavoriteTree, folderID string) *FavoriteFol
 	return nil
 }
 
-func findFavoriteBoardEntryForTest(tree *FavoriteTree, boardID string) *FavoriteBoardEntry {
+func findFavoriteBoardEntryForTest(tree *projections.FavoriteTree, boardID string) *projections.FavoriteBoardEntry {
 	if tree == nil {
 		return nil
 	}
