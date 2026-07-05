@@ -9,8 +9,6 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-const maxMailRecipientsPerSend = 50
-
 func ResolveMailGroupMutation(queryable Queryable, ownerID string, p proto.SetMailGroupPayload, idForNewGroup func() string) (string, []string, *proto.ErrorDetail) {
 	groupID, errDetail := ResolveMailGroupID(queryable, ownerID, p.Group, p.Name, idForNewGroup)
 	if errDetail != nil {
@@ -59,7 +57,7 @@ func ValidateMailAttachmentMutation(queryable Queryable, actor *projections.User
 	if !found {
 		return nil, newErrDetail(proto.ErrNotFound, "mail not found", false)
 	}
-	if fromUserID != actor.ID {
+	if !mailmodel.AttachmentMutationAllowed(actor.ID, fromUserID) {
 		return nil, newErrDetail(proto.ErrForbidden, "only the sender can attach files to this mail", false)
 	}
 	count, err := projections.MailAttachmentCount(queryable, mailID)
@@ -112,7 +110,7 @@ func ResolveMailRecipients(queryable Queryable, actor *projections.User, refs []
 		if target == nil {
 			return nil, newErrDetail(proto.ErrNotFound, "recipient not found: "+strings.TrimSpace(ref), false)
 		}
-		if target.ID != actor.ID && !mailAll {
+		if mailmodel.RecipientIgnoreApplies(actor.ID, target.ID, mailAll) {
 			ignored, err := projections.UserRelationshipExists(queryable, target.ID, actor.ID, "ignore")
 			if err != nil {
 				return nil, internalErr(err)
@@ -159,7 +157,7 @@ func ExpandMailRecipients(db *sql.DB, actor *projections.User, p proto.SendMailP
 	ownerID := actor.ID
 	refs := []string{}
 	if p.ToAll {
-		if !actor.IsAdmin() {
+		if !mailmodel.MailAllAllowed(p.ToAll, actor.IsAdmin()) {
 			return nil, newErrDetail(proto.ErrForbidden, "admin role required for mail-all", false)
 		}
 		allUserIDs, err := projections.ListMailAllRecipientIDs(db, actor.ID)
@@ -214,10 +212,10 @@ func ExpandMailRecipients(db *sql.DB, actor *projections.User, p proto.SendMailP
 		}
 		refs = append(refs, friendIDs...)
 	}
-	if len(refs) == 0 {
+	if mailmodel.RecipientRefsEmpty(len(refs)) {
 		return nil, newErrDetail(proto.ErrValidationFailed, "at least one recipient is required", false)
 	}
-	if !p.ToAll && len(refs) > maxMailRecipientsPerSend {
+	if mailmodel.RecipientRefsTooMany(p.ToAll, len(refs)) {
 		return nil, newErrDetail(proto.ErrValidationFailed, "too many recipients in one message", false)
 	}
 	return refs, nil
@@ -231,7 +229,7 @@ func ResolveUniqueMailGroupMembers(queryable Queryable, refs []string, ownerID s
 	if missingRef != "" {
 		return nil, newErrDetail(proto.ErrNotFound, "user not found: "+missingRef, false)
 	}
-	if includesOwner {
+	if mailmodel.MailGroupIncludesOwner(includesOwner) {
 		return nil, newErrDetail(proto.ErrValidationFailed, "mail group cannot include yourself", false)
 	}
 	return ids, nil
