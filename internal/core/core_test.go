@@ -5942,7 +5942,7 @@ func TestBoardReadMarkersLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var general *core.BoardSummary
+	var general *projections.BoardSummary
 	for i := range summaries {
 		if summaries[i].ID == "general" {
 			general = &summaries[i]
@@ -6041,7 +6041,7 @@ func TestBoardZapHidesUnreadWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var general *core.BoardSummary
+	var general *projections.BoardSummary
 	for i := range summaries {
 		if summaries[i].ID == "general" {
 			general = &summaries[i]
@@ -6146,12 +6146,12 @@ func TestBoardSummaryDiscoveryFilters(t *testing.T) {
 		Board:     "tech",
 	})
 
-	byPosts, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{Sort: "posts"})
+	byPosts, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "posts"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var tech *core.BoardSummary
-	var general *core.BoardSummary
+	var tech *projections.BoardSummary
+	var general *projections.BoardSummary
 	for i := range byPosts {
 		if byPosts[i].ID == "tech" {
 			tech = &byPosts[i]
@@ -6167,21 +6167,21 @@ func TestBoardSummaryDiscoveryFilters(t *testing.T) {
 		t.Fatalf("expected seeded general board to remain old, got %+v", general)
 	}
 
-	search, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{Search: "computing"})
+	search, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Search: "computing"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(search) != 1 || search[0].ID != "tech" {
 		t.Fatalf("expected board search to match description, got %+v", search)
 	}
-	online, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{Sort: "online"})
+	online, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "online"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(online) == 0 || online[0].ID != "tech" || online[0].OnlineUsers != 1 {
 		t.Fatalf("expected online-sorted board summaries to lead with tech, got %+v", online)
 	}
-	newBoards, err := c.ListBoardSummaries(alice.ID, false, core.BoardSummaryOptions{NewOnly: true})
+	newBoards, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{NewOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}

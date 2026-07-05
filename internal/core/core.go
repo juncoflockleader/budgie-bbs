@@ -1989,7 +1989,7 @@ func (c *Core) ListArchiveRankings(actor *User, kind string, limit, offset int) 
 	}
 	return projections.ListArchiveRankings(c.DB, actor.ID, actor.IsMod(), kind, limit, offset)
 }
-func (c *Core) ListBoardSummaries(userID string, unreadOnly bool, opts ...BoardSummaryOptions) ([]BoardSummary, error) {
+func (c *Core) ListBoardSummaries(userID string, unreadOnly bool, opts ...projections.BoardSummaryOptions) ([]projections.BoardSummary, error) {
 	rows, err := projections.BoardSummaryStatsRowCount(c.DB)
 	if err != nil {
 		return nil, err

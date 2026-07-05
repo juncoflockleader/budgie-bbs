@@ -816,7 +816,7 @@ func (s *Server) handleListLatestFeedPosts(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "meta": s.projectionMetaForView(w, core.DerivedViewLatestFeed)})
 }
 
-func boardSummaryOptions(r *http.Request) core.BoardSummaryOptions {
+func boardSummaryOptions(r *http.Request) projections.BoardSummaryOptions {
 	q := r.URL.Query()
 	newOnly := false
 	switch strings.ToLower(strings.TrimSpace(q.Get("new"))) {
@@ -829,7 +829,7 @@ func boardSummaryOptions(r *http.Request) core.BoardSummaryOptions {
 			newDays = parsed
 		}
 	}
-	return core.BoardSummaryOptions{
+	return projections.BoardSummaryOptions{
 		Search:  q.Get("q"),
 		Sort:    q.Get("sort"),
 		NewOnly: newOnly,

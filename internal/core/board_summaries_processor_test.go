@@ -46,7 +46,7 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 	if rows := boardSummaryStatsRows(t, c); rows != 0 {
 		t.Fatalf("board summary stats rows before processor = %d, want 0", rows)
 	}
-	fallback, err := c.ListBoardSummaries(alice.ID, false, BoardSummaryOptions{Sort: "posts"})
+	fallback, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "posts"})
 	if err != nil {
 		t.Fatalf("fallback board summaries: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 	if rows := boardSummaryStatsRows(t, c); rows == 0 {
 		t.Fatalf("board summary stats rows after processor = %d, want rows", rows)
 	}
-	materialized, err := c.ListBoardSummaries(alice.ID, false, BoardSummaryOptions{Sort: "posts"})
+	materialized, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "posts"})
 	if err != nil {
 		t.Fatalf("materialized board summaries: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 		Thread: techThread.ID,
 		Body:   "third",
 	})
-	stale, err := c.ListBoardSummaries(alice.ID, false, BoardSummaryOptions{Sort: "posts"})
+	stale, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "posts"})
 	if err != nil {
 		t.Fatalf("stale materialized board summaries: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 	if updated.FromSeq != head || updated.Events == 0 || !updated.Rebuilt || updated.Rows < result.Rows {
 		t.Fatalf("update result = %+v, want event-driven rebuild after %d", updated, head)
 	}
-	fresh, err := c.ListBoardSummaries(alice.ID, false, BoardSummaryOptions{Sort: "posts"})
+	fresh, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "posts"})
 	if err != nil {
 		t.Fatalf("fresh materialized board summaries: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestBoardSummariesProcessorMaterializesAndRebuildsSummaries(t *testing.T) {
 	if backfill.HeadSeq <= 0 || len(backfill.Views) != 1 || backfill.Views[0] != DerivedViewBoardSummaries {
 		t.Fatalf("backfill result = %+v", backfill)
 	}
-	repaired, err := c.ListBoardSummaries(alice.ID, false, BoardSummaryOptions{Sort: "posts"})
+	repaired, err := c.ListBoardSummaries(alice.ID, false, projections.BoardSummaryOptions{Sort: "posts"})
 	if err != nil {
 		t.Fatalf("repaired board summaries: %v", err)
 	}
@@ -169,7 +169,7 @@ func boardSummaryStatsRows(t *testing.T, c *Core) int {
 	return count
 }
 
-func mustFindBoardSummary(t *testing.T, boards []BoardSummary, boardID string) BoardSummary {
+func mustFindBoardSummary(t *testing.T, boards []projections.BoardSummary, boardID string) projections.BoardSummary {
 	t.Helper()
 	for _, board := range boards {
 		if board.ID == boardID {
@@ -177,5 +177,5 @@ func mustFindBoardSummary(t *testing.T, boards []BoardSummary, boardID string) B
 		}
 	}
 	t.Fatalf("board summary %s missing: %+v", boardID, boards)
-	return BoardSummary{}
+	return projections.BoardSummary{}
 }

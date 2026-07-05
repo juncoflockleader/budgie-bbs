@@ -7502,7 +7502,7 @@ func TestNativeCommandLogDecisionExecutorProjectsImportFavoriteTree(t *testing.T
 	}
 }
 
-func findBoardSummaryForTest(summaries []BoardSummary, boardID string) *BoardSummary {
+func findBoardSummaryForTest(summaries []projections.BoardSummary, boardID string) *projections.BoardSummary {
 	for i := range summaries {
 		if summaries[i].ID == boardID {
 			return &summaries[i]
