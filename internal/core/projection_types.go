@@ -3,9 +3,6 @@ package core
 import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 
 type Board = projections.Board
-type CommunityStats = projections.CommunityStats
-type CommunityStatHistory = projections.CommunityStatHistory
-type LoginHourlyStat = projections.LoginHourlyStat
 type BoardRanking = projections.BoardRanking
 type RecommendedBoard = projections.RecommendedBoard
 type ThreadRanking = projections.ThreadRanking

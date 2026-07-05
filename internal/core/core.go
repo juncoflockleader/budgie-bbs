@@ -1841,12 +1841,12 @@ func validateCategoryParentTx(tx *sql.Tx, categoryID, parentID string) error {
 	return nil
 }
 
-func (c *Core) GetCommunityStats() (*CommunityStats, error) {
+func (c *Core) GetCommunityStats() (*projections.CommunityStats, error) {
 	rows, err := projections.CommunityStatsSnapshotRowCount(c.DB)
 	if err != nil {
 		return nil, err
 	}
-	var stats *CommunityStats
+	var stats *projections.CommunityStats
 	if rows > 0 {
 		stats, err = projections.GetCommunityStatsSnapshot(c.DB)
 	} else {
@@ -1861,7 +1861,7 @@ func (c *Core) GetCommunityStats() (*CommunityStats, error) {
 	return stats, nil
 }
 
-func (c *Core) applyPresenceStoreStats(stats *CommunityStats) error {
+func (c *Core) applyPresenceStoreStats(stats *projections.CommunityStats) error {
 	if c == nil || stats == nil || !c.presenceStoreOverride || c.presenceStore == nil {
 		return nil
 	}
@@ -1885,7 +1885,7 @@ func (c *Core) applyPresenceStoreStats(stats *CommunityStats) error {
 	return nil
 }
 
-func (c *Core) ListCommunityStatHistory(limit, offset int) ([]CommunityStatHistory, error) {
+func (c *Core) ListCommunityStatHistory(limit, offset int) ([]projections.CommunityStatHistory, error) {
 	return projections.ListCommunityStatHistory(c.DB, limit, offset)
 }
 
