@@ -11,6 +11,31 @@ type ReactionCounter interface {
 	ReactionCount(postID string) (int, error)
 }
 
+func RequireBoardMembershipApplicantNotMember(isMember bool) *proto.ErrorDetail {
+	if isMember {
+		return newErrDetail(proto.ErrConflict, "already a board member", false)
+	}
+	return nil
+}
+
+func RequireBoardMembershipApplicationCanStart(latestStatus string) *proto.ErrorDetail {
+	switch latestStatus {
+	case "pending":
+		return newErrDetail(proto.ErrConflict, "membership application already pending", false)
+	case "blacklisted":
+		return newErrDetail(proto.ErrForbidden, "membership application is blocked", false)
+	default:
+		return nil
+	}
+}
+
+func RequireBoardMembershipApplicationPending(status string) *proto.ErrorDetail {
+	if status != "pending" {
+		return newErrDetail(proto.ErrConflict, "membership application is already reviewed", false)
+	}
+	return nil
+}
+
 func RequireBoardMembershipAdmission(db *sql.DB, store ReactionCounter, boardID, userID string, requirements *projections.BoardMemberRequirements) *proto.ErrorDetail {
 	if requirements == nil {
 		return nil

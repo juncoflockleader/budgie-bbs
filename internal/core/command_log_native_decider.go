@@ -2252,7 +2252,9 @@ func (e *CommandLogNativeDecisionExecutor) decideApplyBoardMembership(ctx contex
 					existingApplication.Title == "" &&
 					existingApplication.ReviewNote == proto.BoardMembershipAutoApprovalNote)
 		default:
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "membership application is already reviewed", false)
+			if errDetail := commandrules.RequireBoardMembershipApplicationPending(existingApplication.Status); errDetail != nil {
+				return nativeCommandDecision{}, errDetail
+			}
 		}
 		events, errDetail := nativeBoardMembershipApplicationEvents(e.core.DB, record, actor, applicationID, boardID, actor.ID, payload.Note, autoApprove, ts)
 		if errDetail != nil {
@@ -2264,18 +2266,15 @@ func (e *CommandLogNativeDecisionExecutor) decideApplyBoardMembership(ctx contex
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if isMember {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "already a board member", false)
+	if errDetail := commandrules.RequireBoardMembershipApplicantNotMember(isMember); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	status, err := projections.LatestBoardMemberApplicationStatus(e.core.DB, boardID, actor.ID)
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	switch status {
-	case "pending":
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "membership application already pending", false)
-	case "blacklisted":
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "membership application is blocked", false)
+	if errDetail := commandrules.RequireBoardMembershipApplicationCanStart(status); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if errDetail := nativeRequireBoardMembershipAdmission(e.core, boardID, actor.ID, requirements); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
@@ -2330,7 +2329,9 @@ func (e *CommandLogNativeDecisionExecutor) decideReviewBoardMembership(ctx conte
 			}
 			return nativeDecisionAckEvents(applicationID, events), nil
 		}
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "membership application is already reviewed", false)
+		if errDetail := commandrules.RequireBoardMembershipApplicationPending(app.Status); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
+		}
 	}
 	canModerateBoard, err := projections.ActorCanModerateBoard(e.core.DB, actor, app.BoardID)
 	if err != nil {

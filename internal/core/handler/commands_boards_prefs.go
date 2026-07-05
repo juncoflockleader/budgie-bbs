@@ -301,18 +301,16 @@ func (h *Handler) applyBoardMembership(actor *User, p proto.ApplyBoardMembership
 	if errReply := h.requireBoard(p.Board); errReply.Err != nil {
 		return errReply
 	}
-	if commandrules.BoardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID)) {
-		return Reply{Err: errDetail(proto.ErrConflict, "already a board member", false)}
+	isMember := commandrules.BoardPermissionAllowed(projections.BoardMemberExists(h.db, p.Board, actor.ID))
+	if errDetail := commandrules.RequireBoardMembershipApplicantNotMember(isMember); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	status, err := projections.LatestBoardMemberApplicationStatus(h.db, p.Board, actor.ID)
 	if err != nil {
 		return internalErr(err)
 	}
-	switch status {
-	case "pending":
-		return Reply{Err: errDetail(proto.ErrConflict, "membership application already pending", false)}
-	case "blacklisted":
-		return Reply{Err: errDetail(proto.ErrForbidden, "membership application is blocked", false)}
+	if errDetail := commandrules.RequireBoardMembershipApplicationCanStart(status); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -351,8 +349,8 @@ func (h *Handler) reviewBoardMembership(actor *User, p proto.ReviewBoardMembersh
 	if app == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "membership application not found", false)}
 	}
-	if app.Status != "pending" {
-		return Reply{Err: errDetail(proto.ErrConflict, "membership application is already reviewed", false)}
+	if errDetail := commandrules.RequireBoardMembershipApplicationPending(app.Status); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, app.BoardID)
 	canManageMembers := commandrules.ActorCanManageBoardMembers(h.db, actor, app.BoardID)
