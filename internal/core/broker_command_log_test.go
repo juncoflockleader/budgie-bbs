@@ -50,6 +50,19 @@ func TestBrokerCommandSubjectRoundTripEscapesPartitionTokens(t *testing.T) {
 	if decodedCommit != partition.Normalize() {
 		t.Fatalf("decoded commit partition = %+v, want %+v", decodedCommit, partition.Normalize())
 	}
+	messageID := BrokerCommandMessageID(partition, "actor.1", " cid/1 ")
+	messageTokens := strings.Split(messageID, ".")
+	if len(messageTokens) != 7 {
+		t.Fatalf("message id tokens = %v, want seven tokens", messageTokens)
+	}
+	for _, token := range messageTokens[3:] {
+		if strings.ContainsAny(token, "/=: \t\n") {
+			t.Fatalf("message id token %q contains unsafe subject characters", token)
+		}
+	}
+	if BrokerCommandMessageID(partition, "actor.1", " ") != "" {
+		t.Fatalf("blank command receipt produced message id")
+	}
 }
 
 func TestBrokerCommandLogPartitionsAndCommitsAreIndependent(t *testing.T) {

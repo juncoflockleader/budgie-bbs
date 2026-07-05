@@ -424,24 +424,6 @@ func cloneBrokerCommandLogMessage(msg BrokerCommandLogMessage) BrokerCommandLogM
 	return msg
 }
 
-type commandReceiptKey struct {
-	Partition LogPartition
-	ActorID   string
-	CID       string
-}
-
-func newCommandReceiptKey(partition LogPartition, actorID, cid string) (commandReceiptKey, bool) {
-	cid = strings.TrimSpace(cid)
-	if cid == "" {
-		return commandReceiptKey{}, false
-	}
-	return commandReceiptKey{
-		Partition: partition.Normalize(),
-		ActorID:   actorID,
-		CID:       cid,
-	}, true
-}
-
 func sameCommandLogRecordIdentity(existing, requested CommandLogRecord) bool {
 	return existing.Partition.Normalize() == requested.Partition.Normalize() &&
 		existing.ActorID == requested.ActorID &&
@@ -462,13 +444,5 @@ func sameBrokerCommandIdentity(existing, requested BrokerCommandRecord) bool {
 }
 
 func BrokerCommandMessageID(partition LogPartition, actorID, cid string) string {
-	key, ok := newCommandReceiptKey(partition, actorID, cid)
-	if !ok {
-		return ""
-	}
-	return brokerCommandSubjectPrefix +
-		".id." + logmodel.EncodeSubjectToken(key.Partition.Kind) +
-		"." + logmodel.EncodeSubjectToken(key.Partition.Key) +
-		"." + logmodel.EncodeSubjectToken(key.ActorID) +
-		"." + logmodel.EncodeSubjectToken(key.CID)
+	return logmodel.CommandReceiptMessageID(brokerCommandSubjectPrefix, partition, actorID, cid)
 }

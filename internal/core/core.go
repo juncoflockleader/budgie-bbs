@@ -992,11 +992,6 @@ func EffectiveCommandLogCID(record CommandLogRecord) (string, error) {
 	return SyntheticCommandLogCID(record.Partition, record.Offset), nil
 }
 
-func SyntheticCommandLogCID(partition LogPartition, offset int64) string {
-	partition = partition.Normalize()
-	return fmt.Sprintf("budgie:command-log:%s:%s:%d", partition.Kind, partition.Key, offset)
-}
-
 // Head returns the current highest seq in the event log.
 func (c *Core) Head() (int64, error) {
 	return headSeq(c.DB)
