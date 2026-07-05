@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -360,7 +360,7 @@ func natsSubjectForScope(scope string) string {
 	if scope == "" {
 		scope = "_all"
 	}
-	token := base64.RawURLEncoding.EncodeToString([]byte(scope))
+	token := logmodel.EncodeSubjectToken(scope)
 	if token == "" {
 		token = "_"
 	}

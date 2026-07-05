@@ -11,9 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
+
+func TestNATSSubjectForScopeUsesLogmodelSubjectToken(t *testing.T) {
+	scope := "board:general/with spaces"
+	want := natsEventScopeSubjectPrefix + logmodel.EncodeSubjectToken(scope)
+	if got := natsSubjectForScope(scope); got != want {
+		t.Fatalf("natsSubjectForScope = %q, want %q", got, want)
+	}
+}
 
 func marshalNATSBusEventEnvelope(t *testing.T, node string, scopes []string, event proto.EventKind, seq int64, payload any, ts int64) []byte {
 	t.Helper()
