@@ -48,10 +48,8 @@ func (h *Handler) flagPost(actor *User, p proto.FlagPostPayload) Reply {
 	// not be delivered/replayed on board/thread scopes (that exposes the
 	// reporter's identity to every board member — M8). Moderators receive it via
 	// moderation:global; the review projection consumes it regardless of scope.
-	scopes := []string{"moderation:global"}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, &proto.PostFlaggedPayload{
-		ReviewID: reviewID, Kind: "post_flag", PostID: post.ID, Thread: post.Thread, Reporter: actor.ID, Reason: p.Reason, TS: ts,
-	})
+	scopes, payload := commandevents.PostFlagged(reviewID, "post_flag", post.ID, post.Thread, actor.ID, p.Reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -65,8 +63,9 @@ func (h *Handler) flagPost(actor *User, p proto.FlagPostPayload) Reply {
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
+	_, publicPayload := commandevents.PostFlagged(reviewID, "post_flag", post.ID, post.Thread, actor.Name, p.Reason, ts)
 	h.bus.Publish(&proto.Event{Kind: proto.EvtPostFlagged, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "post_flag", PostID: post.ID, Thread: post.Thread, Reporter: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+		Payload: publicPayload, TS: ts})
 	h.publishGeneratedEvents(generatedEvents)
 	return Reply{Result: &proto.AckResult{ID: reviewID, Seq: seq}}
 }
@@ -154,15 +153,13 @@ func (h *Handler) appendContentFilterReviewTx(tx *sql.Tx, actor *User, publicAut
 		return nil, nil, err
 	}
 	// Moderation-only (reporter/reason must not reach board subscribers — M8).
-	scopes := []string{"moderation:global"}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, &proto.PostFlaggedPayload{
-		ReviewID: reviewID, Kind: "content_filter", PostID: postID, Thread: threadID, Reporter: actor.ID, Reason: reason, TS: ts,
-	})
+	scopes, payload := commandevents.PostFlagged(reviewID, "content_filter", postID, threadID, actor.ID, reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, payload)
 	if err != nil {
 		return nil, nil, err
 	}
-	evt := &proto.Event{Kind: proto.EvtPostFlagged, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "content_filter", PostID: postID, Thread: threadID, Reporter: actor.Name, Reason: reason, TS: ts}, TS: ts}
+	_, publicPayload := commandevents.PostFlagged(reviewID, "content_filter", postID, threadID, actor.Name, reason, ts)
+	evt := &proto.Event{Kind: proto.EvtPostFlagged, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts}
 
 	if !publicBoard {
 		return evt, nil, nil

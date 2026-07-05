@@ -1473,16 +1473,9 @@ func (e *CommandLogNativeDecisionExecutor) decideFlagPost(ctx context.Context, r
 	ts := nativeCommandTimestamp(record)
 	reviewID := stableCommandLogDecisionID("rev_", record, 0)
 	// Moderation-only: reporter and reason are not broadcast to the board (M8).
+	scopes, eventPayload := commandevents.PostFlagged(reviewID, "post_flag", post.ID, post.Thread, actor.ID, payload.Reason, ts)
 	events := []EventAppend{
-		nativeEvent(record, 0, proto.EvtPostFlagged, []string{"moderation:global"}, &proto.PostFlaggedPayload{
-			ReviewID: reviewID,
-			Kind:     "post_flag",
-			PostID:   post.ID,
-			Thread:   post.Thread,
-			Reporter: actor.ID,
-			Reason:   payload.Reason,
-			TS:       ts,
-		}, ts),
+		nativeEvent(record, 0, proto.EvtPostFlagged, scopes, eventPayload, ts),
 	}
 	logEvents, errDetail := nativeModerationSystemLogEvents(e.core.DB, record, actor, proto.ModerationLogFlag, reviewID, post.ID, post.Thread, thread.Board, publicBoard, ts, len(events))
 	if errDetail != nil {
@@ -4485,21 +4478,14 @@ func nativeContentFilterReviewEvents(db *sql.DB, record CommandLogRecord, actor 
 	}
 	reviewID := stableCommandLogDecisionID("rev_", record, startIndex)
 	reason := "Matched content filter " + strings.TrimSpace(filter.ID)
+	scopes, eventPayload := commandevents.PostFlagged(reviewID, "content_filter", postID, threadID, actor.ID, reason, ts)
 	events := []EventAppend{
 		nativeEvent(
 			record,
 			startIndex,
 			proto.EvtPostFlagged,
-			[]string{"moderation:global"}, // moderation-only: reporter/reason not broadcast to board (M8)
-			&proto.PostFlaggedPayload{
-				ReviewID: reviewID,
-				Kind:     "content_filter",
-				PostID:   postID,
-				Thread:   threadID,
-				Reporter: actor.ID,
-				Reason:   reason,
-				TS:       ts,
-			},
+			scopes, // moderation-only: reporter/reason not broadcast to board (M8)
+			eventPayload,
 			ts,
 		),
 	}

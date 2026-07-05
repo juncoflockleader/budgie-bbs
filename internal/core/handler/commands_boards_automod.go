@@ -51,8 +51,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 			return nil, err
 		}
 		// Moderation-only (reporter/reason must not reach board subscribers — M8).
-		scopes := []string{"moderation:global"}
-		payload := &proto.PostFlaggedPayload{ReviewID: reviewID, Kind: "automod", PostID: postID, Thread: threadID, Reporter: by, Reason: reason, TS: ts}
+		scopes, payload := commandevents.PostFlagged(reviewID, "automod", postID, threadID, by, reason, ts)
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagged, scopes, payload)
 		if err != nil {
 			return nil, err

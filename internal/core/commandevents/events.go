@@ -47,6 +47,18 @@ func BoardAutomodRuleDeleted(ruleID, boardID, by string, ts int64) ([]string, *p
 	return []string{"board:" + boardID}, &proto.BoardAutomodRuleDeletedPayload{ID: ruleID, Board: boardID, By: by, TS: ts}
 }
 
+func PostFlagged(reviewID, kind, postID, threadID, reporter, reason string, ts int64) ([]string, *proto.PostFlaggedPayload) {
+	return []string{"moderation:global"}, &proto.PostFlaggedPayload{
+		ReviewID: reviewID,
+		Kind:     kind,
+		PostID:   postID,
+		Thread:   threadID,
+		Reporter: reporter,
+		Reason:   reason,
+		TS:       ts,
+	}
+}
+
 func FavoriteFolderCreated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderCreatedPayload) {
 	payload := &proto.FavoriteFolderCreatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
 	return []string{"user:" + userID}, payload

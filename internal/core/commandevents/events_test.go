@@ -36,3 +36,14 @@ func TestBoardAutomodRuleEvents(t *testing.T) {
 		t.Fatalf("BoardAutomodRuleDeleted payload = %+v", deleted)
 	}
 }
+
+func TestPostFlagged(t *testing.T) {
+	scopes, payload := PostFlagged("rev_1", "post_flag", "post_1", "thread_1", "usr_reporter", "reason", 1234)
+	if len(scopes) != 1 || scopes[0] != "moderation:global" {
+		t.Fatalf("PostFlagged scopes = %#v, want moderation:global", scopes)
+	}
+	if payload.ReviewID != "rev_1" || payload.Kind != "post_flag" || payload.PostID != "post_1" ||
+		payload.Thread != "thread_1" || payload.Reporter != "usr_reporter" || payload.Reason != "reason" || payload.TS != 1234 {
+		t.Fatalf("PostFlagged payload = %+v", payload)
+	}
+}
