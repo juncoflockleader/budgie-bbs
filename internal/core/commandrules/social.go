@@ -2,6 +2,7 @@ package commandrules
 
 import (
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/socialmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -16,7 +17,7 @@ func ResolveOtherUser(queryable Queryable, actor *projections.User, ref, missing
 	if target == nil {
 		return nil, newErrDetail(proto.ErrNotFound, missingMessage, false)
 	}
-	if target.ID == actor.ID {
+	if socialmodel.OtherUserFailureFor(target.ID == actor.ID) == socialmodel.OtherUserSelf {
 		return nil, newErrDetail(proto.ErrValidationFailed, selfMessage, false)
 	}
 	return target, nil
@@ -46,7 +47,7 @@ func ValidateLoginWatchMutation(queryable Queryable, actor *projections.User, ta
 	if err != nil {
 		return nil, false, internalErr(err)
 	}
-	if !friend {
+	if socialmodel.LoginWatchStartFailure(active, friend) == socialmodel.LoginWatchFriendRequired {
 		return nil, false, newErrDetail(proto.ErrForbidden, "friend relationship required", false)
 	}
 	online, err := projections.UserRecentlyOnline(queryable, target.ID)
@@ -65,12 +66,12 @@ func ValidateBlessUserMutation(queryable Queryable, actor *projections.User, tar
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	if ignored {
+	if socialmodel.BlessingFailureFor(ignored, false) == socialmodel.BlessingTargetIgnores {
 		return nil, newErrDetail(proto.ErrForbidden, "target user ignores you", false)
 	}
 	if already, err := projections.BlessingExists(queryable, actor.ID, target.ID); err != nil {
 		return nil, internalErr(err)
-	} else if already {
+	} else if socialmodel.BlessingFailureFor(false, already) == socialmodel.BlessingAlreadyBlessed {
 		return nil, newErrDetail(proto.ErrConflict, "you have already blessed this user", false)
 	}
 	return target, nil
@@ -94,14 +95,14 @@ func ResolveDirectMessageRecipient(queryable Queryable, actor *projections.User,
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	if ignored {
+	if socialmodel.DirectMessageRecipientFailureFor(ignored, true) == socialmodel.DirectMessageRecipientIgnored {
 		return nil, newErrDetail(proto.ErrForbidden, "recipient does not accept messages from this user", false)
 	}
 	allowed, err := projections.DirectMessageAllowed(queryable, target.ID, actor.ID)
 	if err != nil {
 		return nil, internalErr(err)
 	}
-	if !allowed {
+	if socialmodel.DirectMessageRecipientFailureFor(false, allowed) == socialmodel.DirectMessageRecipientFriendsOnly {
 		return nil, newErrDetail(proto.ErrForbidden, "recipient only accepts messages from friends", false)
 	}
 	return target, nil
