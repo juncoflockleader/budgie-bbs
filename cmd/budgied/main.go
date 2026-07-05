@@ -21,6 +21,7 @@ import (
 
 	"github.com/juncoflockleader/budgie-bbs/internal/assetstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/httpapi"
 	"github.com/juncoflockleader/budgie-bbs/internal/kafkaconn"
 	"github.com/juncoflockleader/budgie-bbs/internal/loadmodel"
@@ -1609,7 +1610,7 @@ func main() {
 		tuiSrv.EnableClusterRateLimiting(rateLimitStore)
 		tuiSrv.SetAllowRegistration(*allowSSHRegistration)
 		if *doorsConf != "" {
-			doors, err := core.LoadDoorsConfig(*doorsConf)
+			doors, err := doormodel.LoadConfig(*doorsConf)
 			if err != nil {
 				slog.Error("doors config load failed", "path", *doorsConf, "err", err)
 				os.Exit(1)

@@ -18,6 +18,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/ratelimit"
 )
 
@@ -26,8 +27,8 @@ type Server struct {
 	core              *core.Core
 	port              int
 	hostKey           string
-	doors             *core.DoorsConfig // optional; nil means doors are disabled
-	allowRegistration bool              // opt-in guest self-registration over SSH
+	doors             *doormodel.DoorsConfig // optional; nil means doors are disabled
+	allowRegistration bool                   // opt-in guest self-registration over SSH
 	pwLimiter         *ratelimit.Limiter
 }
 
@@ -53,7 +54,7 @@ func (s *Server) EnableClusterRateLimiting(store ratelimit.Store) {
 }
 
 // SetDoors configures the door games available to SSH sessions.
-func (s *Server) SetDoors(cfg *core.DoorsConfig) { s.doors = cfg }
+func (s *Server) SetDoors(cfg *doormodel.DoorsConfig) { s.doors = cfg }
 
 // SetAllowRegistration enables the guest "create account" flow in the TUI.
 func (s *Server) SetAllowRegistration(v bool) { s.allowRegistration = v }
@@ -194,7 +195,7 @@ func (s *Server) tuiHandler(sess ssh.Session) (tea.Model, []tea.ProgramOption) {
 	}()
 
 	caps := terminalProfileFromEnviron(sess.Environ())
-	var doors []core.DoorConfig
+	var doors []doormodel.DoorConfig
 	if s.doors != nil {
 		doors = s.doors.Doors
 	}

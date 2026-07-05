@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/doormodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sitemodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -172,9 +173,9 @@ type model struct {
 	profile       *core.UserProfile
 	profileField  profileField
 	onlineUsers   []core.SocialUser
-	nodes         []core.NodeEntry  // M14: active SSH sessions for sysop panel
-	doors         []core.DoorConfig // M12: configured door games
-	termName      string            // M12: TERM env value forwarded to door processes
+	nodes         []core.NodeEntry       // M14: active SSH sessions for sysop panel
+	doors         []doormodel.DoorConfig // M12: configured door games
+	termName      string                 // M12: TERM env value forwarded to door processes
 	authorNames   map[string]string
 	supportsANSI  bool
 	// r is the per-session lipgloss renderer. Styles are package-level templates
@@ -276,7 +277,7 @@ func (m *model) postSignatureSepLine() string {
 	return postSignatureSepText
 }
 
-func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []core.DoorConfig, termName string, allowRegistration bool, requires2FA bool, renderer *lipgloss.Renderer) model {
+func newModel(c *core.Core, actor *core.User, width, height int, supportsANSI bool, locale localeCode, nodeID string, msgCh <-chan string, doors []doormodel.DoorConfig, termName string, allowRegistration bool, requires2FA bool, renderer *lipgloss.Renderer) model {
 	if renderer == nil {
 		// Unit tests and any non-SSH caller fall back to the global renderer.
 		renderer = lipgloss.DefaultRenderer()
@@ -2370,7 +2371,7 @@ func (m model) renderNodeSpy() string {
 
 // doorItem is a list.Item representing a configured door game.
 type doorItem struct {
-	d core.DoorConfig
+	d doormodel.DoorConfig
 }
 
 func (i doorItem) Title() string {
@@ -2396,7 +2397,7 @@ func (m *model) enterDoorsMenu() tea.Cmd {
 }
 
 // selectedDoor returns the DoorConfig of the currently selected item, or nil.
-func (m *model) selectedDoor() *core.DoorConfig {
+func (m *model) selectedDoor() *doormodel.DoorConfig {
 	sel, ok := m.list.SelectedItem().(doorItem)
 	if !ok {
 		return nil
@@ -2407,7 +2408,7 @@ func (m *model) selectedDoor() *core.DoorConfig {
 // launchDoor builds an exec.Cmd for the door and returns a tea.ExecProcess
 // command that suspends the TUI, hands the terminal to the door binary, and
 // resumes when the door exits.
-func (m *model) launchDoor(d core.DoorConfig) tea.Cmd {
+func (m *model) launchDoor(d doormodel.DoorConfig) tea.Cmd {
 	termName := m.termName
 	if termName == "" {
 		termName = "ansi"
