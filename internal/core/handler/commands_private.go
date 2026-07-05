@@ -241,8 +241,8 @@ func (h *Handler) mailPostAuthor(actor *User, p proto.MailPostAuthorPayload) Rep
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "cannot mail author from a redacted post", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot mail author from a redacted post"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil {

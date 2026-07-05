@@ -230,6 +230,20 @@ func PlanPostRedaction(canModeratePosts, isAuthor, withinWindow bool) (string, *
 	return "recycle", nil
 }
 
+func RequirePostNotRedacted(redacted bool, message string) *proto.ErrorDetail {
+	if redacted {
+		return newErrDetail(proto.ErrConflict, message, false)
+	}
+	return nil
+}
+
+func RequirePostRedacted(redacted bool, message string) *proto.ErrorDetail {
+	if !redacted {
+		return newErrDetail(proto.ErrConflict, message, false)
+	}
+	return nil
+}
+
 func RequireThreadTitlePermission(canModerateThread, isAuthor, withinWindow bool) *proto.ErrorDetail {
 	if canModerateThread {
 		return nil

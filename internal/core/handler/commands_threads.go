@@ -495,8 +495,8 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	if sourcePost == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "source post not found", false)}
 	}
-	if sourcePost.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "cannot repost a redacted post", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(sourcePost.Redacted, "cannot repost a redacted post"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	sourceThread, err := currentRuntime().GetThread(h.db, sourcePost.Thread)
 	if err != nil {
@@ -782,8 +782,8 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "cannot attach to a redacted post", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot attach to a redacted post"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil {
@@ -887,8 +887,8 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "cannot edit a redacted post", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot edit a redacted post"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
@@ -937,8 +937,8 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "cannot flag a redacted post", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot flag a redacted post"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	thread, err := currentRuntime().GetThread(h.db, post.Thread)
 	if err != nil || thread == nil {
@@ -1004,8 +1004,8 @@ func (h *Handler) redactPost(actor *User, p proto.RedactPostPayload) Reply {
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "post is already redacted", false)}
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "post is already redacted"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
@@ -1066,8 +1066,8 @@ func (h *Handler) restorePost(actor *User, p proto.RestorePostPayload) Reply {
 	if post == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
 	}
-	if !post.Redacted {
-		return Reply{Err: errDetail(proto.ErrConflict, "post is not redacted", false)}
+	if errDetail := commandrules.RequirePostRedacted(post.Redacted, "post is not redacted"); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	thread, err := currentRuntime().GetThreadTx(tx, post.Thread)
@@ -1127,8 +1127,8 @@ func (h *Handler) redactPostRange(actor *User, p proto.RedactPostRangePayload) R
 		if ruleErr != nil {
 			return Reply{Err: ruleErr}
 		}
-		if post.Redacted {
-			return Reply{Err: errDetail(proto.ErrConflict, "post is already redacted: "+postID, false)}
+		if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "post is already redacted: "+postID); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 		scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRedacted, scopes, &proto.PostRedactedPayload{
@@ -1185,8 +1185,8 @@ func (h *Handler) restorePostRange(actor *User, p proto.RestorePostRangePayload)
 		if ruleErr != nil {
 			return Reply{Err: ruleErr}
 		}
-		if !post.Redacted {
-			return Reply{Err: errDetail(proto.ErrConflict, "post is not redacted: "+postID, false)}
+		if errDetail := commandrules.RequirePostRedacted(post.Redacted, "post is not redacted: "+postID); errDetail != nil {
+			return Reply{Err: errDetail}
 		}
 		scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostRestored, scopes, &proto.PostRestoredPayload{

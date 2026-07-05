@@ -822,8 +822,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 	if sourcePost == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "source post not found", false)
 	}
-	if sourcePost.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "cannot repost a redacted post", false)
+	if errDetail := commandrules.RequirePostNotRedacted(sourcePost.Redacted, "cannot repost a redacted post"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	sourceThread, err := projections.GetThread(e.core.DB, sourcePost.Thread)
 	if err != nil {
@@ -938,8 +938,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachPost(ctx context.Context,
 	if post == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "post not found", false)
 	}
-	if post.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "cannot attach to a redacted post", false)
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot attach to a redacted post"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	thread, err := projections.GetThread(e.core.DB, post.Thread)
 	if err != nil {
@@ -1018,8 +1018,8 @@ func (e *CommandLogNativeDecisionExecutor) decideEditPost(ctx context.Context, r
 	if post == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "post not found", false)
 	}
-	if post.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "cannot edit a redacted post", false)
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot edit a redacted post"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	thread, err := projections.GetThread(e.core.DB, post.Thread)
 	if err != nil {
@@ -1061,8 +1061,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetPostFlag(ctx context.Context
 	if post == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "post not found", false)
 	}
-	if post.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "cannot flag a redacted post", false)
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot flag a redacted post"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	thread, err := projections.GetThread(e.core.DB, post.Thread)
 	if err != nil {
@@ -1125,8 +1125,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRedactPost(ctx context.Context,
 	if post == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "post not found", false)
 	}
-	if post.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "post is already redacted", false)
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "post is already redacted"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	thread, err := projections.GetThread(e.core.DB, post.Thread)
 	if err != nil {
@@ -1171,8 +1171,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRestorePost(ctx context.Context
 	if post == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "post not found", false)
 	}
-	if !post.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "post is not redacted", false)
+	if errDetail := commandrules.RequirePostRedacted(post.Redacted, "post is not redacted"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	thread, err := projections.GetThread(e.core.DB, post.Thread)
 	if err != nil {
@@ -1218,8 +1218,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRedactPostRange(ctx context.Con
 		if errDetail != nil {
 			return nativeCommandDecision{}, errDetail
 		}
-		if post.Redacted {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "post is already redacted: "+postID, false)
+		if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "post is already redacted: "+postID); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 		events = append(events, nativeEvent(record, i, proto.EvtPostRedacted, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRedactedPayload{
 			ID:           post.ID,
@@ -1253,8 +1253,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRestorePostRange(ctx context.Co
 		if errDetail != nil {
 			return nativeCommandDecision{}, errDetail
 		}
-		if !post.Redacted {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "post is not redacted: "+postID, false)
+		if errDetail := commandrules.RequirePostRedacted(post.Redacted, "post is not redacted: "+postID); errDetail != nil {
+			return nativeCommandDecision{}, errDetail
 		}
 		events = append(events, nativeEvent(record, i, proto.EvtPostRestored, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostRestoredPayload{
 			ID:     post.ID,
@@ -2738,8 +2738,8 @@ func (e *CommandLogNativeDecisionExecutor) decideMailPostAuthor(ctx context.Cont
 	if post == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "post not found", false)
 	}
-	if post.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "cannot mail author from a redacted post", false)
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot mail author from a redacted post"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	thread, err := projections.GetThread(e.core.DB, post.Thread)
 	if err != nil {
@@ -2814,8 +2814,8 @@ func (e *CommandLogNativeDecisionExecutor) decideCuratePost(ctx context.Context,
 	if post == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "post not found", false)
 	}
-	if post.Redacted {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrConflict, "cannot curate a redacted post", false)
+	if errDetail := commandrules.RequirePostNotRedacted(post.Redacted, "cannot curate a redacted post"); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	thread, err := projections.GetThread(e.core.DB, post.Thread)
 	if err != nil {
