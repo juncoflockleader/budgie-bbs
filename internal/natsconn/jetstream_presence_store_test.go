@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -156,7 +157,7 @@ func TestJetStreamPresenceStoreBacksCommandPresenceAndOnlineReads(t *testing.T) 
 	if err != nil {
 		t.Fatalf("list chat rooms: %v", err)
 	}
-	var lobbyRoom *core.ChatRoom
+	var lobbyRoom *projections.ChatRoom
 	for i := range chatRooms {
 		if chatRooms[i].ID == "lobby" {
 			lobbyRoom = &chatRooms[i]

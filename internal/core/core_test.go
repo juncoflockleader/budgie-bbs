@@ -5581,7 +5581,7 @@ func TestChatRoomsRecentAndRoster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var lobbyRoom, studyRoom *core.ChatRoom
+	var lobbyRoom, studyRoom *projections.ChatRoom
 	for i := range rooms {
 		switch rooms[i].ID {
 		case "lobby":
@@ -5649,7 +5649,7 @@ func TestMemoryChatStoreBacksCommandChatAndRecentReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var studyRoom *core.ChatRoom
+	var studyRoom *projections.ChatRoom
 	for i := range rooms {
 		if rooms[i].ID == "study-room" {
 			studyRoom = &rooms[i]
@@ -5758,7 +5758,7 @@ func TestPrivilegedCloakPresence(t *testing.T) {
 		FromHost: "ops.test",
 	})
 
-	find := func(users []core.SocialUser, name string) *core.SocialUser {
+	find := func(users []projections.SocialUser, name string) *projections.SocialUser {
 		for i := range users {
 			if users[i].Name == name {
 				return &users[i]
@@ -5852,8 +5852,8 @@ func TestMultiSessionPresenceLifecycle(t *testing.T) {
 		FromHost:  "ssh.test",
 	})
 
-	sessionNames := func(users []core.SocialUser, name string) map[string]core.SocialUser {
-		out := map[string]core.SocialUser{}
+	sessionNames := func(users []projections.SocialUser, name string) map[string]projections.SocialUser {
+		out := map[string]projections.SocialUser{}
 		for _, user := range users {
 			if user.Name == name {
 				out[user.SessionID] = user

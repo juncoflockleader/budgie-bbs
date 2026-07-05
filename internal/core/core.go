@@ -2089,18 +2089,18 @@ func (c *Core) ListDirectMessages(userID, otherUserID string, limit, offset int)
 func (c *Core) CountUnreadDirectMessages(userID string) (int, error) {
 	return projections.CountUnreadDirectMessages(c.DB, userID)
 }
-func (c *Core) ListSocialUsers(userID, list string, onlineOnly bool) ([]SocialUser, error) {
+func (c *Core) ListSocialUsers(userID, list string, onlineOnly bool) ([]projections.SocialUser, error) {
 	return projections.ListSocialUsers(c.DB, userID, list, onlineOnly)
 }
 
-func (c *Core) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]SocialUser, error) {
+func (c *Core) ListOnlineUsers(viewerID, boardID string, limit, offset int) ([]projections.SocialUser, error) {
 	if c != nil && c.presenceStore != nil {
 		return c.presenceStore.ListOnlineUsers(viewerID, boardID, limit, offset)
 	}
 	return projections.ListOnlineUsers(c.DB, viewerID, boardID, limit, offset)
 }
-func (c *Core) ListChatRooms() ([]ChatRoom, error) {
-	var rooms []ChatRoom
+func (c *Core) ListChatRooms() ([]projections.ChatRoom, error) {
+	var rooms []projections.ChatRoom
 	var err error
 	if c != nil && c.chatStore != nil {
 		rooms, err = c.chatStore.ListChatRooms()
@@ -2121,13 +2121,13 @@ func (c *Core) ListChatRooms() ([]ChatRoom, error) {
 	}
 	return rooms, nil
 }
-func (c *Core) ListChatLines(roomID string, limit int) ([]ChatLine, error) {
+func (c *Core) ListChatLines(roomID string, limit int) ([]projections.ChatLine, error) {
 	if c != nil && c.chatStore != nil {
 		return c.chatStore.ListChatLines(roomID, limit)
 	}
 	return projections.ListChatLines(c.DB, roomID, limit)
 }
-func (c *Core) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]SocialUser, error) {
+func (c *Core) ListChatOnlineUsers(viewerID, roomID string, limit, offset int) ([]projections.SocialUser, error) {
 	if c != nil && c.presenceStore != nil {
 		return c.presenceStore.ListChatOnlineUsers(viewerID, roomID, limit, offset)
 	}

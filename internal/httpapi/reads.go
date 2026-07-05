@@ -1046,7 +1046,7 @@ func (s *Server) actorCanReadBoard(actor *core.User, boardID string) (bool, erro
 	return actorCanReadBoardInfo(actor, info), nil
 }
 
-func (s *Server) maskPrivatePresenceLocations(actor *core.User, users []core.SocialUser) {
+func (s *Server) maskPrivatePresenceLocations(actor *core.User, users []projections.SocialUser) {
 	for i := range users {
 		if users[i].BoardID == "" {
 			continue

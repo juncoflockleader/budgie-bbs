@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -33,7 +34,7 @@ func TestJetStreamChatStoreTracksBoundedHistoryAndRooms(t *testing.T) {
 	if len(rooms) < 2 || rooms[0].ID != "lobby" {
 		t.Fatalf("expected lobby first plus study room, got %+v", rooms)
 	}
-	var studyRoom *core.ChatRoom
+	var studyRoom *projections.ChatRoom
 	for i := range rooms {
 		if rooms[i].ID == "study-room" {
 			studyRoom = &rooms[i]
@@ -96,7 +97,7 @@ func TestJetStreamChatStoreBacksCommandChatAndRecentReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list chat rooms: %v", err)
 	}
-	var studyRoom *core.ChatRoom
+	var studyRoom *projections.ChatRoom
 	for i := range rooms {
 		if rooms[i].ID == "study-room" {
 			studyRoom = &rooms[i]

@@ -67,7 +67,7 @@ type (
 		err    error
 	}
 	chatLinesMsg struct {
-		lines []core.ChatLine
+		lines []projections.ChatLine
 		err   error
 	}
 	pollMsg struct {
@@ -91,7 +91,7 @@ type (
 		err     error
 	}
 	onlineUsersMsg struct {
-		users []core.SocialUser
+		users []projections.SocialUser
 		err   error
 	}
 	presenceSetMsg   struct{ err error }
@@ -174,7 +174,7 @@ type model struct {
 	unreadNotifs  int
 	profile       *projections.UserProfile
 	profileField  profileField
-	onlineUsers   []core.SocialUser
+	onlineUsers   []projections.SocialUser
 	nodes         []core.NodeEntry       // M14: active SSH sessions for sysop panel
 	doors         []doormodel.DoorConfig // M12: configured door games
 	termName      string                 // M12: TERM env value forwarded to door processes
@@ -2263,7 +2263,7 @@ func (m *model) profileFields() []profileField {
 }
 
 type onlineUserItem struct {
-	u    core.SocialUser
+	u    projections.SocialUser
 	desc string
 }
 
@@ -2287,7 +2287,7 @@ func (i onlineUserItem) FilterValue() string {
 	return i.u.Name + " " + i.u.DisplayName + " " + i.u.Status + " " + i.u.Mode + " " + i.u.BoardName + " " + i.u.LocationLabel
 }
 
-func (m *model) onlineUserStatus(user core.SocialUser) string {
+func (m *model) onlineUserStatus(user projections.SocialUser) string {
 	mode := strings.TrimSpace(user.Mode)
 	if mode == "" {
 		mode = strings.TrimSpace(user.Status)
@@ -2777,7 +2777,7 @@ func (m *model) selectedNotification() *projections.Notification {
 	return &sel.n
 }
 
-func (m *model) selectedOnlineUser() *core.SocialUser {
+func (m *model) selectedOnlineUser() *projections.SocialUser {
 	sel, ok := m.list.SelectedItem().(onlineUserItem)
 	if !ok {
 		return nil
