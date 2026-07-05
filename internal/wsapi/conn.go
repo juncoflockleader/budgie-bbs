@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/metrics"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -81,7 +82,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type wsConn struct {
 	ws            *websocket.Conn
 	core          *core.Core
-	actor         *core.User
+	actor         *projections.User
 	sub           *core.Subscription
 	scopes        []string // active subscription scopes; used for gap replay
 	cursor        proto.Cursor
@@ -308,7 +309,7 @@ func (c *wsConn) deliverEvent(evt *proto.Event) error {
 		})
 }
 
-func (s *Server) validateToken(tok string) (*core.User, error) {
+func (s *Server) validateToken(tok string) (*projections.User, error) {
 	if tok == "" {
 		return nil, fmt.Errorf("missing token")
 	}
