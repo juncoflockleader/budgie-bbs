@@ -62,6 +62,10 @@ func (p CommandLogSourcePosition) ValidateFor(partition Partition, offset int64)
 	return nil
 }
 
+func (p CommandLogSourcePosition) ValidateForRecord(record CommandLogRecord) error {
+	return p.ValidateFor(record.Partition, record.Offset)
+}
+
 // CommandLogCommitPosition is the exact command-log cursor a transaction must
 // advance after its events are durable. Partition/Offset are Budgie's logical
 // progress marker; SourcePosition carries physical broker evidence when the

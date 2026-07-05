@@ -31,6 +31,28 @@ func TestCommandLogSourcePositionAllowsZeroForNonBrokerLogs(t *testing.T) {
 	}
 }
 
+func TestCommandLogSourcePositionValidatesCommandLogRecord(t *testing.T) {
+	partition := Partition{Kind: PartitionBoard, Key: "general"}
+	record := CommandLogRecord{
+		Partition: partition,
+		Offset:    42,
+		SourcePosition: CommandLogSourcePosition{
+			Backend:           "kafka",
+			Topic:             "budgie.commandlog",
+			PhysicalPartition: 7,
+			PhysicalOffset:    41,
+			CommitOffset:      42,
+			LogicalPartition:  partition,
+			LogicalOffset:     42,
+		},
+	}
+	if err := record.SourcePosition.ValidateForRecord(record); err != nil {
+		t.Fatalf("ValidateForRecord: %v", err)
+	}
+	record.Offset = 43
+	requireErrorContains(t, record.SourcePosition.ValidateForRecord(record), "does not match record offset")
+}
+
 func TestCommandLogSourcePositionRejectsUnsafeCommitEvidence(t *testing.T) {
 	partition := Partition{Kind: PartitionBoard, Key: "general"}
 	tests := []struct {
