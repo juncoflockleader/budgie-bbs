@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/emailverificationstore"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/mailer"
 )
@@ -80,27 +80,9 @@ func (c *Core) StartEmailVerification(userID, email string) error {
 	}
 	defer tx.Rollback() //nolint
 
-	if _, err := qExec(tx, `UPDATE users SET email_verified=0 WHERE id=?`, userID); err != nil {
-		return err
-	}
-	if _, err := qExec(tx,
-		`INSERT INTO user_private_profiles (user_id, registration_email, updated_at)
-		 VALUES (?,?,?)
-		 ON CONFLICT(user_id) DO UPDATE SET registration_email=excluded.registration_email, updated_at=excluded.updated_at`,
-		userID, email, now,
-	); err != nil {
-		return err
-	}
-	// One outstanding token per user.
-	if _, err := qExec(tx, `DELETE FROM email_verification_tokens WHERE user_id=?`, userID); err != nil {
-		return err
-	}
 	token := newID("everi_")
 	exp := now + accountmodel.EmailVerificationTokenTTL.Milliseconds()
-	if _, err := qExec(tx,
-		`INSERT INTO email_verification_tokens (token, user_id, email, created_at, expires_at) VALUES (?,?,?,?,?)`,
-		token, userID, email, now, exp,
-	); err != nil {
+	if err := emailverificationstore.Start(tx, userID, email, token, now, exp); err != nil {
 		return err
 	}
 	msg := accountmodel.VerificationEmail(c.emailVerifyBaseURL, token)
@@ -117,35 +99,22 @@ func (c *Core) VerifyEmailToken(token string) (*projections.User, error) {
 	if token == "" {
 		return nil, ErrVerificationTokenInvalid
 	}
-	var userID string
-	var exp int64
-	err := qQueryRow(c.DB,
-		`SELECT user_id, expires_at FROM email_verification_tokens WHERE token=?`, token,
-	).Scan(&userID, &exp)
-	if err == sql.ErrNoRows {
-		return nil, ErrVerificationTokenInvalid
-	}
+	claimedToken, claimed, err := emailverificationstore.ClaimToken(c.DB, token)
 	if err != nil {
 		return nil, err
 	}
 	// Single-use: atomically claim the token. Only the request that actually
 	// deletes the row proceeds; a concurrent replay gets 0 rows and fails.
-	res, err := qExec(c.DB, `DELETE FROM email_verification_tokens WHERE token=?`, token)
-	if err != nil {
-		return nil, err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
+	if !claimed {
 		return nil, ErrVerificationTokenInvalid
 	}
-	if exp < nowMS() {
+	if claimedToken.ExpiresAt < nowMS() {
 		return nil, ErrVerificationTokenInvalid
 	}
-	if _, err := qExec(c.DB,
-		`UPDATE users SET email_verified=1, email_verified_at=? WHERE id=?`, nowMS(), userID,
-	); err != nil {
+	if err := emailverificationstore.MarkVerified(c.DB, claimedToken.UserID, nowMS()); err != nil {
 		return nil, err
 	}
-	return projections.GetUserByID(c.DB, userID)
+	return projections.GetUserByID(c.DB, claimedToken.UserID)
 }
 
 // ResendEmailVerification re-issues a verification email for an unverified
@@ -155,17 +124,17 @@ func (c *Core) ResendEmailVerification(name string) error {
 	if err != nil || u == nil {
 		return ErrInvalidCredentials
 	}
-	var verified int
-	var email string
-	_ = qQueryRow(c.DB, `SELECT email_verified FROM users WHERE id=?`, u.ID).Scan(&verified)
-	_ = qQueryRow(c.DB, `SELECT COALESCE(registration_email,'') FROM user_private_profiles WHERE user_id=?`, u.ID).Scan(&email)
-	if verified != 0 {
+	status, err := emailverificationstore.UserStatus(c.DB, u.ID)
+	if err != nil {
+		return err
+	}
+	if status.Verified {
 		return nil // already verified; nothing to do (don't leak status)
 	}
-	if email == "" {
+	if status.Email == "" {
 		return ErrEmailRequired
 	}
-	return c.StartEmailVerification(u.ID, email)
+	return c.StartEmailVerification(u.ID, status.Email)
 }
 
 // emailVerified reports whether a user's email is confirmed. Fails closed: a
@@ -173,11 +142,11 @@ func (c *Core) ResendEmailVerification(name string) error {
 // email-verification login gate (login already requires the database, so this
 // does not reduce availability in practice).
 func (c *Core) emailVerified(userID string) bool {
-	var v int
-	if err := qQueryRow(c.DB, `SELECT email_verified FROM users WHERE id=?`, userID).Scan(&v); err != nil {
+	verified, err := emailverificationstore.EmailVerified(c.DB, userID)
+	if err != nil {
 		return false
 	}
-	return v != 0
+	return verified
 }
 
 type emailSendJob struct {
