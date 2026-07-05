@@ -1283,10 +1283,7 @@ func (c *Core) DeactivateAccount(userID, password, reason string) error {
 	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)); err != nil {
 		return ErrInvalidCredentials
 	}
-	reason = strings.TrimSpace(reason)
-	if len(reason) > 500 {
-		reason = reason[:500]
-	}
+	reason = accountmodel.NormalizeAccountClosureReason(reason)
 	ts := nowMS()
 	tx, err := c.DB.Begin()
 	if err != nil {
@@ -1325,10 +1322,7 @@ func (c *Core) DeleteUser(actorID, targetUserID, reason string) error {
 	if targetUserID == deletedUserID {
 		return fmt.Errorf("%w: cannot delete account tombstone", ErrAccountDeleteForbidden)
 	}
-	reason = strings.TrimSpace(reason)
-	if len(reason) > 500 {
-		reason = reason[:500]
-	}
+	reason = accountmodel.NormalizeAccountClosureReason(reason)
 
 	tx, err := c.DB.Begin()
 	if err != nil {
