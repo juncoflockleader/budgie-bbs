@@ -734,8 +734,8 @@ func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply
 	if settings == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
-	if !settings.MailInAllowed && !commandrules.ActorCanModerateBoard(h.db, actor, boardID) {
-		return Reply{Err: errDetail(proto.ErrForbidden, "board mail-in is disabled", false)}
+	if errDetail := commandrules.RequireBoardMailInAllowed(settings, commandrules.ActorCanModerateBoard(h.db, actor, boardID)); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	if threadID != "" {
 		return h.appendPost(actor, proto.AppendPostPayload{

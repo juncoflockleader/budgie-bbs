@@ -46,6 +46,13 @@ func RequirePostAttachmentCapacity(existingCount int) *proto.ErrorDetail {
 	return nil
 }
 
+func RequireBoardMailInAllowed(settings *projections.BoardSettings, canModerateBoard bool) *proto.ErrorDetail {
+	if settings != nil && !settings.MailInAllowed && !canModerateBoard {
+		return newErrDetail(proto.ErrForbidden, "board mail-in is disabled", false)
+	}
+	return nil
+}
+
 func ActorAuthoredBy(actor *projections.User, authorID, authorName string) bool {
 	if actor == nil {
 		return false

@@ -675,8 +675,8 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMail(ctx context.Conte
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if !settings.MailInAllowed && !canModerateBoard {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "board mail-in is disabled", false)
+	if errDetail := commandrules.RequireBoardMailInAllowed(settings, canModerateBoard); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	if thread != nil {
 		return e.decidePostBoardMailAppend(record, actor, thread, payload.Body, payload.ContentType, payload.Attachments)
