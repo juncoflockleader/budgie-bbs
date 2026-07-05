@@ -628,7 +628,7 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 			if !logmodel.SameBrokerEventRecordIdentity(existingRecord, record) {
 				return BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("memory broker command event transaction: duplicate event id %q has different content", record.ID)
 			}
-			pending = append(pending, memoryPendingBrokerEvent{message: cloneBrokerEventLogMessage(existing)})
+			pending = append(pending, memoryPendingBrokerEvent{message: logmodel.CloneBrokerEventLogMessage(existing)})
 			continue
 		}
 		if existing, ok := pendingByID[record.ID]; ok {
@@ -665,10 +665,10 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 		if appendEvent.new {
 			c.events.head = msg.StreamSeq
 			c.events.tails[msg.Partition] = msg.Offset
-			c.events.messages[msg.Partition] = append(c.events.messages[msg.Partition], cloneBrokerEventLogMessage(msg))
-			c.events.byID[appendEvent.record.ID] = cloneBrokerEventLogMessage(msg)
+			c.events.messages[msg.Partition] = append(c.events.messages[msg.Partition], logmodel.CloneBrokerEventLogMessage(msg))
+			c.events.byID[appendEvent.record.ID] = logmodel.CloneBrokerEventLogMessage(msg)
 		}
-		out = append(out, cloneBrokerEventLogMessage(msg))
+		out = append(out, logmodel.CloneBrokerEventLogMessage(msg))
 	}
 	commits := make([]CommandLogCommitPosition, 0, len(commands))
 	for _, command := range commands {

@@ -18,14 +18,8 @@ const (
 // BrokerEventRecord is an alias for the durable broker event record model.
 type BrokerEventRecord = logmodel.BrokerEventRecord
 
-// BrokerEventLogMessage is a physical broker message plus its logical event
-// offset. StreamSeq is optional broker metadata used only for scalar diagnostics.
-type BrokerEventLogMessage struct {
-	Partition LogPartition
-	Offset    int64
-	StreamSeq int64
-	Data      []byte
-}
+// BrokerEventLogMessage is an alias for the broker event message envelope.
+type BrokerEventLogMessage = logmodel.BrokerEventLogMessage
 
 // BrokerEventLogClient is the minimal durable broker boundary needed to shadow
 // SQL events before the broker becomes the authoritative event log.
@@ -320,7 +314,7 @@ func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition 
 			if !logmodel.SameBrokerEventRecordIdentity(existingRecord, record) {
 				return BrokerEventLogMessage{}, fmt.Errorf("memory broker event log: duplicate event id %q has different content", record.ID)
 			}
-			return cloneBrokerEventLogMessage(existing), nil
+			return logmodel.CloneBrokerEventLogMessage(existing), nil
 		}
 	}
 	offset := c.tails[partition] + 1
@@ -345,11 +339,11 @@ func (c *MemoryBrokerEventLogClient) AppendEvent(ctx context.Context, partition 
 		Data:      data,
 	}
 	c.tails[partition] = offset
-	c.messages[partition] = append(c.messages[partition], cloneBrokerEventLogMessage(msg))
+	c.messages[partition] = append(c.messages[partition], logmodel.CloneBrokerEventLogMessage(msg))
 	if record.ID != "" {
-		c.byID[record.ID] = cloneBrokerEventLogMessage(msg)
+		c.byID[record.ID] = logmodel.CloneBrokerEventLogMessage(msg)
 	}
-	return cloneBrokerEventLogMessage(msg), nil
+	return logmodel.CloneBrokerEventLogMessage(msg), nil
 }
 
 func (c *MemoryBrokerEventLogClient) FetchEvents(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerEventLogMessage, error) {
@@ -369,7 +363,7 @@ func (c *MemoryBrokerEventLogClient) FetchEvents(ctx context.Context, partition 
 		if msg.Offset <= afterOffset {
 			continue
 		}
-		out = append(out, cloneBrokerEventLogMessage(msg))
+		out = append(out, logmodel.CloneBrokerEventLogMessage(msg))
 		if limit > 0 && len(out) >= limit {
 			break
 		}
@@ -437,10 +431,4 @@ func (c *MemoryBrokerEventLogClient) ListEventPartitionOffsets(ctx context.Conte
 		offsets = offsets[:limit]
 	}
 	return offsets, nil
-}
-
-func cloneBrokerEventLogMessage(msg BrokerEventLogMessage) BrokerEventLogMessage {
-	msg.Partition = msg.Partition.Normalize()
-	msg.Data = append([]byte(nil), msg.Data...)
-	return msg
 }

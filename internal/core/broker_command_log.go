@@ -19,12 +19,8 @@ const (
 // BrokerCommandRecord is an alias for the durable broker command record model.
 type BrokerCommandRecord = logmodel.BrokerCommandRecord
 
-type BrokerCommandLogMessage struct {
-	Partition LogPartition
-	Offset    int64
-	StreamSeq int64
-	Data      []byte
-}
+// BrokerCommandLogMessage is an alias for the broker command message envelope.
+type BrokerCommandLogMessage = logmodel.BrokerCommandLogMessage
 
 type BrokerCommandLogClient interface {
 	AppendCommand(ctx context.Context, partition LogPartition, record BrokerCommandRecord) (BrokerCommandLogMessage, error)
@@ -242,7 +238,7 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 			if !logmodel.SameBrokerCommandRecordIdentity(existingRecord, record) {
 				return BrokerCommandLogMessage{}, fmt.Errorf("memory broker command log: duplicate command receipt %q has different content", record.CID)
 			}
-			return cloneBrokerCommandLogMessage(existing), nil
+			return logmodel.CloneBrokerCommandLogMessage(existing), nil
 		}
 	}
 	offset := c.tails[partition] + 1
@@ -265,11 +261,11 @@ func (c *MemoryBrokerCommandLogClient) AppendCommand(ctx context.Context, partit
 		Data:      data,
 	}
 	c.tails[partition] = offset
-	c.messages[partition] = append(c.messages[partition], cloneBrokerCommandLogMessage(msg))
+	c.messages[partition] = append(c.messages[partition], logmodel.CloneBrokerCommandLogMessage(msg))
 	if key, ok := newCommandReceiptKey(partition, record.ActorID, record.CID); ok {
-		c.byReceipt[key] = cloneBrokerCommandLogMessage(msg)
+		c.byReceipt[key] = logmodel.CloneBrokerCommandLogMessage(msg)
 	}
-	return cloneBrokerCommandLogMessage(msg), nil
+	return logmodel.CloneBrokerCommandLogMessage(msg), nil
 }
 
 func (c *MemoryBrokerCommandLogClient) FetchCommands(ctx context.Context, partition LogPartition, afterOffset int64, limit int) ([]BrokerCommandLogMessage, error) {
@@ -289,7 +285,7 @@ func (c *MemoryBrokerCommandLogClient) FetchCommands(ctx context.Context, partit
 		if msg.Offset <= afterOffset {
 			continue
 		}
-		out = append(out, cloneBrokerCommandLogMessage(msg))
+		out = append(out, logmodel.CloneBrokerCommandLogMessage(msg))
 		if limit > 0 && len(out) >= limit {
 			break
 		}
@@ -360,12 +356,6 @@ func (c *MemoryBrokerCommandLogClient) ListCommandPartitionOffsets(ctx context.C
 		offsets = offsets[:limit]
 	}
 	return offsets, nil
-}
-
-func cloneBrokerCommandLogMessage(msg BrokerCommandLogMessage) BrokerCommandLogMessage {
-	msg.Partition = msg.Partition.Normalize()
-	msg.Data = append([]byte(nil), msg.Data...)
-	return msg
 }
 
 func BrokerCommandMessageID(partition LogPartition, actorID, cid string) string {
