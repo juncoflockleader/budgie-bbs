@@ -329,6 +329,15 @@ func PostUnreacted(postID, threadID, boardID, user, emoji string, reactionCount 
 	}
 }
 
+func PollVoted(pollID, optionID, threadID, boardID, user string, ts int64) ([]string, *proto.PollVotedPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PollVotedPayload{
+		Poll:   pollID,
+		Option: optionID,
+		User:   user,
+		TS:     ts,
+	}
+}
+
 type DigestEntryUpsertedSpec proto.DigestEntryUpsertedPayload
 
 func DigestEntryUpserted(spec DigestEntryUpsertedSpec) ([]string, *proto.DigestEntryUpsertedPayload) {

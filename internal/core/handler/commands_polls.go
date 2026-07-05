@@ -3,6 +3,7 @@ package handler
 import (
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/eventwakeup"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
@@ -61,8 +62,8 @@ func (h *Handler) votePoll(actor *User, p proto.VotePollPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPollVoted, Scopes: scopes,
-		Payload: &proto.PollVotedPayload{Poll: p.Poll, Option: p.Option, User: actor.Name, TS: ts}, TS: ts})
+	scopes, eventPayload := commandevents.PollVoted(p.Poll, p.Option, post.Thread, thread.Board, actor.Name, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPollVoted, Scopes: scopes, Payload: eventPayload, TS: ts})
 	pgNotifyEphemeral(h.db, string(proto.EvtPollVoted), eventwakeup.EncodePollVote(p.Poll, actor.ID, ts), strings.Join(scopes, ","))
 
 	return Reply{Result: &proto.AckResult{ID: p.Poll}}

@@ -319,6 +319,14 @@ func TestPostReactionEvents(t *testing.T) {
 	}
 }
 
+func TestPollVoted(t *testing.T) {
+	scopes, voted := PollVoted("poll_1", "option_1", "thread_1", "general", "alice", 1234)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if voted.Poll != "poll_1" || voted.Option != "option_1" || voted.User != "alice" || voted.TS != 1234 {
+		t.Fatalf("PollVoted payload = %+v", voted)
+	}
+}
+
 func TestDigestEvents(t *testing.T) {
 	scopes, upserted := DigestEntryUpserted(DigestEntryUpsertedSpec{
 		ID: "dig_1", Board: "general", TargetKind: "post", TargetID: "post_1",
