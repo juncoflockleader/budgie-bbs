@@ -11,15 +11,15 @@ import (
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
-func (h *Handler) grantRole(actor *User, p proto.GrantRolePayload) Reply {
+func (h *Handler) grantRole(actor *projections.User, p proto.GrantRolePayload) Reply {
 	return h.changeRole(actor, p.User, p.Role, proto.EvtRoleGranted, "granted", p.Role)
 }
 
-func (h *Handler) revokeRole(actor *User, p proto.RevokeRolePayload) Reply {
+func (h *Handler) revokeRole(actor *projections.User, p proto.RevokeRolePayload) Reply {
 	return h.changeRole(actor, p.User, p.Role, proto.EvtRoleRevoked, "revoked", "user")
 }
 
-func (h *Handler) changeRole(actor *User, userID, role string, kind proto.EventKind, action, storedRole string) Reply {
+func (h *Handler) changeRole(actor *projections.User, userID, role string, kind proto.EventKind, action, storedRole string) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -65,7 +65,7 @@ func (h *Handler) changeRole(actor *User, userID, role string, kind proto.EventK
 	return Reply{Result: &proto.AckResult{ID: target.ID, Seq: seq}}
 }
 
-func (h *Handler) sendChatLine(actor *User, p proto.SendChatLinePayload) Reply {
+func (h *Handler) sendChatLine(actor *projections.User, p proto.SendChatLinePayload) Reply {
 	line, errDetail := commandrules.NormalizeChatLine(p.Room, p.Text)
 	if errDetail != nil {
 		return Reply{Err: errDetail}
@@ -89,7 +89,7 @@ func (h *Handler) sendChatLine(actor *User, p proto.SendChatLinePayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: id}}
 }
 
-func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
+func (h *Handler) setPresence(actor *projections.User, p proto.SetPresencePayload) Reply {
 	status := strings.TrimSpace(p.Status)
 	if status == "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, "status is required", false)}
@@ -208,7 +208,7 @@ func (h *Handler) setPresence(actor *User, p proto.SetPresencePayload) Reply {
 	return Reply{Result: &proto.AckResult{}}
 }
 
-func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
+func (h *Handler) sanctionUser(actor *projections.User, p proto.SanctionUserPayload) Reply {
 	p, msg := proto.NormalizeSanctionUserPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -274,7 +274,7 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: sanctionID, Seq: seq}}
 }
 
-func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayload) Reply {
+func (h *Handler) clearUserSanction(actor *projections.User, p proto.ClearUserSanctionPayload) Reply {
 	p, msg := proto.NormalizeClearUserSanctionPayload(p)
 	if msg != "" {
 		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
@@ -340,7 +340,7 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 	return Reply{Result: &proto.AckResult{ID: target.ID, Seq: seq}}
 }
 
-func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload) Reply {
+func (h *Handler) setContentFilter(actor *projections.User, p proto.SetContentFilterPayload) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -394,15 +394,15 @@ func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload)
 	return Reply{Result: &proto.AckResult{ID: filterID, Seq: seq}}
 }
 
-func (h *Handler) ensureDenyPostSystemPost(actor, target *User, boardID, kind, reason string, ts int64) error {
+func (h *Handler) ensureDenyPostSystemPost(actor, target *projections.User, boardID, kind, reason string, ts int64) error {
 	return h.ensureSanctionSystemPost(proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardDescription, actor, target, boardID, kind, reason, "Board posting denied", ts)
 }
 
-func (h *Handler) ensureUndenyPostSystemPost(actor, target *User, boardID, kind, reason string, ts int64) error {
+func (h *Handler) ensureUndenyPostSystemPost(actor, target *projections.User, boardID, kind, reason string, ts int64) error {
 	return h.ensureSanctionSystemPost(proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardDescription, actor, target, boardID, kind, reason, "Board posting restored", ts)
 }
 
-func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, systemBoardDescription string, actor, target *User, sourceBoardID, kind, reason, action string, ts int64) error {
+func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, systemBoardDescription string, actor, target *projections.User, sourceBoardID, kind, reason, action string, ts int64) error {
 	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, sourceBoardID)
 	if err != nil {
 		return err
@@ -452,7 +452,7 @@ func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, syste
 	return nil
 }
 
-func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
+func (h *Handler) createBoard(actor *projections.User, p proto.CreateBoardPayload) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
@@ -494,7 +494,7 @@ func (h *Handler) createBoard(actor *User, p proto.CreateBoardPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: p.ID, Seq: seq}}
 }
 
-func (h *Handler) purgePost(actor *User, p proto.PurgePostPayload) Reply {
+func (h *Handler) purgePost(actor *projections.User, p proto.PurgePostPayload) Reply {
 	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
 		return Reply{Err: errDetail}
 	}
