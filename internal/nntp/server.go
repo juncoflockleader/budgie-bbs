@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -66,15 +67,15 @@ type session struct {
 	r           *bufio.Reader
 	w           *bufio.Writer
 	pendingUser string
-	actor       *core.User
+	actor       *projections.User
 	group       string
 	articles    []article
 }
 
 type article struct {
 	Number int
-	Thread core.Thread
-	Post   core.Post
+	Thread projections.Thread
+	Post   projections.Post
 }
 
 const (
