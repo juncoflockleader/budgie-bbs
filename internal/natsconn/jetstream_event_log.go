@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	nats "github.com/nats-io/nats.go"
 )
 
@@ -387,7 +388,7 @@ func (c *JetStreamEventLogClient) findEventByID(ctx context.Context, partition c
 		if record.ID != id {
 			continue
 		}
-		if !sameJetStreamEventIdentity(record, requested) {
+		if !logmodel.SameBrokerEventRecordIdentity(record, requested) {
 			return core.BrokerEventLogMessage{}, fmt.Errorf("nats event log: duplicate event id %q has different content", id)
 		}
 		c.rememberEventPosition(partition, record.PartitionOffset, raw.Sequence)
@@ -483,27 +484,6 @@ func (c *JetStreamEventLogClient) knownStreamSequenceAfterOffset(partition core.
 		return 0
 	}
 	return known.streamSeq + 1
-}
-
-func sameJetStreamEventIdentity(existing, requested core.BrokerEventRecord) bool {
-	if existing.ID != requested.ID ||
-		existing.Kind != requested.Kind ||
-		existing.CompatibilitySeq != requested.CompatibilitySeq ||
-		existing.TS != requested.TS ||
-		existing.PartitionKind != requested.PartitionKind ||
-		existing.PartitionKey != requested.PartitionKey ||
-		string(existing.Payload) != string(requested.Payload) {
-		return false
-	}
-	if len(existing.Scopes) != len(requested.Scopes) {
-		return false
-	}
-	for i := range existing.Scopes {
-		if existing.Scopes[i] != requested.Scopes[i] {
-			return false
-		}
-	}
-	return true
 }
 
 type jetStreamPartitionTail struct {

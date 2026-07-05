@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 const (
@@ -292,7 +293,7 @@ func normalizeTransactionEvents(records []core.BrokerEventRecord) ([]core.Broker
 			return nil, fmt.Errorf("kafka command/event transaction: event timestamp is required")
 		}
 		if existing, ok := byID[record.ID]; ok {
-			if !sameTransactionEventIdentity(existing, record) {
+			if !logmodel.SameBrokerEventRecordIdentity(existing, record) {
 				return nil, fmt.Errorf("kafka command/event transaction: duplicate event id %q has different content", record.ID)
 			}
 			return nil, fmt.Errorf("kafka command/event transaction: duplicate event id %q in one transaction", record.ID)
@@ -301,27 +302,6 @@ func normalizeTransactionEvents(records []core.BrokerEventRecord) ([]core.Broker
 		normalized = append(normalized, record)
 	}
 	return normalized, nil
-}
-
-func sameTransactionEventIdentity(existing, requested core.BrokerEventRecord) bool {
-	if existing.ID != requested.ID ||
-		existing.Kind != requested.Kind ||
-		existing.CompatibilitySeq != requested.CompatibilitySeq ||
-		existing.TS != requested.TS ||
-		existing.PartitionKind != requested.PartitionKind ||
-		existing.PartitionKey != requested.PartitionKey ||
-		string(existing.Payload) != string(requested.Payload) {
-		return false
-	}
-	if len(existing.Scopes) != len(requested.Scopes) {
-		return false
-	}
-	for i := range existing.Scopes {
-		if existing.Scopes[i] != requested.Scopes[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func LogicalPartitionKey(partition core.LogPartition) string {

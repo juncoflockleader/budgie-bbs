@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
 
@@ -297,7 +298,7 @@ func (a *fakeTransactionEventAppender) AppendEvent(ctx context.Context, partitio
 		if err != nil {
 			return core.BrokerEventLogMessage{}, err
 		}
-		if !sameJetStreamEventIdentity(existingRecord, record) {
+		if !logmodel.SameBrokerEventRecordIdentity(existingRecord, record) {
 			return core.BrokerEventLogMessage{}, fmt.Errorf("duplicate event id %q has different content", record.ID)
 		}
 		return cloneTransactionBrokerEventMessage(existing), nil

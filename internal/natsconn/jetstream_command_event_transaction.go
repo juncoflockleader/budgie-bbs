@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 type JetStreamCommandEventTransactionOptions struct {
@@ -159,7 +160,7 @@ func normalizeJetStreamTransactionEvents(records []core.BrokerEventRecord) ([]co
 			return nil, fmt.Errorf("nats command/event transaction: event timestamp is required")
 		}
 		if existing, ok := byID[record.ID]; ok {
-			if !sameJetStreamEventIdentity(existing, record) {
+			if !logmodel.SameBrokerEventRecordIdentity(existing, record) {
 				return nil, fmt.Errorf("nats command/event transaction: duplicate event id %q has different content", record.ID)
 			}
 			return nil, fmt.Errorf("nats command/event transaction: duplicate event id %q in one transaction", record.ID)

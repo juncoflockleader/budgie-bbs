@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 	nats "github.com/nats-io/nats.go"
 )
 
@@ -398,7 +399,7 @@ func (c *JetStreamCommandLogClient) findCommandByReceipt(ctx context.Context, pa
 		if record.ActorID != requested.ActorID || record.CID != requested.CID {
 			continue
 		}
-		if !sameJetStreamCommandIdentity(record, requested) {
+		if !logmodel.SameBrokerCommandRecordIdentity(record, requested) {
 			return core.BrokerCommandLogMessage{}, fmt.Errorf("nats command log: duplicate command receipt %q has different content", requested.CID)
 		}
 		return core.BrokerCommandLogMessage{
@@ -548,14 +549,4 @@ func decodeCommandCommitRecord(data []byte) (commandCommitRecord, error) {
 		return commandCommitRecord{}, fmt.Errorf("nats command log: negative committed offset")
 	}
 	return record, nil
-}
-
-func sameJetStreamCommandIdentity(existing, requested core.BrokerCommandRecord) bool {
-	return existing.ActorID == requested.ActorID &&
-		existing.CID == requested.CID &&
-		existing.Command == requested.Command &&
-		existing.EnqueuedAt == requested.EnqueuedAt &&
-		existing.PartitionKind == requested.PartitionKind &&
-		existing.PartitionKey == requested.PartitionKey &&
-		string(existing.Payload) == string(requested.Payload)
 }
