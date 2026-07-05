@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -321,7 +322,7 @@ func (s *Server) handleListBoardMemberApplications(w http.ResponseWriter, r *htt
 	status := r.URL.Query().Get("status")
 	limit, offset := paginate(r)
 	userID := actor.ID
-	if actorCanManageBoardMembersInfo(actor, info) {
+	if boardmodel.ActorCanManageBoardMembers(actor, info) {
 		userID = r.URL.Query().Get("userId")
 	}
 	apps, err := s.core.ListBoardMemberApplications(boardID, status, userID, limit, offset)
@@ -343,7 +344,7 @@ func (s *Server) handleListBoardDeletedPosts(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "not_found", "board not found", false)
 		return
 	}
-	if !actorCanModerateBoardPostsInfo(actor, info) {
+	if !boardmodel.ActorCanModerateBoardPosts(actor, info) {
 		writeError(w, http.StatusForbidden, proto.ErrForbidden, "board post moderation permission required", false)
 		return
 	}
@@ -1071,63 +1072,6 @@ func actorCanReadBoardInfo(actor *core.User, info *core.BoardInfo) bool {
 	// Delegates to the canonical core implementation so every transport (HTTP,
 	// NNTP, SSH/TUI) enforces one read-access rule.
 	return core.ActorCanReadBoard(actor, info)
-}
-
-func actorCanModerateBoardInfo(actor *core.User, info *core.BoardInfo) bool {
-	if actor == nil {
-		return false
-	}
-	if actor.IsMod() {
-		return true
-	}
-	for _, mod := range info.Moderators {
-		if mod.UserID == actor.ID {
-			return true
-		}
-	}
-	return false
-}
-
-func actorCanManageBoardMembersInfo(actor *core.User, info *core.BoardInfo) bool {
-	if actorCanModerateBoardInfo(actor, info) {
-		return true
-	}
-	if actor == nil {
-		return false
-	}
-	for _, member := range info.Members {
-		if member.UserID == actor.ID && member.CanManageMembers {
-			return true
-		}
-	}
-	return false
-}
-
-func actorCanModerateBoardPostsInfo(actor *core.User, info *core.BoardInfo) bool {
-	if actorCanModerateBoardInfo(actor, info) {
-		return true
-	}
-	if actor == nil {
-		return false
-	}
-	for _, member := range info.Members {
-		if member.UserID == actor.ID && member.CanModeratePosts {
-			return true
-		}
-	}
-	return false
-}
-
-func actorIsBoardMemberInfo(actor *core.User, info *core.BoardInfo) bool {
-	if actor == nil {
-		return false
-	}
-	for _, member := range info.Members {
-		if member.UserID == actor.ID {
-			return true
-		}
-	}
-	return false
 }
 
 // GET /api/v1/notifications

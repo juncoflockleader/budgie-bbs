@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/aiprovider"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -181,7 +182,7 @@ func (p *AIProcessor) maybeReply(ctx context.Context, post *proto.PostAppendedPa
 			return false
 		}
 		info, err := c.GetBoardInfo(thread.Board)
-		if err != nil || info == nil || !actorModeratesBoard(author, info) {
+		if err != nil || info == nil || !boardmodel.ActorModeratesBoard(author, info) {
 			return false
 		}
 	}

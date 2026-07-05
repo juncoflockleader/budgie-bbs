@@ -3,6 +3,7 @@ package core
 import (
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/boardmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 )
 
@@ -12,30 +13,11 @@ import (
 // moderators/admins, the board's own moderators, and its members. Boards not in
 // MemberReadMode are world-readable. This logic previously lived only in the
 // HTTP layer, which let the NNTP and SSH transports read private boards; it is
-// promoted here so all transports enforce the same rule.
+// centralized in boardmodel so all transports enforce the same rule.
 
 // ActorCanReadBoard reports whether actor may read the board described by info.
 func ActorCanReadBoard(actor *User, info *BoardInfo) bool {
-	if info == nil {
-		return false
-	}
-	if actorIsGuest(actor) {
-		// Unauthenticated web guests are governed by the board's GuestAccess
-		// override: "public" always grants, "hidden" always denies, and the
-		// default follows the world-readable rule (non-member boards readable).
-		switch info.Settings.GuestAccess {
-		case "public":
-			return true
-		case "hidden":
-			return false
-		default:
-			return !info.Settings.MemberReadMode
-		}
-	}
-	if !info.Settings.MemberReadMode {
-		return true
-	}
-	return actorModeratesBoard(actor, info) || actorIsBoardMember(actor, info)
+	return boardmodel.ActorCanReadBoard(actor, info)
 }
 
 // ActorCanSetBoardSettings reports whether actor may manage a board's settings:
@@ -45,13 +27,6 @@ func ActorCanReadBoard(actor *User, info *BoardInfo) bool {
 func (c *Core) ActorCanSetBoardSettings(actor *User, boardID string) bool {
 	ok, err := projections.ActorCanSetBoardSettings(c.DB, actor, boardID)
 	return err == nil && ok
-}
-
-// actorIsGuest reports whether actor is the unauthenticated web guest principal.
-// A nil actor (internal/system reads such as NNTP or relay) is deliberately not
-// a guest, so those paths keep their existing world-readable behavior.
-func actorIsGuest(actor *User) bool {
-	return actor != nil && actor.Role == "guest"
 }
 
 // ActorCanReadBoardID loads the board and applies ActorCanReadBoard. A missing
@@ -102,31 +77,4 @@ func (c *Core) scopeVisibleTo(actor *User, scope string) bool {
 		// chat:, presence:, and other non-sensitive broadcast scopes.
 		return true
 	}
-}
-
-func actorModeratesBoard(actor *User, info *BoardInfo) bool {
-	if actor == nil {
-		return false
-	}
-	if actor.IsMod() {
-		return true
-	}
-	for _, mod := range info.Moderators {
-		if mod.UserID == actor.ID {
-			return true
-		}
-	}
-	return false
-}
-
-func actorIsBoardMember(actor *User, info *BoardInfo) bool {
-	if actor == nil {
-		return false
-	}
-	for _, member := range info.Members {
-		if member.UserID == actor.ID {
-			return true
-		}
-	}
-	return false
 }
