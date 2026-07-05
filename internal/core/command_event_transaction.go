@@ -465,7 +465,7 @@ func validateBrokerCommandEventTransactionMessages(records []BrokerEventRecord, 
 			return nil, err
 		}
 		expected := records[len(events)]
-		if !sameBrokerEventTransactionResultIdentity(record, expected) {
+		if !logmodel.SameBrokerEventTransactionResultIdentity(record, expected) {
 			return nil, fmt.Errorf("broker command event transaction store: transaction returned event %d id %q for requested id %q",
 				len(events), record.ID, expected.ID)
 		}
@@ -493,14 +493,6 @@ func validateBrokerCommandEventTransactionMessages(records []BrokerEventRecord, 
 		events = append(events, evt)
 	}
 	return events, nil
-}
-
-func sameBrokerEventTransactionResultIdentity(returned, expected BrokerEventRecord) bool {
-	if expected.CompatibilitySeq > 0 {
-		return logmodel.SameBrokerEventRecordIdentity(returned, expected)
-	}
-	expected.CompatibilitySeq = returned.CompatibilitySeq
-	return logmodel.SameBrokerEventRecordIdentity(returned, expected)
 }
 
 func brokerEventTransactionRecord(event EventAppend) (BrokerEventRecord, error) {

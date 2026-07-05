@@ -26,6 +26,21 @@ func TestSameBrokerEventRecordIdentityIncludesTimestamp(t *testing.T) {
 	}
 }
 
+func TestSameBrokerEventTransactionResultIdentityAllowsAssignedCompatibilitySeq(t *testing.T) {
+	expected := brokerEventIdentityRecord(1000)
+	returned := expected
+	returned.CompatibilitySeq = 42
+
+	if !SameBrokerEventTransactionResultIdentity(returned, expected) {
+		t.Fatalf("SameBrokerEventTransactionResultIdentity rejected adapter-assigned compatibility sequence")
+	}
+
+	expected.CompatibilitySeq = 41
+	if SameBrokerEventTransactionResultIdentity(returned, expected) {
+		t.Fatalf("SameBrokerEventTransactionResultIdentity accepted requested sequence drift")
+	}
+}
+
 func TestNormalizeBrokerEventTransactionRecordsPreparesPendingEvents(t *testing.T) {
 	record := brokerEventIdentityRecord(1000)
 	record.ID = " evt_pending "

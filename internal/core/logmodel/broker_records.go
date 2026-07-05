@@ -155,6 +155,17 @@ func SameBrokerEventRecordIdentity(existing, requested BrokerEventRecord) bool {
 	return true
 }
 
+// SameBrokerEventTransactionResultIdentity compares a returned broker event
+// record against the requested one while allowing adapters to assign a scalar
+// compatibility sequence when the request did not require one.
+func SameBrokerEventTransactionResultIdentity(returned, expected BrokerEventRecord) bool {
+	if expected.CompatibilitySeq > 0 {
+		return SameBrokerEventRecordIdentity(returned, expected)
+	}
+	expected.CompatibilitySeq = returned.CompatibilitySeq
+	return SameBrokerEventRecordIdentity(returned, expected)
+}
+
 // NormalizeBrokerEventTransactionRecords prepares broker event records for a
 // transaction append before the broker assigns PartitionOffset.
 func NormalizeBrokerEventTransactionRecords(records []BrokerEventRecord, duplicateScope string) ([]BrokerEventRecord, error) {
