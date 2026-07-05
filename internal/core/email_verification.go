@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/mailer"
 )
@@ -25,7 +26,6 @@ var (
 
 const (
 	outboxEmailSend = "email.send"
-	emailTokenTTL   = 24 * time.Hour
 )
 
 // Process-wide mailer used by the outbox worker. Set via SetMailer; the API node
@@ -96,29 +96,18 @@ func (c *Core) StartEmailVerification(userID, email string) error {
 		return err
 	}
 	token := newID("everi_")
-	exp := now + emailTokenTTL.Milliseconds()
+	exp := now + accountmodel.EmailVerificationTokenTTL.Milliseconds()
 	if _, err := qExec(tx,
 		`INSERT INTO email_verification_tokens (token, user_id, email, created_at, expires_at) VALUES (?,?,?,?,?)`,
 		token, userID, email, now, exp,
 	); err != nil {
 		return err
 	}
-	subject, body := c.verificationEmail(token)
-	if err := enqueueOutboxJob(tx, outboxEmailSend, emailSendJob{From: mailFrom, To: email, Subject: subject, Body: body, TS: now}, now); err != nil {
+	msg := accountmodel.VerificationEmail(c.emailVerifyBaseURL, token)
+	if err := enqueueOutboxJob(tx, outboxEmailSend, emailSendJob{From: mailFrom, To: email, Subject: msg.Subject, Body: msg.Body, TS: now}, now); err != nil {
 		return err
 	}
 	return tx.Commit()
-}
-
-func (c *Core) verificationEmail(token string) (subject, body string) {
-	link := "/api/v1/auth/verify-email?token=" + token
-	if c.emailVerifyBaseURL != "" {
-		link = c.emailVerifyBaseURL + link
-	}
-	subject = "Confirm your email"
-	body = "Welcome! Please confirm your email address by opening this link:\n\n" +
-		link + "\n\nThis link expires in 24 hours. If you did not sign up, ignore this message.\n"
-	return subject, body
 }
 
 // VerifyEmailToken consumes a verification token and marks the account verified.
