@@ -83,26 +83,24 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
 
-	scopes := []string{"board:" + p.Board}
-
-	// Append thread.new
-	threadPayload := &proto.ThreadNewPayload{
-		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: p.Title, TS: ts,
-	}
+	scopes, threadPayload := commandevents.ThreadNew(threadID, p.Board, authorName, authorID, p.Title, ts)
 	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, threadPayload)
 	if err != nil {
 		return internalErr(err)
 	}
 
-	threadScopes := append(scopes, "thread:"+threadID)
-
-	// Append post.appended (the first post in the thread)
-	postPayload := &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: cleanBody,
+	threadScopes, postPayload := commandevents.PostAppended(p.Board, commandevents.PostAppendedSpec{
+		ID:          postID,
+		Thread:      threadID,
+		Author:      authorName,
+		AuthorID:    authorID,
+		Body:        cleanBody,
 		RawBody:     p.Body,
 		Signature:   signature,
-		ContentType: ct, Attachments: attachments, TS: ts,
-	}
+		ContentType: ct,
+		Attachments: attachments,
+		TS:          ts,
+	})
 	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, postPayload)
 	if err != nil {
 		return internalErr(err)
@@ -306,13 +304,19 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
-	eventPayload := &proto.PostAppendedPayload{
-		ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID, Body: cleanBody,
+	scopes, eventPayload := commandevents.PostAppended(thread.Board, commandevents.PostAppendedSpec{
+		ID:          postID,
+		Thread:      p.Thread,
+		Author:      authorName,
+		AuthorID:    authorID,
+		Body:        cleanBody,
 		RawBody:     rawBody,
 		Signature:   signature,
-		ContentType: ct, ReplyTo: p.ReplyTo, Attachments: attachments, TS: ts,
-	}
+		ContentType: ct,
+		ReplyTo:     p.ReplyTo,
+		Attachments: attachments,
+		TS:          ts,
+	})
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -566,18 +570,18 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return Reply{Err: errDetail}
 	}
 
-	scopes := []string{"board:" + p.Board}
-	threadPayload := &proto.ThreadNewPayload{
-		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title, TS: ts,
-	}
+	scopes, threadPayload := commandevents.ThreadNew(threadID, p.Board, authorName, authorID, title, ts)
 	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, threadPayload)
 	if err != nil {
 		return internalErr(err)
 	}
 
-	threadScopes := append(scopes, "thread:"+threadID)
-	postPayload := &proto.PostAppendedPayload{
-		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID, Body: body,
+	threadScopes, postPayload := commandevents.PostAppended(p.Board, commandevents.PostAppendedSpec{
+		ID:             postID,
+		Thread:         threadID,
+		Author:         authorName,
+		AuthorID:       authorID,
+		Body:           body,
 		RawBody:        body,
 		Signature:      signature,
 		ContentType:    ct,
@@ -588,7 +592,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		SourceAuthorID: sourcePost.AuthorID,
 		SourceTitle:    sourceThread.Title,
 		TS:             ts,
-	}
+	})
 	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, postPayload)
 	if err != nil {
 		return internalErr(err)

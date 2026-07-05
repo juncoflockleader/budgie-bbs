@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
 )
@@ -53,18 +54,21 @@ func (h *Handler) appendGeneratedSystemPostTx(tx *sql.Tx, actor *User, spec gene
 		}
 	}
 
-	scopes := []string{"board:" + spec.BoardID}
-	threadPayload := &proto.ThreadNewPayload{
-		ID: spec.ThreadID, Board: spec.BoardID, Author: actor.Name, AuthorID: actor.ID, Title: spec.Title, TS: ts,
-	}
+	scopes, threadPayload := commandevents.ThreadNew(spec.ThreadID, spec.BoardID, actor.Name, actor.ID, spec.Title, ts)
 	tseq, err := appendEvent(tx, newID("evt_"), proto.EvtThreadNew, scopes, threadPayload)
 	if err != nil {
 		return nil, err
 	}
-	threadScopes := append(scopes, "thread:"+spec.ThreadID)
-	postPayload := &proto.PostAppendedPayload{
-		ID: spec.PostID, Thread: spec.ThreadID, Author: actor.Name, AuthorID: actor.ID, Body: spec.Body, RawBody: spec.Body, ContentType: "markup", TS: ts,
-	}
+	threadScopes, postPayload := commandevents.PostAppended(spec.BoardID, commandevents.PostAppendedSpec{
+		ID:          spec.PostID,
+		Thread:      spec.ThreadID,
+		Author:      actor.Name,
+		AuthorID:    actor.ID,
+		Body:        spec.Body,
+		RawBody:     spec.Body,
+		ContentType: "markup",
+		TS:          ts,
+	})
 	pseq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAppended, threadScopes, postPayload)
 	if err != nil {
 		return nil, err

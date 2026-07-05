@@ -128,6 +128,24 @@ func ThreadMoved(threadID, fromBoardID, toBoardID, by string, ts int64) ([]strin
 	}
 }
 
+func ThreadNew(threadID, boardID, authorName, authorID, title string, ts int64) ([]string, *proto.ThreadNewPayload) {
+	return []string{"board:" + boardID}, &proto.ThreadNewPayload{
+		ID:       threadID,
+		Board:    boardID,
+		Author:   authorName,
+		AuthorID: authorID,
+		Title:    title,
+		TS:       ts,
+	}
+}
+
+type PostAppendedSpec proto.PostAppendedPayload
+
+func PostAppended(boardID string, spec PostAppendedSpec) ([]string, *proto.PostAppendedPayload) {
+	payload := proto.PostAppendedPayload(spec)
+	return []string{"board:" + boardID, "thread:" + payload.Thread}, &payload
+}
+
 func PostRedacted(postID, threadID, boardID, by, reason, deletionKind string, ts int64) ([]string, *proto.PostRedactedPayload) {
 	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostRedactedPayload{
 		ID:           postID,

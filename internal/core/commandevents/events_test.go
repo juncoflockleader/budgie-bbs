@@ -105,6 +105,40 @@ func TestThreadModerationEvents(t *testing.T) {
 	}
 }
 
+func TestThreadPostCreationEvents(t *testing.T) {
+	scopes, thread := ThreadNew("thread_1", "general", "alice", "usr_alice", "Welcome", 1234)
+	requireScopes(t, scopes, "board:general")
+	if thread.ID != "thread_1" || thread.Board != "general" || thread.Author != "alice" ||
+		thread.AuthorID != "usr_alice" || thread.Title != "Welcome" || thread.TS != 1234 {
+		t.Fatalf("ThreadNew payload = %+v", thread)
+	}
+
+	notificationBody := "notification body"
+	scopes, post := PostAppended("general", PostAppendedSpec{
+		ID:                  "post_1",
+		Thread:              "thread_1",
+		Author:              "anon",
+		Body:                "body",
+		RawBody:             "raw",
+		PostCommitBody:      &notificationBody,
+		PostCommitActorID:   "usr_alice",
+		PostCommitActorName: "alice",
+		Signature:           "sig",
+		ContentType:         "markup",
+		ReplyTo:             "post_0",
+		Attachments:         []proto.AttachmentPayload{{ID: "att_1"}},
+		TS:                  1235,
+	})
+	requireScopes(t, scopes, "board:general", "thread:thread_1")
+	if post.ID != "post_1" || post.Thread != "thread_1" || post.Author != "anon" ||
+		post.Body != "body" || post.RawBody != "raw" || post.PostCommitBody == nil || *post.PostCommitBody != notificationBody ||
+		post.PostCommitActorID != "usr_alice" || post.PostCommitActorName != "alice" || post.Signature != "sig" ||
+		post.ContentType != "markup" || post.ReplyTo != "post_0" || len(post.Attachments) != 1 || post.Attachments[0].ID != "att_1" ||
+		post.TS != 1235 {
+		t.Fatalf("PostAppended payload = %+v", post)
+	}
+}
+
 func TestPostDeletionEvents(t *testing.T) {
 	scopes, redacted := PostRedacted("post_1", "thread_1", "general", "usr_mod", "reason", "recycle", 1234)
 	requireScopes(t, scopes, "thread:thread_1", "board:general")

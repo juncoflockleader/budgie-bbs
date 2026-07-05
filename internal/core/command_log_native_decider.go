@@ -435,33 +435,28 @@ func (e *CommandLogNativeDecisionExecutor) decideCreateThread(ctx context.Contex
 	ts := nativeCommandTimestamp(record)
 	threadID := stableCommandLogDecisionID("thr_", record, 0)
 	postID := stableCommandLogDecisionID("pst_", record, 1)
-	scopes := []string{"board:" + payload.Board}
-	threadScopes := []string{"board:" + payload.Board, "thread:" + threadID}
 	contentType := proto.NormalizePostContentType(payload.ContentType)
-	threadPayload := &proto.ThreadNewPayload{
-		ID:       threadID,
-		Board:    payload.Board,
-		Author:   authorName,
-		AuthorID: authorID,
-		Title:    payload.Title,
-		TS:       ts,
-	}
-	postPayload := &proto.PostAppendedPayload{
-		ID:          postID,
-		Thread:      threadID,
-		Author:      authorName,
-		AuthorID:    authorID,
-		Body:        cleanBody,
-		RawBody:     payload.Body,
-		Signature:   signature,
-		ContentType: contentType,
-		Attachments: attachments,
-		TS:          ts,
-	}
+	postCommitActorID := ""
+	postCommitActorName := ""
 	if authorID == "" && actor.ID != "" {
-		postPayload.PostCommitActorID = actor.ID
-		postPayload.PostCommitActorName = authorName
+		postCommitActorID = actor.ID
+		postCommitActorName = authorName
 	}
+	scopes, threadPayload := commandevents.ThreadNew(threadID, payload.Board, authorName, authorID, payload.Title, ts)
+	threadScopes, postPayload := commandevents.PostAppended(payload.Board, commandevents.PostAppendedSpec{
+		ID:                  postID,
+		Thread:              threadID,
+		Author:              authorName,
+		AuthorID:            authorID,
+		Body:                cleanBody,
+		RawBody:             payload.Body,
+		PostCommitActorID:   postCommitActorID,
+		PostCommitActorName: postCommitActorName,
+		Signature:           signature,
+		ContentType:         contentType,
+		Attachments:         attachments,
+		TS:                  ts,
+	})
 	events := []EventAppend{
 		nativeEvent(record, 0, proto.EvtThreadNew, scopes, threadPayload, ts),
 		nativeEvent(record, 1, proto.EvtPostAppended, threadScopes, postPayload, ts),
@@ -587,26 +582,29 @@ func (e *CommandLogNativeDecisionExecutor) decideAppendPost(ctx context.Context,
 	}
 	ts := nativeCommandTimestamp(record)
 	postID := stableCommandLogDecisionID("pst_", record, 0)
-	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
 	contentType := proto.NormalizePostContentType(payload.ContentType)
-	postPayload := &proto.PostAppendedPayload{
-		ID:             postID,
-		Thread:         thread.ID,
-		Author:         authorName,
-		AuthorID:       authorID,
-		Body:           cleanBody,
-		RawBody:        rawBody,
-		PostCommitBody: postCommitBody,
-		Signature:      signature,
-		ContentType:    contentType,
-		ReplyTo:        effectiveReplyTo,
-		Attachments:    attachments,
-		TS:             ts,
-	}
+	postCommitActorID := ""
+	postCommitActorName := ""
 	if authorID == "" && actor.ID != "" {
-		postPayload.PostCommitActorID = actor.ID
-		postPayload.PostCommitActorName = authorName
+		postCommitActorID = actor.ID
+		postCommitActorName = authorName
 	}
+	scopes, postPayload := commandevents.PostAppended(thread.Board, commandevents.PostAppendedSpec{
+		ID:                  postID,
+		Thread:              thread.ID,
+		Author:              authorName,
+		AuthorID:            authorID,
+		Body:                cleanBody,
+		RawBody:             rawBody,
+		PostCommitBody:      postCommitBody,
+		PostCommitActorID:   postCommitActorID,
+		PostCommitActorName: postCommitActorName,
+		Signature:           signature,
+		ContentType:         contentType,
+		ReplyTo:             effectiveReplyTo,
+		Attachments:         attachments,
+		TS:                  ts,
+	})
 	event := nativeEvent(record, 0, proto.EvtPostAppended, scopes, postPayload, ts)
 	events := []EventAppend{event}
 	if filterEvents, errDetail := nativeContentFilterReviewEvents(e.core.DB, record, actor, authorName, contentFilter, postID, thread.ID, thread.Board, !settings.MemberReadMode, ts, len(events)); errDetail != nil {
@@ -769,23 +767,26 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMailAppend(record Comm
 	}
 	ts := nativeCommandTimestamp(record)
 	postID := stableCommandLogDecisionID("pst_", record, 0)
-	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
-	postPayload := &proto.PostAppendedPayload{
-		ID:          postID,
-		Thread:      thread.ID,
-		Author:      authorName,
-		AuthorID:    authorID,
-		Body:        cleanBody,
-		RawBody:     rawBody,
-		Signature:   signature,
-		ContentType: proto.NormalizePostContentType(contentType),
-		Attachments: attachments,
-		TS:          ts,
-	}
+	postCommitActorID := ""
+	postCommitActorName := ""
 	if authorID == "" && actor.ID != "" {
-		postPayload.PostCommitActorID = actor.ID
-		postPayload.PostCommitActorName = authorName
+		postCommitActorID = actor.ID
+		postCommitActorName = authorName
 	}
+	scopes, postPayload := commandevents.PostAppended(thread.Board, commandevents.PostAppendedSpec{
+		ID:                  postID,
+		Thread:              thread.ID,
+		Author:              authorName,
+		AuthorID:            authorID,
+		Body:                cleanBody,
+		RawBody:             rawBody,
+		PostCommitActorID:   postCommitActorID,
+		PostCommitActorName: postCommitActorName,
+		Signature:           signature,
+		ContentType:         proto.NormalizePostContentType(contentType),
+		Attachments:         attachments,
+		TS:                  ts,
+	})
 	event := nativeEvent(record, 0, proto.EvtPostAppended, scopes, postPayload, ts)
 	events := []EventAppend{event}
 	if filterEvents, errDetail := nativeContentFilterReviewEvents(e.core.DB, record, actor, authorName, contentFilter, postID, thread.ID, thread.Board, !settings.MemberReadMode, ts, len(events)); errDetail != nil {
@@ -877,17 +878,8 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 	ts := nativeCommandTimestamp(record)
 	threadID := stableCommandLogDecisionID("thr_", record, 0)
 	postID := stableCommandLogDecisionID("pst_", record, 1)
-	scopes := []string{"board:" + payload.Board}
-	threadScopes := []string{"board:" + payload.Board, "thread:" + threadID}
-	threadPayload := &proto.ThreadNewPayload{
-		ID:       threadID,
-		Board:    payload.Board,
-		Author:   authorName,
-		AuthorID: authorID,
-		Title:    title,
-		TS:       ts,
-	}
-	postPayload := &proto.PostAppendedPayload{
+	scopes, threadPayload := commandevents.ThreadNew(threadID, payload.Board, authorName, authorID, title, ts)
+	threadScopes, postPayload := commandevents.PostAppended(payload.Board, commandevents.PostAppendedSpec{
 		ID:             postID,
 		Thread:         threadID,
 		Author:         authorName,
@@ -903,7 +895,7 @@ func (e *CommandLogNativeDecisionExecutor) decideRepostPost(ctx context.Context,
 		SourceAuthorID: sourcePost.AuthorID,
 		SourceTitle:    sourceThread.Title,
 		TS:             ts,
-	}
+	})
 	events := []EventAppend{
 		nativeEvent(record, 0, proto.EvtThreadNew, scopes, threadPayload, ts),
 		nativeEvent(record, 1, proto.EvtPostAppended, threadScopes, postPayload, ts),
@@ -4009,16 +4001,9 @@ func nativeGeneratedSystemPostEvents(db *sql.DB, record CommandLogRecord, actor 
 	if reserveBoardOrdinal && len(events) == 0 {
 		threadEventIndex = startIndex + 1
 	}
-	scopes := []string{"board:" + spec.BoardID}
-	events = append(events, nativeEvent(record, threadEventIndex, proto.EvtThreadNew, scopes, &proto.ThreadNewPayload{
-		ID:       spec.ThreadID,
-		Board:    spec.BoardID,
-		Author:   actor.Name,
-		AuthorID: actor.ID,
-		Title:    spec.Title,
-		TS:       ts,
-	}, ts))
-	events = append(events, nativeEvent(record, threadEventIndex+1, proto.EvtPostAppended, append(scopes, "thread:"+spec.ThreadID), &proto.PostAppendedPayload{
+	scopes, threadPayload := commandevents.ThreadNew(spec.ThreadID, spec.BoardID, actor.Name, actor.ID, spec.Title, ts)
+	events = append(events, nativeEvent(record, threadEventIndex, proto.EvtThreadNew, scopes, threadPayload, ts))
+	threadScopes, postPayload := commandevents.PostAppended(spec.BoardID, commandevents.PostAppendedSpec{
 		ID:          spec.PostID,
 		Thread:      spec.ThreadID,
 		Author:      actor.Name,
@@ -4027,7 +4012,8 @@ func nativeGeneratedSystemPostEvents(db *sql.DB, record CommandLogRecord, actor 
 		RawBody:     spec.Body,
 		ContentType: "markup",
 		TS:          ts,
-	}, ts))
+	})
+	events = append(events, nativeEvent(record, threadEventIndex+1, proto.EvtPostAppended, threadScopes, postPayload, ts))
 	return events, nil
 }
 
