@@ -3,6 +3,7 @@ package handler
 import (
 	"database/sql"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -99,10 +100,8 @@ func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply
 		}
 		return internalErr(err)
 	}
-	scopes := []string{"moderation:global"}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtReviewResolved, scopes, &proto.ReviewResolvedPayload{
-		ReviewID: p.Review, Resolution: p.Resolution, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.ReviewResolved(p.Review, p.Resolution, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtReviewResolved, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -116,8 +115,8 @@ func (h *Handler) resolveReview(actor *User, p proto.ResolveReviewPayload) Reply
 	if err := tx.Commit(); err != nil {
 		return internalErr(err)
 	}
-	h.bus.Publish(&proto.Event{Kind: proto.EvtReviewResolved, Seq: seq, Scopes: scopes,
-		Payload: &proto.ReviewResolvedPayload{ReviewID: p.Review, Resolution: p.Resolution, By: actor.Name, TS: ts}, TS: ts})
+	_, publicPayload := commandevents.ReviewResolved(p.Review, p.Resolution, actor.Name, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtReviewResolved, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 	h.publishGeneratedEvents(generatedEvents)
 	return Reply{Result: &proto.AckResult{ID: p.Review, Seq: seq}}
 }

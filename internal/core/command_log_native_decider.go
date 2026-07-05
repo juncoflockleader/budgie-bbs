@@ -1512,13 +1512,9 @@ func (e *CommandLogNativeDecisionExecutor) decideResolveReview(ctx context.Conte
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
+	scopes, eventPayload := commandevents.ReviewResolved(payload.Review, payload.Resolution, actor.ID, ts)
 	events := []EventAppend{
-		nativeEvent(record, 0, proto.EvtReviewResolved, []string{"moderation:global"}, &proto.ReviewResolvedPayload{
-			ReviewID:   payload.Review,
-			Resolution: payload.Resolution,
-			By:         actor.ID,
-			TS:         ts,
-		}, ts),
+		nativeEvent(record, 0, proto.EvtReviewResolved, scopes, eventPayload, ts),
 	}
 	logEvents, errDetail := nativeModerationSystemLogEvents(e.core.DB, record, actor, proto.ModerationLogResolve, payload.Review, target.PostID, target.ThreadID, target.BoardID, target.Public, ts, len(events))
 	if errDetail != nil {

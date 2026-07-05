@@ -69,3 +69,12 @@ func UserBlessed(fromUserID, fromName, toUserID, toName, blessingID, message str
 		TS:         ts,
 	}
 }
+
+func ReviewResolved(reviewID, resolution, by string, ts int64) ([]string, *proto.ReviewResolvedPayload) {
+	return []string{"moderation:global"}, &proto.ReviewResolvedPayload{
+		ReviewID:   reviewID,
+		Resolution: resolution,
+		By:         by,
+		TS:         ts,
+	}
+}
