@@ -99,8 +99,7 @@ func (h *Handler) applyAutomodActionEventsTx(tx *sql.Tx, action, reason string, 
 			expiresAt = ts + durationSec*1000
 		}
 		sanctionID := newID("san_")
-		scopes := []string{"account:" + targetUserID}
-		payload := &proto.UserSanctionedPayload{User: targetUserID, Kind: kind, Scope: scope, DurationSec: durationSec, By: by, Reason: reason, TS: ts}
+		scopes, payload := commandevents.UserSanctioned(targetUserID, targetUserID, kind, scope, durationSec, by, reason, ts)
 		seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctioned, scopes, payload)
 		if err != nil {
 			return nil, err

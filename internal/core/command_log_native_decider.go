@@ -1625,18 +1625,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetContentFilter(ctx context.Co
 		active = *payload.Active
 	}
 	ts := nativeCommandTimestamp(record)
-	scopes := []string{"moderation:global"}
-	if scope != proto.DefaultContentFilterScope {
-		scopes = append(scopes, "board:"+scope)
-	}
-	event := nativeEvent(record, 0, proto.EvtContentFilterSet, scopes, &proto.ContentFilterSetPayload{
-		ID:      filterID,
-		Pattern: pattern,
-		Scope:   scope,
-		Active:  active,
-		By:      actor.ID,
-		TS:      ts,
-	}, ts)
+	scopes, eventPayload := commandevents.ContentFilterSet(filterID, pattern, scope, active, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtContentFilterSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(filterID, event), nil
 }
 
@@ -1765,16 +1755,9 @@ func (e *CommandLogNativeDecisionExecutor) decideSanctionUser(ctx context.Contex
 		}
 	}
 	ts := nativeCommandTimestamp(record)
+	scopes, eventPayload := commandevents.UserSanctioned(target.ID, target.ID, payload.Kind, scope, payload.DurationSec, actor.ID, payload.Reason, ts)
 	events := []EventAppend{
-		nativeEvent(record, 0, proto.EvtUserSanctioned, []string{"account:" + target.ID}, &proto.UserSanctionedPayload{
-			User:        target.ID,
-			Kind:        payload.Kind,
-			Scope:       scope,
-			DurationSec: payload.DurationSec,
-			By:          actor.ID,
-			Reason:      payload.Reason,
-			TS:          ts,
-		}, ts),
+		nativeEvent(record, 0, proto.EvtUserSanctioned, scopes, eventPayload, ts),
 	}
 	if scope != "global" {
 		auditEvents, errDetail := nativeDenyPostSystemLogEvents(e.core.DB, record, actor, target, scope, sourceBoardName, payload.Kind, payload.Reason, ts, len(events))
@@ -1826,15 +1809,9 @@ func (e *CommandLogNativeDecisionExecutor) decideClearUserSanction(ctx context.C
 		}
 	}
 	ts := nativeCommandTimestamp(record)
+	scopes, eventPayload := commandevents.UserSanctionCleared(target.ID, target.ID, kind, scope, actor.ID, reason, ts)
 	events := []EventAppend{
-		nativeEvent(record, 0, proto.EvtUserSanctionCleared, []string{"account:" + target.ID}, &proto.UserSanctionClearedPayload{
-			User:   target.ID,
-			Kind:   kind,
-			Scope:  scope,
-			By:     actor.ID,
-			Reason: reason,
-			TS:     ts,
-		}, ts),
+		nativeEvent(record, 0, proto.EvtUserSanctionCleared, scopes, eventPayload, ts),
 	}
 	if scope != "global" {
 		auditEvents, errDetail := nativeUndenyPostSystemLogEvents(e.core.DB, record, actor, target, scope, sourceBoardName, kind, reason, ts, len(events))

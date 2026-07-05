@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 	"github.com/juncoflockleader/budgie-bbs/internal/proto"
@@ -252,11 +253,8 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 	}
 
 	sanctionID := newID("san_")
-	scopes := []string{"account:" + target.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctioned, scopes, &proto.UserSanctionedPayload{
-		User: target.ID, Kind: p.Kind, Scope: scope, DurationSec: p.DurationSec,
-		By: actor.ID, Reason: p.Reason, TS: ts,
-	})
+	scopes, payload := commandevents.UserSanctioned(target.ID, target.ID, p.Kind, scope, p.DurationSec, actor.ID, p.Reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctioned, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -267,9 +265,9 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 		return internalErr(err)
 	}
 
+	_, publicPayload := commandevents.UserSanctioned(target.ID, target.Name, p.Kind, scope, p.DurationSec, actor.Name, p.Reason, ts)
 	h.bus.Publish(&proto.Event{Kind: proto.EvtUserSanctioned, Seq: seq, Scopes: scopes,
-		Payload: &proto.UserSanctionedPayload{User: target.Name, Kind: p.Kind, Scope: scope,
-			DurationSec: p.DurationSec, By: actor.Name, Reason: p.Reason, TS: ts}, TS: ts})
+		Payload: publicPayload, TS: ts})
 	if scope != "global" {
 		if err := h.ensureDenyPostSystemPost(actor, target, scope, p.Kind, p.Reason, ts); err != nil {
 			return internalErr(err)
@@ -318,10 +316,8 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 	}
 
 	ts := nowMS()
-	scopes := []string{"account:" + target.ID}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctionCleared, scopes, &proto.UserSanctionClearedPayload{
-		User: target.ID, Kind: kind, Scope: scope, By: actor.ID, Reason: reason, TS: ts,
-	})
+	scopes, payload := commandevents.UserSanctionCleared(target.ID, target.ID, kind, scope, actor.ID, reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctionCleared, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -336,8 +332,9 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 		return internalErr(err)
 	}
 
+	_, publicPayload := commandevents.UserSanctionCleared(target.ID, target.Name, kind, scope, actor.Name, reason, ts)
 	h.bus.Publish(&proto.Event{Kind: proto.EvtUserSanctionCleared, Seq: seq, Scopes: scopes,
-		Payload: &proto.UserSanctionClearedPayload{User: target.Name, Kind: kind, Scope: scope, By: actor.Name, Reason: reason, TS: ts}, TS: ts})
+		Payload: publicPayload, TS: ts})
 	if scope != "global" {
 		if err := h.ensureUndenyPostSystemPost(actor, target, scope, kind, reason, ts); err != nil {
 			return internalErr(err)
@@ -382,13 +379,8 @@ func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload)
 	}
 
 	ts := nowMS()
-	scopes := []string{"moderation:global"}
-	if scope != proto.DefaultContentFilterScope {
-		scopes = append(scopes, "board:"+scope)
-	}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtContentFilterSet, scopes, &proto.ContentFilterSetPayload{
-		ID: filterID, Pattern: pattern, Scope: scope, Active: active, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.ContentFilterSet(filterID, pattern, scope, active, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtContentFilterSet, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -399,8 +391,9 @@ func (h *Handler) setContentFilter(actor *User, p proto.SetContentFilterPayload)
 		return internalErr(err)
 	}
 
+	_, publicPayload := commandevents.ContentFilterSet(filterID, pattern, scope, active, actor.Name, ts)
 	h.bus.Publish(&proto.Event{Kind: proto.EvtContentFilterSet, Seq: seq, Scopes: scopes,
-		Payload: &proto.ContentFilterSetPayload{ID: filterID, Pattern: pattern, Scope: scope, Active: active, By: actor.Name, TS: ts}, TS: ts})
+		Payload: publicPayload, TS: ts})
 	return Reply{Result: &proto.AckResult{ID: filterID, Seq: seq}}
 }
 

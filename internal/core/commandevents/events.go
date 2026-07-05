@@ -59,6 +59,47 @@ func PostFlagged(reviewID, kind, postID, threadID, reporter, reason string, ts i
 	}
 }
 
+func ContentFilterSet(filterID, pattern, scope string, active bool, by string, ts int64) ([]string, *proto.ContentFilterSetPayload) {
+	scopes := []string{"moderation:global"}
+	if scope != proto.DefaultContentFilterScope {
+		scopes = append(scopes, "board:"+scope)
+	}
+	return scopes, &proto.ContentFilterSetPayload{
+		ID:      filterID,
+		Pattern: pattern,
+		Scope:   scope,
+		Active:  active,
+		By:      by,
+		TS:      ts,
+	}
+}
+
+// UserSanctioned keeps delivery scopes keyed by accountUserID while allowing
+// the payload User field to preserve the caller's durable/live representation.
+func UserSanctioned(accountUserID, payloadUser, kind, scope string, durationSec int64, by, reason string, ts int64) ([]string, *proto.UserSanctionedPayload) {
+	return []string{"account:" + accountUserID}, &proto.UserSanctionedPayload{
+		User:        payloadUser,
+		Kind:        kind,
+		Scope:       scope,
+		DurationSec: durationSec,
+		By:          by,
+		Reason:      reason,
+		TS:          ts,
+	}
+}
+
+// UserSanctionCleared mirrors UserSanctioned's account-scope/payload split.
+func UserSanctionCleared(accountUserID, payloadUser, kind, scope, by, reason string, ts int64) ([]string, *proto.UserSanctionClearedPayload) {
+	return []string{"account:" + accountUserID}, &proto.UserSanctionClearedPayload{
+		User:   payloadUser,
+		Kind:   kind,
+		Scope:  scope,
+		By:     by,
+		Reason: reason,
+		TS:     ts,
+	}
+}
+
 func FavoriteFolderCreated(userID, folderID, parentID, name string, position int, ts int64) ([]string, *proto.FavoriteFolderCreatedPayload) {
 	payload := &proto.FavoriteFolderCreatedPayload{ID: folderID, UserID: userID, ParentID: parentID, Name: name, Position: position, TS: ts}
 	return []string{"user:" + userID}, payload
