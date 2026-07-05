@@ -68,11 +68,11 @@ func newJetStreamCommandEventTransactionClient(commands jetStreamCommandCommitte
 	}
 }
 
-func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command core.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
+func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return core.BrokerCommandEventTransactionResult{}, err
 	}
-	batch, err := c.AppendEventsAndCommitCommands(ctx, []core.CommandLogCommitPosition{command}, records)
+	batch, err := c.AppendEventsAndCommitCommands(ctx, []logmodel.CommandLogCommitPosition{command}, records)
 	if err != nil {
 		return core.BrokerCommandEventTransactionResult{}, err
 	}
@@ -86,14 +86,14 @@ func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommand(ct
 	}, nil
 }
 
-func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []core.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionBatchResult, error) {
+func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionBatchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return core.BrokerCommandEventTransactionBatchResult{}, err
 	}
 	if c == nil || c.commands == nil || c.events == nil {
 		return core.BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("nats command/event transaction: nil client")
 	}
-	commands = append([]core.CommandLogCommitPosition(nil), commands...)
+	commands = append([]logmodel.CommandLogCommitPosition(nil), commands...)
 	for i, command := range commands {
 		command = command.Normalize()
 		if err := command.Validate(); err != nil {
@@ -123,7 +123,7 @@ func (c *JetStreamCommandEventTransactionClient) AppendEventsAndCommitCommands(c
 			messages = append(messages, msg)
 		}
 	}
-	commits := make([]core.CommandLogCommitPosition, 0, len(commands))
+	commits := make([]logmodel.CommandLogCommitPosition, 0, len(commands))
 	for _, command := range commands {
 		if err := c.commands.CommitPartition(ctx, command.Partition, command.Offset); err != nil {
 			return core.BrokerCommandEventTransactionBatchResult{}, err

@@ -112,7 +112,7 @@ func TestCommandEventTransactionClientCommitsPartitionOnlyEventsWhenAllowed(t *t
 		AllowPartitionOnlyEvents: true,
 	}
 	client := NewCommandEventTransactionClient(transactions, options)
-	command := core.CommandLogCommitPosition{
+	command := logmodel.CommandLogCommitPosition{
 		Partition: commandPartition,
 		Offset:    7,
 		SourcePosition: logmodel.CommandLogSourcePosition{
@@ -177,7 +177,7 @@ func TestCommandEventTransactionClientCommitsCommandOffsetWithoutEvents(t *testi
 	}
 	client := NewCommandEventTransactionClient(transactions, options)
 	commandPartition := core.LogPartition{Kind: "board", Key: "general"}
-	command := core.CommandLogCommitPosition{
+	command := logmodel.CommandLogCommitPosition{
 		Partition: commandPartition,
 		Offset:    9,
 		SourcePosition: logmodel.CommandLogSourcePosition{
@@ -387,7 +387,7 @@ func TestCommandEventTransactionClientRequiresCommandSourcePositionBeforeBegin(t
 	transactions := &fakeTransactionBeginner{next: newFakeTransaction()}
 	client := NewCommandEventTransactionClient(transactions, CommandEventTransactionOptions{})
 
-	_, err := client.AppendEventsAndCommitCommand(ctx, core.CommandLogCommitPosition{
+	_, err := client.AppendEventsAndCommitCommand(ctx, logmodel.CommandLogCommitPosition{
 		Partition: core.LogPartition{Kind: "board", Key: "general"},
 		Offset:    3,
 	}, []logmodel.BrokerEventRecord{
@@ -591,10 +591,10 @@ func testBrokerEventRecord(t *testing.T, id, title string) logmodel.BrokerEventR
 	}
 }
 
-func testKafkaCommandCommit(partition core.LogPartition, logicalOffset int64) core.CommandLogCommitPosition {
+func testKafkaCommandCommit(partition core.LogPartition, logicalOffset int64) logmodel.CommandLogCommitPosition {
 	partition = partition.Normalize()
 	physicalOffset := logicalOffset + 100
-	return core.CommandLogCommitPosition{
+	return logmodel.CommandLogCommitPosition{
 		Partition: partition,
 		Offset:    logicalOffset,
 		SourcePosition: logmodel.CommandLogSourcePosition{

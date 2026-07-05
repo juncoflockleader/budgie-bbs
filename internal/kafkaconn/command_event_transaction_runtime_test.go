@@ -259,7 +259,7 @@ func TestRewriteTxnOffsetCommitRequestRejectsGroupMismatch(t *testing.T) {
 	requireErrorContains(t, err, "does not match command commit group")
 }
 
-func commandOffsetCommitForTest(t *testing.T, command core.CommandLogCommitPosition) CommandOffsetCommit {
+func commandOffsetCommitForTest(t *testing.T, command logmodel.CommandLogCommitPosition) CommandOffsetCommit {
 	t.Helper()
 	commit, err := commandOffsetCommit(normalizeCommandEventTransactionOptions(CommandEventTransactionOptions{}), command)
 	if err != nil {

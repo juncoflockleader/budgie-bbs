@@ -62,7 +62,7 @@ func TestJetStreamCommandEventTransactionCommitsCommandBatch(t *testing.T) {
 	lifeEvent.Payload = []byte(`{"id":"thr_nats_transaction_life","board":"life","author":"alice","authorId":"usr_alice","title":"Life batch","ts":1234}`)
 	lifeEvent.PartitionKey = "life"
 
-	result, err := client.AppendEventsAndCommitCommands(ctx, []core.CommandLogCommitPosition{
+	result, err := client.AppendEventsAndCommitCommands(ctx, []logmodel.CommandLogCommitPosition{
 		testCommandCommit(general, 3),
 		testCommandCommit(life, 4),
 	}, []logmodel.BrokerEventRecord{generalEvent, lifeEvent})
@@ -224,12 +224,12 @@ type fakeTransactionCommandCommitter struct {
 	commits            int
 	committedPartition core.LogPartition
 	committedOffset    int64
-	committed          []core.CommandLogCommitPosition
+	committed          []logmodel.CommandLogCommitPosition
 	onCommit           func() error
 }
 
-func testCommandCommit(partition core.LogPartition, offset int64) core.CommandLogCommitPosition {
-	return core.CommandLogCommitPosition{Partition: partition, Offset: offset}
+func testCommandCommit(partition core.LogPartition, offset int64) logmodel.CommandLogCommitPosition {
+	return logmodel.CommandLogCommitPosition{Partition: partition, Offset: offset}
 }
 
 func (c *fakeTransactionCommandCommitter) CommitPartition(ctx context.Context, partition core.LogPartition, offset int64) error {
@@ -250,7 +250,7 @@ func (c *fakeTransactionCommandCommitter) CommitPartition(ctx context.Context, p
 	if offset > c.committedOffset {
 		c.committedOffset = offset
 	}
-	c.committed = append(c.committed, core.CommandLogCommitPosition{Partition: partition.Normalize(), Offset: offset})
+	c.committed = append(c.committed, logmodel.CommandLogCommitPosition{Partition: partition.Normalize(), Offset: offset})
 	return nil
 }
 

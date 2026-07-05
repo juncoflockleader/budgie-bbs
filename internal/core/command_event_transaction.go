@@ -270,7 +270,7 @@ func validateCommandEventTransactionBatch(records []CommandLogRecord) error {
 // successful call must prove both durable event appends and advancement of the
 // consumed command offset.
 type BrokerCommandEventTransactionClient interface {
-	AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, events []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error)
+	AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, events []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error)
 }
 
 type BrokerCommandEventTransactionResult struct {
@@ -283,12 +283,12 @@ type BrokerCommandEventTransactionResult struct {
 // of command/event decisions into one backend transaction. Messages must be
 // returned in the same order as the flattened requested events.
 type BrokerCommandEventTransactionBatchClient interface {
-	AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, events []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error)
+	AppendEventsAndCommitCommands(ctx context.Context, commands []logmodel.CommandLogCommitPosition, events []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error)
 }
 
 type BrokerCommandEventTransactionBatchResult struct {
 	Messages []logmodel.BrokerEventLogMessage
-	Commits  []CommandLogCommitPosition
+	Commits  []logmodel.CommandLogCommitPosition
 }
 
 type BrokerCommandEventTransactionStoreOptions struct {
@@ -315,7 +315,7 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEvents(ctx context.Con
 	if s == nil || s.client == nil {
 		return CommandEventTransactionResult{}, fmt.Errorf("broker command event transaction store: nil client")
 	}
-	command := CommandLogCommitPosition{
+	command := logmodel.CommandLogCommitPosition{
 		Partition:      tx.CommandPartition,
 		Offset:         tx.CommandOffset,
 		SourcePosition: tx.CommandSourcePosition,
@@ -388,11 +388,11 @@ func (s *BrokerCommandEventTransactionStore) CommitCommandEventBatch(ctx context
 		start int
 		end   int
 	}
-	commands := make([]CommandLogCommitPosition, 0, len(txs))
+	commands := make([]logmodel.CommandLogCommitPosition, 0, len(txs))
 	eventRanges := make([]eventRange, len(txs))
 	records := []logmodel.BrokerEventRecord{}
 	for i, tx := range txs {
-		command := CommandLogCommitPosition{
+		command := logmodel.CommandLogCommitPosition{
 			Partition:      tx.CommandPartition,
 			Offset:         tx.CommandOffset,
 			SourcePosition: tx.CommandSourcePosition,
@@ -541,11 +541,11 @@ func NewMemoryBrokerCommandEventTransactionClient(commands *MemoryBrokerCommandL
 	return &MemoryBrokerCommandEventTransactionClient{commands: commands, events: events}
 }
 
-func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
-	batch, err := c.AppendEventsAndCommitCommands(ctx, []CommandLogCommitPosition{command}, records)
+	batch, err := c.AppendEventsAndCommitCommands(ctx, []logmodel.CommandLogCommitPosition{command}, records)
 	if err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -559,14 +559,14 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 	}, nil
 }
 
-func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
+func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionBatchResult{}, err
 	}
 	if c == nil || c.commands == nil || c.events == nil {
 		return BrokerCommandEventTransactionBatchResult{}, fmt.Errorf("memory broker command event transaction: nil client")
 	}
-	commands = append([]CommandLogCommitPosition(nil), commands...)
+	commands = append([]logmodel.CommandLogCommitPosition(nil), commands...)
 	for i, command := range commands {
 		command = command.Normalize()
 		if err := command.Validate(); err != nil {
@@ -655,12 +655,12 @@ func (c *MemoryBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand
 		}
 		out = append(out, logmodel.CloneBrokerEventLogMessage(msg))
 	}
-	commits := make([]CommandLogCommitPosition, 0, len(commands))
+	commits := make([]logmodel.CommandLogCommitPosition, 0, len(commands))
 	for _, command := range commands {
 		if command.Offset > c.commands.committed[command.Partition] {
 			c.commands.committed[command.Partition] = command.Offset
 		}
-		commits = append(commits, CommandLogCommitPosition{
+		commits = append(commits, logmodel.CommandLogCommitPosition{
 			Partition:      command.Partition,
 			Offset:         c.commands.committed[command.Partition],
 			SourcePosition: command.SourcePosition,

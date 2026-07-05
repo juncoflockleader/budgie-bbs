@@ -105,12 +105,6 @@ type EventStore interface {
 // boundary.
 type CommandEventTransaction = logmodel.CommandEventTransaction
 
-// CommandLogCommitPosition is the exact command-log cursor a transaction must
-// advance after its events are durable. Partition/Offset are Budgie's logical
-// progress marker; SourcePosition carries physical broker evidence when the
-// command source has distinct commit coordinates, such as Kafka/Redpanda.
-type CommandLogCommitPosition = logmodel.CommandLogCommitPosition
-
 type CommandEventTransactionResult = logmodel.CommandEventTransactionResult
 
 // CommandEventTransactionStore is the final promotion boundary for broker-owned

@@ -72,7 +72,7 @@ func NewCommandEventTransactionClient(transactions TransactionBeginner, options 
 	}
 }
 
-func (c *CommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command core.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
+func (c *CommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (core.BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return core.BrokerCommandEventTransactionResult{}, err
 	}
@@ -147,7 +147,7 @@ func (c *CommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context
 	}, nil
 }
 
-func commandOffsetCommit(options CommandEventTransactionOptions, command core.CommandLogCommitPosition) (CommandOffsetCommit, error) {
+func commandOffsetCommit(options CommandEventTransactionOptions, command logmodel.CommandLogCommitPosition) (CommandOffsetCommit, error) {
 	source := command.SourcePosition.Normalize()
 	if source.IsZero() {
 		return CommandOffsetCommit{}, fmt.Errorf("kafka command/event transaction: command source position is required")

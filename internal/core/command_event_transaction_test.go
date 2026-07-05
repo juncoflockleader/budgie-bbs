@@ -419,7 +419,7 @@ func TestMemoryBrokerCommandEventTransactionClientRequiresEventTimestamp(t *test
 	record.TS = 0
 	client := NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient)
 
-	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []logmodel.BrokerEventRecord{record})
+	_, err = client.AppendEventsAndCommitCommand(ctx, logmodel.CommandLogCommitPosition{Partition: partition, Offset: 1}, []logmodel.BrokerEventRecord{record})
 	requireErrorContains(t, err, "event timestamp is required")
 	requireCommandEventTransactionRollback(t, ctx, commandLog, NewBrokerEventStore(eventClient), partition, "missing timestamp")
 }
@@ -439,7 +439,7 @@ func TestMemoryBrokerCommandEventTransactionClientRejectsDuplicateEventIDInOneBa
 	}
 	client := NewMemoryBrokerCommandEventTransactionClient(commandClient, eventClient)
 
-	_, err = client.AppendEventsAndCommitCommand(ctx, CommandLogCommitPosition{Partition: partition, Offset: 1}, []logmodel.BrokerEventRecord{record, record})
+	_, err = client.AppendEventsAndCommitCommand(ctx, logmodel.CommandLogCommitPosition{Partition: partition, Offset: 1}, []logmodel.BrokerEventRecord{record, record})
 	requireErrorContains(t, err, `duplicate event id "evt_memory_transaction_duplicate" in one transaction`)
 	requireCommandEventTransactionRollback(t, ctx, commandLog, eventStore, partition, "duplicate event batch")
 }
@@ -818,7 +818,7 @@ type fakeBrokerCommandEventTransactionClient struct {
 	committedOffset           int64
 }
 
-func (c fakeBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c fakeBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -847,7 +847,7 @@ type countingBrokerCommandEventTransactionClient struct {
 	calls int
 }
 
-func (c *countingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *countingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -861,10 +861,10 @@ func (c *countingBrokerCommandEventTransactionClient) AppendEventsAndCommitComma
 
 type recordingBrokerCommandEventTransactionClient struct {
 	calls   int
-	command CommandLogCommitPosition
+	command logmodel.CommandLogCommitPosition
 }
 
-func (c *recordingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *recordingBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -879,13 +879,13 @@ func (c *recordingBrokerCommandEventTransactionClient) AppendEventsAndCommitComm
 type recordingBatchBrokerCommandEventTransactionClient struct {
 	singleCalls int
 	batchCalls  int
-	command     CommandLogCommitPosition
-	commands    []CommandLogCommitPosition
+	command     logmodel.CommandLogCommitPosition
+	commands    []logmodel.CommandLogCommitPosition
 	records     []logmodel.BrokerEventRecord
 	messages    []logmodel.BrokerEventLogMessage
 }
 
-func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
+func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommand(ctx context.Context, command logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionResult{}, err
 	}
@@ -898,17 +898,17 @@ func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommi
 	}, nil
 }
 
-func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
+func (c *recordingBatchBrokerCommandEventTransactionClient) AppendEventsAndCommitCommands(ctx context.Context, commands []logmodel.CommandLogCommitPosition, records []logmodel.BrokerEventRecord) (BrokerCommandEventTransactionBatchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BrokerCommandEventTransactionBatchResult{}, err
 	}
 	c.batchCalls++
-	c.commands = append([]CommandLogCommitPosition(nil), commands...)
+	c.commands = append([]logmodel.CommandLogCommitPosition(nil), commands...)
 	for i := range c.commands {
 		c.commands[i] = c.commands[i].Normalize()
 	}
 	c.records = append([]logmodel.BrokerEventRecord(nil), records...)
-	commits := make([]CommandLogCommitPosition, 0, len(c.commands))
+	commits := make([]logmodel.CommandLogCommitPosition, 0, len(c.commands))
 	for _, command := range c.commands {
 		commits = append(commits, command.Normalize())
 	}
