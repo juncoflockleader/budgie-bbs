@@ -351,6 +351,39 @@ func TestDigestEvents(t *testing.T) {
 	}
 }
 
+func TestMailEvents(t *testing.T) {
+	scopes, group := MailGroupSet("grp_1", "usr_alice", "Friends", []string{"usr_bob"}, 1234)
+	requireScopes(t, scopes, "account:usr_alice", "mail:grp_1")
+	if group.ID != "grp_1" || group.OwnerID != "usr_alice" || group.Name != "Friends" ||
+		len(group.MemberIDs) != 1 || group.MemberIDs[0] != "usr_bob" || group.TS != 1234 {
+		t.Fatalf("MailGroupSet payload = %+v", group)
+	}
+
+	scopes, deleted := MailGroupDeleted("grp_1", "usr_alice", 1235)
+	requireScopes(t, scopes, "account:usr_alice", "mail:grp_1")
+	if deleted.ID != "grp_1" || deleted.OwnerID != "usr_alice" || deleted.TS != 1235 {
+		t.Fatalf("MailGroupDeleted payload = %+v", deleted)
+	}
+
+	mailScopes := []string{"account:usr_alice", "mail:mail_1"}
+	scopes, attachment := MailAttachmentAdded(mailScopes, "att_1", "mail_1", "file.txt", "text/plain", 42, "usr_alice", "alice", "blob_1", 1236)
+	requireScopes(t, scopes, "account:usr_alice", "mail:mail_1")
+	if attachment.ID != "att_1" || attachment.Mail != "mail_1" || attachment.Filename != "file.txt" ||
+		attachment.SizeBytes != 42 || attachment.AuthorID != "usr_alice" || attachment.StagedBlobID != "blob_1" || attachment.TS != 1236 {
+		t.Fatalf("MailAttachmentAdded payload = %+v", attachment)
+	}
+
+	read := true
+	kept := false
+	mailbox := "archive"
+	scopes, updated := MailCopyUpdated("usr_sender", "usr_reader", "mail_1", &mailbox, &read, &kept, 1237)
+	requireScopes(t, scopes, "account:usr_sender", "account:usr_reader", "mail:mail_1")
+	if updated.Mail != "mail_1" || updated.UserID != "usr_reader" || updated.Mailbox == nil || *updated.Mailbox != "archive" ||
+		updated.Read == nil || !*updated.Read || updated.Kept == nil || *updated.Kept || updated.TS != 1237 {
+		t.Fatalf("MailCopyUpdated payload = %+v", updated)
+	}
+}
+
 func TestUserScopedEvents(t *testing.T) {
 	folders := []proto.FavoriteTreeImportedFolderPayload{{ID: "folder_1", Name: "News", Position: 1}}
 	boards := []proto.FavoriteTreeImportedBoardPayload{{ID: "general", FolderID: "folder_1", Position: 2}}

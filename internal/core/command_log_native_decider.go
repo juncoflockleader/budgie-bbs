@@ -3041,20 +3041,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetMailGroup(ctx context.Contex
 		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(
-		record,
-		0,
-		proto.EvtMailGroupSet,
-		[]string{"account:" + actor.ID, "mail:" + groupID},
-		&proto.MailGroupSetPayload{
-			ID:        groupID,
-			OwnerID:   actor.ID,
-			Name:      name,
-			MemberIDs: memberIDs,
-			TS:        ts,
-		},
-		ts,
-	)
+	scopes, eventPayload := commandevents.MailGroupSet(groupID, actor.ID, name, memberIDs, ts)
+	event := nativeEvent(record, 0, proto.EvtMailGroupSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(groupID, event), nil
 }
 
@@ -3083,18 +3071,8 @@ func (e *CommandLogNativeDecisionExecutor) decideDeleteMailGroup(ctx context.Con
 		}
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(
-		record,
-		0,
-		proto.EvtMailGroupDeleted,
-		[]string{"account:" + actor.ID, "mail:" + groupID},
-		&proto.MailGroupDeletedPayload{
-			ID:      groupID,
-			OwnerID: actor.ID,
-			TS:      ts,
-		},
-		ts,
-	)
+	scopes, eventPayload := commandevents.MailGroupDeleted(groupID, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtMailGroupDeleted, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(groupID, event), nil
 }
 
@@ -3130,24 +3108,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachMail(ctx context.Context,
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(
-		record,
-		0,
-		proto.EvtMailAttachmentAdded,
-		scopes,
-		&proto.MailAttachmentAddedPayload{
-			ID:           attachmentID,
-			Mail:         mailID,
-			Filename:     filename,
-			ContentType:  contentType,
-			SizeBytes:    payload.SizeBytes,
-			AuthorID:     actor.ID,
-			Author:       actor.Name,
-			StagedBlobID: stagedBlobID,
-			TS:           ts,
-		},
-		ts,
-	)
+	scopes, eventPayload := commandevents.MailAttachmentAdded(scopes, attachmentID, mailID, filename, contentType, payload.SizeBytes, actor.ID, actor.Name, stagedBlobID, ts)
+	event := nativeEvent(record, 0, proto.EvtMailAttachmentAdded, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(attachmentID, event), nil
 }
 
@@ -4425,23 +4387,9 @@ func nativeDigestMirrorSystemLogEvents(db *sql.DB, record CommandLogRecord, acto
 	}, ts, startIndex)
 }
 
-func nativeMailCopyUpdateScopes(fromUserID, actorID, mailID string) []string {
-	scopes := []string{"account:" + fromUserID}
-	if actorID != fromUserID {
-		scopes = append(scopes, "account:"+actorID)
-	}
-	return append(scopes, "mail:"+mailID)
-}
-
 func nativeMailCopyUpdatedEvent(record CommandLogRecord, index int, target projections.MailCopyUpdateTarget, actorID, mailID string, mailbox *string, read, kept *bool, ts int64) EventAppend {
-	return nativeEvent(record, index, proto.EvtMailCopyUpdated, nativeMailCopyUpdateScopes(target.FromUserID, actorID, mailID), &proto.MailCopyUpdatedPayload{
-		Mail:    mailID,
-		UserID:  actorID,
-		Mailbox: mailbox,
-		Read:    read,
-		Kept:    kept,
-		TS:      ts,
-	}, ts)
+	scopes, eventPayload := commandevents.MailCopyUpdated(target.FromUserID, actorID, mailID, mailbox, read, kept, ts)
+	return nativeEvent(record, index, proto.EvtMailCopyUpdated, scopes, eventPayload, ts)
 }
 
 func nativeValidateStagedPostAttachmentBlob(db *sql.DB, stagedBlobID, attachmentID string, expectedSize int64, contentType string) *proto.ErrorDetail {

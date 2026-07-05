@@ -425,6 +425,43 @@ func DirectMessageSettingsSet(userID, policy string, ts int64) ([]string, *proto
 	return []string{"user:" + userID}, payload
 }
 
+func MailGroupSet(groupID, ownerID, name string, memberIDs []string, ts int64) ([]string, *proto.MailGroupSetPayload) {
+	return []string{"account:" + ownerID, "mail:" + groupID}, &proto.MailGroupSetPayload{
+		ID:        groupID,
+		OwnerID:   ownerID,
+		Name:      name,
+		MemberIDs: memberIDs,
+		TS:        ts,
+	}
+}
+
+func MailGroupDeleted(groupID, ownerID string, ts int64) ([]string, *proto.MailGroupDeletedPayload) {
+	return []string{"account:" + ownerID, "mail:" + groupID}, &proto.MailGroupDeletedPayload{ID: groupID, OwnerID: ownerID, TS: ts}
+}
+
+func MailAttachmentAdded(scopes []string, attachmentID, mailID, filename, contentType string, sizeBytes int64, authorID, authorName, stagedBlobID string, ts int64) ([]string, *proto.MailAttachmentAddedPayload) {
+	return scopes, &proto.MailAttachmentAddedPayload{
+		ID:           attachmentID,
+		Mail:         mailID,
+		Filename:     filename,
+		ContentType:  contentType,
+		SizeBytes:    sizeBytes,
+		AuthorID:     authorID,
+		Author:       authorName,
+		StagedBlobID: stagedBlobID,
+		TS:           ts,
+	}
+}
+
+func MailCopyUpdated(fromUserID, userID, mailID string, mailbox *string, read, kept *bool, ts int64) ([]string, *proto.MailCopyUpdatedPayload) {
+	scopes := []string{"account:" + fromUserID}
+	if userID != fromUserID {
+		scopes = append(scopes, "account:"+userID)
+	}
+	scopes = append(scopes, "mail:"+mailID)
+	return scopes, &proto.MailCopyUpdatedPayload{Mail: mailID, UserID: userID, Mailbox: mailbox, Read: read, Kept: kept, TS: ts}
+}
+
 func UserRelationshipSet(userID, targetUserID, kind, note string, active bool, ts int64) ([]string, *proto.UserRelationshipSetPayload) {
 	payload := &proto.UserRelationshipSetPayload{UserID: userID, TargetUserID: targetUserID, Kind: kind, Active: active, Note: note, TS: ts}
 	return []string{"user:" + userID, "user:" + targetUserID}, payload

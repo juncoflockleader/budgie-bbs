@@ -395,10 +395,7 @@ func (h *Handler) attachMail(actor *User, p proto.AttachMailPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	payload := &proto.MailAttachmentAddedPayload{
-		ID: attachmentID, Mail: mailID, Filename: filename, ContentType: contentType,
-		SizeBytes: p.SizeBytes, AuthorID: actor.ID, Author: actor.Name, TS: ts,
-	}
+	scopes, payload := commandevents.MailAttachmentAdded(scopes, attachmentID, mailID, filename, contentType, p.SizeBytes, actor.ID, actor.Name, "", ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtMailAttachmentAdded, scopes, payload)
 	if err != nil {
 		return internalErr(err)
