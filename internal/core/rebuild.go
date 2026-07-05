@@ -882,7 +882,7 @@ func rebuildProjectionEventWithContext(tx *sql.Tx, applyCtx *projectionApplyCont
 			return err
 		}
 	case *proto.UserBlessedPayload:
-		if err := projections.InsertBlessing(tx, &Blessing{
+		if err := projections.InsertBlessing(tx, &projections.Blessing{
 			ID:         evt.ID,
 			FromUserID: evt.FromUserID,
 			FromName:   evt.From,

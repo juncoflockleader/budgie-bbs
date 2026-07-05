@@ -1973,7 +1973,7 @@ func (c *Core) ListBlessingRankings(limit, offset int) ([]projections.BlessingRa
 	}
 	return projections.ListBlessingRankings(c.DB, limit, offset)
 }
-func (c *Core) ListBlessings(limit, offset int) ([]Blessing, error) {
+func (c *Core) ListBlessings(limit, offset int) ([]projections.Blessing, error) {
 	return projections.ListBlessings(c.DB, limit, offset)
 }
 func (c *Core) ListBoardModeratorTerms(boardID string, limit, offset int) ([]BoardModeratorTerm, error) {
@@ -2503,7 +2503,7 @@ func (c *Core) DeleteAllNotifications(userID string) error {
 
 // ── M9: Trust levels ────────────────────────────────────────────────────────
 
-func (c *Core) TrustInfo(userID string) (*TrustLevelInfo, error) {
+func (c *Core) TrustInfo(userID string) (*projections.TrustLevelInfo, error) {
 	return projections.TrustInfo(c.DB, userID)
 }
 

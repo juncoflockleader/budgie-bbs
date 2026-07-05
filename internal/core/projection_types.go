@@ -3,7 +3,6 @@ package core
 import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 
 type Board = projections.Board
-type Blessing = projections.Blessing
 type BoardSettings = projections.BoardSettings
 type BoardSettingsPatch = projections.BoardSettingsPatch
 type BoardModerator = projections.BoardModerator
@@ -61,4 +60,3 @@ type UserSanction = projections.UserSanction
 type Poll = projections.Poll
 type PollOption = projections.PollOption
 type Notification = projections.Notification
-type TrustLevelInfo = projections.TrustLevelInfo
