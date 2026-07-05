@@ -1766,11 +1766,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSanctionUser(ctx context.Contex
 	if target == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "user not found", false)
 	}
-	if target.IsAdmin() {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "cannot sanction an admin", false)
-	}
-	if target.IsMod() && !actor.IsAdmin() {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "only admins can sanction moderators", false)
+	if errDetail := commandrules.RequireSanctionTargetAllowed(actor.IsAdmin(), target.IsAdmin(), target.IsMod()); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	sourceBoardName := ""
 	if scope != "global" {
@@ -1829,8 +1826,8 @@ func (e *CommandLogNativeDecisionExecutor) decideClearUserSanction(ctx context.C
 	if errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	if target.IsMod() && !actor.IsAdmin() {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "only admins can clear moderator sanctions", false)
+	if errDetail := commandrules.RequireClearSanctionTargetAllowed(actor.IsAdmin(), target.IsMod()); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	var err error
 	sourceBoardName := ""

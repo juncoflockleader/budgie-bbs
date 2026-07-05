@@ -235,11 +235,8 @@ func (h *Handler) sanctionUser(actor *User, p proto.SanctionUserPayload) Reply {
 	if target == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
 	}
-	if target.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "cannot sanction an admin", false)}
-	}
-	if target.IsMod() && !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "only admins can sanction moderators", false)}
+	if errDetail := commandrules.RequireSanctionTargetAllowed(actor.IsAdmin(), target.IsAdmin(), target.IsMod()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	// Authorize by scope: a global sanction requires the site moderator role;
@@ -310,8 +307,8 @@ func (h *Handler) clearUserSanction(actor *User, p proto.ClearUserSanctionPayloa
 	if target == nil {
 		return Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
 	}
-	if target.IsMod() && !actor.IsAdmin() {
-		return Reply{Err: errDetail(proto.ErrForbidden, "only admins can clear moderator sanctions", false)}
+	if errDetail := commandrules.RequireClearSanctionTargetAllowed(actor.IsAdmin(), target.IsMod()); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	// Authorize by scope: a global sanction requires the site moderator role;
 	// a board sanction is also clearable by that board's moderators.
