@@ -24,10 +24,7 @@ type PostSearchProcessor struct {
 }
 
 func NewPostSearchProcessor(c *Core, interval time.Duration, batchSize int) (*PostSearchProcessor, error) {
-	processor, err := newPeriodicProcessor(c, "post search", interval, batchSize, func(_ context.Context, c *Core, batchSize int) (processorRunProgress, error) {
-		result, err := c.ProcessPostSearchOnce(batchSize)
-		return postSearchRunProgress(result), err
-	})
+	processor, err := newCorePeriodicProcessor(c, "post search", interval, batchSize, (*Core).ProcessPostSearchOnce, postSearchRunProgress)
 	if err != nil {
 		return nil, err
 	}

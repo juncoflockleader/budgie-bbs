@@ -79,6 +79,13 @@ func newPeriodicProcessor(c *Core, name string, interval time.Duration, batchSiz
 	}, nil
 }
 
+func newCorePeriodicProcessor[T any](c *Core, name string, interval time.Duration, batchSize int, process func(*Core, int) (T, error), progress func(T) processorRunProgress) (periodicProcessor, error) {
+	return newPeriodicProcessor(c, name, interval, batchSize, func(_ context.Context, c *Core, batchSize int) (processorRunProgress, error) {
+		result, err := process(c, batchSize)
+		return progress(result), err
+	})
+}
+
 func nilProcessorError(name string) error {
 	return fmt.Errorf("%s processor: nil core", name)
 }

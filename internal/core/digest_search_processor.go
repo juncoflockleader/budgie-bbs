@@ -20,10 +20,7 @@ type DigestSearchProcessor struct {
 }
 
 func NewDigestSearchProcessor(c *Core, interval time.Duration, batchSize int) (*DigestSearchProcessor, error) {
-	processor, err := newPeriodicProcessor(c, "digest search", interval, batchSize, func(_ context.Context, c *Core, batchSize int) (processorRunProgress, error) {
-		result, err := c.ProcessDigestSearchOnce(batchSize)
-		return digestSearchRunProgress(result), err
-	})
+	processor, err := newCorePeriodicProcessor(c, "digest search", interval, batchSize, (*Core).ProcessDigestSearchOnce, digestSearchRunProgress)
 	if err != nil {
 		return nil, err
 	}

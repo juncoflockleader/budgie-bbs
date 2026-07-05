@@ -16,10 +16,7 @@ type ResidentFeedProcessor struct {
 }
 
 func NewResidentFeedProcessor(c *Core, interval time.Duration, batchSize int) (*ResidentFeedProcessor, error) {
-	processor, err := newPeriodicProcessor(c, "resident feed", interval, batchSize, func(_ context.Context, c *Core, batchSize int) (processorRunProgress, error) {
-		result, err := c.ProcessResidentFeedOnce(batchSize)
-		return residentFeedRunProgress(result), err
-	})
+	processor, err := newCorePeriodicProcessor(c, "resident feed", interval, batchSize, (*Core).ProcessResidentFeedOnce, residentFeedRunProgress)
 	if err != nil {
 		return nil, err
 	}

@@ -30,10 +30,7 @@ type LatestFeedProcessor struct {
 }
 
 func NewLatestFeedProcessor(c *Core, interval time.Duration, batchSize int) (*LatestFeedProcessor, error) {
-	processor, err := newPeriodicProcessor(c, "latest feed", interval, batchSize, func(_ context.Context, c *Core, batchSize int) (processorRunProgress, error) {
-		result, err := c.ProcessLatestFeedOnce(batchSize)
-		return latestFeedRunProgress(result), err
-	})
+	processor, err := newCorePeriodicProcessor(c, "latest feed", interval, batchSize, (*Core).ProcessLatestFeedOnce, latestFeedRunProgress)
 	if err != nil {
 		return nil, err
 	}
