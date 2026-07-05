@@ -2,6 +2,7 @@ package accountstore
 
 import (
 	"database/sql"
+	"fmt"
 
 	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
 	"github.com/juncoflockleader/budgie-bbs/internal/core/sqlstore"
@@ -25,5 +26,66 @@ func SaveRegistrationIntake(db *sql.DB, userID string, intake accountmodel.Norma
 
 func ApproveUser(db *sql.DB, userID string) error {
 	_, err := sqlstore.Exec(db, `UPDATE users SET registration_status='approved' WHERE id=?`, userID)
+	return err
+}
+
+func RegistrationStateTx(tx *sql.Tx) (int, bool, error) {
+	var userCount int
+	if err := sqlstore.QueryRow(tx, `SELECT COUNT(*) FROM users`).Scan(&userCount); err != nil {
+		return 0, false, err
+	}
+	if userCount == 0 {
+		return userCount, false, nil
+	}
+	var requireApproval int
+	err := sqlstore.QueryRow(tx, `SELECT COALESCE(require_approval,0) FROM account_registration_settings WHERE id='default'`).Scan(&requireApproval)
+	if err == sql.ErrNoRows {
+		return userCount, false, nil
+	}
+	return userCount, requireApproval != 0, err
+}
+
+func CreateRegisteredUserTx(tx *sql.Tx, id, name, role, passwordHash, status string, ts int64) error {
+	_, err := sqlstore.Exec(tx,
+		`INSERT INTO users (id, name, role, password, created, registration_status) VALUES (?,?,?,?,?,?)`,
+		id, name, role, passwordHash, ts, status,
+	)
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	_, err = sqlstore.Exec(tx,
+		`INSERT OR IGNORE INTO user_profiles (user_id, display_name, updated_at) VALUES (?,?,?)`,
+		id, name, ts,
+	)
+	if err != nil {
+		return fmt.Errorf("create user profile: %w", err)
+	}
+	if _, err := sqlstore.Exec(tx,
+		`INSERT OR IGNORE INTO user_signature_settings (user_id, selected_signature_id, random_enabled, updated_at)
+		 VALUES (?, '', 0, ?)`,
+		id, ts,
+	); err != nil {
+		return fmt.Errorf("create user signature settings: %w", err)
+	}
+	if _, err := sqlstore.Exec(tx,
+		`INSERT OR IGNORE INTO user_login_acl_settings (user_id, enabled, updated_at)
+		 VALUES (?, 0, ?)`,
+		id, ts,
+	); err != nil {
+		return fmt.Errorf("create user login acl settings: %w", err)
+	}
+	if err := seedDefaultFavorites(tx, id, ts); err != nil {
+		return fmt.Errorf("seed default favorites: %w", err)
+	}
+	return nil
+}
+
+func seedDefaultFavorites(tx *sql.Tx, userID string, ts int64) error {
+	_, err := sqlstore.Exec(tx,
+		`INSERT INTO board_favorites (user_id, board_id, folder_id, position, created_at, updated_at)
+		 SELECT ?, id, '', 0, ?, ? FROM boards WHERE id='general'
+		 ON CONFLICT(user_id, board_id) DO NOTHING`,
+		userID, ts, ts,
+	)
 	return err
 }

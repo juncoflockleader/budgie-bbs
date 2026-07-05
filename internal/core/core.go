@@ -956,54 +956,20 @@ func (c *Core) registerUserInternal(name, password string) (*projections.User, e
 		return nil, fmt.Errorf("registration gate: %w", err)
 	}
 
-	var n int
-	if err := qQueryRow(tx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+	userCount, requireApproval, err := accountstore.RegistrationStateTx(tx)
+	if err != nil {
 		return nil, err
 	}
 	role := "user"
 	status := "approved"
-	if n == 0 {
+	if userCount == 0 {
 		role = "admin"
-	} else {
-		var requireApproval int
-		if err := qQueryRow(tx, `SELECT COALESCE(require_approval,0) FROM account_registration_settings WHERE id='default'`).Scan(&requireApproval); err != nil && err != sql.ErrNoRows {
-			return nil, err
-		}
-		if requireApproval != 0 {
-			status = "pending"
-		}
+	} else if requireApproval {
+		status = "pending"
 	}
 
-	_, err = qExec(tx,
-		`INSERT INTO users (id, name, role, password, created, registration_status) VALUES (?,?,?,?,?,?)`,
-		id, name, role, string(hash), ts, status,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create user: %w", err)
-	}
-	_, err = qExec(tx,
-		`INSERT OR IGNORE INTO user_profiles (user_id, display_name, updated_at) VALUES (?,?,?)`,
-		id, name, ts,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create user profile: %w", err)
-	}
-	if _, err := qExec(tx,
-		`INSERT OR IGNORE INTO user_signature_settings (user_id, selected_signature_id, random_enabled, updated_at)
-		 VALUES (?, '', 0, ?)`,
-		id, ts,
-	); err != nil {
-		return nil, fmt.Errorf("create user signature settings: %w", err)
-	}
-	if _, err := qExec(tx,
-		`INSERT OR IGNORE INTO user_login_acl_settings (user_id, enabled, updated_at)
-		 VALUES (?, 0, ?)`,
-		id, ts,
-	); err != nil {
-		return nil, fmt.Errorf("create user login acl settings: %w", err)
-	}
-	if err := seedDefaultFavorites(tx, id, ts); err != nil {
-		return nil, fmt.Errorf("seed default favorites: %w", err)
+	if err := accountstore.CreateRegisteredUserTx(tx, id, name, role, string(hash), status, ts); err != nil {
+		return nil, err
 	}
 	user := &projections.User{ID: id, Name: name, Role: role, Created: ts, RegistrationStatus: status}
 	events := []*proto.Event{}
@@ -1021,16 +987,6 @@ func (c *Core) registerUserInternal(name, password string) (*projections.User, e
 	}
 	slog.Info("user registered", "id", id, "name", name, "role", role, "status", status)
 	return user, nil
-}
-
-func seedDefaultFavorites(db sqlLike, userID string, ts int64) error {
-	_, err := qExec(db,
-		`INSERT INTO board_favorites (user_id, board_id, folder_id, position, created_at, updated_at)
-		 SELECT ?, id, '', 0, ?, ? FROM boards WHERE id='general'
-		 ON CONFLICT(user_id, board_id) DO NOTHING`,
-		userID, ts, ts,
-	)
-	return err
 }
 
 func accountLifecycleUser(user *projections.User) accountmodel.LifecycleUser {
