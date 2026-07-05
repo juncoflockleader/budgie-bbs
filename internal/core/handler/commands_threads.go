@@ -805,8 +805,8 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	}
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
 	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), post.CreatedAt, editWindowDur.Milliseconds())
-	if !canModerateBoard && !(isAuthor && withinWindow) {
-		return Reply{Err: commandrules.AuthorEditWindowExpiredError()}
+	if errDetail := commandrules.RequirePostAuthorEditWindow(canModerateBoard, isAuthor, withinWindow); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	count, err := projections.PostAttachmentCount(h.db, p.Post)
 	if err != nil {
@@ -893,8 +893,8 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
 	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), post.CreatedAt, editWindowDur.Milliseconds())
-	if !actor.IsMod() && !(isAuthor && withinWindow) {
-		return Reply{Err: commandrules.AuthorEditWindowExpiredError()}
+	if errDetail := commandrules.RequirePostAuthorEditWindow(actor.IsMod(), isAuthor, withinWindow); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	thread, err := currentRuntime().GetThreadTx(tx, post.Thread)

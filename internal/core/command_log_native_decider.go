@@ -961,8 +961,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachPost(ctx context.Context,
 	ts := nativeCommandTimestamp(record)
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
 	withinWindow := commandrules.WithinAuthorEditWindow(ts, post.CreatedAt, nativeAuthorEditWindow.Milliseconds())
-	if !isAuthor || !withinWindow {
-		return nativeCommandDecision{}, commandrules.AuthorEditWindowExpiredError()
+	if errDetail := commandrules.RequirePostAuthorEditWindow(false, isAuthor, withinWindow); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	count, err := projections.PostAttachmentCount(e.core.DB, post.ID)
 	if err != nil {
@@ -1031,8 +1031,8 @@ func (e *CommandLogNativeDecisionExecutor) decideEditPost(ctx context.Context, r
 	ts := nativeCommandTimestamp(record)
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
 	withinWindow := commandrules.WithinAuthorEditWindow(ts, post.CreatedAt, nativeAuthorEditWindow.Milliseconds())
-	if !actor.IsMod() && (!isAuthor || !withinWindow) {
-		return nativeCommandDecision{}, commandrules.AuthorEditWindowExpiredError()
+	if errDetail := commandrules.RequirePostAuthorEditWindow(actor.IsMod(), isAuthor, withinWindow); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 
 	event := nativeEvent(record, 0, proto.EvtPostEdited, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostEditedPayload{

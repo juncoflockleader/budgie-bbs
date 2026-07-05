@@ -54,6 +54,13 @@ func AuthorEditWindowExpiredError() *proto.ErrorDetail {
 	return newErrDetail(proto.ErrEditWindowExpired, "edit window has expired", false)
 }
 
+func RequirePostAuthorEditWindow(canBypassAuthorWindow, isAuthor, withinWindow bool) *proto.ErrorDetail {
+	if canBypassAuthorWindow || (isAuthor && withinWindow) {
+		return nil
+	}
+	return AuthorEditWindowExpiredError()
+}
+
 func boardRequiresPostingMembership(settings *projections.BoardSettings) bool {
 	return settings != nil && (settings.MemberReadMode || settings.MemberPostMode)
 }
