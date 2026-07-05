@@ -22,14 +22,28 @@ func NormalizePostAttachments(input []proto.AttachmentPayload, allowed bool, can
 	if len(input) == 0 {
 		return nil, nil
 	}
-	if !allowed && !canModerateBoard {
-		return nil, newErrDetail(proto.ErrForbidden, "attachments are not enabled for this board", false)
+	if errDetail := RequirePostAttachmentsAllowed(allowed, canModerateBoard); errDetail != nil {
+		return nil, errDetail
 	}
 	attachments, msg := proto.NormalizePostAttachments(input)
 	if msg != "" {
 		return nil, newErrDetail(proto.ErrValidationFailed, msg, false)
 	}
 	return proto.WithAttachmentIDs(attachments, idFor), nil
+}
+
+func RequirePostAttachmentsAllowed(allowed, canModerateBoard bool) *proto.ErrorDetail {
+	if !allowed && !canModerateBoard {
+		return newErrDetail(proto.ErrForbidden, "attachments are not enabled for this board", false)
+	}
+	return nil
+}
+
+func RequirePostAttachmentCapacity(existingCount int) *proto.ErrorDetail {
+	if msg := proto.ValidatePostAttachmentCount(existingCount + 1); msg != "" {
+		return newErrDetail(proto.ErrValidationFailed, msg, false)
+	}
+	return nil
 }
 
 func ActorAuthoredBy(actor *projections.User, authorID, authorName string) bool {

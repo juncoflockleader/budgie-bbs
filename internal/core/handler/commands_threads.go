@@ -800,8 +800,8 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 		return Reply{Err: errDetail(proto.ErrNotFound, "board not found", false)}
 	}
 	canModerateBoard := commandrules.ActorCanModerateBoard(h.db, actor, thread.Board)
-	if !settings.AttachmentsAllowed && !canModerateBoard {
-		return Reply{Err: errDetail(proto.ErrForbidden, "attachments are not enabled for this board", false)}
+	if errDetail := commandrules.RequirePostAttachmentsAllowed(settings.AttachmentsAllowed, canModerateBoard); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
 	withinWindow := commandrules.WithinAuthorEditWindow(time.Now().UnixMilli(), post.CreatedAt, editWindowDur.Milliseconds())
@@ -812,8 +812,8 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if msg := proto.ValidatePostAttachmentCount(count + 1); msg != "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	if errDetail := commandrules.RequirePostAttachmentCapacity(count); errDetail != nil {
+		return Reply{Err: errDetail}
 	}
 
 	attachmentID := p.ID

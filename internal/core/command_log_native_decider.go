@@ -955,8 +955,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachPost(ctx context.Context,
 	if settings == nil {
 		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "board not found", false)
 	}
-	if !settings.AttachmentsAllowed {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrForbidden, "attachments are not enabled for this board", false)
+	if errDetail := commandrules.RequirePostAttachmentsAllowed(settings.AttachmentsAllowed, false); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 	ts := nativeCommandTimestamp(record)
 	isAuthor := commandrules.ActorAuthoredBy(actor, post.AuthorID, post.Author)
@@ -968,8 +968,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachPost(ctx context.Context,
 	if err != nil {
 		return nativeCommandDecision{}, nativeDecisionErr("internal_error", err.Error(), true)
 	}
-	if msg := proto.ValidatePostAttachmentCount(count + 1); msg != "" {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, msg, false)
+	if errDetail := commandrules.RequirePostAttachmentCapacity(count); errDetail != nil {
+		return nativeCommandDecision{}, errDetail
 	}
 
 	attachmentID := payload.ID
