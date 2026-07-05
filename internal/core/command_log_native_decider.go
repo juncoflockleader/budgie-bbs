@@ -3692,7 +3692,7 @@ func (e *CommandLogNativeDecisionExecutor) loadNativeDecisionActor(actorID strin
 
 type nativeCreateThreadContext struct {
 	Actor            *User
-	Settings         *BoardSettings
+	Settings         *projections.BoardSettings
 	CanModerateBoard bool
 	SanctionKind     string
 }
@@ -3733,7 +3733,7 @@ type nativeAppendPostContext struct {
 	Actor             *User
 	Thread            *Thread
 	RootReplyGuards   projections.ThreadRootReplyGuards
-	Settings          *BoardSettings
+	Settings          *projections.BoardSettings
 	CanModerateBoard  bool
 	CanModerateThread bool
 	SanctionKind      string

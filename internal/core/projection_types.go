@@ -3,7 +3,6 @@ package core
 import "github.com/juncoflockleader/budgie-bbs/internal/core/projections"
 
 type Board = projections.Board
-type BoardSettings = projections.BoardSettings
 type BoardSettingsPatch = projections.BoardSettingsPatch
 type BoardMemberPatch = projections.BoardMemberPatch
 type BoardMemberRequirementsPatch = projections.BoardMemberRequirementsPatch
