@@ -421,27 +421,14 @@ func derivedViewWatermarkSamples(db *sql.DB) ([]metrics.Sample, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := qQuery(db,
-		`SELECT view_name, applied_seq
-		   FROM derived_view_watermarks
-		  ORDER BY view_name`,
-	)
+	watermarks, err := projections.ListDerivedViewWatermarks(db)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	appliedByView := map[string]int64{}
-	for rows.Next() {
-		var view string
-		var applied int64
-		if err := rows.Scan(&view, &applied); err != nil {
-			return nil, err
-		}
-		appliedByView[view] = applied
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	appliedByView := make(map[string]int64, len(watermarks))
+	for _, watermark := range watermarks {
+		appliedByView[watermark.View] = watermark.AppliedSeq
 	}
 
 	knownViews := projections.KnownDerivedViews()

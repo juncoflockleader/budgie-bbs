@@ -27,11 +27,7 @@ const (
 	DerivedViewDigestSearch         = projections.DerivedViewDigestSearch
 )
 
-type DerivedViewWatermark struct {
-	View       string
-	AppliedSeq int64
-	UpdatedAt  int64
-}
+type DerivedViewWatermark = projections.DerivedViewWatermark
 
 type DerivedViewBackfillResult struct {
 	Views   []string
@@ -85,25 +81,7 @@ func (c *Core) RecordDerivedViewApplied(view string, appliedSeq int64) error {
 }
 
 func (c *Core) ListDerivedViewWatermarks() ([]DerivedViewWatermark, error) {
-	rows, err := qQuery(c.DB,
-		`SELECT view_name, applied_seq, updated_at
-		   FROM derived_view_watermarks
-		  ORDER BY view_name`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []DerivedViewWatermark
-	for rows.Next() {
-		var mark DerivedViewWatermark
-		if err := rows.Scan(&mark.View, &mark.AppliedSeq, &mark.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, mark)
-	}
-	return out, rows.Err()
+	return projections.ListDerivedViewWatermarks(c.DB)
 }
 
 func (c *Core) BackfillDerivedViewsFromEventLog(views []string, fromSeq int64) (DerivedViewBackfillResult, error) {

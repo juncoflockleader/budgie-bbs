@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+type DerivedViewWatermark struct {
+	View       string
+	AppliedSeq int64
+	UpdatedAt  int64
+}
+
 func LookupProjectionWatermarkAppliedSeq(queryable sqlLike, watermark string) (int64, bool, error) {
 	var applied int64
 	err := QQueryRow(queryable, `SELECT applied_seq FROM derived_view_watermarks WHERE view_name=?`, watermark).Scan(&applied)
@@ -16,6 +22,28 @@ func LookupProjectionWatermarkAppliedSeq(queryable sqlLike, watermark string) (i
 		return 0, false, err
 	}
 	return applied, true, nil
+}
+
+func ListDerivedViewWatermarks(queryable sqlLike) ([]DerivedViewWatermark, error) {
+	rows, err := QQuery(queryable,
+		`SELECT view_name, applied_seq, updated_at
+		   FROM derived_view_watermarks
+		  ORDER BY view_name`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DerivedViewWatermark
+	for rows.Next() {
+		var mark DerivedViewWatermark
+		if err := rows.Scan(&mark.View, &mark.AppliedSeq, &mark.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, mark)
+	}
+	return out, rows.Err()
 }
 
 func RecordDerivedViewApplied(execable sqlLike, view string, appliedSeq, updatedAt int64) error {
