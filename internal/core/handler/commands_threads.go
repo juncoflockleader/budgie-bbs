@@ -107,14 +107,14 @@ func (h *Handler) createThread(actor *User, p proto.CreateThreadPayload) Reply {
 	}
 
 	// Update projections.
-	newThread := &Thread{
+	newThread := &projections.Thread{
 		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: p.Title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}
 	if err := currentRuntime().InsertThread(tx, newThread); err != nil {
 		return internalErr(err)
 	}
-	if err := currentRuntime().InsertPost(tx, &Post{
+	if err := currentRuntime().InsertPost(tx, &projections.Post{
 		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
 		Body: cleanBody, Signature: signature, ContentType: ct, CreatedSeq: pseq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
@@ -255,10 +255,10 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 		return Reply{Err: commandrules.ActiveBoardSanctionError(kind)}
 	}
 
-	var mailBackTarget *Post
-	var quoteSource *Post
-	var replyNotifyTarget *Post
-	var parent *Post
+	var mailBackTarget *projections.Post
+	var quoteSource *projections.Post
+	var replyNotifyTarget *projections.Post
+	var parent *projections.Post
 	if p.ReplyTo != "" {
 		parent, err = currentRuntime().GetPost(h.db, p.ReplyTo)
 		if err != nil {
@@ -321,7 +321,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	if err != nil {
 		return internalErr(err)
 	}
-	if err := currentRuntime().InsertPost(tx, &Post{
+	if err := currentRuntime().InsertPost(tx, &projections.Post{
 		ID: postID, Thread: p.Thread, Author: authorName, AuthorID: authorID,
 		Body: cleanBody, Signature: signature, ContentType: ct, ReplyTo: p.ReplyTo, CreatedSeq: seq, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
@@ -400,7 +400,7 @@ func (h *Handler) appendPost(actor *User, p proto.AppendPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: postID, Seq: seq}}
 }
 
-func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName, authorID string, thread *Thread, settings *BoardSettings, postID, body string, replyTarget *Post, ts int64) error {
+func (h *Handler) appendPostNotificationsTx(tx *sql.Tx, actor *User, authorName, authorID string, thread *projections.Thread, settings *BoardSettings, postID, body string, replyTarget *projections.Post, ts int64) error {
 	if actor == nil || thread == nil {
 		return nil
 	}
@@ -598,13 +598,13 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	if err := currentRuntime().InsertThread(tx, &Thread{
+	if err := currentRuntime().InsertThread(tx, &projections.Thread{
 		ID: threadID, Board: p.Board, Author: authorName, AuthorID: authorID, Title: title,
 		LastSeq: tseq, CreatedTS: ts, CreatedAt: ts, UpdatedAt: ts,
 	}); err != nil {
 		return internalErr(err)
 	}
-	if err := currentRuntime().InsertPost(tx, &Post{
+	if err := currentRuntime().InsertPost(tx, &projections.Post{
 		ID: postID, Thread: threadID, Author: authorName, AuthorID: authorID,
 		Body: body, Signature: signature, ContentType: ct,
 		SourcePost: sourcePost.ID, SourceThread: sourceThread.ID, SourceBoard: sourceThread.Board,
@@ -661,7 +661,7 @@ func (h *Handler) repostPost(actor *User, p proto.RepostPostPayload) Reply {
 	return Reply{Result: &proto.AckResult{ID: threadID, Seq: pseq}}
 }
 
-func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, authorID string, target *Post, thread *Thread, replyPostID, replyBody string, ts int64) (*proto.Event, error) {
+func (h *Handler) appendArticleMailBackTx(tx *sql.Tx, actor *User, authorName, authorID string, target *projections.Post, thread *projections.Thread, replyPostID, replyBody string, ts int64) (*proto.Event, error) {
 	if actor == nil || target == nil || !target.MailBack || target.Redacted {
 		return nil, nil
 	}
@@ -1249,10 +1249,10 @@ func (h *Handler) clearBoardJunk(actor *User, p proto.ClearBoardJunkPayload) Rep
 	return Reply{Result: &proto.AckResult{ID: fmt.Sprintf("%d", len(postIDs)), Seq: lastSeq}}
 }
 
-func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*Post, *Thread, *proto.ErrorDetail) {
-	return commandrules.LoadRangePost(postID, boardID, func(id string) (*Post, error) {
+func loadRangePostTx(tx *sql.Tx, postID, boardID string) (*projections.Post, *projections.Thread, *proto.ErrorDetail) {
+	return commandrules.LoadRangePost(postID, boardID, func(id string) (*projections.Post, error) {
 		return currentRuntime().GetPostTx(tx, id)
-	}, func(id string) (*Thread, error) {
+	}, func(id string) (*projections.Thread, error) {
 		return currentRuntime().GetThreadTx(tx, id)
 	})
 }
