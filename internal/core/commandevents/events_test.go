@@ -133,3 +133,27 @@ func TestPostDeletionEvents(t *testing.T) {
 		t.Fatalf("PostPurged payload = %+v", purged)
 	}
 }
+
+func TestPostUpdateEvents(t *testing.T) {
+	scopes, attachment := PostAttachmentAdded("att_1", "post_1", "thread_1", "general", "file.txt", "text/plain", 42, "usr_author", "blob_1", 1234)
+	requireScopes(t, scopes, "board:general", "thread:thread_1")
+	if attachment.ID != "att_1" || attachment.Post != "post_1" || attachment.Thread != "thread_1" ||
+		attachment.Filename != "file.txt" || attachment.ContentType != "text/plain" || attachment.SizeBytes != 42 ||
+		attachment.AuthorID != "usr_author" || attachment.StagedBlobID != "blob_1" || attachment.TS != 1234 {
+		t.Fatalf("PostAttachmentAdded payload = %+v", attachment)
+	}
+
+	scopes, edited := PostEdited("post_1", "thread_1", "general", "new body", 3, 1235)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if edited.ID != "post_1" || edited.Thread != "thread_1" || edited.NewBody != "new body" ||
+		edited.Version != 3 || edited.TS != 1235 {
+		t.Fatalf("PostEdited payload = %+v", edited)
+	}
+
+	scopes, flags := PostFlagsSet("post_1", "thread_1", "general", true, true, false, true, false, "usr_mod", 1236)
+	requireScopes(t, scopes, "thread:thread_1", "board:general")
+	if flags.ID != "post_1" || flags.Thread != "thread_1" || !flags.Marked || !flags.Recommended ||
+		flags.NoReply || !flags.TeX || flags.MailBack || flags.By != "usr_mod" || flags.TS != 1236 {
+		t.Fatalf("PostFlagsSet payload = %+v", flags)
+	}
+}

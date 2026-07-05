@@ -980,17 +980,8 @@ func (e *CommandLogNativeDecisionExecutor) decideAttachPost(ctx context.Context,
 	if errDetail := nativeValidateStagedPostAttachmentBlob(e.core.DB, stagedBlobID, attachmentID, payload.SizeBytes, contentType); errDetail != nil {
 		return nativeCommandDecision{}, errDetail
 	}
-	event := nativeEvent(record, 0, proto.EvtPostAttachmentAdded, []string{"board:" + thread.Board, "thread:" + thread.ID}, &proto.PostAttachmentAddedPayload{
-		ID:           attachmentID,
-		Post:         post.ID,
-		Thread:       thread.ID,
-		Filename:     payload.Filename,
-		ContentType:  contentType,
-		SizeBytes:    payload.SizeBytes,
-		AuthorID:     actor.ID,
-		StagedBlobID: stagedBlobID,
-		TS:           ts,
-	}, ts)
+	scopes, eventPayload := commandevents.PostAttachmentAdded(attachmentID, post.ID, thread.ID, thread.Board, payload.Filename, contentType, payload.SizeBytes, actor.ID, stagedBlobID, ts)
+	event := nativeEvent(record, 0, proto.EvtPostAttachmentAdded, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(attachmentID, event), nil
 }
 
@@ -1035,13 +1026,8 @@ func (e *CommandLogNativeDecisionExecutor) decideEditPost(ctx context.Context, r
 		return nativeCommandDecision{}, errDetail
 	}
 
-	event := nativeEvent(record, 0, proto.EvtPostEdited, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostEditedPayload{
-		ID:      post.ID,
-		Thread:  post.Thread,
-		NewBody: payload.Body,
-		Version: post.Version + 1,
-		TS:      ts,
-	}, ts)
+	scopes, eventPayload := commandevents.PostEdited(post.ID, post.Thread, thread.Board, payload.Body, post.Version+1, ts)
+	event := nativeEvent(record, 0, proto.EvtPostEdited, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(post.ID, event), nil
 }
 
@@ -1095,17 +1081,8 @@ func (e *CommandLogNativeDecisionExecutor) decideSetPostFlag(ctx context.Context
 	}
 
 	ts := nativeCommandTimestamp(record)
-	event := nativeEvent(record, 0, proto.EvtPostFlagsSet, []string{"thread:" + post.Thread, "board:" + thread.Board}, &proto.PostFlagsSetPayload{
-		ID:          post.ID,
-		Thread:      post.Thread,
-		Marked:      flagPlan.Marked,
-		Recommended: flagPlan.Recommended,
-		NoReply:     flagPlan.NoReply,
-		TeX:         flagPlan.TeX,
-		MailBack:    flagPlan.MailBack,
-		By:          actor.ID,
-		TS:          ts,
-	}, ts)
+	scopes, eventPayload := commandevents.PostFlagsSet(post.ID, post.Thread, thread.Board, flagPlan.Marked, flagPlan.Recommended, flagPlan.NoReply, flagPlan.TeX, flagPlan.MailBack, actor.ID, ts)
+	event := nativeEvent(record, 0, proto.EvtPostFlagsSet, scopes, eventPayload, ts)
 	return nativeDecisionAckEvent(post.ID, event), nil
 }
 

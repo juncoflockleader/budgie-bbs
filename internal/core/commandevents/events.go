@@ -159,6 +159,44 @@ func PostDeletionCleared(postID, threadID, boardID, kind, by string, ts int64) (
 	}
 }
 
+func PostAttachmentAdded(attachmentID, postID, threadID, boardID, filename, contentType string, sizeBytes int64, authorID, stagedBlobID string, ts int64) ([]string, *proto.PostAttachmentAddedPayload) {
+	return []string{"board:" + boardID, "thread:" + threadID}, &proto.PostAttachmentAddedPayload{
+		ID:           attachmentID,
+		Post:         postID,
+		Thread:       threadID,
+		Filename:     filename,
+		ContentType:  contentType,
+		SizeBytes:    sizeBytes,
+		AuthorID:     authorID,
+		StagedBlobID: stagedBlobID,
+		TS:           ts,
+	}
+}
+
+func PostEdited(postID, threadID, boardID, body string, version int, ts int64) ([]string, *proto.PostEditedPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostEditedPayload{
+		ID:      postID,
+		Thread:  threadID,
+		NewBody: body,
+		Version: version,
+		TS:      ts,
+	}
+}
+
+func PostFlagsSet(postID, threadID, boardID string, marked, recommended, noReply, tex, mailBack bool, by string, ts int64) ([]string, *proto.PostFlagsSetPayload) {
+	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostFlagsSetPayload{
+		ID:          postID,
+		Thread:      threadID,
+		Marked:      marked,
+		Recommended: recommended,
+		NoReply:     noReply,
+		TeX:         tex,
+		MailBack:    mailBack,
+		By:          by,
+		TS:          ts,
+	}
+}
+
 func PostPurged(postID, threadID, boardID, by, reason string, ts int64) ([]string, *proto.PostPurgedPayload) {
 	return []string{"thread:" + threadID, "board:" + boardID}, &proto.PostPurgedPayload{
 		ID:     postID,

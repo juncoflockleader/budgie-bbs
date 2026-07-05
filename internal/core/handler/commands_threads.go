@@ -825,11 +825,7 @@ func (h *Handler) attachPost(actor *User, p proto.AttachPostPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	scopes := []string{"board:" + thread.Board, "thread:" + thread.ID}
-	payload := &proto.PostAttachmentAddedPayload{
-		ID: attachmentID, Post: p.Post, Thread: thread.ID, Filename: filename,
-		ContentType: contentType, SizeBytes: p.SizeBytes, AuthorID: actor.ID, TS: ts,
-	}
+	scopes, payload := commandevents.PostAttachmentAdded(attachmentID, p.Post, thread.ID, thread.Board, filename, contentType, p.SizeBytes, actor.ID, "", ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostAttachmentAdded, scopes, payload)
 	if err != nil {
 		return internalErr(err)
@@ -900,10 +896,7 @@ func (h *Handler) editPost(actor *User, p proto.EditPostPayload) Reply {
 		return internalErr(err)
 	}
 
-	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-	eventPayload := &proto.PostEditedPayload{
-		ID: post.ID, Thread: post.Thread, NewBody: p.Body, Version: post.Version + 1, TS: ts,
-	}
+	scopes, eventPayload := commandevents.PostEdited(post.ID, post.Thread, thread.Board, p.Body, post.Version+1, ts)
 	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostEdited, scopes, eventPayload)
 	if err != nil {
 		return internalErr(err)
@@ -963,10 +956,8 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 	}
 	defer tx.Rollback() //nolint
 
-	scopes := []string{"thread:" + post.Thread, "board:" + thread.Board}
-	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagsSet, scopes, &proto.PostFlagsSetPayload{
-		ID: post.ID, Thread: post.Thread, Marked: flagPlan.Marked, Recommended: flagPlan.Recommended, NoReply: flagPlan.NoReply, TeX: flagPlan.TeX, MailBack: flagPlan.MailBack, By: actor.ID, TS: ts,
-	})
+	scopes, payload := commandevents.PostFlagsSet(post.ID, post.Thread, thread.Board, flagPlan.Marked, flagPlan.Recommended, flagPlan.NoReply, flagPlan.TeX, flagPlan.MailBack, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostFlagsSet, scopes, payload)
 	if err != nil {
 		return internalErr(err)
 	}
@@ -977,8 +968,8 @@ func (h *Handler) setPostFlag(actor *User, p proto.SetPostFlagPayload) Reply {
 		return internalErr(err)
 	}
 
-	h.bus.Publish(&proto.Event{Kind: proto.EvtPostFlagsSet, Seq: seq, Scopes: scopes,
-		Payload: &proto.PostFlagsSetPayload{ID: post.ID, Thread: post.Thread, Marked: flagPlan.Marked, Recommended: flagPlan.Recommended, NoReply: flagPlan.NoReply, TeX: flagPlan.TeX, MailBack: flagPlan.MailBack, By: actor.Name, TS: ts}, TS: ts})
+	_, publicPayload := commandevents.PostFlagsSet(post.ID, post.Thread, thread.Board, flagPlan.Marked, flagPlan.Recommended, flagPlan.NoReply, flagPlan.TeX, flagPlan.MailBack, actor.Name, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostFlagsSet, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
 	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
 }
 
