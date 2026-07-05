@@ -44,7 +44,7 @@ func TestCommandLogProducePreservesKafkaSourcePosition(t *testing.T) {
 	if record.Partition != partition || record.Offset != 41 || record.CID != "cid-kafka-produce" {
 		t.Fatalf("record = %+v, want partition with logical offset 41 and cid", record)
 	}
-	wantSource := core.CommandLogSourcePosition{
+	wantSource := logmodel.CommandLogSourcePosition{
 		Backend:           "kafka",
 		Topic:             "budgie.commands",
 		PhysicalPartition: physical,

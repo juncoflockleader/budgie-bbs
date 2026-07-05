@@ -108,7 +108,7 @@ func TestCommandLogMaterializationAuditDetectsCommittedMissingMaterialization(t 
 func TestCommandLogMaterializationAuditAllowsSourceBackedSparseOffsets(t *testing.T) {
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
-	record := sparseCommandLogWorkerRecord(partition, 4, CommandLogSourcePosition{
+	record := sparseCommandLogWorkerRecord(partition, 4, logmodel.CommandLogSourcePosition{
 		Backend:           "kafka",
 		Topic:             "budgie.commands",
 		PhysicalPartition: 2,

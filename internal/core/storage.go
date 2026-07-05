@@ -26,11 +26,6 @@ func logPartitionFromEventPartition(p eventPartition) LogPartition {
 // consumed by the writer tier in the partitioned-log architecture.
 type CommandLogRecord = logmodel.CommandLogRecord
 
-// CommandLogSourcePosition is the broker source offset for one command-log
-// record. Logical Partition/Offset remain the Budgie execution identity;
-// physical topic-partition offsets are what Kafka/Redpanda commits must use.
-type CommandLogSourcePosition = logmodel.CommandLogSourcePosition
-
 // CommandLog is the IS4 command-log boundary. Implementations must preserve
 // order within one partition and may process different partitions in parallel.
 type CommandLog interface {

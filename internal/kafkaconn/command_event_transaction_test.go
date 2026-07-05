@@ -39,7 +39,7 @@ func TestCommandEventTransactionClientCommitsEventsAndCommandOffset(t *testing.T
 	client := NewCommandEventTransactionClient(transactions, options)
 	store := core.NewBrokerCommandEventTransactionStore(client)
 	commandPartition := core.LogPartition{Kind: "board", Key: "general"}
-	commandSource := core.CommandLogSourcePosition{
+	commandSource := logmodel.CommandLogSourcePosition{
 		Backend:           "kafka",
 		Topic:             options.CommandTopic,
 		PhysicalPartition: 9,
@@ -115,7 +115,7 @@ func TestCommandEventTransactionClientCommitsPartitionOnlyEventsWhenAllowed(t *t
 	command := core.CommandLogCommitPosition{
 		Partition: commandPartition,
 		Offset:    7,
-		SourcePosition: core.CommandLogSourcePosition{
+		SourcePosition: logmodel.CommandLogSourcePosition{
 			Backend:           "kafka",
 			Topic:             options.CommandTopic,
 			PhysicalPartition: 9,
@@ -180,7 +180,7 @@ func TestCommandEventTransactionClientCommitsCommandOffsetWithoutEvents(t *testi
 	command := core.CommandLogCommitPosition{
 		Partition: commandPartition,
 		Offset:    9,
-		SourcePosition: core.CommandLogSourcePosition{
+		SourcePosition: logmodel.CommandLogSourcePosition{
 			Backend:           "kafka",
 			Topic:             options.CommandTopic,
 			PhysicalPartition: 4,
@@ -597,7 +597,7 @@ func testKafkaCommandCommit(partition core.LogPartition, logicalOffset int64) co
 	return core.CommandLogCommitPosition{
 		Partition: partition,
 		Offset:    logicalOffset,
-		SourcePosition: core.CommandLogSourcePosition{
+		SourcePosition: logmodel.CommandLogSourcePosition{
 			Backend:           "kafka",
 			Topic:             DefaultCommandTopic,
 			PhysicalPartition: 7,

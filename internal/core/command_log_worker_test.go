@@ -442,7 +442,7 @@ func TestCommandLogWorkerAllowsSourcePositionBackedSparseOffsets(t *testing.T) {
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	log := newStaticCommandLogForWorker(partition, 1, []CommandLogRecord{
-		sparseCommandLogWorkerRecord(partition, 4, CommandLogSourcePosition{
+		sparseCommandLogWorkerRecord(partition, 4, logmodel.CommandLogSourcePosition{
 			Backend:           "kafka",
 			Topic:             "budgie.commandlog",
 			PhysicalPartition: 3,
@@ -477,7 +477,7 @@ func TestCommandLogWorkerRejectsSparseOffsetsWithoutSourcePosition(t *testing.T)
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	log := newStaticCommandLogForWorker(partition, 1, []CommandLogRecord{
-		sparseCommandLogWorkerRecord(partition, 4, CommandLogSourcePosition{}),
+		sparseCommandLogWorkerRecord(partition, 4, logmodel.CommandLogSourcePosition{}),
 	})
 
 	worker := NewCommandLogWorker(CommandLogWorkerConfig{
@@ -500,7 +500,7 @@ func TestCommandLogWorkerRejectsInvalidSparseSourcePosition(t *testing.T) {
 	ctx := context.Background()
 	partition := LogPartition{Kind: partitionBoard, Key: "general"}.Normalize()
 	log := newStaticCommandLogForWorker(partition, 1, []CommandLogRecord{
-		sparseCommandLogWorkerRecord(partition, 4, CommandLogSourcePosition{
+		sparseCommandLogWorkerRecord(partition, 4, logmodel.CommandLogSourcePosition{
 			Backend:           "kafka",
 			Topic:             "budgie.commandlog",
 			PhysicalPartition: 3,
@@ -2792,7 +2792,7 @@ func (l *staticCommandLogForWorker) ListCommandPartitions(ctx context.Context, l
 	return []LogPartition{l.partition}, nil
 }
 
-func sparseCommandLogWorkerRecord(partition LogPartition, offset int64, source CommandLogSourcePosition) CommandLogRecord {
+func sparseCommandLogWorkerRecord(partition LogPartition, offset int64, source logmodel.CommandLogSourcePosition) CommandLogRecord {
 	return CommandLogRecord{
 		Partition:      partition.Normalize(),
 		Offset:         offset,

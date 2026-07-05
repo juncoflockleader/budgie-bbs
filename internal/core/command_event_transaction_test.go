@@ -466,7 +466,7 @@ func TestBrokerCommandEventTransactionStorePassesCommandSourcePosition(t *testin
 	ctx := context.Background()
 	client := &recordingBrokerCommandEventTransactionClient{}
 	store := NewBrokerCommandEventTransactionStore(client)
-	source := CommandLogSourcePosition{
+	source := logmodel.CommandLogSourcePosition{
 		Backend:           "kafka",
 		Topic:             "budgie.commandlog",
 		PhysicalPartition: 7,
@@ -502,7 +502,7 @@ func TestBrokerCommandEventTransactionStoreRejectsUnsafeCommandSourcePositionBef
 	_, err := store.CommitCommandEvents(ctx, CommandEventTransaction{
 		CommandPartition: LogPartition{Kind: partitionBoard, Key: "general"},
 		CommandOffset:    12,
-		CommandSourcePosition: CommandLogSourcePosition{
+		CommandSourcePosition: logmodel.CommandLogSourcePosition{
 			Backend:           "kafka",
 			Topic:             "budgie.commandlog",
 			PhysicalPartition: 7,
@@ -556,7 +556,7 @@ func TestCommandEventTransactionFinalizerPassesCommandSourcePosition(t *testing.
 		Offset:    7,
 		ActorID:   "usr_alice",
 		CID:       "cid-finalizer-source-position",
-		SourcePosition: CommandLogSourcePosition{
+		SourcePosition: logmodel.CommandLogSourcePosition{
 			Backend:           "kafka",
 			Topic:             "budgie.commandlog",
 			PhysicalPartition: 3,
@@ -566,7 +566,7 @@ func TestCommandEventTransactionFinalizerPassesCommandSourcePosition(t *testing.
 			LogicalOffset:     7,
 		},
 	}
-	var got CommandLogSourcePosition
+	var got logmodel.CommandLogSourcePosition
 	finalizer := CommandEventTransactionFinalizer{
 		Transactions: commandEventTransactionStoreFunc(func(ctx context.Context, tx CommandEventTransaction) (CommandEventTransactionResult, error) {
 			got = tx.CommandSourcePosition
