@@ -146,26 +146,7 @@ func DecodeBrokerCommandRecord(data []byte) (BrokerCommandRecord, error) {
 }
 
 func DecodeBrokerCommandMessage(msg BrokerCommandLogMessage) (CommandLogRecord, error) {
-	record, err := DecodeBrokerCommandRecord(msg.Data)
-	if err != nil {
-		return CommandLogRecord{}, err
-	}
-	partition := LogPartition{Kind: record.PartitionKind, Key: record.PartitionKey}.Normalize()
-	if msg.Partition != (LogPartition{}) && msg.Partition.Normalize() != partition {
-		return CommandLogRecord{}, fmt.Errorf("broker command message: partition metadata mismatch")
-	}
-	if msg.Offset > 0 && msg.Offset != record.Offset {
-		return CommandLogRecord{}, fmt.Errorf("broker command message: offset metadata mismatch")
-	}
-	return CommandLogRecord{
-		Partition:  partition,
-		Offset:     record.Offset,
-		ActorID:    record.ActorID,
-		CID:        record.CID,
-		Command:    record.Command,
-		Payload:    append([]byte(nil), record.Payload...),
-		EnqueuedAt: record.EnqueuedAt,
-	}, nil
+	return logmodel.DecodeBrokerCommandMessage(msg)
 }
 
 func BrokerCommandSubject(partition LogPartition) string {
