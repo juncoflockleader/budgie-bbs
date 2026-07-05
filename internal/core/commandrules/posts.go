@@ -53,6 +53,21 @@ func RequireBoardMailInAllowed(settings *projections.BoardSettings, canModerateB
 	return nil
 }
 
+func ResolveBoardMailTargetBoard(boardID, threadBoardID string, hasThread bool) (string, *proto.ErrorDetail) {
+	if hasThread {
+		if boardID == "" {
+			return threadBoardID, nil
+		}
+		if boardID != threadBoardID {
+			return "", newErrDetail(proto.ErrValidationFailed, "thread does not belong to board", false)
+		}
+	}
+	if boardID == "" {
+		return "", newErrDetail(proto.ErrValidationFailed, "board is required", false)
+	}
+	return boardID, nil
+}
+
 func ActorAuthoredBy(actor *projections.User, authorID, authorName string) bool {
 	if actor == nil {
 		return false

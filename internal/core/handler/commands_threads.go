@@ -710,6 +710,7 @@ func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply
 	}
 	boardID := p.Board
 	threadID := p.Thread
+	threadBoardID := ""
 	if threadID != "" {
 		thread, err := currentRuntime().GetThread(h.db, threadID)
 		if err != nil {
@@ -718,14 +719,12 @@ func (h *Handler) postBoardMail(actor *User, p proto.PostBoardMailPayload) Reply
 		if thread == nil {
 			return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
 		}
-		if boardID == "" {
-			boardID = thread.Board
-		} else if boardID != thread.Board {
-			return Reply{Err: errDetail(proto.ErrValidationFailed, "thread does not belong to board", false)}
-		}
+		threadBoardID = thread.Board
 	}
-	if boardID == "" {
-		return Reply{Err: errDetail(proto.ErrValidationFailed, "board is required", false)}
+	var targetErr *proto.ErrorDetail
+	boardID, targetErr = commandrules.ResolveBoardMailTargetBoard(boardID, threadBoardID, threadID != "")
+	if targetErr != nil {
+		return Reply{Err: targetErr}
 	}
 	settings, err := currentRuntime().GetBoardSettings(h.db, boardID)
 	if err != nil {

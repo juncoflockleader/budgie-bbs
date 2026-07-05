@@ -646,6 +646,7 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMail(ctx context.Conte
 	}
 	boardID := rawBoardID
 	var thread *Thread
+	threadBoardID := ""
 	if threadID != "" {
 		var err error
 		thread, err = projections.GetThread(e.core.DB, threadID)
@@ -655,14 +656,12 @@ func (e *CommandLogNativeDecisionExecutor) decidePostBoardMail(ctx context.Conte
 		if thread == nil {
 			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrNotFound, "thread not found", false)
 		}
-		if boardID == "" {
-			boardID = thread.Board
-		} else if boardID != thread.Board {
-			return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "thread does not belong to board", false)
-		}
+		threadBoardID = thread.Board
 	}
-	if boardID == "" {
-		return nativeCommandDecision{}, nativeDecisionErr(proto.ErrValidationFailed, "board is required", false)
+	var targetErr *proto.ErrorDetail
+	boardID, targetErr = commandrules.ResolveBoardMailTargetBoard(boardID, threadBoardID, thread != nil)
+	if targetErr != nil {
+		return nativeCommandDecision{}, targetErr
 	}
 	settings, err := projections.GetBoardSettings(e.core.DB, boardID)
 	if err != nil {
