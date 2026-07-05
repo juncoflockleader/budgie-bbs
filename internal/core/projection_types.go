@@ -12,7 +12,6 @@ type BoardMemberPatch = projections.BoardMemberPatch
 type BoardMemberApplication = projections.BoardMemberApplication
 type BoardMemberRequirements = projections.BoardMemberRequirements
 type BoardMemberRequirementsPatch = projections.BoardMemberRequirementsPatch
-type BoardInfo = projections.BoardInfo
 type Category = projections.Category
 type Thread = projections.Thread
 type ThreadSummary = projections.ThreadSummary

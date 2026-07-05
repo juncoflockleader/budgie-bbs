@@ -1999,7 +1999,7 @@ func (c *Core) ListBoardSummaries(userID string, unreadOnly bool, opts ...projec
 	}
 	return projections.ListBoardSummaries(c.DB, userID, unreadOnly, opts...)
 }
-func (c *Core) GetBoardInfo(boardID string) (*BoardInfo, error) {
+func (c *Core) GetBoardInfo(boardID string) (*projections.BoardInfo, error) {
 	return projections.GetBoardInfo(c.DB, boardID)
 }
 func (c *Core) GetBoardMemberRequirements(boardID string) (*BoardMemberRequirements, error) {

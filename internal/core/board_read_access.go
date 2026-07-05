@@ -16,24 +16,24 @@ import (
 // centralized in boardmodel so all transports enforce the same rule.
 
 // ActorCanReadBoard reports whether actor may read the board described by info.
-func ActorCanReadBoard(actor *User, info *BoardInfo) bool {
+func ActorCanReadBoard(actor *User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorCanReadBoard(boardAccessActor(actor), boardAccessInfo(info))
 }
 
 // ActorModeratesBoard reports whether actor has site or board moderation scope.
-func ActorModeratesBoard(actor *User, info *BoardInfo) bool {
+func ActorModeratesBoard(actor *User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorModeratesBoard(boardAccessActor(actor), boardAccessInfo(info))
 }
 
 // ActorCanManageBoardMembers reports whether actor may review/manage board
 // membership using a loaded BoardInfo snapshot.
-func ActorCanManageBoardMembers(actor *User, info *BoardInfo) bool {
+func ActorCanManageBoardMembers(actor *User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorCanManageBoardMembers(boardAccessActor(actor), boardAccessInfo(info))
 }
 
 // ActorCanModerateBoardPosts reports whether actor may moderate posts using a
 // loaded BoardInfo snapshot.
-func ActorCanModerateBoardPosts(actor *User, info *BoardInfo) bool {
+func ActorCanModerateBoardPosts(actor *User, info *projections.BoardInfo) bool {
 	return boardmodel.ActorCanModerateBoardPosts(boardAccessActor(actor), boardAccessInfo(info))
 }
 
@@ -106,7 +106,7 @@ func boardAccessActor(actor *User) *boardmodel.AccessActor {
 	}
 }
 
-func boardAccessInfo(info *BoardInfo) *boardmodel.AccessInfo {
+func boardAccessInfo(info *projections.BoardInfo) *boardmodel.AccessInfo {
 	if info == nil {
 		return nil
 	}

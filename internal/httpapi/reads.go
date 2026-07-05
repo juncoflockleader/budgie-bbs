@@ -1067,7 +1067,7 @@ func (s *Server) maskPrivatePresenceLocations(actor *core.User, users []projecti
 	}
 }
 
-func actorCanReadBoardInfo(actor *core.User, info *core.BoardInfo) bool {
+func actorCanReadBoardInfo(actor *core.User, info *projections.BoardInfo) bool {
 	// Delegates to the canonical core implementation so every transport (HTTP,
 	// NNTP, SSH/TUI) enforces one read-access rule.
 	return core.ActorCanReadBoard(actor, info)
