@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 const defaultCommandPartitionClaimTTL = 30 * time.Second
@@ -77,9 +79,5 @@ SELECT owner_id, expires_at
 }
 
 func commandPartitionClaimForOwner(partition LogPartition, ownerID string, expiresAt int64) CommandPartitionClaim {
-	return CommandPartitionClaim{
-		Partition: partition.Normalize(),
-		OwnerID:   strings.TrimSpace(ownerID),
-		ExpiresAt: expiresAt,
-	}
+	return logmodel.NewCommandPartitionClaim(partition, ownerID, expiresAt)
 }

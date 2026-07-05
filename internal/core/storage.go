@@ -69,17 +69,9 @@ type CommandPartitionOffsetLister interface {
 	ListCommandPartitionOffsets(ctx context.Context, limit int) ([]CommandPartitionOffset, error)
 }
 
-type CommandPartitionClaim struct {
-	Partition LogPartition
-	OwnerID   string
-	ExpiresAt int64
-}
+type CommandPartitionClaim = logmodel.CommandPartitionClaim
 
-type CommandPartitionAssignment struct {
-	Partition  LogPartition
-	OwnerID    string
-	Generation int64
-}
+type CommandPartitionAssignment = logmodel.CommandPartitionAssignment
 
 // CommandPartitionAssigner models broker consumer-group ownership for command
 // partitions. A worker may drain a partition only while the assigner says that

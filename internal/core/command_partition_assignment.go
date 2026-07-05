@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/logmodel"
 )
 
 // HashCommandPartitionAssigner is a deterministic stand-in for broker
@@ -132,11 +134,7 @@ func commandPartitionAssignmentsForOwner(partitions []LogPartition, ownerID stri
 }
 
 func commandPartitionAssignmentForOwner(partition LogPartition, ownerID string, generation int64) CommandPartitionAssignment {
-	return CommandPartitionAssignment{
-		Partition:  partition.Normalize(),
-		OwnerID:    strings.TrimSpace(ownerID),
-		Generation: generation,
-	}
+	return logmodel.NewCommandPartitionAssignment(partition, ownerID, generation)
 }
 
 func (a *SnapshotCommandPartitionAssigner) Generation() int64 {
