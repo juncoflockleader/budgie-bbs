@@ -29,13 +29,11 @@ single-host install, see [deployment-single-node.md](deployment-single-node.md).
   transport ladder, REST surface, and command/event catalogs.
 - [Architecture](doc/architecture.md) - the durable architecture principles and
   client/server model.
-- [Roadmap](doc/roadmap.md) - current product, backend, and scale roadmap.
+- [Repository Plan](doc/roadmap.md) - the single active, prioritized work plan.
 - [Single-node Deployment](deployment-single-node.md) - one-process SQLite
   deployment and launchd/systemd setup.
 - [Multi-node Deployment](deployment-multi-node.md) - Postgres, runtime roles,
   observability, recovery, and cluster validation.
-- [Internet-scale Milestones](milestones-internet-scale.md) - scale epic status,
-  gate evidence, and remaining hardening work.
 - [Internet-scale Write Design](design-internet-scale-writes.md) - partitioned
   command/event log design behind the scale epic.
 - [Repo Maintenance](doc/repo-maintenance.md) - cleanup rules for docs, scripts,

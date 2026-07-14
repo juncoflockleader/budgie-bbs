@@ -7,11 +7,15 @@ does not grow a new layer of stale operational notes after each milestone.
 
 - Keep root-level docs limited to entrypoints and canonical deployment/design
   documents.
-- Put focused design/status docs under `doc/`.
+- Put focused design documents under `doc/`.
 - Put operational procedures under `ops/runbooks/`.
-- Merge historical milestone notes into [doc/roadmap.md](roadmap.md).
+- Keep [doc/roadmap.md](roadmap.md) as the single active plan.
+- Move superseded plans, milestone journals, and status snapshots into
+  `doc/archive/`, add them to the archive index, and point them back to the
+  active plan.
 - Merge durable architectural principles into [doc/architecture.md](architecture.md).
-- Delete or fold old status docs once their status is superseded.
+- Do not create parallel active status trackers; update the roadmap or a durable
+  design/operations document instead.
 
 ## Script Rules
 

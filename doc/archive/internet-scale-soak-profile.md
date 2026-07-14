@@ -1,6 +1,9 @@
 # Internet-Scale Sustained Soak Profile (sketch)
 
-The gates in [`internet-scale-benchmarks.md`](internet-scale-benchmarks.md) are
+> Archived on July 13, 2026. The current roadmap owns implementation and
+> promotion work; this document preserves the original soak-test design.
+
+The gates in [`internet-scale-benchmarks.md`](../internet-scale-benchmarks.md) are
 **capacity** tests: short, peak-shaped runs that prove per-shape throughput,
 fanout, and zero-loss budgets. They do **not** characterize what happens when
 the system runs at load for hours. This document sketches the **soak** profile
@@ -105,7 +108,7 @@ self-terminate — they can't soak as-is. Proposed additions:
 ## Relationship to IS0
 
 This operationalizes the IS0 baseline + tripwire intent in
-[`milestones-internet-scale.md`](../milestones-internet-scale.md) (writer lock
+[`milestones-internet-scale.md`](milestones-internet-scale.md) (writer lock
 wait, command latency by kind, wakeup lag, replay counts, subscriber drops, open
 sessions) as a **time-based** check, complementing the point-in-time capacity
 gates. Build it once the multi-node compose cluster is the standard test

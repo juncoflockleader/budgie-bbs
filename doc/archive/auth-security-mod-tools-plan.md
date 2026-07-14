@@ -1,5 +1,8 @@
 # Auth, Security, And Moderator Tools Plan
 
+> Archived on July 13, 2026. This is a historical implementation plan, not an
+> active source of work. See [the current roadmap](../roadmap.md).
+
 Date: 2026-06-14
 
 ## Goals

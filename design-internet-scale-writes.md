@@ -304,8 +304,10 @@ single global order relaxed. Phased path:
    slices, with event-log replay/backfill as the repair path.
 6. **Shard projections / add the gateway tier** for connection scale.
 
-The execution roadmap for these phases lives in
-[`milestones-internet-scale.md`](milestones-internet-scale.md).
+Current promotion work lives in the
+[repository plan](doc/roadmap.md#phase-3--sustained-scale-proof). The original
+execution journal is retained in the
+[plan archive](doc/archive/milestones-internet-scale.md).
 
 Crucially, the **client protocol and the event/cursor model stay stable** — the
 cursor generalizes from a scalar `seq` to a per-partition offset vector, but the

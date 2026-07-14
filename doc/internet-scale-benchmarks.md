@@ -2,8 +2,9 @@
 
 This document records reproducible load/capacity evidence for the internet-scale
 claims in [`design-internet-scale-writes.md`](../design-internet-scale-writes.md)
-and [`milestones-internet-scale.md`](../milestones-internet-scale.md). The
-budgets those documents define are enforced as machine-checked gates; this page
+and the historical
+[`milestones-internet-scale.md`](archive/milestones-internet-scale.md). The
+budgets defined by that work are enforced as machine-checked gates; this page
 publishes the numbers a run of those gates produced.
 
 **Scope honesty:** these are **load / throughput-capacity gates** at the promoted
@@ -135,7 +136,9 @@ budget file. For the full bundle + manifest archival, use
 - **Sustained soak profile:** a multi-hour run at a fraction of peak to surface
   memory growth, GC pauses, broker compaction, and reconnect-storm recovery —
   distinct from these capacity gates. Sketched in
-  [`internet-scale-soak-profile.md`](internet-scale-soak-profile.md).
+  [`internet-scale-soak-profile.md`](archive/internet-scale-soak-profile.md),
+  with active implementation work tracked in the
+  [repository plan](roadmap.md#31-implement-the-soak-harness).
 - **Kafka drain throughput** (§4): the Kafka backend drains correctly but at a
   lower rate than NATS (more poll rounds per batch) — a throughput optimization,
   not a correctness gap.

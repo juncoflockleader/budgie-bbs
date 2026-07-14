@@ -1,7 +1,10 @@
 # KBS Feature Parity Status
 
+> Archived on July 13, 2026. This snapshot is retained for historical feature
+> context. It is not an active roadmap.
+
 This document tracks implementation progress against
-[`kbs-feature-set-review.md`](kbs-feature-set-review.md). It is intentionally stricter than a product
+[`kbs-feature-set-review.md`](../kbs-feature-set-review.md). It is intentionally stricter than a product
 roadmap: a feature is only marked done when Budgie has a usable workflow, not
 just a schema placeholder or an idea in prose.
 

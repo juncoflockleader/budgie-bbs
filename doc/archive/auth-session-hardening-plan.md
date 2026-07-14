@@ -1,6 +1,9 @@
 # Plan: Auth Session Hardening — HttpOnly Cookie + Logout Revocation
 
-Status: **in progress** — Part B (logout revocation) **done**; Part A phases
+> Archived on July 13, 2026. Remaining work was consolidated into
+> [the current roadmap](../roadmap.md).
+
+Historical status: **in progress** — Part B (logout revocation) **done**; Part A phases
 **A-1 (server cookie + CSRF) and A-2 (SPA flipped to cookie-only, browser
 verified) done**; only **A-3 (cleanup: stop returning the JWT in JSON for
 browser logins)** remains. Covers the two `SECURITY.md`

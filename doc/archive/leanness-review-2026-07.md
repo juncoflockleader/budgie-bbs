@@ -1,10 +1,13 @@
 # Leanness & Architecture Review (July 2026)
 
-Status: in progress. This document records the findings of a repo-wide leanness
+> Archived on July 13, 2026. Its unfinished recommendations were consolidated
+> into [the current roadmap](../roadmap.md).
+
+Historical status: in progress. This document records the findings of a repo-wide leanness
 review (2026-07-02) and the agreed directions for shrinking the codebase
 without losing capability. Fold completed items into
-[doc/roadmap.md](roadmap.md) and delete their sections here per
-[doc/repo-maintenance.md](repo-maintenance.md).
+[the archived roadmap](roadmap-2026-07-13.md) and delete their sections here per
+[repo maintenance guidance](../repo-maintenance.md).
 
 ## Summary
 
@@ -15,7 +18,7 @@ three places:
 
 1. The internet-scale migration left a ~10k-line hand-copied reimplementation
    of the command handlers
-   ([command_log_native_decider.go](../internal/core/command_log_native_decider.go)),
+   ([command_log_native_decider.go](../../internal/core/command_log_native_decider.go)),
    plus ~5k lines of flag-gated scaffolding inside `internal/core`.
 2. Two full broker stacks (Kafka ~7.3k lines, NATS ~6.4k lines) are carried
    for the same architectural role (command/event log).
@@ -41,10 +44,10 @@ A realistic pass removes **~8–12k lines of Go** (plus a large share of the
 
 ### 1. Deduplicate the native decider (highest value; fixes a correctness risk)
 
-[command_log_native_decider.go](../internal/core/command_log_native_decider.go)
+[command_log_native_decider.go](../../internal/core/command_log_native_decider.go)
 re-implements handler validation at 70–95% overlap per command. Example:
 `createThread` is ~95% identical between
-[handler/commands_threads.go](../internal/core/handler/commands_threads.go)
+[handler/commands_threads.go](../../internal/core/handler/commands_threads.go)
 (~line 21) and the decider (~line 271). Every rule change (sanctions, poll
 trust levels, automod, content filters) must be made twice; divergence means a
 replayed command produces different events — a data-corruption class of bug.
@@ -137,7 +140,7 @@ Considerations:
 
 - NATS already covers roles Kafka cannot in this deployment (presence, chat,
   counter KV stores) and NATS KV requires Postgres.
-- [design-internet-scale-writes.md](../design-internet-scale-writes.md)
+- [design-internet-scale-writes.md](../../design-internet-scale-writes.md)
   targets Kafka partitioning for the scale epic.
 - A defensible split is Kafka-for-logs + NATS-for-KV — but then delete the
   NATS *log* path, or vice versa. Carrying both log paths indefinitely is the
@@ -331,8 +334,8 @@ invocations only; update `scripts/scripts_test.go` in the same change.
 
 The 234 handlers in `internal/httpapi` are correctly thin but hand-written:
 ~8 identical lines of parse/call/serialize each (~1.9k lines total, mostly in
-[commands.go](../internal/httpapi/commands.go) and
-[reads.go](../internal/httpapi/reads.go)).
+[commands.go](../../internal/httpapi/commands.go) and
+[reads.go](../../internal/httpapi/reads.go)).
 
 **Direction:** table-driven route registration with generic decode/respond
 helpers; auth/freshness checks become middleware. Saves ~1.2–1.6k lines and
@@ -340,9 +343,9 @@ eliminates copy-paste drift.
 
 **Related quick win (done 2026-07-02):** SSE gap-replay in
 `httpapi/events.go` and WebSocket gap repair in
-[wsapi/conn.go](../internal/wsapi/conn.go) were ~150 near-identical lines;
+[wsapi/conn.go](../../internal/wsapi/conn.go) were ~150 near-identical lines;
 now both call `Core.DeliverWithGapRepair` in
-[internal/core/stream_delivery.go](../internal/core/stream_delivery.go).
+[internal/core/stream_delivery.go](../../internal/core/stream_delivery.go).
 
 - Effort: medium (handlers), low (gap replay). Risk: low–medium — large but
   mechanical surface; the heavyweight httpapi tests pin behavior.
@@ -366,7 +369,7 @@ anyway, not as a standalone project.
 - **Merging `internal/policy` into core registration.** On inspection the
   package is not trivial glue: it is a coherent `go:embed` of the default
   privacy policy with a content-hash version and a drift test against
-  [doc/default-privacy-policy.md](default-privacy-policy.md). Merging would
+  [doc/default-privacy-policy.md](../default-privacy-policy.md). Merging would
   move an embedded asset into the already-large core package for no gain.
 
 ## Architectural principles going forward
@@ -415,7 +418,7 @@ native executor handles: which state reads are partition-local (safe), which
 tolerate bounded staleness (and what the blast radius of a stale read is),
 and which are unsafe and force either a partition-key change or exclusion
 from the native path. Record the decision in
-[design-internet-scale-writes.md](../design-internet-scale-writes.md). This
+[design-internet-scale-writes.md](../../design-internet-scale-writes.md). This
 must land **before** native promotion — ideally alongside the shared decide
 functions, since extracting them is when each command's reads get enumerated
 anyway.

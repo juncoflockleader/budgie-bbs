@@ -1,11 +1,14 @@
 # Multilingual Support Status
 
+> Archived on July 13, 2026. This is a historical status snapshot, not an active
+> implementation plan.
+
 Date: 2026-06-14
 
 ## Scope
 
 This status summarizes the current gap against
-[`ui-multilingual-support-design.md`](ui-multilingual-support-design.md) for
+[`ui-multilingual-support-design.md`](../ui-multilingual-support-design.md) for
 adding first-class UI localization with English fallback plus Simplified Chinese
 (`zh-CN`) and Traditional Chinese (`zh-TW`).
 

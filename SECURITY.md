@@ -77,7 +77,7 @@ defense-in-depth or low-severity, and are slated for follow-up.
   same-origin check (CSRF), and WebSocket upgrades require same-origin (CSWSH).
   The `Authorization: Bearer` header still works for programmatic clients. Only
   cleanup remains (phase A-3: stop returning the JWT in JSON for browser logins)
-  — see [doc/auth-session-hardening-plan.md](doc/auth-session-hardening-plan.md).
+  — see [the current repository plan](doc/roadmap.md#04-finish-the-remaining-browser-session-cleanup).
 - **Logout / session revocation:** ✅ addressed. `POST /api/v1/auth/logout-all`
   revokes every outstanding token for the user (a per-user `sessions_valid_after`
   epoch checked against the token `iat`, enforced cluster-wide); normal logout

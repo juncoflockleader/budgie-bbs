@@ -1,18 +1,21 @@
 # Milestones: Path to Internet Scale
 
+> Archived on July 13, 2026. This execution journal is preserved as historical
+> evidence. See [the current roadmap](../roadmap.md) for active work.
+
 ## Status
 
 Execution roadmap. This document turns
-[`design-internet-scale-writes.md`](design-internet-scale-writes.md) into
+[`design-internet-scale-writes.md`](../../design-internet-scale-writes.md) into
 milestones that can be worked in order.
 
 Published gate results that back these budgets live in
-[`doc/internet-scale-benchmarks.md`](doc/internet-scale-benchmarks.md)
+[`doc/internet-scale-benchmarks.md`](../internet-scale-benchmarks.md)
 (gateway fanout, durable NATS command-log drain, and Postgres write scaling, run
 at a clean checkout against real brokers).
 
 It starts from the current production-scale cluster plan in
-[`deployment-multi-node.md`](deployment-multi-node.md). That baseline is a
+[`deployment-multi-node.md`](../../deployment-multi-node.md). That baseline is a
 shared Postgres event log, one global advisory write lock, Postgres
 `LISTEN/NOTIFY` wakeups, cursor replay, and local per-node subscribers.
 
@@ -145,7 +148,7 @@ replacing it.
 as the authoritative event log and keeping the global write lock.
 
 This corresponds to Appendix A in
-[`design-internet-scale-writes.md`](design-internet-scale-writes.md).
+[`design-internet-scale-writes.md`](../../design-internet-scale-writes.md).
 
 ### Workstreams
 
