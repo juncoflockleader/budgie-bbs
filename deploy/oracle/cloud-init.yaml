@@ -1,0 +1,17 @@
+#cloud-config
+# Budgie BBS — Oracle Cloud Infrastructure (OCI) first-boot provisioning.
+#
+# Paste into "Show advanced options → Management → cloud-init script" when
+# creating the instance (Image: Canonical Ubuntu 24.04). Installs Caddy, the
+# budgied systemd unit, the service user + data dirs, and opens the HOST
+# firewall via iptables (OCI Ubuntu images ship a restrictive INPUT chain).
+#
+# IMPORTANT: the host firewall is only half the story on OCI. You MUST also add
+# ingress rules for TCP 80, 443 and 2222 to the subnet's **VCN Security List**
+# (or a Network Security Group) in the console — see README.md. Without that,
+# traffic never reaches the host.
+#
+# Shape: Ampere A1 (Always Free, ARM) -> deploy with the default arm64.
+package_update: true
+runcmd:
+  - [ bash, -c, "curl -fsSL https://raw.githubusercontent.com/juncoflockleader/budgie-bbs/main/deploy/common/provision.sh | BUDGIE_FIREWALL=iptables bash" ]

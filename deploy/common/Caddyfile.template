@@ -1,0 +1,17 @@
+# Budgie BBS — TLS reverse proxy.
+#
+# Caddy automatically provisions and renews a free Let's Encrypt certificate for
+# the site address below, then proxies to budgied on the loopback. Replace
+# YOUR_DOMAIN with your real hostname (the deploy script does this for you when
+# you pass BUDGIE_DOMAIN), then: sudo systemctl reload caddy
+#
+# Point an A/AAAA DNS record for YOUR_DOMAIN at this server before reloading, or
+# certificate issuance will fail.
+
+YOUR_DOMAIN {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8081
+}
+
+# The SSH TUI is NOT proxied here — it speaks the SSH protocol, not HTTP. It is
+# reached directly, e.g.  ssh -p 2222 your-handle@YOUR_DOMAIN

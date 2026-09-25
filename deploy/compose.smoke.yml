@@ -1,0 +1,10 @@
+# Override used by scripts/compose-cluster-smoke.sh: publish the two API nodes
+# directly on the host so the cross-node smoke test can target each node
+# individually (a write on api1 must reach a live stream on api2).
+services:
+  api1:
+    ports:
+      - "${COMPOSE_API1_PORT:-18101}:8080"
+  api2:
+    ports:
+      - "${COMPOSE_API2_PORT:-18102}:8080"

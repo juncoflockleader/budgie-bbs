@@ -1,0 +1,177 @@
+package core
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/emailverificationstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/mailer"
+)
+
+var (
+	// ErrEmailNotVerified is returned at login for an account whose email has
+	// not been confirmed.
+	ErrEmailNotVerified = errors.New("email not verified")
+	// ErrVerificationTokenInvalid is returned for a missing/expired token.
+	ErrVerificationTokenInvalid = errors.New("verification token invalid or expired")
+	// ErrEmailRequired is returned when signup needs an email but none was given.
+	ErrEmailRequired = errors.New("email is required")
+)
+
+const (
+	outboxEmailSend = "email.send"
+)
+
+// Process-wide mailer used by the outbox worker. Set via SetMailer; the API node
+// composes and enqueues, the worker node delivers, so both call SetMailer.
+var (
+	outboxMailer mailer.Mailer
+	mailFrom     string
+)
+
+// SetMailer configures outbound email. enforce gates login on a verified email
+// for new accounts; baseURL is the public site URL used to build verification
+// links. A nil mailer disables sending and enforcement.
+func (c *Core) SetMailer(m mailer.Mailer, from string, enforce bool, baseURL string) {
+	outboxMailer = m
+	mailFrom = strings.TrimSpace(from)
+	c.emailVerifyEnabled = enforce && m != nil
+	c.emailVerifyBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+}
+
+// EmailVerificationEnabled reports whether new accounts must confirm their email.
+func (c *Core) EmailVerificationEnabled() bool {
+	return c != nil && c.emailVerifyEnabled
+}
+
+// SetMailDevInbox records the web-inbox URL of a local SMTP catcher (mailpit)
+// so the signup UI can link to captured verification mail during local testing.
+// Empty disables the hint; never set this for a real provider.
+func (c *Core) SetMailDevInbox(url string) {
+	c.emailDevInboxURL = strings.TrimRight(strings.TrimSpace(url), "/")
+}
+
+// MailDevInboxURL returns the local SMTP-catcher inbox URL, or "" if none.
+func (c *Core) MailDevInboxURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.emailDevInboxURL
+}
+
+// StartEmailVerification marks a user unverified, records the email, mints a
+// single-use token, and enqueues the verification email. Idempotent enough to
+// double as "resend": old tokens for the user are cleared first.
+func (c *Core) StartEmailVerification(userID, email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return ErrEmailRequired
+	}
+	now := nowMS()
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	token := newID("everi_")
+	exp := now + accountmodel.EmailVerificationTokenTTL.Milliseconds()
+	if err := emailverificationstore.Start(tx, userID, email, token, now, exp); err != nil {
+		return err
+	}
+	msg := accountmodel.VerificationEmail(c.emailVerifyBaseURL, token)
+	if err := enqueueOutboxJob(tx, outboxEmailSend, emailSendJob{From: mailFrom, To: email, Subject: msg.Subject, Body: msg.Body, TS: now}, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// VerifyEmailToken consumes a verification token and marks the account verified.
+// Returns the verified user.
+func (c *Core) VerifyEmailToken(token string) (*projections.User, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, ErrVerificationTokenInvalid
+	}
+	claimedToken, claimed, err := emailverificationstore.ClaimToken(c.DB, token)
+	if err != nil {
+		return nil, err
+	}
+	// Single-use: atomically claim the token. Only the request that actually
+	// deletes the row proceeds; a concurrent replay gets 0 rows and fails.
+	if !claimed {
+		return nil, ErrVerificationTokenInvalid
+	}
+	if claimedToken.ExpiresAt < nowMS() {
+		return nil, ErrVerificationTokenInvalid
+	}
+	if err := emailverificationstore.MarkVerified(c.DB, claimedToken.UserID, nowMS()); err != nil {
+		return nil, err
+	}
+	return projections.GetUserByID(c.DB, claimedToken.UserID)
+}
+
+// ResendEmailVerification re-issues a verification email for an unverified
+// account, looked up by name. Returns the email it was sent to (or "" / error).
+func (c *Core) ResendEmailVerification(name string) error {
+	u, err := projections.GetUserByName(c.DB, name)
+	if err != nil || u == nil {
+		return ErrInvalidCredentials
+	}
+	status, err := emailverificationstore.UserStatus(c.DB, u.ID)
+	if err != nil {
+		return err
+	}
+	if status.Verified {
+		return nil // already verified; nothing to do (don't leak status)
+	}
+	if status.Email == "" {
+		return ErrEmailRequired
+	}
+	return c.StartEmailVerification(u.ID, status.Email)
+}
+
+// emailVerified reports whether a user's email is confirmed. Fails closed: a
+// read error reports "not verified" so a database hiccup cannot bypass the
+// email-verification login gate (login already requires the database, so this
+// does not reduce availability in practice).
+func (c *Core) emailVerified(userID string) bool {
+	verified, err := emailverificationstore.EmailVerified(c.DB, userID)
+	if err != nil {
+		return false
+	}
+	return verified
+}
+
+type emailSendJob struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+	TS      int64  `json:"ts"`
+}
+
+// processEmailSendJob delivers a queued verification email via the process mailer.
+func processEmailSendJob(payload emailSendJob) error {
+	if outboxMailer == nil {
+		return fmt.Errorf("email send: no mailer configured on this node")
+	}
+	from := payload.From
+	if from == "" {
+		from = mailFrom
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := outboxMailer.Send(ctx, mailer.Message{From: from, To: payload.To, Subject: payload.Subject, Body: payload.Body}); err != nil {
+		slog.Warn("email send failed", "to", payload.To, "err", err)
+		return err
+	}
+	slog.Info("verification email sent", "to", payload.To)
+	return nil
+}

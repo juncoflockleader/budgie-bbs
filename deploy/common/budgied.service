@@ -1,0 +1,39 @@
+[Unit]
+Description=Budgie BBS (single-node, SQLite)
+Documentation=https://github.com/juncoflockleader/budgie-bbs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=budgie
+Group=budgie
+WorkingDirectory=/opt/budgie
+
+# Optional operator config (public URL, mail relay, asset CDN). The leading "-"
+# makes it non-fatal if the file is absent.
+EnvironmentFile=-/opt/budgie/budgie.env
+
+# Single-node launcher settings (mapped to budgied flags by run-single-node.sh).
+# The JWT secret is generated + persisted to the data dir on first start.
+Environment=BUDGIE_SINGLE_NODE_DATA_DIR=/var/lib/budgie
+Environment=BUDGIE_SINGLE_NODE_BINARY=/opt/budgie/budgied
+Environment=BUDGIE_SINGLE_NODE_WEB=/opt/budgie/web/dist
+# HTTP binds to loopback — Caddy terminates TLS and reverse-proxies to it.
+# The SSH TUI listens publicly on :2222.
+Environment=BUDGIE_SINGLE_NODE_HTTP=127.0.0.1:8081
+Environment=BUDGIE_SINGLE_NODE_SSH=2222
+
+ExecStart=/opt/budgie/scripts/run-single-node.sh
+Restart=always
+RestartSec=5
+
+# Hardening.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/budgie
+
+[Install]
+WantedBy=multi-user.target

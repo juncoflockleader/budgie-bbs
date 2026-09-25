@@ -1,0 +1,309 @@
+package core
+
+import (
+	"errors"
+	"strings"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/accountmodel"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/emailverificationstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/twofactorstore"
+	"github.com/juncoflockleader/budgie-bbs/internal/totp"
+)
+
+var (
+	// ErrTwoFactorNotEnrolled is returned when a 2FA action needs an enrollment
+	// the user does not have.
+	ErrTwoFactorNotEnrolled = errors.New("two-factor authentication is not enrolled")
+	// ErrTwoFactorInvalidCode is returned for a wrong or expired code.
+	ErrTwoFactorInvalidCode = errors.New("invalid or expired verification code")
+	// ErrTwoFactorNoEmail is returned when email 2FA is requested but no address
+	// is on file.
+	ErrTwoFactorNoEmail = errors.New("no email address on file for email two-factor")
+)
+
+const (
+	outboxEmail2FACode = "email.2fa"
+)
+
+// SecuritySettings returns the site security settings (zero value if unset).
+func (c *Core) SecuritySettings() (*accountmodel.SecuritySettings, error) {
+	return twofactorstore.SecuritySettings(c.DB)
+}
+
+// SetSecuritySettings toggles whether staff (admin/moderator) must complete 2FA.
+func (c *Core) SetSecuritySettings(staff2FARequired bool) (*accountmodel.SecuritySettings, error) {
+	if err := twofactorstore.SetSecuritySettings(c.DB, staff2FARequired, nowMS()); err != nil {
+		return nil, err
+	}
+	return c.SecuritySettings()
+}
+
+// TwoFactorStatus returns a user's enrollment state.
+func (c *Core) TwoFactorStatus(userID string) (accountmodel.TwoFactorStatus, error) {
+	return twofactorstore.TwoFactorStatus(c.DB, userID)
+}
+
+// BeginTOTPEnrollment generates a pending TOTP secret (not yet active) and the
+// otpauth URI the authenticator app consumes. Call ConfirmTOTPEnrollment with a
+// code to activate it.
+func (c *Core) BeginTOTPEnrollment(userID, accountName string) (secret, uri string, err error) {
+	secret, err = totp.NewSecret()
+	if err != nil {
+		return "", "", err
+	}
+	if err = twofactorstore.StorePendingTOTPSecret(c.DB, userID, secret, nowMS()); err != nil {
+		return "", "", err
+	}
+	return secret, totp.OTPAuthURI(accountmodel.TOTPIssuer, accountName, secret), nil
+}
+
+// ConfirmTOTPEnrollment activates a pending TOTP secret once the user proves
+// possession with a valid code.
+func (c *Core) ConfirmTOTPEnrollment(userID, code string) error {
+	pending, found, err := twofactorstore.PendingTOTPSecret(c.DB, userID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrTwoFactorNotEnrolled
+	}
+	if !totp.Validate(pending, code, time.Now().Unix(), 1) {
+		return ErrTwoFactorInvalidCode
+	}
+	return twofactorstore.ActivatePendingTOTP(c.DB, userID, pending, nowMS())
+}
+
+// DisableTOTP removes a user's authenticator enrollment.
+func (c *Core) DisableTOTP(userID string) error {
+	if err := twofactorstore.DisableTOTP(c.DB, userID, nowMS()); err != nil {
+		return err
+	}
+	return c.clearBackupCodesIfUnenrolled(userID)
+}
+
+// EnableEmail2FA turns on email-code 2FA; requires an email on file.
+func (c *Core) EnableEmail2FA(userID string) error {
+	if c.userRegistrationEmail(userID) == "" {
+		return ErrTwoFactorNoEmail
+	}
+	return twofactorstore.EnableEmail2FA(c.DB, userID, nowMS())
+}
+
+// DisableEmail2FA turns off email-code 2FA.
+func (c *Core) DisableEmail2FA(userID string) error {
+	if err := twofactorstore.DisableEmail2FA(c.DB, userID, nowMS()); err != nil {
+		return err
+	}
+	return c.clearBackupCodesIfUnenrolled(userID)
+}
+
+// GenerateBackupCodes issues a fresh set of single-use recovery codes (replacing
+// any existing ones) and returns the plaintext codes to show once. Requires an
+// enrolled second factor.
+func (c *Core) GenerateBackupCodes(userID string) ([]string, error) {
+	st, err := c.TwoFactorStatus(userID)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Enrolled() {
+		return nil, ErrTwoFactorNotEnrolled
+	}
+	now := nowMS()
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint
+	codes := make([]string, 0, accountmodel.BackupCodeCount)
+	records := make([]twofactorstore.BackupCode, 0, accountmodel.BackupCodeCount)
+	for i := 0; i < accountmodel.BackupCodeCount; i++ {
+		code, err := accountmodel.RandomBackupCode()
+		if err != nil {
+			return nil, err
+		}
+		codes = append(codes, code)
+		records = append(records, twofactorstore.BackupCode{
+			ID:        newID("bkp_"),
+			CodeHash:  accountmodel.HashBackupCode(code),
+			CreatedAt: now,
+		})
+	}
+	if err := twofactorstore.ReplaceBackupCodes(tx, userID, records); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return codes, nil
+}
+
+// VerifyBackupCode consumes a single-use recovery code, returning nil on success.
+func (c *Core) VerifyBackupCode(userID, code string) error {
+	if accountmodel.NormalizeBackupCode(code) == "" {
+		return ErrTwoFactorInvalidCode
+	}
+	claimed, err := twofactorstore.ClaimBackupCode(c.DB, userID, accountmodel.HashBackupCode(code))
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return ErrTwoFactorInvalidCode
+	}
+	return nil
+}
+
+// BackupCodesRemaining counts a user's unused recovery codes.
+func (c *Core) BackupCodesRemaining(userID string) int {
+	return twofactorstore.BackupCodesRemaining(c.DB, userID)
+}
+
+func (c *Core) clearBackupCodesIfUnenrolled(userID string) error {
+	return twofactorstore.ClearBackupCodesIfUnenrolled(c.DB, userID)
+}
+
+// TwoFactorRequiredForLogin reports whether the given staff user must pass a 2FA
+// challenge at login: enforcement on, role is admin/moderator, and they are
+// enrolled. Un-enrolled staff are handled separately (StaffShouldEnroll2FA).
+func (c *Core) TwoFactorRequiredForLogin(userID, role string) (bool, error) {
+	if role != "admin" && role != "moderator" {
+		return false, nil
+	}
+	ss, err := c.SecuritySettings()
+	if err != nil {
+		return false, err
+	}
+	if !ss.Staff2FARequired {
+		return false, nil
+	}
+	st, err := c.TwoFactorStatus(userID)
+	if err != nil {
+		return false, err
+	}
+	return st.Enrolled(), nil
+}
+
+// StaffShouldEnroll2FA reports whether enforcement is on for this staff user but
+// they have no second factor yet (UI nudges them to enroll).
+func (c *Core) StaffShouldEnroll2FA(userID, role string) (bool, error) {
+	if role != "admin" && role != "moderator" {
+		return false, nil
+	}
+	ss, err := c.SecuritySettings()
+	if err != nil || !ss.Staff2FARequired {
+		return false, err
+	}
+	st, err := c.TwoFactorStatus(userID)
+	if err != nil {
+		return false, err
+	}
+	return !st.Enrolled(), nil
+}
+
+// VerifyTOTP checks an authenticator code against the user's active secret.
+func (c *Core) VerifyTOTP(userID, code string) error {
+	stored, found, err := twofactorstore.LoadTOTPSecret(c.DB, userID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrTwoFactorNotEnrolled
+	}
+	step, ok := totp.ValidateAt(stored.Secret, code, time.Now().Unix(), 1)
+	if !ok {
+		return ErrTwoFactorInvalidCode
+	}
+	// Reject replay: a code is single-use per time-step. Atomically claim the
+	// step only if it is newer than the last one accepted (guards concurrent
+	// replays too — exactly one updater wins).
+	if step <= stored.LastStep {
+		return ErrTwoFactorInvalidCode
+	}
+	claimed, err := twofactorstore.ClaimTOTPStep(c.DB, userID, step)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return ErrTwoFactorInvalidCode
+	}
+	return nil
+}
+
+// SendEmail2FACode mints a one-time 6-digit code, stores it hashed with a TTL,
+// and enqueues the email.
+func (c *Core) SendEmail2FACode(userID string) error {
+	st, err := c.TwoFactorStatus(userID)
+	if err != nil {
+		return err
+	}
+	if !st.EmailEnrolled {
+		return ErrTwoFactorNotEnrolled
+	}
+	email := c.userRegistrationEmail(userID)
+	if email == "" {
+		return ErrTwoFactorNoEmail
+	}
+	code, err := accountmodel.RandomNumericCode(6)
+	if err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	now := nowMS()
+	exp := now + accountmodel.Email2FACodeTTL.Milliseconds()
+	tx, err := c.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+	if err := twofactorstore.StoreEmailCode(tx, userID, string(hash), now, exp); err != nil {
+		return err
+	}
+	subject, body := accountmodel.Email2FACodeMessage(code)
+	if err := enqueueOutboxJob(tx, outboxEmail2FACode, emailSendJob{From: mailFrom, To: email, Subject: subject, Body: body, TS: now}, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// VerifyEmail2FACode checks a single-use email code and consumes it on success.
+func (c *Core) VerifyEmail2FACode(userID, code string) error {
+	stored, found, err := twofactorstore.LoadEmailCode(c.DB, userID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrTwoFactorInvalidCode
+	}
+	if nowMS() > stored.ExpiresAt {
+		_ = twofactorstore.DeleteEmailCode(c.DB, userID)
+		return ErrTwoFactorInvalidCode
+	}
+	if bcrypt.CompareHashAndPassword([]byte(stored.CodeHash), []byte(strings.TrimSpace(code))) != nil {
+		return ErrTwoFactorInvalidCode
+	}
+	// Atomically claim the code so it cannot be redeemed twice by concurrent
+	// requests. Guarding on the exact stored hash means a wrong guess (rejected
+	// above) never consumes the code, while the correct code stays single-use
+	// under a race: exactly one deleter wins, the rest get 0 rows and fail.
+	claimed, err := twofactorstore.ClaimEmailCode(c.DB, userID, stored.CodeHash)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return ErrTwoFactorInvalidCode
+	}
+	return nil
+}
+
+func (c *Core) userRegistrationEmail(userID string) string {
+	status, err := emailverificationstore.UserStatus(c.DB, userID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(status.Email)
+}

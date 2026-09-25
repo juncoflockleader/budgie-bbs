@@ -1,0 +1,37 @@
+# Budgie BBS — Fly.io app config. deploy.sh renders YOUR_APP_NAME / YOUR_REGION.
+# Single machine + single volume = SQLite single-writer (do not scale to >1).
+
+app = "YOUR_APP_NAME"
+primary_region = "YOUR_REGION"
+
+[build]
+  dockerfile = "deploy/fly/Dockerfile"
+
+[env]
+  # Absolute base URL for sitemap/robots/canonical + email links.
+  BUDGIE_PUBLIC_URL = "https://YOUR_APP_NAME.fly.dev"
+
+# Persistent storage for the SQLite DB, JWT secret and SSH host key.
+[mounts]
+  source = "budgie_data"
+  destination = "/data"
+
+# HTTP/WS/SSE — Fly's edge terminates TLS and forwards to :8081.
+[http_service]
+  internal_port = 8081
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+# SSH TUI — raw TCP passthrough on :2222 (no Fly TLS handler; it's SSH).
+[[services]]
+  protocol = "tcp"
+  internal_port = 2222
+
+  [[services.ports]]
+    port = 2222
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

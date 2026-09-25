@@ -1,0 +1,547 @@
+package handler
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandevents"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/commandrules"
+	"github.com/juncoflockleader/budgie-bbs/internal/core/projections"
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+)
+
+func (h *Handler) grantRole(actor *projections.User, p proto.GrantRolePayload) Reply {
+	return h.changeRole(actor, p.User, p.Role, proto.EvtRoleGranted, "granted", p.Role)
+}
+
+func (h *Handler) revokeRole(actor *projections.User, p proto.RevokeRolePayload) Reply {
+	return h.changeRole(actor, p.User, p.Role, proto.EvtRoleRevoked, "revoked", "user")
+}
+
+func (h *Handler) changeRole(actor *projections.User, userID, role string, kind proto.EventKind, action, storedRole string) Reply {
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	target, err := currentRuntime().GetUserTx(tx, userID)
+	if err != nil {
+		return internalErr(err)
+	}
+	if target == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
+	}
+
+	scopes := []string{"account:" + target.ID}
+	seq, err := appendEvent(tx, newID("evt_"), kind, scopes, proto.RoleChangePayload(kind, target.ID, role, actor.ID, ts))
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := currentRuntime().SetUserRole(tx, target.ID, storedRole); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	if err := h.ensureSyssecuritySystemPost(actor, "Role "+action+": "+target.Name, []string{
+		"Action: role " + action,
+		"User: " + target.Name,
+		"Role: " + role,
+		"Actor: " + actor.Name,
+	}, ""); err != nil {
+		return internalErr(err)
+	}
+	h.bus.Publish(&proto.Event{Kind: kind, Seq: seq, Scopes: scopes,
+		Payload: proto.RoleChangePayload(kind, target.Name, role, actor.Name, ts), TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: target.ID, Seq: seq}}
+}
+
+func (h *Handler) sendChatLine(actor *projections.User, p proto.SendChatLinePayload) Reply {
+	line, errDetail := commandrules.NormalizeChatLine(p.Room, p.Text)
+	if errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+	ts := nowMS()
+	id := newID("chat_")
+	if err := chatStore().InsertChatLine(id, line.RoomID, line.RoomName, actor.ID, actor.Name, line.Text, ts); err != nil {
+		return internalErr(err)
+	}
+	scopes, eventPayload := commandevents.ChatLine(id, line.RoomID, actor.Name, line.Text, ts)
+
+	h.bus.Publish(&proto.Event{
+		Kind:    proto.EvtChatLine,
+		Scopes:  scopes,
+		Payload: eventPayload,
+		TS:      ts,
+	})
+	// Notify sibling nodes in Postgres multi-node deployments.
+	pgNotifyEphemeral(h.db, string(proto.EvtChatLine), id, strings.Join(scopes, ","))
+
+	return Reply{Result: &proto.AckResult{ID: id}}
+}
+
+func (h *Handler) setPresence(actor *projections.User, p proto.SetPresencePayload) Reply {
+	status := strings.TrimSpace(p.Status)
+	if status == "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, "status is required", false)}
+	}
+	if proto.CloakedPresenceStatus(status) {
+		if !actor.IsMod() {
+			return Reply{Err: errDetail(proto.ErrForbidden, "cloak presence requires moderator privileges", false)}
+		}
+		status = "cloak"
+	}
+	mode := strings.TrimSpace(p.Mode)
+	sessionID := strings.TrimSpace(p.SessionID)
+	if sessionID == "" {
+		sessionID = "default"
+	}
+	boardID := strings.TrimSpace(p.Board)
+	threadID := strings.TrimSpace(p.Thread)
+	location := strings.TrimSpace(p.Location)
+	fromHost := strings.TrimSpace(p.FromHost)
+	explicitBoard := boardID != ""
+	explicitThread := threadID != ""
+
+	if mode == "" || (boardID == "" && threadID == "") {
+		derivedMode, derivedBoard, derivedThread := commandrules.DerivePresenceHints(status)
+		if mode == "" {
+			mode = derivedMode
+		}
+		if boardID == "" {
+			boardID = derivedBoard
+		}
+		if threadID == "" {
+			threadID = derivedThread
+		}
+	}
+	if proto.HiddenPresenceStatus(status) {
+		mode = ""
+		boardID = ""
+		threadID = ""
+		location = ""
+	}
+	if errDetail := commandrules.ValidatePresenceText(status, sessionID, mode, boardID, threadID, location, fromHost); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+
+	if threadID != "" {
+		thread, err := currentRuntime().GetThread(h.db, threadID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if thread == nil {
+			if explicitThread {
+				return Reply{Err: errDetail(proto.ErrNotFound, "thread not found", false)}
+			}
+			threadID = ""
+		} else {
+			if boardID != "" && boardID != thread.Board {
+				return Reply{Err: errDetail(proto.ErrValidationFailed, "thread does not belong to board", false)}
+			}
+			boardID = thread.Board
+		}
+	}
+	if boardID != "" {
+		if errReply := h.requireBoard(boardID); errReply.Err != nil {
+			if explicitBoard || explicitThread {
+				return errReply
+			}
+			boardID = ""
+		}
+	}
+	if boardID != "" {
+		settings, err := currentRuntime().GetBoardSettings(h.db, boardID)
+		if err != nil {
+			return internalErr(err)
+		}
+		if errDetail := commandrules.RequireMemberBoardReadAccess(h.db, actor, boardID, settings, "board members only"); errDetail != nil {
+			if explicitBoard || explicitThread {
+				return Reply{Err: errDetail}
+			}
+			boardID = ""
+			threadID = ""
+		}
+	}
+
+	ts := nowMS()
+	persistPresence := !proto.TypingPresenceStatus(status)
+	if persistPresence {
+		if err := setUserPresence(h.db, actor.ID, sessionID, status, mode, boardID, threadID, location, fromHost, ts); err != nil {
+			return internalErr(err)
+		}
+		if proto.VisiblePresenceStatus(status) {
+			if err := h.notifyLoginWatchers(actor, ts); err != nil {
+				return internalErr(err)
+			}
+		}
+	}
+
+	scopes, eventPayload := commandevents.PresenceUpdate(commandevents.PresenceUpdateSpec{
+		User:      actor.Name,
+		UserID:    actor.ID,
+		SessionID: sessionID,
+		Status:    status,
+		Mode:      mode,
+		Board:     boardID,
+		Thread:    threadID,
+		Location:  location,
+		FromHost:  fromHost,
+		TS:        ts,
+	})
+	h.bus.Publish(&proto.Event{
+		Kind:    proto.EvtPresenceUpdate,
+		Scopes:  scopes,
+		Payload: eventPayload,
+		TS:      ts,
+	})
+
+	return Reply{Result: &proto.AckResult{}}
+}
+
+func (h *Handler) sanctionUser(actor *projections.User, p proto.SanctionUserPayload) Reply {
+	p, msg := proto.NormalizeSanctionUserPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
+	scope := p.Scope
+	ts := nowMS()
+	var expiresAt int64
+	if p.DurationSec > 0 {
+		expiresAt = ts + p.DurationSec*1000
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	target, err := currentRuntime().GetUserTx(tx, p.User)
+	if err != nil {
+		return internalErr(err)
+	}
+	if target == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
+	}
+	if errDetail := commandrules.RequireSanctionTargetAllowed(actor.IsAdmin(), target.IsAdmin(), target.IsMod()); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+
+	// Authorize by scope: a global sanction requires the site moderator role;
+	// a board sanction is also available to that board's moderators.
+	if scope == "global" {
+		if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+			return Reply{Err: errDetail}
+		}
+	} else {
+		if errDetail := commandrules.RequireBoardSanctionScopePermission(tx, actor, scope); errDetail != nil {
+			return Reply{Err: errDetail}
+		}
+	}
+
+	sanctionID := newID("san_")
+	scopes, payload := commandevents.UserSanctioned(target.ID, target.ID, p.Kind, scope, p.DurationSec, actor.ID, p.Reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctioned, scopes, payload)
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := currentRuntime().InsertSanction(tx, sanctionID, target.ID, p.Kind, scope, expiresAt, actor.ID, p.Reason, seq); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	_, publicPayload := commandevents.UserSanctioned(target.ID, target.Name, p.Kind, scope, p.DurationSec, actor.Name, p.Reason, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtUserSanctioned, Seq: seq, Scopes: scopes,
+		Payload: publicPayload, TS: ts})
+	if scope != "global" {
+		if err := h.ensureDenyPostSystemPost(actor, target, scope, p.Kind, p.Reason, ts); err != nil {
+			return internalErr(err)
+		}
+	}
+
+	return Reply{Result: &proto.AckResult{ID: sanctionID, Seq: seq}}
+}
+
+func (h *Handler) clearUserSanction(actor *projections.User, p proto.ClearUserSanctionPayload) Reply {
+	p, msg := proto.NormalizeClearUserSanctionPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
+	userRef := p.User
+	kind := p.Kind
+	scope := p.Scope
+	reason := p.Reason
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	target, err := projections.FindUserRef(tx, userRef)
+	if err != nil {
+		return internalErr(err)
+	}
+	if target == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "user not found", false)}
+	}
+	if errDetail := commandrules.RequireClearSanctionTargetAllowed(actor.IsAdmin(), target.IsMod()); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+	// Authorize by scope: a global sanction requires the site moderator role;
+	// a board sanction is also clearable by that board's moderators.
+	if scope == "global" {
+		if errDetail := commandrules.RequireModeratorRole(actor.IsMod()); errDetail != nil {
+			return Reply{Err: errDetail}
+		}
+	} else {
+		if errDetail := commandrules.RequireBoardSanctionScopePermission(tx, actor, scope); errDetail != nil {
+			return Reply{Err: errDetail}
+		}
+	}
+
+	ts := nowMS()
+	scopes, payload := commandevents.UserSanctionCleared(target.ID, target.ID, kind, scope, actor.ID, reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtUserSanctionCleared, scopes, payload)
+	if err != nil {
+		return internalErr(err)
+	}
+	removed, err := currentRuntime().ClearUserSanctions(tx, target.ID, kind, scope)
+	if err != nil {
+		return internalErr(err)
+	}
+	if removed == 0 {
+		return Reply{Err: errDetail(proto.ErrNotFound, "sanction not found", false)}
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	_, publicPayload := commandevents.UserSanctionCleared(target.ID, target.Name, kind, scope, actor.Name, reason, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtUserSanctionCleared, Seq: seq, Scopes: scopes,
+		Payload: publicPayload, TS: ts})
+	if scope != "global" {
+		if err := h.ensureUndenyPostSystemPost(actor, target, scope, kind, reason, ts); err != nil {
+			return internalErr(err)
+		}
+	}
+	return Reply{Result: &proto.AckResult{ID: target.ID, Seq: seq}}
+}
+
+func (h *Handler) setContentFilter(actor *projections.User, p proto.SetContentFilterPayload) Reply {
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+	p = proto.NormalizeContentFilterPayload(p)
+	filterID := p.ID
+	if filterID == "" {
+		filterID = newID("filter_")
+	} else if msg := proto.ValidateContentFilterID(filterID); msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
+	pattern := p.Pattern
+	if msg := proto.ValidateContentFilterPattern(pattern); msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
+	scope := p.Scope
+	active := true
+	if p.Active != nil {
+		active = *p.Active
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if scope != proto.DefaultContentFilterScope {
+		if _, found, err := projections.BoardName(tx, scope); err != nil {
+			return internalErr(err)
+		} else if !found {
+			return Reply{Err: errDetail(proto.ErrNotFound, "board not found for scope", false)}
+		}
+	}
+
+	ts := nowMS()
+	scopes, payload := commandevents.ContentFilterSet(filterID, pattern, scope, active, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtContentFilterSet, scopes, payload)
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := currentRuntime().UpsertContentFilter(tx, filterID, pattern, scope, active, actor.ID, ts); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	_, publicPayload := commandevents.ContentFilterSet(filterID, pattern, scope, active, actor.Name, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtContentFilterSet, Seq: seq, Scopes: scopes,
+		Payload: publicPayload, TS: ts})
+	return Reply{Result: &proto.AckResult{ID: filterID, Seq: seq}}
+}
+
+func (h *Handler) ensureDenyPostSystemPost(actor, target *projections.User, boardID, kind, reason string, ts int64) error {
+	return h.ensureSanctionSystemPost(proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardID, proto.DenyPostSystemBoardDescription, actor, target, boardID, kind, reason, "Board posting denied", ts)
+}
+
+func (h *Handler) ensureUndenyPostSystemPost(actor, target *projections.User, boardID, kind, reason string, ts int64) error {
+	return h.ensureSanctionSystemPost(proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardID, proto.UndenyPostSystemBoardDescription, actor, target, boardID, kind, reason, "Board posting restored", ts)
+}
+
+func (h *Handler) ensureSanctionSystemPost(systemBoardID, systemBoardName, systemBoardDescription string, actor, target *projections.User, sourceBoardID, kind, reason, action string, ts int64) error {
+	emit, err := currentRuntime().BoardAllowsPublicSystemPost(h.db, sourceBoardID)
+	if err != nil {
+		return err
+	}
+	if !emit {
+		return nil
+	}
+	sourceBoardName, found, err := projections.BoardName(h.db, sourceBoardID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return sql.ErrNoRows
+	}
+	if ts == 0 {
+		ts = nowMS()
+	}
+
+	threadID := newID(systemBoardID + "_thr_")
+	postID := newID(systemBoardID + "_pst_")
+	title := fmt.Sprintf("%s: %s on %s", action, target.Name, sourceBoardID)
+	body := proto.FormatSanctionSystemBody(action, target.Name, sourceBoardName, sourceBoardID, kind, actor.Name, reason)
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint
+
+	events, err := h.appendGeneratedSystemPostTx(tx, actor, generatedSystemPostSpec{
+		BoardID:     systemBoardID,
+		BoardName:   systemBoardName,
+		Description: systemBoardDescription,
+		ThreadID:    threadID,
+		PostID:      postID,
+		Title:       title,
+		Body:        body,
+	}, ts)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	h.publishGeneratedEvents(events)
+	return nil
+}
+
+func (h *Handler) createBoard(actor *projections.User, p proto.CreateBoardPayload) Reply {
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+	p, msg := proto.NormalizeCreateBoardPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
+	ts := nowMS()
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	if errDetail := commandrules.RequireParentCategory(tx, p.ParentID); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+	position, err := projections.CategoryPositionForCreate(tx, p.ID, p.ParentID, p.Position)
+	if err != nil {
+		return internalErr(err)
+	}
+
+	scopes, payload := commandevents.BoardCreated(p.ID, p.Name, p.Description, p.ParentID, position, actor.ID, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtBoardCreated, scopes, payload)
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := currentRuntime().InsertBoard(tx, p.ID, p.Name, p.Description, p.ParentID, position); err != nil {
+		return Reply{Err: errDetail(proto.ErrConflict, "board already exists", false)}
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	_, publicPayload := commandevents.BoardCreated(p.ID, p.Name, p.Description, p.ParentID, position, actor.Name, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtBoardCreated, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: p.ID, Seq: seq}}
+}
+
+func (h *Handler) purgePost(actor *projections.User, p proto.PurgePostPayload) Reply {
+	if errDetail := commandrules.RequireAdminRole(actor.IsAdmin()); errDetail != nil {
+		return Reply{Err: errDetail}
+	}
+	p, msg := proto.NormalizePurgePostPayload(p)
+	if msg != "" {
+		return Reply{Err: errDetail(proto.ErrValidationFailed, msg, false)}
+	}
+	ts := nowMS()
+
+	// Read before TX.
+	post, err := currentRuntime().GetPost(h.db, p.Post)
+	if err != nil {
+		return internalErr(err)
+	}
+	if post == nil {
+		return Reply{Err: errDetail(proto.ErrNotFound, "post not found", false)}
+	}
+
+	thread, err := currentRuntime().GetThread(h.db, post.Thread)
+	if err != nil || thread == nil {
+		return internalErr(err)
+	}
+
+	tx, err := h.db.Begin()
+	if err != nil {
+		return internalErr(err)
+	}
+	defer tx.Rollback() //nolint
+
+	scopes, payload := commandevents.PostPurged(post.ID, post.Thread, thread.Board, actor.ID, p.Reason, ts)
+	seq, err := appendEvent(tx, newID("evt_"), proto.EvtPostPurged, scopes, payload)
+	if err != nil {
+		return internalErr(err)
+	}
+	if err := currentRuntime().MarkPostPurged(tx, post.ID, seq); err != nil {
+		return internalErr(err)
+	}
+	// Remove from FTS permanently.
+	if err := currentRuntime().FtsDeletePost(tx, post.ID); err != nil {
+		return internalErr(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return internalErr(err)
+	}
+
+	_, publicPayload := commandevents.PostPurged(post.ID, post.Thread, thread.Board, actor.Name, p.Reason, ts)
+	h.bus.Publish(&proto.Event{Kind: proto.EvtPostPurged, Seq: seq, Scopes: scopes, Payload: publicPayload, TS: ts})
+
+	return Reply{Result: &proto.AckResult{ID: post.ID, Seq: seq}}
+}

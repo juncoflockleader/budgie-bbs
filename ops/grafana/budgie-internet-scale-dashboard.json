@@ -1,0 +1,511 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [
+    {
+      "targetBlank": true,
+      "title": "Deployment runbook",
+      "type": "link",
+      "url": "deployment-multi-node.md"
+    },
+    {
+      "targetBlank": true,
+      "title": "IS9 alert rules",
+      "type": "link",
+      "url": "ops/prometheus/budgie-internet-scale-alerts.yml"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Live fanout latency. Replay remains authoritative, but this panel shows when clients are waiting too long for live wakeups.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(budgie_remote_wakeup_lag_ms_bucket[5m])) by (le))",
+          "legendFormat": "p95 remote wakeup",
+          "refId": "A"
+        }
+      ],
+      "title": "Live Delivery SLO",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Gateway queue pressure and replay repair. Add gateway capacity or tighten backpressure when queues and drops rise without repair.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "max(budgie_gateway_connection_queue_depth{stat=\"max\"})",
+          "legendFormat": "max queue depth",
+          "refId": "A"
+        },
+        {
+          "expr": "max(budgie_gateway_connection_queue_capacity{stat=\"max\"})",
+          "legendFormat": "max queue capacity",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(budgie_gateway_dropped_sends_total[5m]))",
+          "legendFormat": "drops/s",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(rate(budgie_gateway_replay_repairs_total[5m]))",
+          "legendFormat": "replay repairs/s",
+          "refId": "D"
+        }
+      ],
+      "title": "Gateway Fanout Capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Connection and queue capacity as a cost driver for extra gateway nodes.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 3,
+      "targets": [
+        {
+          "expr": "sum(budgie_ws_connections)",
+          "legendFormat": "websocket connections",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(budgie_ssh_sessions)",
+          "legendFormat": "ssh sessions",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(budgie_gateway_connection_queue_capacity{stat=\"total\"})",
+          "legendFormat": "total queued-event capacity",
+          "refId": "C"
+        }
+      ],
+      "title": "Gateway Socket Cost",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Command-log writer backlog. These panels show whether adding writers, reassigning partitions, or splitting hot threads will buy capacity.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "max(budgie_command_partition_lag)",
+          "legendFormat": "max partition lag",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(budgie_command_partition_lag)",
+          "legendFormat": "total partition lag",
+          "refId": "B"
+        },
+        {
+          "expr": "max(budgie_command_partition_lag_skew)",
+          "legendFormat": "lag skew",
+          "refId": "C"
+        }
+      ],
+      "title": "Writer Partition Capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Hot write-ordering partitions by signal. Use this before deciding whether to add writer capacity, split a thread, or reassign a partition.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "topk(10, budgie_hot_partition_candidate)",
+          "legendFormat": "{{kind}}/{{key}} {{signal}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Hot Partition Candidates",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Writer ownership stability during rebalances, manual assignment overrides, and command-log receipt clearing.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum(budgie_command_partition_assigned_count)",
+          "legendFormat": "assigned partitions",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(budgie_command_log_assignment_losses_total[5m]))",
+          "legendFormat": "assignment losses/s",
+          "refId": "B"
+        },
+        {
+          "expr": "max(budgie_command_partition_assignment_generation)",
+          "legendFormat": "max assignment generation",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(budgie_command_log_receipts) by (status)",
+          "legendFormat": "{{status}} receipts",
+          "refId": "D"
+        },
+        {
+          "expr": "max(budgie_command_log_receipt_oldest_age_ms) by (status)",
+          "legendFormat": "{{status}} oldest receipt age ms",
+          "refId": "E"
+        }
+      ],
+      "title": "Writer Assignment And Receipt Health",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Command execution and partition lock wait latency.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(budgie_command_latency_ms_bucket[5m])) by (le))",
+          "legendFormat": "command p95",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(budgie_writer_lock_wait_ms_bucket[5m])) by (le))",
+          "legendFormat": "writer lock wait p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(budgie_scalar_append_gate_wait_ms_bucket[5m])) by (le))",
+          "legendFormat": "scalar append gate p95",
+          "refId": "C"
+        }
+      ],
+      "title": "Command Latency And Lock Wait",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Async/global projection lag by view.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "max(budgie_derived_view_lag_events) by (view)",
+          "legendFormat": "{{view}} lag",
+          "refId": "A"
+        },
+        {
+          "expr": "max(budgie_derived_view_applied_seq) by (view)",
+          "legendFormat": "{{view}} applied seq",
+          "refId": "B"
+        }
+      ],
+      "title": "Derived View Freshness",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Broker egress, ingress, failures, and replay repair as the cost of live fanout and broker recovery.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "sum(rate(budgie_events_published_remote_total[5m]))",
+          "legendFormat": "remote publishes/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(budgie_events_ingested_remote_total[5m]))",
+          "legendFormat": "remote ingests/s",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(budgie_events_remote_publish_failures_total[5m]))",
+          "legendFormat": "remote publish failures/s",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(rate(budgie_replay_total[5m]))",
+          "legendFormat": "durable replays/s",
+          "refId": "D"
+        }
+      ],
+      "title": "Broker Egress And Replay Cost",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Cross-region write routing volume and failures.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "sum(rate(budgie_write_region_routed_requests_total[5m])) by (method)",
+          "legendFormat": "{{method}} routed/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(budgie_write_region_proxy_failures_total[5m]))",
+          "legendFormat": "proxy failures/s",
+          "refId": "B"
+        }
+      ],
+      "title": "Regional Write Routing Cost",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Event-log shadow health before broker promotion.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "id": 11,
+      "targets": [
+        {
+          "expr": "sum(rate(budgie_event_log_shadow_append_failures_total[5m]))",
+          "legendFormat": "shadow append failures/s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(budgie_event_log_shadow_parity_failures_total[5m]))",
+          "legendFormat": "shadow parity failures/s",
+          "refId": "B"
+        }
+      ],
+      "title": "Event Log Shadow Promotion Gate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Worker backlog and dead jobs for async projections and repair jobs.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "id": 12,
+      "targets": [
+        {
+          "expr": "sum(budgie_outbox_jobs) by (status)",
+          "legendFormat": "{{status}} jobs",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(budgie_worker_is_leader)",
+          "legendFormat": "worker leaders",
+          "refId": "B"
+        }
+      ],
+      "title": "Worker Repair Backlog",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "budgie",
+    "internet-scale",
+    "capacity",
+    "cost"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Budgie Internet Scale Capacity And Cost",
+  "uid": "budgie-internet-scale",
+  "version": 1,
+  "weekStart": ""
+}
