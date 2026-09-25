@@ -1,0 +1,233 @@
+package core
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/juncoflockleader/budgie-bbs/internal/proto"
+)
+
+// currentNodeID identifies this process. Non-empty only in Postgres mode;
+// used to tag pg_notify payloads so other nodes can skip self-originated events.
+var currentNodeID string
+
+func setNodeID(id string) { currentNodeID = id }
+
+// appendEvent writes a new event row and returns its assigned seq.
+// Must be called within a transaction from the single-writer goroutine.
+// In Postgres mode it also issues a pg_notify so other nodes are woken up.
+func appendEvent(tx *sql.Tx, id string, kind proto.EventKind, scopes []string, payload any) (int64, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+	ts := nowMS()
+
+	// The two storage backends use different events-table shapes. SQLite
+	// denormalizes scopes/ts into the row; Postgres normalizes scopes into
+	// event_scopes and stores the timestamp as created_at. Either way the
+	// per-scope rows below are the authoritative scope index.
+	var seq int64
+	if currentSQLFlavor == postgresFlavor {
+		seq, err = execReturningSeq(tx,
+			`INSERT INTO events (id, kind, payload, created_at) VALUES (?,?,CAST(? AS JSONB),?)`,
+			id, string(kind), string(raw), ts)
+	} else {
+		seq, err = execReturningSeq(tx,
+			`INSERT INTO events (id, kind, scopes, payload, ts) VALUES (?,?,?,?,?)`,
+			id, string(kind), strings.Join(scopes, ","), string(raw), ts)
+	}
+	if err != nil {
+		return 0, err
+	}
+	for _, scope := range scopes {
+		if _, err := qExec(tx,
+			`INSERT INTO event_scopes (seq, scope) VALUES (?,?)
+			 ON CONFLICT (seq, scope) DO NOTHING`,
+			seq, scope,
+		); err != nil {
+			return 0, err
+		}
+	}
+
+	// In Postgres mode, notify sibling nodes about this new event.
+	// The NOTIFY is inside the same transaction so it's only delivered on commit.
+	if currentSQLFlavor == postgresFlavor && currentNodeID != "" {
+		notifyPayload := fmt.Sprintf(`{"seq":%d,"event":%q,"node_id":%q,"scopes":%q}`,
+			seq, string(kind), currentNodeID, strings.Join(scopes, ","))
+		if _, err := tx.Exec(`SELECT pg_notify($1, $2)`, pgNotifyChannel, notifyPayload); err != nil {
+			// Non-fatal: LISTEN/NOTIFY is best-effort; W4 gap detection handles misses.
+			slog.Warn("appendEvent: pg_notify failed", "seq", seq, "err", err)
+		}
+	}
+
+	return seq, nil
+}
+
+// pgNotifyEphemeralFn emits a pg_notify for an ephemeral (non-durable) event.
+// Used so sibling nodes can fetch the record by ID and re-publish locally.
+// No-op when not in Postgres mode or when nodeID is unset.
+func pgNotifyEphemeralFn(db *sql.DB, event, eid, scopes string) {
+	if currentSQLFlavor != postgresFlavor || currentNodeID == "" {
+		return
+	}
+	payload := fmt.Sprintf(`{"seq":0,"event":%q,"node_id":%q,"scopes":%q,"eid":%q}`,
+		event, currentNodeID, scopes, eid)
+	if _, err := db.Exec(`SELECT pg_notify($1, $2)`, pgNotifyChannel, payload); err != nil {
+		slog.Warn("pgNotifyEphemeral: failed", "event", event, "eid", eid, "err", err)
+	}
+}
+
+// headSeq returns the highest seq currently in the events table.
+func headSeq(db *sql.DB) (int64, error) {
+	var head sql.NullInt64
+	if err := qQueryRow(db, `SELECT MAX(seq) FROM events`).Scan(&head); err != nil {
+		return 0, err
+	}
+	return head.Int64, nil
+}
+
+// replayEvents returns events with seq > after, optionally filtered to the
+// given scopes (pass nil for all events).
+func replayEvents(db *sql.DB, after int64, filterScopes []string, limit int) ([]*proto.Event, error) {
+	query := `SELECT seq, kind, scopes, payload, ts FROM events WHERE seq > ? ORDER BY seq`
+	if currentSQLFlavor == postgresFlavor {
+		// Postgres normalizes scopes into event_scopes and names the timestamp
+		// created_at; reassemble the comma-separated scope string and alias the
+		// timestamp so the scan below is identical to the SQLite path.
+		query = `SELECT e.seq, e.kind,
+		                COALESCE((SELECT string_agg(scope, ',') FROM event_scopes es WHERE es.seq = e.seq), '') AS scopes,
+		                e.payload, e.created_at
+		         FROM events e WHERE e.seq > ? ORDER BY e.seq`
+	}
+	rows, err := qQuery(db, query, after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []*proto.Event
+	for rows.Next() {
+		var (
+			seq      int64
+			kind     string
+			scopeStr string
+			raw      string
+			ts       int64
+		)
+		if err := rows.Scan(&seq, &kind, &scopeStr, &raw, &ts); err != nil {
+			return nil, err
+		}
+		evtScopes := strings.Split(scopeStr, ",")
+		if filterScopes != nil && !scopesOverlap(evtScopes, filterScopes) {
+			continue
+		}
+		p, err := unmarshalPayload(proto.EventKind(kind), []byte(raw))
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, &proto.Event{
+			Kind:    proto.EventKind(kind),
+			Seq:     seq,
+			Payload: p,
+			TS:      ts,
+			Scopes:  evtScopes,
+		})
+		if limit > 0 && len(events) >= limit {
+			break
+		}
+	}
+	return events, rows.Err()
+}
+
+func scopesOverlap(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unmarshalPayload(kind proto.EventKind, raw []byte) (any, error) {
+	var dst any
+	switch kind {
+	case proto.EvtThreadNew:
+		dst = new(proto.ThreadNewPayload)
+	case proto.EvtPostAppended:
+		dst = new(proto.PostAppendedPayload)
+	case proto.EvtPostAttachmentAdded:
+		dst = new(proto.PostAttachmentAddedPayload)
+	case proto.EvtPostEdited:
+		dst = new(proto.PostEditedPayload)
+	case proto.EvtPostFlagsSet:
+		dst = new(proto.PostFlagsSetPayload)
+	case proto.EvtPostRedacted:
+		dst = new(proto.PostRedactedPayload)
+	case proto.EvtPostRestored:
+		dst = new(proto.PostRestoredPayload)
+	case proto.EvtPostDeletionCleared:
+		dst = new(proto.PostDeletionClearedPayload)
+	case proto.EvtPostPurged:
+		dst = new(proto.PostPurgedPayload)
+	case proto.EvtPostReacted:
+		dst = new(proto.PostReactedPayload)
+	case proto.EvtPostUnreacted:
+		dst = new(proto.PostUnreactedPayload)
+	case proto.EvtPollVoted:
+		dst = new(proto.PollVotedPayload)
+	case proto.EvtMentioned:
+		dst = new(proto.MentionedPayload)
+	case proto.EvtTrustLevelChanged:
+		dst = new(proto.TrustLevelChangedPayload)
+	case proto.EvtPostFlagged:
+		dst = new(proto.PostFlaggedPayload)
+	case proto.EvtReviewResolved:
+		dst = new(proto.ReviewResolvedPayload)
+	case proto.EvtThreadTitleSet:
+		dst = new(proto.ThreadTitleSetPayload)
+	case proto.EvtThreadLocked:
+		dst = new(proto.ThreadLockedPayload)
+	case proto.EvtThreadMoved:
+		dst = new(proto.ThreadMovedPayload)
+	case proto.EvtUserSanctioned:
+		dst = new(proto.UserSanctionedPayload)
+	case proto.EvtUserSanctionCleared:
+		dst = new(proto.UserSanctionClearedPayload)
+	case proto.EvtContentFilterSet:
+		dst = new(proto.ContentFilterSetPayload)
+	case proto.EvtRoleGranted:
+		dst = new(proto.RoleGrantedPayload)
+	case proto.EvtRoleRevoked:
+		dst = new(proto.RoleRevokedPayload)
+	case proto.EvtBoardCreated:
+		dst = new(proto.BoardCreatedPayload)
+	case proto.EvtMailSent:
+		dst = new(proto.MailSentPayload)
+	case proto.EvtMailAttachmentAdded:
+		dst = new(proto.MailAttachmentAddedPayload)
+	case proto.EvtDirectMessageSent:
+		dst = new(proto.DirectMessageSentPayload)
+	case proto.EvtUserBlessed:
+		dst = new(proto.UserBlessedPayload)
+	case proto.EvtChatLine:
+		dst = new(proto.ChatLinePayload)
+	case proto.EvtPresenceUpdate:
+		dst = new(proto.PresenceUpdatePayload)
+	case proto.EvtUserJoined:
+		dst = new(proto.UserJoinedPayload)
+	case proto.EvtUserLeft:
+		dst = new(proto.UserLeftPayload)
+	default:
+		return json.RawMessage(raw), nil
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return nil, err
+	}
+	return dst, nil
+}
